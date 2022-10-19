@@ -33,6 +33,32 @@ https://nodejs.org/en/
 
 https://rustwasm.github.io/wasm-pack/installer/#
 
+```
+cargo install wasm-pack
+```
+
 ### just (not really required but I like it)
 
 https://github.com/casey/just
+
+## Build
+
+Get all the dependencies above first.
+
+Build the rust wasm stuff:
+```
+just pack
+```
+
+or on mac:
+```
+just pack-mac
+```
+
+do the frontend things:
+```
+cd frontend
+npm i
+npm start
+```
+
