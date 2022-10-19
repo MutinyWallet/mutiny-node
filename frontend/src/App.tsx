@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import logo from './logo.svg';
+import logo from './mutiny-logo.svg';
 import init, { generate_seed, InitOutput } from "node-manager";
 
 function App() {
@@ -16,16 +16,19 @@ function App() {
   }, [])
 
   return (
-    <div className="p-8">
-      <header className="App-header">
+    <div className="p-8 flex flex-col gap-4">
+      <header>
+        <img src={logo} className="App-logo" alt="logo" />
+      </header>
+      <main>
         <p>Here's where you put all your money:</p>
-        <pre className='bg-gray-100 border rounded shadow-lg p-4 m-4'>
+        <pre className=''>
           <code>{privatekey}</code>
         </pre>
         <p>
           <button onClick={() => wasm && setPrivatekey(generate_seed())}>Generate!</button>
         </p>
-      </header>
+      </main>
     </div>
   );
 }

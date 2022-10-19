@@ -2,7 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
+body {
+  @apply h-screen text-white bg-fixed bg-no-repeat bg-gradient-to-b from-black to-[#0b215b];
+}
+
+button,
+input[type="submit"] {
+  background: linear-gradient(192.14deg, #ffffff -0.54%, #d9d9d9 101.77%);
+
+  border-radius: 6px;
+  @apply text-black font-light text-xl;
+  @apply shadow-lg p-2;
+  @apply shadow-inner-button;
+}
+
 pre {
   word-wrap: break-word;
   white-space: pre-wrap;
+  @apply border rounded shadow-lg p-4 my-4;
 }
