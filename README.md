@@ -1,4 +1,4 @@
-# mutiny-web
+# mutiny-web (proof of concept)
 
 mutiny, but for the web!
 
