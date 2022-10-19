@@ -1,0 +1,14 @@
+{
+  "folders": [
+    {
+      "path": "node-manager"
+    },
+    {
+      "path": "frontend"
+    },
+    {
+      "path": "."
+    }
+  ],
+  "settings": {}
+}

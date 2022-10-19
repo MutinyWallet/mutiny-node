@@ -1,34 +1,33 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import './App.css'
+import { useEffect, useState } from 'react';
+import logo from './logo.svg';
+import init, { generate_seed, InitOutput } from "node-manager";
 
 function App() {
-  const [count, setCount] = useState(0)
+
+  const [wasm, setWasm] = useState<InitOutput>();
+
+  const [privatekey, setPrivatekey] = useState("...")
+
+  useEffect(() => {
+    // TODO: learn why we init this but don't actually call stuff on it
+    init().then((wasmModule) => {
+      setWasm(wasmModule)
+    })
+  }, [])
 
   return (
-    <div className="App">
-      <div>
-        <a href="https://vitejs.dev" target="_blank">
-          <img src="/vite.svg" className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://reactjs.org" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
+    <div className="p-8">
+      <header className="App-header">
+        <p>Here's where you put all your money:</p>
+        <pre className='bg-gray-100 border rounded shadow-lg p-4 m-4'>
+          <code>{privatekey}</code>
+        </pre>
         <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
+          <button onClick={() => wasm && setPrivatekey(generate_seed())}>Generate!</button>
         </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
+      </header>
     </div>
-  )
+  );
 }
 
-export default App
+export default App;
