@@ -8,7 +8,8 @@ function App() {
 
   const [mnemonic, setMnemonic] = useState("...")
 
-  let myNodeManager = {} as NodeManager
+  const [nodeManager, setNodeManager] = useState<NodeManager>();
+
 
   useEffect(() => {
     // TODO: learn why we init this but don't actually call stuff on it
@@ -18,7 +19,7 @@ function App() {
   }, [])
 
   function createNodeManager() {
-    myNodeManager = new NodeManager(undefined)
+    setNodeManager(new NodeManager(undefined))
   }
 
   return (
@@ -26,7 +27,7 @@ function App() {
       <header>
         <img src={logo} className="App-logo" alt="logo" />
       </header>
-      <main>
+      <main className='flex flex-col gap-4'>
         <p>Here is the seed phrase for your node manager:</p>
         <pre className=''>
           <code>{mnemonic}</code>
@@ -34,9 +35,16 @@ function App() {
         <p>
           <button onClick={() => wasm && createNodeManager()}>Create the node manager!</button>
         </p>
-        <p>
-          <button onClick={() => wasm && setMnemonic(myNodeManager.show_seed())}>Reveal Seed!</button>
-        </p>
+        {nodeManager &&
+          <>
+            <p>
+              <button onClick={() => setMnemonic(nodeManager.show_seed())}>Reveal Seed!</button>
+            </p>
+            <p>
+              <button onClick={() => nodeManager.test_ws()}>Test Websockets</button>
+            </p>
+          </>
+        }
       </main>
     </div>
   );

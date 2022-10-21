@@ -25,6 +25,11 @@ console_error_panic_hook = { version = "0.1.6", optional = true }
 #
 # Unfortunately, `wee_alloc` requires nightly Rust when targeting wasm for now.
 wee_alloc = { version = "0.4.5", optional = true }
+wasm-bindgen-futures = "0.4.33"
+wasm-logger = "0.2.0"
+log = "0.4.17"
+gloo-net = "0.2.4"
+futures = "0.3.25"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.13"
