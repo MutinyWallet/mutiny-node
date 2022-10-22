@@ -4,6 +4,7 @@
 
 mod nodemanager;
 mod seedgen;
+mod storage;
 mod utils;
 
 use cfg_if::cfg_if;

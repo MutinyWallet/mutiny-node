@@ -3,11 +3,14 @@ use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
 use log::{debug, info};
 use std::{str::FromStr, sync::Arc};
-use gloo_storage::*;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{seedgen, utils::set_panic_hook};
+use crate::{
+    seedgen,
+    storage::{get_mnemonic, insert_mnemonic},
+    utils::set_panic_hook,
+};
 
 #[wasm_bindgen]
 pub struct NodeManager {
@@ -18,15 +21,9 @@ pub struct NodeManager {
 
 #[wasm_bindgen]
 impl NodeManager {
-    fn insert_mnemonic(mnemonic: Mnemonic) -> Mnemonic {
-        LocalStorage::set("mnemonic", mnemonic.clone().to_string())
-            .expect("Failed to write to storage");
-        mnemonic
-    }
-
     #[wasm_bindgen]
     pub fn has_node_manager() -> bool {
-        let res: Result<String> = LocalStorage::get("mnemonic");
+        let res = get_mnemonic();
         res.is_ok()
     }
 
@@ -36,21 +33,17 @@ impl NodeManager {
 
         let mnemonic = match mnemonic {
             Some(m) => {
-                let seed =
-                    Mnemonic::from_str(String::as_str(&m)).expect("could not parse specified mnemonic");
-                NodeManager::insert_mnemonic(seed)
+                let seed = Mnemonic::from_str(String::as_str(&m))
+                    .expect("could not parse specified mnemonic");
+                insert_mnemonic(seed)
             }
             None => {
-                let res: Result<String> = LocalStorage::get("mnemonic");
-                match res {
-                    Ok(str) => Mnemonic::from_str(&str)
-                        .expect("could not parse specified mnemonic"),
-                    Err(_) => {
-                        // does not exist, need to generate
-                        let seed = seedgen::generate_seed();
-
-                        NodeManager::insert_mnemonic(seed)
-                    }
+                if let Ok(m) = get_mnemonic() {
+                    m
+                } else {
+                    // does not exist, need to generate
+                    let seed = seedgen::generate_seed();
+                    insert_mnemonic(seed)
                 }
             }
         };
@@ -96,16 +89,15 @@ impl NodeManager {
 
 #[cfg(test)]
 mod tests {
-    use gloo_storage::{LocalStorage, Storage};
-    use crate::nodemanager::NodeManager;
     use crate::seedgen::generate_seed;
+    use crate::{nodemanager::NodeManager, storage::delete_mnemonic};
 
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
 
     fn cleanup_test() -> () {
-        LocalStorage::delete("mnemonic");
+        delete_mnemonic()
     }
 
     #[test]
