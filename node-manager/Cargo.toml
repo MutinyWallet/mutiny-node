@@ -12,6 +12,7 @@ wasm-bindgen = "0.2.83"
 bip39 = { version = "1.0.1" }
 bitcoin = "0.29.1"
 getrandom = { version = "0.2", features = ["js"] }
+gloo-storage = "0.2.2"
 
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires

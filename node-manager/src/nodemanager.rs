@@ -3,6 +3,7 @@ use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
 use log::{debug, info};
 use std::{str::FromStr, sync::Arc};
+use gloo_storage::*;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -17,14 +18,35 @@ pub struct NodeManager {
 
 #[wasm_bindgen]
 impl NodeManager {
+    fn insert_mnemonic(mnemonic: Mnemonic) -> Mnemonic {
+        LocalStorage::set("mnemonic", mnemonic.clone().to_string())
+            .expect("Failed to write to storage");
+        mnemonic
+    }
+
     #[wasm_bindgen(constructor)]
     pub fn new(mnemonic: Option<String>) -> NodeManager {
         set_panic_hook();
 
-        let mnemonic = if let Some(m) = mnemonic {
-            Mnemonic::from_str(String::as_str(&m)).expect("could not parse specified mnemonic")
-        } else {
-            seedgen::generate_seed()
+        let mnemonic = match mnemonic {
+            Some(m) => {
+                let seed =
+                    Mnemonic::from_str(String::as_str(&m)).expect("could not parse specified mnemonic");
+                NodeManager::insert_mnemonic(seed)
+            }
+            None => {
+                let res: Result<String> = LocalStorage::get("mnemonic");
+                match res {
+                    Ok(str) => Mnemonic::from_str(&str)
+                        .expect("could not parse specified mnemonic"),
+                    Err(_) => {
+                        // does not exist, need to generate
+                        let seed = seedgen::generate_seed();
+
+                        NodeManager::insert_mnemonic(seed)
+                    }
+                }
+            }
         };
 
         let ws = WebSocket::open("wss://ws.postman-echo.com/raw").unwrap();
