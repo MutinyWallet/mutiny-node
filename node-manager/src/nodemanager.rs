@@ -93,3 +93,38 @@ impl NodeManager {
         self.counter += 1;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use gloo_storage::{LocalStorage, Storage};
+    use crate::nodemanager::NodeManager;
+    use crate::seedgen::generate_seed;
+
+    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    fn cleanup_test() -> () {
+        LocalStorage::delete("mnemonic");
+    }
+
+    #[test]
+    fn create_node_manager() {
+        assert!(!NodeManager::has_node_manager());
+        NodeManager::new(None);
+        assert!(NodeManager::has_node_manager());
+
+        cleanup_test();
+    }
+
+    #[test]
+    fn correctly_show_seed() {
+        let seed = generate_seed();
+        let nm = NodeManager::new(Some(seed.to_string()));
+
+        assert!(NodeManager::has_node_manager());
+        assert_eq!(seed.to_string(), nm.show_seed());
+
+        cleanup_test();
+    }
+}
