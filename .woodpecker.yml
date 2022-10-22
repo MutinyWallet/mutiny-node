@@ -3,4 +3,5 @@ pipeline:
     image: rust
     commands:
       - cd node-manager
-      - cargo test
+      - curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - wasm-pack test --firefox --headless
