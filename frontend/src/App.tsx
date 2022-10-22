@@ -10,13 +10,19 @@ function App() {
 
   const [nodeManager, setNodeManager] = useState<NodeManager>();
 
-
   useEffect(() => {
     // TODO: learn why we init this but don't actually call stuff on it
     init().then((wasmModule) => {
       setWasm(wasmModule)
+      setup()
     })
   }, [])
+
+  function setup() {
+    if (NodeManager.has_node_manager()) {
+      createNodeManager()
+    }
+  }
 
   function createNodeManager() {
     setNodeManager(new NodeManager(undefined))
@@ -32,9 +38,11 @@ function App() {
         <pre className=''>
           <code>{mnemonic}</code>
         </pre>
-        <p>
-          <button onClick={() => wasm && createNodeManager()}>Create the node manager!</button>
-        </p>
+        {!nodeManager &&
+          <p>
+            <button onClick={() => wasm && createNodeManager()}>Create the node manager!</button>
+          </p>
+        }
         {nodeManager &&
           <>
             <p>

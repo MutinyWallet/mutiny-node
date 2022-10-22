@@ -24,6 +24,12 @@ impl NodeManager {
         mnemonic
     }
 
+    #[wasm_bindgen]
+    pub fn has_node_manager() -> bool {
+        let res: Result<String> = LocalStorage::get("mnemonic");
+        res.is_ok()
+    }
+
     #[wasm_bindgen(constructor)]
     pub fn new(mnemonic: Option<String>) -> NodeManager {
         set_panic_hook();
