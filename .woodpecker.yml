@@ -1,6 +1,0 @@
-pipeline:
-  test:
-    image: rust
-    commands:
-      - cd node-manager
-      - cargo test

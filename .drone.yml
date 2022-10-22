@@ -1,0 +1,10 @@
+kind: pipeline
+type: kubernetes
+name: default
+
+steps:
+- name: test
+  image: rust:latest
+  commands:
+  - cargo build --verbose --all
+  - cargo test --verbose --all
