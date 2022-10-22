@@ -41,24 +41,46 @@ cargo install wasm-pack
 
 https://github.com/casey/just
 
+### mkcert
+
+https://github.com/FiloSottile/mkcert
+
 ## Build
 
 Get all the dependencies above first.
 
 Build the rust wasm stuff:
+
 ```
 just pack
 ```
 
 or on mac:
+
 ```
 just pack-mac
 ```
 
 do the frontend things:
+
 ```
 cd frontend
 npm i
 npm start
 ```
 
+## With SSL
+
+Since we plan to use web workers and other SSL-required things, we can also do SSL in localhost to make testing a little less gotch-ey.
+
+First generate the local cert (requires `mkcert` command):
+
+```
+just cert
+```
+
+Then start react with SSL flags:
+
+```
+npm run start-ssl
+```
