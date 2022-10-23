@@ -38,13 +38,10 @@ impl NodeManager {
                 insert_mnemonic(seed)
             }
             None => {
-                if let Ok(m) = get_mnemonic() {
-                    m
-                } else {
-                    // does not exist, need to generate
+                get_mnemonic().unwrap_or_else(|_|{
                     let seed = seedgen::generate_seed();
                     insert_mnemonic(seed)
-                }
+                })
             }
         };
 
