@@ -12,6 +12,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::{
     localstorage::MutinyBrowserStorage, seedgen, utils::set_panic_hook, wallet::MutinyWallet,
 };
+use serde::{Deserialize, Serialize};
 
 #[wasm_bindgen]
 pub struct NodeManager {
@@ -19,6 +20,17 @@ pub struct NodeManager {
     wallet: MutinyWallet,
     ws_write: Arc<Mutex<SplitSink<WebSocket, Message>>>,
     counter: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct NodeKeys {
+    pub node_keys: Vec<NodeKey>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct NodeKey {
+    pub id: String,
+    pub child_index: i32,
 }
 
 #[wasm_bindgen]
@@ -96,6 +108,31 @@ impl NodeManager {
     #[wasm_bindgen]
     pub async fn sync(&self) {
         self.wallet.sync().await.expect("Wallet failed to sync")
+    }
+
+    pub fn new_node(&self) -> String {
+        // Get the current nodes and their bip32 indices
+        // so that we can create another node with the next.
+        // TODO mutex lock this call
+        let mut existing_node_keys =
+            MutinyBrowserStorage::get_node_keys().expect("could not retrieve node keys");
+        let next_node_index = match existing_node_keys
+            .node_keys
+            .iter()
+            .max_by_key(|n| n.child_index)
+        {
+            None => 1,
+            Some(n) => n.child_index,
+        };
+
+        let next_node = NodeKey {
+            id: String::from(""), // TODO
+            child_index: next_node_index,
+        };
+        existing_node_keys.node_keys.push(next_node.clone());
+        MutinyBrowserStorage::insert_node_keys(existing_node_keys)
+            .expect("could not insert node keys");
+        return next_node.id;
     }
 
     #[wasm_bindgen]
