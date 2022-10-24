@@ -3,8 +3,7 @@ use gloo_storage::*;
 use std::str::FromStr;
 
 pub fn insert_mnemonic(mnemonic: Mnemonic) -> Mnemonic {
-    LocalStorage::set("mnemonic", mnemonic.to_string())
-        .expect("Failed to write to storage");
+    LocalStorage::set("mnemonic", mnemonic.to_string()).expect("Failed to write to storage");
     mnemonic
 }
 

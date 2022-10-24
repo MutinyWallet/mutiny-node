@@ -22,8 +22,7 @@ impl MutinyBrowserStorage {
     where
         T: Serialize,
     {
-        LocalStorage::set(key, value)
-            .map_err(|_| bdk::Error::Generic("Storage error".to_string()))
+        LocalStorage::set(key, value).map_err(|_| bdk::Error::Generic("Storage error".to_string()))
     }
 
     // mostly a copy of LocalStorage::get_all()
@@ -277,9 +276,13 @@ impl Database for MutinyBrowserStorage {
         self.scan_prefix(key)
             .into_iter()
             .map(|(_, value)| -> Result<_, bdk::Error> {
-                let str = value.as_str().expect("Unexpected json value");
-                Script::from_hex(str)
-                    .map_err(|_| bdk::Error::Generic(String::from("Error decoding")))
+                let str_opt = value.as_str();
+
+                match str_opt {
+                    Some(str) => Script::from_hex(str)
+                        .map_err(|_| bdk::Error::Generic(String::from("Error decoding json"))),
+                    None => Err(bdk::Error::Generic(String::from("Error decoding json"))),
+                }
             })
             .collect()
     }
@@ -314,13 +317,21 @@ impl Database for MutinyBrowserStorage {
                 let mut tx_details: TransactionDetails = Deserialize::deserialize(value)?;
                 if include_raw {
                     // first byte is prefix for the map, need to drop it
-                    let rm_prefix: &str = &key[2..key.len()];
-                    let k_bytes = Vec::from_hex(rm_prefix)?;
-                    let txid = deserialize(k_bytes.as_slice())?;
-                    tx_details.transaction = self.get_raw_tx(&txid)?;
+                    let rm_prefix_opt = key.get(2..key.len());
+                    match rm_prefix_opt {
+                        Some(rm_prefix) => {
+                            let k_bytes = Vec::from_hex(rm_prefix)?;
+                            let txid = deserialize(k_bytes.as_slice())?;
+                            tx_details.transaction = self.get_raw_tx(&txid)?;
+                            Ok(tx_details)
+                        }
+                        None => Err(bdk::Error::Generic(String::from(
+                            "Error parsing txid from json",
+                        ))),
+                    }
+                } else {
+                    Ok(tx_details)
                 }
-
-                Ok(tx_details)
             })
             .collect()
     }
@@ -445,6 +456,7 @@ mod tests {
         );
     }
 
+    #[allow(dead_code)]
     pub fn test_batch_script_pubkey<D: BatchDatabase>(mut db: D) {
         let mut batch = db.begin_batch();
 

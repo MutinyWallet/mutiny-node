@@ -84,8 +84,8 @@ impl NodeManager {
 
 #[cfg(test)]
 mod tests {
+    use crate::nodemanager::NodeManager;
     use crate::seedgen::generate_seed;
-    use crate::{nodemanager::NodeManager, storage::delete_mnemonic};
 
     use crate::test::*;
 
