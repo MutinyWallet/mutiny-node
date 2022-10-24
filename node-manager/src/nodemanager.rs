@@ -87,13 +87,11 @@ mod tests {
     use crate::seedgen::generate_seed;
     use crate::{nodemanager::NodeManager, storage::delete_mnemonic};
 
+    use crate::test::*;
+
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
-
-    fn cleanup_test() -> () {
-        delete_mnemonic()
-    }
 
     macro_rules! log {
         ( $( $t:tt )* ) => {
