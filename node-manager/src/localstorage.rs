@@ -7,17 +7,10 @@ use bitcoin::{OutPoint, Script, Transaction};
 use gloo_storage::{LocalStorage, Storage};
 
 use bitcoin::hashes::hex::{FromHex, ToHex};
-use log::{error, info};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub struct MutinyBrowserStorage {}
-
-macro_rules! log {
-        ( $( $t:tt )* ) => {
-            web_sys::console::log_1(&format!( $( $t )* ).into());
-        }
-    }
 
 impl MutinyBrowserStorage {
     pub fn new() -> Self {
@@ -30,7 +23,7 @@ impl MutinyBrowserStorage {
         T: Serialize,
     {
         LocalStorage::set(key, value)
-            .map_err(|_| bdk::Error::Generic(String::from(format!("Storage error"))))
+            .map_err(|_| bdk::Error::Generic("Storage error".to_string()))
     }
 
     // mostly a copy of LocalStorage::get_all()
@@ -283,10 +276,8 @@ impl Database for MutinyBrowserStorage {
         let key = MapKey::Path((keychain, None)).as_map_key();
         self.scan_prefix(key)
             .into_iter()
-            .map(|tuple| -> Result<_, bdk::Error> {
-                // todo make this safer
-                let (_, value) = tuple;
-                let str = value.as_str().unwrap();
+            .map(|(_, value)| -> Result<_, bdk::Error> {
+                let str = value.as_str().expect("Unexpected json value");
                 Script::from_hex(str)
                     .map_err(|_| bdk::Error::Generic(String::from("Error decoding")))
             })
@@ -297,10 +288,8 @@ impl Database for MutinyBrowserStorage {
         let key = MapKey::Utxo(None).as_map_key();
         self.scan_prefix(key)
             .into_iter()
-            .map(|x| -> Result<_, bdk::Error> {
-                let (_, v) = x;
-
-                let utxo: LocalUtxo = Deserialize::deserialize(v)?;
+            .map(|(_, value)| -> Result<_, bdk::Error> {
+                let utxo: LocalUtxo = Deserialize::deserialize(value)?;
                 Ok(utxo)
             })
             .collect()
@@ -310,8 +299,7 @@ impl Database for MutinyBrowserStorage {
         let key = MapKey::RawTx(None).as_map_key();
         self.scan_prefix(key)
             .into_iter()
-            .map(|tuple| -> Result<_, bdk::Error> {
-                let (_, value) = tuple;
+            .map(|(_, value)| -> Result<_, bdk::Error> {
                 let tx: Transaction = Deserialize::deserialize(value)?;
                 Ok(tx)
             })
@@ -322,8 +310,7 @@ impl Database for MutinyBrowserStorage {
         let key = MapKey::Transaction(None).as_map_key();
         self.scan_prefix(key)
             .into_iter()
-            .map(|tuple| -> Result<_, bdk::Error> {
-                let (key, value) = tuple;
+            .map(|(key, value)| -> Result<_, bdk::Error> {
                 let mut tx_details: TransactionDetails = Deserialize::deserialize(value)?;
                 if include_raw {
                     // first byte is prefix for the map, need to drop it

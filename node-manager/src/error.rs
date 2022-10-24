@@ -2,6 +2,7 @@ use gloo_storage::errors::StorageError;
 use std::fmt;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 // copied from LDK lite
 /// An error that possibly needs to be handled by the user.
 pub enum Error {

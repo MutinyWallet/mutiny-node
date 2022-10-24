@@ -31,10 +31,9 @@ pub async fn main_js() -> Result<(), JsValue> {
 
 #[cfg(test)]
 mod test {
-    use crate::storage::delete_mnemonic;
     use gloo_storage::{LocalStorage, Storage};
 
-    pub(crate) fn cleanup_test() -> () {
+    pub(crate) fn cleanup_test() {
         LocalStorage::clear();
     }
 }

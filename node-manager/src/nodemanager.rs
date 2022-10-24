@@ -62,7 +62,7 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub fn show_seed(&self) -> String {
-        return self.mnemonic.to_string();
+        self.mnemonic.to_string()
     }
 
     #[wasm_bindgen]
