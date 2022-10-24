@@ -8,13 +8,20 @@ jobs:
     name: Browser Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
+          toolchain: nightly
+          components: clippy
           target: wasm32-unknown-unknown
           override: true
           profile: minimal
+
+      - uses: actions-rs/clippy-check@v1
+        working-directory: ./node-manager
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-features
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
