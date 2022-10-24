@@ -34,6 +34,7 @@ futures = "0.3.25"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.13"
+web-sys = { version = "0.3.60", features = ["console"] }
 
 [profile.release]
 # Tell `rustc` to optimize for small code size.

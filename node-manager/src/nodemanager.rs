@@ -37,12 +37,10 @@ impl NodeManager {
                     .expect("could not parse specified mnemonic");
                 insert_mnemonic(seed)
             }
-            None => {
-                get_mnemonic().unwrap_or_else(|_|{
-                    let seed = seedgen::generate_seed();
-                    insert_mnemonic(seed)
-                })
-            }
+            None => get_mnemonic().unwrap_or_else(|_| {
+                let seed = seedgen::generate_seed();
+                insert_mnemonic(seed)
+            }),
         };
 
         let ws = WebSocket::open("wss://ws.postman-echo.com/raw").unwrap();
@@ -97,8 +95,16 @@ mod tests {
         delete_mnemonic()
     }
 
+    macro_rules! log {
+        ( $( $t:tt )* ) => {
+            web_sys::console::log_1(&format!( $( $t )* ).into());
+        }
+    }
+
     #[test]
     fn create_node_manager() {
+        log!("creating node manager!");
+
         assert!(!NodeManager::has_node_manager());
         NodeManager::new(None);
         assert!(NodeManager::has_node_manager());
@@ -108,6 +114,8 @@ mod tests {
 
     #[test]
     fn correctly_show_seed() {
+        log!("showing seed");
+
         let seed = generate_seed();
         let nm = NodeManager::new(Some(seed.to_string()));
 

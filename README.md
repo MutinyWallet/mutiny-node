@@ -47,6 +47,14 @@ https://github.com/casey/just
 
 https://github.com/FiloSottile/mkcert
 
+### chromedriver (for tests)
+
+https://chromedriver.chromium.org/
+
+```
+brew install chromedriver
+```
+
 ## Build
 
 Get all the dependencies above first.
