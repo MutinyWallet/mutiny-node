@@ -1,0 +1,12 @@
+{
+  "name": "node-manager",
+  "version": "0.1.0",
+  "files": [
+    "node_manager_bg.wasm",
+    "node_manager.js",
+    "node_manager.d.ts"
+  ],
+  "module": "node_manager.js",
+  "types": "node_manager.d.ts",
+  "sideEffects": false
+}
