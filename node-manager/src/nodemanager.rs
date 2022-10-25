@@ -8,7 +8,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::{
     seedgen,
-    storage::{get_mnemonic, insert_mnemonic},
+    localstorage::MutinyBrowserStorage,
     utils::set_panic_hook,
 };
 
@@ -23,7 +23,7 @@ pub struct NodeManager {
 impl NodeManager {
     #[wasm_bindgen]
     pub fn has_node_manager() -> bool {
-        let res = get_mnemonic();
+        let res = MutinyBrowserStorage::get_mnemonic();
         res.is_ok()
     }
 
@@ -35,11 +35,11 @@ impl NodeManager {
             Some(m) => {
                 let seed = Mnemonic::from_str(String::as_str(&m))
                     .expect("could not parse specified mnemonic");
-                insert_mnemonic(seed)
+                MutinyBrowserStorage::insert_mnemonic(seed)
             }
-            None => get_mnemonic().unwrap_or_else(|_| {
+            None => MutinyBrowserStorage::get_mnemonic().unwrap_or_else(|_| {
                 let seed = seedgen::generate_seed();
-                insert_mnemonic(seed)
+                MutinyBrowserStorage::insert_mnemonic(seed)
             }),
         };
 
@@ -62,7 +62,7 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub fn show_seed(&self) -> String {
-        return self.mnemonic.to_string();
+        self.mnemonic.to_string()
     }
 
     #[wasm_bindgen]
@@ -84,16 +84,14 @@ impl NodeManager {
 
 #[cfg(test)]
 mod tests {
+    use crate::nodemanager::NodeManager;
     use crate::seedgen::generate_seed;
-    use crate::{nodemanager::NodeManager, storage::delete_mnemonic};
+
+    use crate::test::*;
 
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
-
-    fn cleanup_test() -> () {
-        delete_mnemonic()
-    }
 
     macro_rules! log {
         ( $( $t:tt )* ) => {

@@ -2,9 +2,10 @@
 // wasm_bindgen uses improper casing and it needs to be turned off:
 // https://github.com/rustwasm/wasm-bindgen/issues/2882
 
+mod error;
+mod localstorage;
 mod nodemanager;
 mod seedgen;
-mod storage;
 mod utils;
 
 use cfg_if::cfg_if;
@@ -25,4 +26,13 @@ pub async fn main_js() -> Result<(), JsValue> {
     debug!("Main function begins");
     debug!("Main function ends");
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use gloo_storage::{LocalStorage, Storage};
+
+    pub(crate) fn cleanup_test() {
+        LocalStorage::clear();
+    }
 }
