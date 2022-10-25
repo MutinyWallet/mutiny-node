@@ -8,7 +8,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::{
     seedgen,
-    storage::{get_mnemonic, insert_mnemonic},
+    localstorage::MutinyBrowserStorage,
     utils::set_panic_hook,
 };
 
@@ -23,7 +23,7 @@ pub struct NodeManager {
 impl NodeManager {
     #[wasm_bindgen]
     pub fn has_node_manager() -> bool {
-        let res = get_mnemonic();
+        let res = MutinyBrowserStorage::get_mnemonic();
         res.is_ok()
     }
 
@@ -35,11 +35,11 @@ impl NodeManager {
             Some(m) => {
                 let seed = Mnemonic::from_str(String::as_str(&m))
                     .expect("could not parse specified mnemonic");
-                insert_mnemonic(seed)
+                MutinyBrowserStorage::insert_mnemonic(seed)
             }
-            None => get_mnemonic().unwrap_or_else(|_| {
+            None => MutinyBrowserStorage::get_mnemonic().unwrap_or_else(|_| {
                 let seed = seedgen::generate_seed();
-                insert_mnemonic(seed)
+                MutinyBrowserStorage::insert_mnemonic(seed)
             }),
         };
 

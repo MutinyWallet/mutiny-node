@@ -1,5 +1,7 @@
 use bdk::database::{BatchDatabase, BatchOperations, Database, SyncTime};
 use bdk::{KeychainKind, LocalUtxo, TransactionDetails};
+use bip39::Mnemonic;
+use std::str::FromStr;
 use bitcoin::consensus::deserialize;
 use bitcoin::consensus::encode::serialize;
 use bitcoin::hash_types::Txid;
@@ -42,6 +44,24 @@ impl MutinyBrowserStorage {
         }
 
         map
+    }
+
+    pub fn insert_mnemonic(mnemonic: Mnemonic) -> Mnemonic {
+        LocalStorage::set("mnemonic", mnemonic.to_string()).expect("Failed to write to storage");
+        mnemonic
+    }
+
+    pub fn get_mnemonic() -> gloo_storage::Result<Mnemonic> {
+        let res: gloo_storage::Result<String> = LocalStorage::get("mnemonic");
+        match res {
+            Ok(str) => Ok(Mnemonic::from_str(&str).expect("could not parse specified mnemonic")),
+            Err(e) => Err(e),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn delete_mnemonic() {
+        LocalStorage::delete("mnemonic");
     }
 }
 
