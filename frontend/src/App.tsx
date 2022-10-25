@@ -8,6 +8,10 @@ function App() {
 
   const [mnemonic, setMnemonic] = useState("...")
 
+  const [balance, setBalance] = useState("0")
+
+  const [address, setAddress] = useState("")
+
   const [nodeManager, setNodeManager] = useState<NodeManager>();
 
   useEffect(() => {
@@ -18,9 +22,23 @@ function App() {
     })
   }, [])
 
-  function setup() {
+  async function setup() {
     if (NodeManager.has_node_manager()) {
       createNodeManager()
+      let balance = await nodeManager?.get_wallet_balance()
+      if (balance) {
+        setBalance(balance.toLocaleString())
+      }
+    }
+  }
+
+  async function sync() {
+    if (nodeManager) {
+      await nodeManager.sync()
+      let balance = await nodeManager.get_wallet_balance()
+      if (balance) {
+        setBalance(balance.toLocaleString())
+      }
     }
   }
 
@@ -46,11 +64,24 @@ function App() {
         {nodeManager &&
           <>
             <p>
+              {`Wallet Balance: ${balance} sats`}
+            </p>
+            <pre className=''>
+                <code>{address}</code>
+            </pre>
+            <p>
               <button onClick={() => setMnemonic(nodeManager.show_seed())}>Reveal Seed!</button>
+            </p>
+            <p>
+              <button onClick={async () => setAddress(await nodeManager.get_new_address())}>Generate Address!</button>
+            </p>
+            <p>
+              <button onClick={async () => sync()}>Sync Wallet</button>
             </p>
             <p>
               <button onClick={() => nodeManager.test_ws()}>Test Websockets</button>
             </p>
+
           </>
         }
       </main>

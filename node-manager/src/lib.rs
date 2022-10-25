@@ -7,6 +7,7 @@ mod localstorage;
 mod nodemanager;
 mod seedgen;
 mod utils;
+mod wallet;
 
 use cfg_if::cfg_if;
 use log::{debug, Level};

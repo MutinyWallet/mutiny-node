@@ -12,13 +12,10 @@ use gloo_storage::{LocalStorage, Storage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+#[derive(Debug, Default)]
 pub struct MutinyBrowserStorage {}
 
 impl MutinyBrowserStorage {
-    pub fn new() -> Self {
-        MutinyBrowserStorage {}
-    }
-
     // A wrapper for LocalStorage::set that converts the error to bdk::Error
     fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), bdk::Error>
     where
@@ -429,7 +426,7 @@ impl BatchDatabase for MutinyBrowserStorage {
     type Batch = Self;
 
     fn begin_batch(&self) -> Self::Batch {
-        MutinyBrowserStorage::new()
+        MutinyBrowserStorage::default()
     }
 
     fn commit_batch(&mut self, mut _batch: Self::Batch) -> Result<(), bdk::Error> {
@@ -882,7 +879,7 @@ mod tests {
 
     fn get_tree() -> MutinyBrowserStorage {
         cleanup_test();
-        MutinyBrowserStorage::new()
+        MutinyBrowserStorage::default()
     }
 
     #[test]

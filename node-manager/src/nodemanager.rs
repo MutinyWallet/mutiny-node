@@ -1,20 +1,22 @@
+use std::{str::FromStr, sync::Arc};
+
+use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
+use bitcoin::Network;
 use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
 use log::{debug, info};
-use std::{str::FromStr, sync::Arc};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::{
-    seedgen,
-    localstorage::MutinyBrowserStorage,
-    utils::set_panic_hook,
+    localstorage::MutinyBrowserStorage, seedgen, utils::set_panic_hook, wallet::MutinyWallet,
 };
 
 #[wasm_bindgen]
 pub struct NodeManager {
     mnemonic: Mnemonic,
+    wallet: MutinyWallet,
     ws_write: Arc<Mutex<SplitSink<WebSocket, Message>>>,
     counter: usize,
 }
@@ -43,6 +45,8 @@ impl NodeManager {
             }),
         };
 
+        let wallet = MutinyWallet::new(mnemonic.clone(), Network::Testnet);
+
         let ws = WebSocket::open("wss://ws.postman-echo.com/raw").unwrap();
         let (write, mut read) = ws.split();
 
@@ -55,6 +59,7 @@ impl NodeManager {
 
         NodeManager {
             mnemonic,
+            wallet,
             ws_write: Arc::new(Mutex::new(write)),
             counter: 0,
         }
@@ -63,6 +68,34 @@ impl NodeManager {
     #[wasm_bindgen]
     pub fn show_seed(&self) -> String {
         self.mnemonic.to_string()
+    }
+
+    #[wasm_bindgen]
+    pub async fn get_new_address(&self) -> String {
+        self.wallet
+            .wallet
+            .lock()
+            .await
+            .get_address(AddressIndex::New)
+            .unwrap()
+            .address
+            .to_string()
+    }
+
+    #[wasm_bindgen]
+    pub async fn get_wallet_balance(&self) -> u64 {
+        self.wallet
+            .wallet
+            .lock()
+            .await
+            .get_balance()
+            .unwrap()
+            .get_total()
+    }
+
+    #[wasm_bindgen]
+    pub async fn sync(&self) {
+        self.wallet.sync().await.expect("Wallet failed to sync")
     }
 
     #[wasm_bindgen]
