@@ -22,11 +22,12 @@ use crate::{
 pub struct NodeManager {
     mnemonic: Mnemonic,
     wallet: MutinyWallet,
+    node_storage: Mutex<NodeStorage>,
     ws_write: Arc<Mutex<SplitSink<WebSocket, Message>>>,
     counter: usize,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct NodeStorage {
     pub nodes: Vec<NodeIndex>,
 }
@@ -74,9 +75,12 @@ impl NodeManager {
             debug!("WebSocket Closed")
         });
 
+        let node_storage = MutinyBrowserStorage::get_nodes().expect("could not retrieve node keys");
+
         NodeManager {
             mnemonic,
             wallet,
+            node_storage: Mutex::new(node_storage),
             ws_write: Arc::new(Mutex::new(write)),
             counter: 0,
         }
@@ -115,10 +119,17 @@ impl NodeManager {
         self.wallet.sync().await.expect("Wallet failed to sync")
     }
 
-    pub fn new_node(&self) -> String {
+    #[wasm_bindgen]
+    pub async fn new_node(&self) -> String {
+        // Begin with a mutex lock so that nothing else can
+        // save or alter the node list while it is about to
+        // be saved.
+        let mut node_mutex = self.node_storage.lock().await;
+
         // Get the current nodes and their bip32 indices
         // so that we can create another node with the next.
-        // TODO mutex lock this call
+        // Always get it from our storage, the node_mutex is
+        // mostly for read only and locking.
         let mut existing_nodes =
             MutinyBrowserStorage::get_nodes().expect("could not retrieve nodes");
         let next_node_index = match existing_nodes.nodes.iter().max_by_key(|n| n.child_index) {
@@ -155,7 +166,9 @@ impl NodeManager {
             child_index: next_node_index,
         };
         existing_nodes.nodes.push(next_node.clone());
-        MutinyBrowserStorage::insert_nodes(existing_nodes).expect("could not insert nodes");
+        MutinyBrowserStorage::insert_nodes(existing_nodes.clone()).expect("could not insert nodes");
+        node_mutex.nodes = existing_nodes.nodes.clone();
+
         return pubkey.clone();
     }
 
