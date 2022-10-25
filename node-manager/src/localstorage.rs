@@ -1,14 +1,14 @@
+use std::str::FromStr;
+
 use bdk::database::{BatchDatabase, BatchOperations, Database, SyncTime};
 use bdk::{KeychainKind, LocalUtxo, TransactionDetails};
 use bip39::Mnemonic;
-use std::str::FromStr;
 use bitcoin::consensus::deserialize;
 use bitcoin::consensus::encode::serialize;
 use bitcoin::hash_types::Txid;
+use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::{OutPoint, Script, Transaction};
 use gloo_storage::{LocalStorage, Storage};
-
-use bitcoin::hashes::hex::{FromHex, ToHex};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -439,20 +439,20 @@ impl BatchDatabase for MutinyBrowserStorage {
 
 #[cfg(test)]
 mod tests {
-    use crate::localstorage::MutinyBrowserStorage;
-    use bdk::database::{BatchDatabase, Database, SyncTime};
-    use bdk::{BlockTime, KeychainKind, LocalUtxo, TransactionDetails};
     use std::str::FromStr;
 
-    use crate::test::*;
+    use bdk::database::{BatchDatabase, Database, SyncTime};
+    use bdk::{BlockTime, KeychainKind, LocalUtxo, TransactionDetails};
     use bitcoin::consensus::encode::deserialize;
     use bitcoin::consensus::serialize;
     use bitcoin::hashes::hex::*;
     use bitcoin::*;
+    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+
+    use crate::localstorage::MutinyBrowserStorage;
+    use crate::test::*;
 
     use super::*;
-
-    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
 
