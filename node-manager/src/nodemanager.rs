@@ -1,18 +1,22 @@
 use std::{str::FromStr, sync::Arc};
 
 use bdk::wallet::AddressIndex;
+use bip32::XPrv;
 use bip39::Mnemonic;
+use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::Network;
 use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
+use lightning::chain::keysinterface::{KeysInterface, KeysManager, Recipient};
 use log::{debug, info};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::{
     localstorage::MutinyBrowserStorage, seedgen, utils::set_panic_hook, wallet::MutinyWallet,
 };
-use serde::{Deserialize, Serialize};
 
 #[wasm_bindgen]
 pub struct NodeManager {
@@ -30,6 +34,7 @@ pub struct NodeKeys {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct NodeKey {
     pub id: String,
+    pub pubkey: String,
     pub child_index: i32,
 }
 
@@ -125,8 +130,30 @@ impl NodeManager {
             Some(n) => n.child_index,
         };
 
+        // Get the pubkey of this node before we save it
+        // TODO too many unwraps here
+        let xpriv = XPrv::new(&self.mnemonic.to_seed(""))
+            .unwrap()
+            .derive_child(bip32::ChildNumber::new(next_node_index as u32, true).unwrap())
+            .unwrap();
+        let current_time = instant::now();
+        let keys_manager = Arc::new(KeysManager::new(
+            &xpriv.to_bytes(),
+            (current_time / 1000.0).round() as u64,
+            (current_time * 1000.0).round() as u32,
+        ));
+        let mut secp_ctx = Secp256k1::new();
+        let keys_manager_clone = keys_manager.clone();
+        secp_ctx.seeded_randomize(&keys_manager_clone.get_secure_random_bytes());
+        let our_network_key = keys_manager_clone
+            .get_node_secret(Recipient::Node)
+            .expect("cannot parse node secret");
+        let pubkey = PublicKey::from_secret_key(&secp_ctx, &our_network_key).to_string();
+
+        // Create and save a new node using the next child index
         let next_node = NodeKey {
-            id: String::from(""), // TODO
+            id: Uuid::new_v4().to_string(),
+            pubkey,
             child_index: next_node_index,
         };
         existing_node_keys.node_keys.push(next_node.clone());
