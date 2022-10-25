@@ -17,12 +17,6 @@ jobs:
           override: true
           profile: minimal
 
-      - uses: actions-rs/clippy-check@v1
-        working-directory: ./node-manager
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          args: --all-features
-
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
