@@ -27,12 +27,12 @@ pub struct NodeManager {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct NodeKeys {
-    pub node_keys: Vec<NodeKey>,
+pub struct NodeStorage {
+    pub nodes: Vec<NodeIndex>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct NodeKey {
+pub struct NodeIndex {
     pub id: String,
     pub pubkey: String,
     pub child_index: i32,
@@ -119,13 +119,9 @@ impl NodeManager {
         // Get the current nodes and their bip32 indices
         // so that we can create another node with the next.
         // TODO mutex lock this call
-        let mut existing_node_keys =
-            MutinyBrowserStorage::get_node_keys().expect("could not retrieve node keys");
-        let next_node_index = match existing_node_keys
-            .node_keys
-            .iter()
-            .max_by_key(|n| n.child_index)
-        {
+        let mut existing_nodes =
+            MutinyBrowserStorage::get_nodes().expect("could not retrieve nodes");
+        let next_node_index = match existing_nodes.nodes.iter().max_by_key(|n| n.child_index) {
             None => 1,
             Some(n) => n.child_index + 1,
         };
@@ -153,14 +149,13 @@ impl NodeManager {
         let pubkey = PublicKey::from_secret_key(&secp_ctx, &our_network_key).to_string();
 
         // Create and save a new node using the next child index
-        let next_node = NodeKey {
+        let next_node = NodeIndex {
             id: Uuid::new_v4().to_string(),
             pubkey: pubkey.clone(),
             child_index: next_node_index,
         };
-        existing_node_keys.node_keys.push(next_node.clone());
-        MutinyBrowserStorage::insert_node_keys(existing_node_keys)
-            .expect("could not insert node keys");
+        existing_nodes.nodes.push(next_node.clone());
+        MutinyBrowserStorage::insert_nodes(existing_nodes).expect("could not insert nodes");
         return pubkey.clone();
     }
 

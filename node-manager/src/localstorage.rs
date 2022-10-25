@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use crate::nodemanager::NodeKeys;
+use crate::nodemanager::NodeStorage;
 use bdk::database::{BatchDatabase, BatchOperations, Database, SyncTime};
 use bdk::{KeychainKind, LocalUtxo, TransactionDetails};
 use bip39::Mnemonic;
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 const mnemonic_key: &str = "mnemonic";
-const node_keys_key: &str = "node_keys";
+const nodes_key: &str = "nodes";
 
 #[derive(Debug, Default)]
 pub struct MutinyBrowserStorage {}
@@ -65,21 +65,21 @@ impl MutinyBrowserStorage {
         LocalStorage::delete(mnemonic_key);
     }
 
-    pub fn get_node_keys() -> gloo_storage::Result<NodeKeys> {
-        let res: gloo_storage::Result<NodeKeys> = LocalStorage::get(node_keys_key);
+    pub fn get_nodes() -> gloo_storage::Result<NodeStorage> {
+        let res: gloo_storage::Result<NodeStorage> = LocalStorage::get(nodes_key);
         match res {
             Ok(k) => Ok(k),
             Err(e) => match e {
                 gloo_storage::errors::StorageError::KeyNotFound(_) => {
-                    Ok(NodeKeys { node_keys: vec![] })
+                    Ok(NodeStorage { nodes: vec![] })
                 }
                 _ => Err(e),
             },
         }
     }
 
-    pub fn insert_node_keys(node_keys: NodeKeys) -> gloo_storage::Result<()> {
-        LocalStorage::set(node_keys_key, node_keys)
+    pub fn insert_nodes(nodes: NodeStorage) -> gloo_storage::Result<()> {
+        LocalStorage::set(nodes_key, nodes)
     }
 }
 
