@@ -127,11 +127,13 @@ impl NodeManager {
             .max_by_key(|n| n.child_index)
         {
             None => 1,
-            Some(n) => n.child_index,
+            Some(n) => n.child_index + 1,
         };
 
         // Get the pubkey of this node before we save it
-        // TODO too many unwraps here
+        // TODO too many unwraps here, maybe iterate through
+        // indexes in case there's a problem with a specific
+        // index's bytes.
         let xpriv = XPrv::new(&self.mnemonic.to_seed(""))
             .unwrap()
             .derive_child(bip32::ChildNumber::new(next_node_index as u32, true).unwrap())
@@ -153,13 +155,13 @@ impl NodeManager {
         // Create and save a new node using the next child index
         let next_node = NodeKey {
             id: Uuid::new_v4().to_string(),
-            pubkey,
+            pubkey: pubkey.clone(),
             child_index: next_node_index,
         };
         existing_node_keys.node_keys.push(next_node.clone());
         MutinyBrowserStorage::insert_node_keys(existing_node_keys)
             .expect("could not insert node keys");
-        return next_node.id;
+        return pubkey.clone();
     }
 
     #[wasm_bindgen]
