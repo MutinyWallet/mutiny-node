@@ -1,7 +1,5 @@
 # mutiny-web (proof of concept)
 
-[![status-badge](https://ci.btcdev.shop/api/badges/BitcoinDevShop/mutiny-web-poc/status.svg)](https://ci.btcdev.shop/BitcoinDevShop/mutiny-web-poc)
-
 mutiny, but for the web!
 
 ## resources
