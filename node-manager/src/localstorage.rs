@@ -1,7 +1,7 @@
 use std::collections::HashMap;
+use std::str;
 use std::str::FromStr;
 
-use crate::nodemanager::NodeStorage;
 use bdk::database::{BatchDatabase, BatchOperations, Database, SyncTime};
 use bdk::{KeychainKind, LocalUtxo, TransactionDetails};
 use bip39::Mnemonic;
@@ -10,19 +10,25 @@ use bitcoin::consensus::encode::serialize;
 use bitcoin::hash_types::Txid;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::{OutPoint, Script, Transaction};
+use gloo_storage::errors::StorageError;
 use gloo_storage::{LocalStorage, Storage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::encrypt::*;
+use crate::nodemanager::NodeStorage;
+
 const mnemonic_key: &str = "mnemonic";
 const nodes_key: &str = "nodes";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MutinyBrowserStorage {}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MutinyBrowserStorage {
+    password: String,
+}
 
 impl MutinyBrowserStorage {
-    pub fn new() -> MutinyBrowserStorage {
-        MutinyBrowserStorage {}
+    pub fn new(password: String) -> MutinyBrowserStorage {
+        MutinyBrowserStorage { password }
     }
 
     // A wrapper for LocalStorage::set that converts the error to bdk::Error
@@ -30,7 +36,10 @@ impl MutinyBrowserStorage {
     where
         T: Serialize,
     {
-        LocalStorage::set(key, value).map_err(|_| bdk::Error::Generic("Storage error".to_string()))
+        let data = serde_json::to_string(&value)?;
+        let ciphertext = encrypt(data.as_str(), self.password.as_str());
+        LocalStorage::set(key, ciphertext)
+            .map_err(|_| bdk::Error::Generic("Storage error".to_string()))
     }
 
     /// Get the value for the specified key
@@ -38,7 +47,9 @@ impl MutinyBrowserStorage {
     where
         T: for<'de> Deserialize<'de>,
     {
-        LocalStorage::get::<T>(key)
+        let ciphertext: String = LocalStorage::get(key)?;
+        let data = decrypt(ciphertext.as_str(), self.password.as_str());
+        serde_json::from_str::<T>(data.as_str()).map_err(StorageError::SerdeError)
     }
 
     // mostly a copy of self.get_all()
@@ -88,7 +99,7 @@ impl MutinyBrowserStorage {
         match res {
             Ok(k) => Ok(k),
             Err(e) => match e {
-                gloo_storage::errors::StorageError::KeyNotFound(_) => Ok(NodeStorage {
+                StorageError::KeyNotFound(_) => Ok(NodeStorage {
                     nodes: HashMap::new(),
                 }),
                 _ => Err(e),
@@ -467,7 +478,7 @@ impl BatchDatabase for MutinyBrowserStorage {
     type Batch = Self;
 
     fn begin_batch(&self) -> Self::Batch {
-        MutinyBrowserStorage::new()
+        MutinyBrowserStorage::new("".to_string())
     }
 
     fn commit_batch(&mut self, mut _batch: Self::Batch) -> Result<(), bdk::Error> {
@@ -920,7 +931,7 @@ mod tests {
 
     fn get_tree() -> MutinyBrowserStorage {
         cleanup_test();
-        MutinyBrowserStorage::default()
+        MutinyBrowserStorage::new("very_secure_password".to_string())
     }
 
     #[test]

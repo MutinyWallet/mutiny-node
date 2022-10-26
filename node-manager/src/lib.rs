@@ -2,6 +2,7 @@
 // wasm_bindgen uses improper casing and it needs to be turned off:
 // https://github.com/rustwasm/wasm-bindgen/issues/2882
 
+mod encrypt;
 mod error;
 mod localstorage;
 mod nodemanager;

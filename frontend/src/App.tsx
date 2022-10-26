@@ -46,7 +46,8 @@ function App() {
   }
 
   function createNodeManager() {
-    setNodeManager(new NodeManager(undefined))
+    // todo enter password
+    setNodeManager(new NodeManager("",undefined))
   }
 
   return (
