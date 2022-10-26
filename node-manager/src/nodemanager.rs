@@ -20,6 +20,7 @@ use crate::{
 #[wasm_bindgen]
 pub struct NodeManager {
     mnemonic: Mnemonic,
+    storage: MutinyBrowserStorage,
     wallet: MutinyWallet,
     node_storage: Mutex<NodeStorage>,
     ws_write: Arc<Mutex<SplitSink<WebSocket, Message>>>,
@@ -42,27 +43,28 @@ pub struct NodeIndex {
 impl NodeManager {
     #[wasm_bindgen]
     pub fn has_node_manager() -> bool {
-        let res = MutinyBrowserStorage::get_mnemonic();
-        res.is_ok()
+        MutinyBrowserStorage::has_mnemonic()
     }
 
     #[wasm_bindgen(constructor)]
     pub fn new(mnemonic: Option<String>) -> NodeManager {
         set_panic_hook();
 
+        let storage = MutinyBrowserStorage::new();
+
         let mnemonic = match mnemonic {
             Some(m) => {
                 let seed = Mnemonic::from_str(String::as_str(&m))
                     .expect("could not parse specified mnemonic");
-                MutinyBrowserStorage::insert_mnemonic(seed)
+                storage.insert_mnemonic(seed)
             }
-            None => MutinyBrowserStorage::get_mnemonic().unwrap_or_else(|_| {
+            None => storage.get_mnemonic().unwrap_or_else(|_| {
                 let seed = seedgen::generate_seed();
-                MutinyBrowserStorage::insert_mnemonic(seed)
+                storage.insert_mnemonic(seed)
             }),
         };
 
-        let wallet = MutinyWallet::new(mnemonic.clone(), Network::Testnet);
+        let wallet = MutinyWallet::new(mnemonic.clone(), storage.clone(), Network::Testnet);
 
         let ws = WebSocket::open("wss://ws.postman-echo.com/raw").unwrap();
         let (write, mut read) = ws.split();
@@ -78,6 +80,7 @@ impl NodeManager {
 
         NodeManager {
             mnemonic,
+            storage,
             wallet,
             node_storage: Mutex::new(node_storage),
             ws_write: Arc::new(Mutex::new(write)),
