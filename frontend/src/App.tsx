@@ -20,6 +20,7 @@ function App() {
       setWasm(wasmModule)
       setup()
     })
+      // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function setup() {
