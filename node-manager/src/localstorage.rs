@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 
+use crate::nodemanager::NodeStorage;
 use bdk::database::{BatchDatabase, BatchOperations, Database, SyncTime};
 use bdk::{KeychainKind, LocalUtxo, TransactionDetails};
 use bip39::Mnemonic;
@@ -11,6 +13,9 @@ use bitcoin::{OutPoint, Script, Transaction};
 use gloo_storage::{LocalStorage, Storage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+const mnemonic_key: &str = "mnemonic";
+const nodes_key: &str = "nodes";
 
 #[derive(Debug, Default)]
 pub struct MutinyBrowserStorage {}
@@ -44,12 +49,12 @@ impl MutinyBrowserStorage {
     }
 
     pub fn insert_mnemonic(mnemonic: Mnemonic) -> Mnemonic {
-        LocalStorage::set("mnemonic", mnemonic.to_string()).expect("Failed to write to storage");
+        LocalStorage::set(mnemonic_key, mnemonic.to_string()).expect("Failed to write to storage");
         mnemonic
     }
 
     pub fn get_mnemonic() -> gloo_storage::Result<Mnemonic> {
-        let res: gloo_storage::Result<String> = LocalStorage::get("mnemonic");
+        let res: gloo_storage::Result<String> = LocalStorage::get(mnemonic_key);
         match res {
             Ok(str) => Ok(Mnemonic::from_str(&str).expect("could not parse specified mnemonic")),
             Err(e) => Err(e),
@@ -58,7 +63,24 @@ impl MutinyBrowserStorage {
 
     #[allow(dead_code)]
     pub fn delete_mnemonic() {
-        LocalStorage::delete("mnemonic");
+        LocalStorage::delete(mnemonic_key);
+    }
+
+    pub fn get_nodes() -> gloo_storage::Result<NodeStorage> {
+        let res: gloo_storage::Result<NodeStorage> = LocalStorage::get(nodes_key);
+        match res {
+            Ok(k) => Ok(k),
+            Err(e) => match e {
+                gloo_storage::errors::StorageError::KeyNotFound(_) => Ok(NodeStorage {
+                    nodes: HashMap::new(),
+                }),
+                _ => Err(e),
+            },
+        }
+    }
+
+    pub fn insert_nodes(nodes: NodeStorage) -> gloo_storage::Result<()> {
+        LocalStorage::set(nodes_key, nodes)
     }
 }
 

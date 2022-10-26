@@ -14,6 +14,8 @@ function App() {
 
   const [nodeManager, setNodeManager] = useState<NodeManager>();
 
+  const [newPubkey, setNewPubkey] = useState("...")
+
   useEffect(() => {
     // TODO: learn why we init this but don't actually call stuff on it
     init().then((wasmModule) => {
@@ -65,16 +67,23 @@ function App() {
         {nodeManager &&
           <>
             <p>
+              <button onClick={() => setMnemonic(nodeManager.show_seed())}>Reveal Seed!</button>
+            </p>
+
+            <p>
               {`Wallet Balance: ${balance} sats`}
             </p>
             <pre className=''>
                 <code>{address}</code>
             </pre>
             <p>
-              <button onClick={() => setMnemonic(nodeManager.show_seed())}>Reveal Seed!</button>
-            </p>
-            <p>
               <button onClick={async () => setAddress(await nodeManager.get_new_address())}>Generate Address!</button>
+            </p>
+	    <pre className=''>
+		<code>{newPubkey}</code>
+	    </pre>
+            <p>
+              <button onClick={async () => setNewPubkey(await nodeManager.new_node())}>New Node!</button>
             </p>
             <p>
               <button onClick={async () => sync()}>Sync Wallet</button>
