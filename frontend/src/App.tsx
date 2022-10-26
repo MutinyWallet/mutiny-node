@@ -63,6 +63,7 @@ function App() {
     try {
       let amount_num = BigInt(amount);
       let dest = destinationAddress.trim();
+      // TODO: we can pass a fee here but not gonna bother for now
       let txid = await nodeManager?.send_to_address(dest, amount_num);
       if (txid) {
         setTxid(txid)
@@ -77,7 +78,7 @@ function App() {
 
   function createNodeManager() {
     // todo enter password
-    setNodeManager(new NodeManager("",undefined))
+    setNodeManager(new NodeManager("", undefined))
   }
 
   return (

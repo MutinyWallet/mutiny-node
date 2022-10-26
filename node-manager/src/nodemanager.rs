@@ -115,10 +115,15 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub async fn send_to_address(&self, destination_address: String, amount: u64) -> String {
+    pub async fn send_to_address(
+        &self,
+        destination_address: String,
+        amount: u64,
+        fee_rate: Option<f32>,
+    ) -> String {
         let txid = self
             .wallet
-            .send(destination_address, amount)
+            .send(destination_address, amount, fee_rate)
             .await
             .expect("Failed to send");
         txid.to_owned().to_string()

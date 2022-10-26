@@ -2,7 +2,7 @@ use futures::lock::Mutex;
 use log::debug;
 use std::str::FromStr;
 
-use bdk::blockchain::EsploraBlockchain;
+use bdk::blockchain::{Blockchain, EsploraBlockchain};
 use bdk::keys::ExtendedKey;
 use bdk::template::DescriptorTemplateOut;
 use bdk::{FeeRate, SignOptions, SyncOptions, Wallet};
@@ -67,19 +67,25 @@ impl MutinyWallet {
         &self,
         destination_address: String,
         amount: u64,
+        fee_rate: Option<f32>,
     ) -> Result<bitcoin::Txid, bdk::Error> {
         let wallet = self.wallet.lock().await;
 
         let send_to = Address::from_str(&destination_address)
             .map_err(|e| bdk::Error::Generic(e.to_string()))?;
 
+        let fee_rate = if let Some(rate) = fee_rate {
+            FeeRate::from_sat_per_vb(rate)
+        } else {
+            self.blockchain.estimate_fee(1).await?
+        };
+
         let (psbt, details) = {
             let mut builder = wallet.build_tx();
             builder
                 .add_recipient(send_to.script_pubkey(), amount)
                 .enable_rbf()
-                .do_not_spend_change()
-                .fee_rate(FeeRate::from_sat_per_vb(5.0));
+                .fee_rate(fee_rate);
             builder.finish()?
         };
 
