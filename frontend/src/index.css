@@ -16,6 +16,13 @@ input[type="submit"] {
   @apply shadow-inner-button;
 }
 
+input[type="text"] {
+  @apply p-4;
+  @apply text-black font-light text-xl;
+  @apply placeholder-[#4E5B7E];
+  @apply border-[2px] border-[#38CDA3] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#38CDA3] ring-offset-black;
+}
+
 pre {
   word-wrap: break-word;
   white-space: pre-wrap;
