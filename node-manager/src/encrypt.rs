@@ -45,7 +45,7 @@ pub fn decrypt(encrypted: &str, password: &str) -> String {
 
 fn derive_key(password: &str, salt: &[u8]) -> Output {
     let params = Params {
-        rounds: 12345,
+        rounds: 2048,
         output_length: 32,
     };
 
