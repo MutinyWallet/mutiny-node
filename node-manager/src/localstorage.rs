@@ -1,7 +1,7 @@
 use std::collections::HashMap;
+use std::str;
 use std::str::FromStr;
 
-use crate::nodemanager::NodeStorage;
 use bdk::database::{BatchDatabase, BatchOperations, Database, SyncTime};
 use bdk::{KeychainKind, LocalUtxo, TransactionDetails};
 use bip39::Mnemonic;
@@ -10,26 +10,49 @@ use bitcoin::consensus::encode::serialize;
 use bitcoin::hash_types::Txid;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::{OutPoint, Script, Transaction};
+use gloo_storage::errors::StorageError;
 use gloo_storage::{LocalStorage, Storage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::encrypt::*;
+use crate::nodemanager::NodeStorage;
+
 const mnemonic_key: &str = "mnemonic";
 const nodes_key: &str = "nodes";
 
-#[derive(Debug, Default)]
-pub struct MutinyBrowserStorage {}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MutinyBrowserStorage {
+    password: String,
+}
 
 impl MutinyBrowserStorage {
+    pub fn new(password: String) -> MutinyBrowserStorage {
+        MutinyBrowserStorage { password }
+    }
+
     // A wrapper for LocalStorage::set that converts the error to bdk::Error
     fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), bdk::Error>
     where
         T: Serialize,
     {
-        LocalStorage::set(key, value).map_err(|_| bdk::Error::Generic("Storage error".to_string()))
+        let data = serde_json::to_string(&value)?;
+        let ciphertext = encrypt(data.as_str(), self.password.as_str());
+        LocalStorage::set(key, ciphertext)
+            .map_err(|_| bdk::Error::Generic("Storage error".to_string()))
     }
 
-    // mostly a copy of LocalStorage::get_all()
+    /// Get the value for the specified key
+    fn get<T>(&self, key: impl AsRef<str>) -> gloo_storage::Result<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let ciphertext: String = LocalStorage::get(key)?;
+        let data = decrypt(ciphertext.as_str(), self.password.as_str());
+        serde_json::from_str::<T>(data.as_str()).map_err(StorageError::SerdeError)
+    }
+
+    // mostly a copy of self.get_all()
     fn scan_prefix(&self, prefix: String) -> Map<String, Value> {
         let local_storage = LocalStorage::raw();
         let length = LocalStorage::length();
@@ -39,7 +62,7 @@ impl MutinyBrowserStorage {
 
             if let Some(key) = key_opt {
                 if key.starts_with(String::as_str(&prefix)) {
-                    let value: Value = LocalStorage::get(&key).unwrap();
+                    let value: Value = self.get(&key).unwrap();
                     map.insert(key, value);
                 }
             }
@@ -48,17 +71,22 @@ impl MutinyBrowserStorage {
         map
     }
 
-    pub fn insert_mnemonic(mnemonic: Mnemonic) -> Mnemonic {
-        LocalStorage::set(mnemonic_key, mnemonic.to_string()).expect("Failed to write to storage");
+    pub fn insert_mnemonic(&self, mnemonic: Mnemonic) -> Mnemonic {
+        self.set(mnemonic_key, mnemonic.to_string())
+            .expect("Failed to write to storage");
         mnemonic
     }
 
-    pub fn get_mnemonic() -> gloo_storage::Result<Mnemonic> {
-        let res: gloo_storage::Result<String> = LocalStorage::get(mnemonic_key);
+    pub fn get_mnemonic(&self) -> gloo_storage::Result<Mnemonic> {
+        let res: gloo_storage::Result<String> = self.get(mnemonic_key);
         match res {
             Ok(str) => Ok(Mnemonic::from_str(&str).expect("could not parse specified mnemonic")),
             Err(e) => Err(e),
         }
+    }
+
+    pub fn has_mnemonic() -> bool {
+        LocalStorage::get::<String>("mnemonic").is_ok()
     }
 
     #[allow(dead_code)]
@@ -71,7 +99,7 @@ impl MutinyBrowserStorage {
         match res {
             Ok(k) => Ok(k),
             Err(e) => match e {
-                gloo_storage::errors::StorageError::KeyNotFound(_) => Ok(NodeStorage {
+                StorageError::KeyNotFound(_) => Ok(NodeStorage {
                     nodes: HashMap::new(),
                 }),
                 _ => Err(e),
@@ -214,7 +242,7 @@ impl BatchOperations for MutinyBrowserStorage {
         path: u32,
     ) -> Result<Option<Script>, bdk::Error> {
         let key = MapKey::Path((Some(keychain), Some(path))).as_map_key();
-        let res: Option<Script> = LocalStorage::get(&key).ok();
+        let res: Option<Script> = self.get(&key).ok();
         LocalStorage::delete(&key);
 
         Ok(res)
@@ -224,7 +252,7 @@ impl BatchOperations for MutinyBrowserStorage {
         script: &Script,
     ) -> Result<Option<(KeychainKind, u32)>, bdk::Error> {
         let key = MapKey::Script(Some(script)).as_map_key();
-        let res: Option<ScriptPubKeyInfo> = LocalStorage::get(&key).ok();
+        let res: Option<ScriptPubKeyInfo> = self.get(&key).ok();
         LocalStorage::delete(&key);
 
         match res {
@@ -234,14 +262,14 @@ impl BatchOperations for MutinyBrowserStorage {
     }
     fn del_utxo(&mut self, outpoint: &OutPoint) -> Result<Option<LocalUtxo>, bdk::Error> {
         let key = MapKey::Utxo(Some(outpoint)).as_map_key();
-        let res: Option<LocalUtxo> = LocalStorage::get(&key).ok();
+        let res: Option<LocalUtxo> = self.get(&key).ok();
         LocalStorage::delete(&key);
 
         Ok(res)
     }
     fn del_raw_tx(&mut self, txid: &Txid) -> Result<Option<Transaction>, bdk::Error> {
         let key = MapKey::RawTx(Some(txid)).as_map_key();
-        let res: Option<Transaction> = LocalStorage::get(&key).ok();
+        let res: Option<Transaction> = self.get(&key).ok();
         LocalStorage::delete(&key);
 
         Ok(res)
@@ -258,7 +286,7 @@ impl BatchOperations for MutinyBrowserStorage {
         };
 
         let key = MapKey::Transaction(Some(txid)).as_map_key();
-        let res: Option<TransactionDetails> = LocalStorage::get(&key).ok();
+        let res: Option<TransactionDetails> = self.get(&key).ok();
         LocalStorage::delete(&key);
 
         match res {
@@ -272,14 +300,14 @@ impl BatchOperations for MutinyBrowserStorage {
     }
     fn del_last_index(&mut self, keychain: KeychainKind) -> Result<Option<u32>, bdk::Error> {
         let key = MapKey::LastIndex(keychain).as_map_key();
-        let res: Option<u32> = LocalStorage::get(&key).ok();
+        let res: Option<u32> = self.get(&key).ok();
         LocalStorage::delete(&key);
 
         Ok(res)
     }
     fn del_sync_time(&mut self) -> Result<Option<SyncTime>, bdk::Error> {
         let key = MapKey::SyncTime.as_map_key();
-        let res: Option<SyncTime> = LocalStorage::get(&key).ok();
+        let res: Option<SyncTime> = self.get(&key).ok();
         LocalStorage::delete(&key);
 
         Ok(res)
@@ -294,7 +322,7 @@ impl Database for MutinyBrowserStorage {
     ) -> Result<(), bdk::Error> {
         let key = MapKey::DescriptorChecksum(keychain).as_map_key();
 
-        let prev = LocalStorage::get::<Vec<u8>>(&key).ok();
+        let prev = self.get::<Vec<u8>>(&key).ok();
         if let Some(val) = prev {
             if val == bytes.as_ref().to_vec() {
                 Ok(())
@@ -381,7 +409,7 @@ impl Database for MutinyBrowserStorage {
         path: u32,
     ) -> Result<Option<Script>, bdk::Error> {
         let key = MapKey::Path((Some(keychain), Some(path))).as_map_key();
-        Ok(LocalStorage::get::<Script>(&key).ok())
+        Ok(self.get::<Script>(&key).ok())
     }
 
     fn get_path_from_script_pubkey(
@@ -389,21 +417,22 @@ impl Database for MutinyBrowserStorage {
         script: &Script,
     ) -> Result<Option<(KeychainKind, u32)>, bdk::Error> {
         let key = MapKey::Script(Some(script)).as_map_key();
-        Ok(LocalStorage::get::<ScriptPubKeyInfo>(&key)
+        Ok(self
+            .get::<ScriptPubKeyInfo>(&key)
             .ok()
             .map(|info| (info.keychain, info.path)))
     }
 
     fn get_utxo(&self, outpoint: &OutPoint) -> Result<Option<LocalUtxo>, bdk::Error> {
         let key = MapKey::Utxo(Some(outpoint)).as_map_key();
-        let res: Option<LocalUtxo> = LocalStorage::get(key).ok();
+        let res: Option<LocalUtxo> = self.get(key).ok();
 
         Ok(res)
     }
 
     fn get_raw_tx(&self, txid: &Txid) -> Result<Option<Transaction>, bdk::Error> {
         let key = MapKey::RawTx(Some(txid)).as_map_key();
-        Ok(LocalStorage::get::<Transaction>(&key).ok())
+        Ok(self.get::<Transaction>(&key).ok())
     }
 
     fn get_tx(
@@ -412,7 +441,8 @@ impl Database for MutinyBrowserStorage {
         include_raw: bool,
     ) -> Result<Option<TransactionDetails>, bdk::Error> {
         let key = MapKey::Transaction(Some(txid)).as_map_key();
-        Ok(LocalStorage::get::<TransactionDetails>(&key)
+        Ok(self
+            .get::<TransactionDetails>(&key)
             .ok()
             .map(|mut txdetails| {
                 if include_raw {
@@ -425,18 +455,18 @@ impl Database for MutinyBrowserStorage {
 
     fn get_last_index(&self, keychain: KeychainKind) -> Result<Option<u32>, bdk::Error> {
         let key = MapKey::LastIndex(keychain).as_map_key();
-        Ok(LocalStorage::get::<u32>(key).ok())
+        Ok(self.get::<u32>(key).ok())
     }
 
     fn get_sync_time(&self) -> Result<Option<SyncTime>, bdk::Error> {
         let key = MapKey::SyncTime.as_map_key();
-        Ok(LocalStorage::get::<SyncTime>(key).ok())
+        Ok(self.get::<SyncTime>(key).ok())
     }
 
     // inserts 0 if not present
     fn increment_last_index(&mut self, keychain: KeychainKind) -> Result<u32, bdk::Error> {
         let key = MapKey::LastIndex(keychain).as_map_key();
-        let current_opt = LocalStorage::get::<u32>(&key).ok();
+        let current_opt = self.get::<u32>(&key).ok();
         let value = current_opt.map(|s| s + 1).unwrap_or_else(|| 0);
         self.set(key, value)?;
 
@@ -448,7 +478,7 @@ impl BatchDatabase for MutinyBrowserStorage {
     type Batch = Self;
 
     fn begin_batch(&self) -> Self::Batch {
-        MutinyBrowserStorage::default()
+        MutinyBrowserStorage::new("".to_string())
     }
 
     fn commit_batch(&mut self, mut _batch: Self::Batch) -> Result<(), bdk::Error> {
@@ -901,7 +931,7 @@ mod tests {
 
     fn get_tree() -> MutinyBrowserStorage {
         cleanup_test();
-        MutinyBrowserStorage::default()
+        MutinyBrowserStorage::new("very_secure_password".to_string())
     }
 
     #[test]

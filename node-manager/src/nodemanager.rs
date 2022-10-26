@@ -42,27 +42,28 @@ pub struct NodeIndex {
 impl NodeManager {
     #[wasm_bindgen]
     pub fn has_node_manager() -> bool {
-        let res = MutinyBrowserStorage::get_mnemonic();
-        res.is_ok()
+        MutinyBrowserStorage::has_mnemonic()
     }
 
     #[wasm_bindgen(constructor)]
-    pub fn new(mnemonic: Option<String>) -> NodeManager {
+    pub fn new(password: String, mnemonic: Option<String>) -> NodeManager {
         set_panic_hook();
+
+        let storage = MutinyBrowserStorage::new(password);
 
         let mnemonic = match mnemonic {
             Some(m) => {
                 let seed = Mnemonic::from_str(String::as_str(&m))
                     .expect("could not parse specified mnemonic");
-                MutinyBrowserStorage::insert_mnemonic(seed)
+                storage.insert_mnemonic(seed)
             }
-            None => MutinyBrowserStorage::get_mnemonic().unwrap_or_else(|_| {
+            None => storage.get_mnemonic().unwrap_or_else(|_| {
                 let seed = seedgen::generate_seed();
-                MutinyBrowserStorage::insert_mnemonic(seed)
+                storage.insert_mnemonic(seed)
             }),
         };
 
-        let wallet = MutinyWallet::new(mnemonic.clone(), Network::Testnet);
+        let wallet = MutinyWallet::new(mnemonic.clone(), storage, Network::Testnet);
 
         let ws = WebSocket::open("wss://ws.postman-echo.com/raw").unwrap();
         let (write, mut read) = ws.split();
@@ -170,9 +171,7 @@ pub(crate) async fn create_new_node_from_node_manager(node_manager: &NodeManager
         pubkey,
         child_index: next_node_index,
     };
-    existing_nodes
-        .nodes
-        .insert(pubkey.to_string(), next_node.clone());
+    existing_nodes.nodes.insert(pubkey.to_string(), next_node);
     MutinyBrowserStorage::insert_nodes(existing_nodes.clone()).expect("could not insert nodes");
     node_mutex.nodes = existing_nodes.nodes.clone();
     pubkey
@@ -194,7 +193,7 @@ mod tests {
         log!("creating node manager!");
 
         assert!(!NodeManager::has_node_manager());
-        NodeManager::new(None);
+        NodeManager::new("password".to_string(), None);
         assert!(NodeManager::has_node_manager());
 
         cleanup_test();
@@ -205,7 +204,7 @@ mod tests {
         log!("showing seed");
 
         let seed = generate_seed();
-        let nm = NodeManager::new(Some(seed.to_string()));
+        let nm = NodeManager::new("password".to_string(), Some(seed.to_string()));
 
         assert!(NodeManager::has_node_manager());
         assert_eq!(seed.to_string(), nm.show_seed());
@@ -218,7 +217,7 @@ mod tests {
         log!("creating new nodes");
 
         let seed = generate_seed();
-        let nm = NodeManager::new(Some(seed.to_string()));
+        let nm = NodeManager::new("password".to_string(), Some(seed.to_string()));
 
         {
             let node_pubkey = nm.new_node().await;

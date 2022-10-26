@@ -22,6 +22,11 @@ uuid = { version = "1.1.2", features = ["v4"] }
 lightning = { version = "0.0.112", features = ["max_level_trace"] }
 instant = { version = "0.1", features = [ "wasm-bindgen" ] }
 
+base64 = "0.13.0"
+pbkdf2 = "0.11"
+aes-gcm = "0.10.1"
+rand_core = { version = "0.6", features = ["std"] }
+
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires
 # all the `std::fmt` and `std::panicking` infrastructure, so isn't great for

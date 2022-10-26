@@ -12,7 +12,7 @@ pub fn generate_seed() -> Mnemonic {
 // A node private key will be derived from `m/0'/X'`, where it's node pubkey will
 // be derived from the LDK default being `m/0'/X'/0'`.
 pub fn derive_pubkey_child(mnemonic: Mnemonic, child_index: u32) -> PublicKey {
-    let xpriv = XPrv::new(&mnemonic.to_seed(""))
+    let xpriv = XPrv::new(mnemonic.to_seed(""))
         .unwrap()
         .derive_child(bip32::ChildNumber::new(0, true).unwrap())
         .unwrap()

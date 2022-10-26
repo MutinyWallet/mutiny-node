@@ -17,7 +17,11 @@ pub struct MutinyWallet {
 }
 
 impl MutinyWallet {
-    pub fn new(mnemonic: Mnemonic, network: Network) -> MutinyWallet {
+    pub fn new(
+        mnemonic: Mnemonic,
+        database: MutinyBrowserStorage,
+        network: Network,
+    ) -> MutinyWallet {
         let entropy = mnemonic.to_entropy();
         let xprivkey = ExtendedPrivKey::new_master(network, &entropy).unwrap();
         let xkey = ExtendedKey::from(xprivkey);
@@ -25,13 +29,11 @@ impl MutinyWallet {
         let (receive_descriptor_template, change_descriptor_template) =
             get_tr_descriptors_for_extended_key(xkey, network, account_number);
 
-        let db = MutinyBrowserStorage::default();
-
         let wallet = Wallet::new(
             receive_descriptor_template,
             Some(change_descriptor_template),
             network,
-            db,
+            database,
         )
         .expect("Error creating wallet");
 
