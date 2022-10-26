@@ -239,8 +239,6 @@ mod tests {
             assert_eq!(2, node_storage.nodes.len());
 
             let retrieved_node = node_storage.nodes.get(&node_pubkey.to_string()).unwrap();
-
-            let retrieved_node = node_storage.nodes.get(&node_pubkey.to_string()).unwrap();
             assert_eq!(node_pubkey, retrieved_node.pubkey.to_string());
             assert_eq!(1, retrieved_node.child_index);
         }
