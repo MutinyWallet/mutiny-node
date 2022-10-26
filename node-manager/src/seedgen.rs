@@ -9,8 +9,12 @@ pub fn generate_seed() -> Mnemonic {
     Mnemonic::from_entropy(&entropy).expect("Could not generate seed")
 }
 
+// A node private key will be derived from `m/0'/X'`, where it's node pubkey will
+// be derived from the LDK default being `m/0'/X'/0'`.
 pub fn derive_pubkey_child(mnemonic: Mnemonic, child_index: u32) -> PublicKey {
     let xpriv = XPrv::new(&mnemonic.to_seed(""))
+        .unwrap()
+        .derive_child(bip32::ChildNumber::new(0, true).unwrap())
         .unwrap()
         .derive_child(bip32::ChildNumber::new(child_index, true).unwrap())
         .unwrap();
@@ -48,13 +52,13 @@ mod tests {
 
         let pubkey = derive_pubkey_child(mnemonic.clone(), 1);
         assert_eq!(
-            "03366e949aaad84f42aa1b8e1e93e1ac38480c0b97136a1c18a5936fa7a4600b5a",
+            "02cae09cf2c8842ace44068a5bf3117a494ebbf69a99e79712483c36f97cdb7b54",
             pubkey.to_string()
         );
 
         let second_pubkey = derive_pubkey_child(mnemonic.clone(), 2);
         assert_eq!(
-            "031eecdfc3cb199b0daa867a2d9640feb7f744bec35133c3f64057d06720c769bd",
+            "03fcc9eaaf0b84946ea7935e3bc4f2b498893c2f53e5d2994d6877d149601ce553",
             second_pubkey.to_string()
         );
 

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use crate::nodemanager::NodeStorage;
@@ -70,9 +71,9 @@ impl MutinyBrowserStorage {
         match res {
             Ok(k) => Ok(k),
             Err(e) => match e {
-                gloo_storage::errors::StorageError::KeyNotFound(_) => {
-                    Ok(NodeStorage { nodes: vec![] })
-                }
+                gloo_storage::errors::StorageError::KeyNotFound(_) => Ok(NodeStorage {
+                    nodes: HashMap::new(),
+                }),
                 _ => Err(e),
             },
         }

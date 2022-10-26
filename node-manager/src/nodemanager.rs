@@ -1,13 +1,12 @@
+use std::collections::HashMap;
 use std::{str::FromStr, sync::Arc};
 
 use bdk::wallet::AddressIndex;
-use bip32::XPrv;
 use bip39::Mnemonic;
-use bitcoin::secp256k1::{PublicKey, Secp256k1};
+use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
 use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
-use lightning::chain::keysinterface::{KeysInterface, KeysManager, Recipient};
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -29,14 +28,14 @@ pub struct NodeManager {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct NodeStorage {
-    pub nodes: Vec<NodeIndex>,
+    pub nodes: HashMap<String, NodeIndex>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct NodeIndex {
     pub id: String,
-    pub pubkey: String,
-    pub child_index: i32,
+    pub pubkey: PublicKey,
+    pub child_index: u32,
 }
 
 #[wasm_bindgen]
@@ -121,37 +120,7 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub async fn new_node(&self) -> String {
-        // Begin with a mutex lock so that nothing else can
-        // save or alter the node list while it is about to
-        // be saved.
-        let mut node_mutex = self.node_storage.lock().await;
-
-        // Get the current nodes and their bip32 indices
-        // so that we can create another node with the next.
-        // Always get it from our storage, the node_mutex is
-        // mostly for read only and locking.
-        let mut existing_nodes =
-            MutinyBrowserStorage::get_nodes().expect("could not retrieve nodes");
-        let next_node_index = match existing_nodes.nodes.iter().max_by_key(|n| n.child_index) {
-            None => 1,
-            Some(n) => n.child_index + 1,
-        };
-
-        // Get the pubkey of this node before we save it
-        let pubkey =
-            seedgen::derive_pubkey_child(self.mnemonic.clone(), next_node_index as u32).to_string();
-
-        // Create and save a new node using the next child index
-        let next_node = NodeIndex {
-            id: Uuid::new_v4().to_string(),
-            pubkey: pubkey.clone(),
-            child_index: next_node_index,
-        };
-        existing_nodes.nodes.push(next_node.clone());
-        MutinyBrowserStorage::insert_nodes(existing_nodes.clone()).expect("could not insert nodes");
-        node_mutex.nodes = existing_nodes.nodes.clone();
-
-        return pubkey.clone();
+        create_new_node_from_node_manager(self).await.to_string()
     }
 
     #[wasm_bindgen]
@@ -169,6 +138,44 @@ impl NodeManager {
         });
         self.counter += 1;
     }
+}
+
+// This will create a new node with a node manager and return the PublicKey of the node created.
+pub(crate) async fn create_new_node_from_node_manager(node_manager: &NodeManager) -> PublicKey {
+    // Begin with a mutex lock so that nothing else can
+    // save or alter the node list while it is about to
+    // be saved.
+    let mut node_mutex = node_manager.node_storage.lock().await;
+
+    // Get the current nodes and their bip32 indices
+    // so that we can create another node with the next.
+    // Always get it from our storage, the node_mutex is
+    // mostly for read only and locking.
+    let mut existing_nodes = MutinyBrowserStorage::get_nodes().expect("could not retrieve nodes");
+    let next_node_index = match existing_nodes
+        .nodes
+        .iter()
+        .max_by_key(|(_, v)| v.child_index)
+    {
+        None => 0,
+        Some((_, v)) => v.child_index + 1,
+    };
+
+    // Get the pubkey of this node before we save it
+    let pubkey = seedgen::derive_pubkey_child(node_manager.mnemonic.clone(), next_node_index);
+
+    // Create and save a new node using the next child index
+    let next_node = NodeIndex {
+        id: Uuid::new_v4().to_string(),
+        pubkey,
+        child_index: next_node_index,
+    };
+    existing_nodes
+        .nodes
+        .insert(pubkey.to_string(), next_node.clone());
+    MutinyBrowserStorage::insert_nodes(existing_nodes.clone()).expect("could not insert nodes");
+    node_mutex.nodes = existing_nodes.nodes.clone();
+    pubkey
 }
 
 #[cfg(test)]
@@ -216,11 +223,12 @@ mod tests {
         {
             let node_pubkey = nm.new_node().await;
             let node_storage = nm.node_storage.lock().await;
-
             assert_ne!("", node_pubkey);
             assert_eq!(1, node_storage.nodes.len());
-            assert_eq!(node_pubkey, node_storage.nodes[0].pubkey);
-            assert_eq!(1, node_storage.nodes[0].child_index);
+
+            let retrieved_node = node_storage.nodes.get(&node_pubkey.to_string()).unwrap();
+            assert_eq!(node_pubkey, retrieved_node.pubkey.to_string());
+            assert_eq!(0, retrieved_node.child_index);
         }
 
         {
@@ -229,8 +237,12 @@ mod tests {
 
             assert_ne!("", node_pubkey);
             assert_eq!(2, node_storage.nodes.len());
-            assert_eq!(node_pubkey, node_storage.nodes[1].pubkey);
-            assert_eq!(2, node_storage.nodes[1].child_index);
+
+            let retrieved_node = node_storage.nodes.get(&node_pubkey.to_string()).unwrap();
+
+            let retrieved_node = node_storage.nodes.get(&node_pubkey.to_string()).unwrap();
+            assert_eq!(node_pubkey, retrieved_node.pubkey.to_string());
+            assert_eq!(1, retrieved_node.child_index);
         }
 
         cleanup_test();
