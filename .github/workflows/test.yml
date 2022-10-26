@@ -12,7 +12,7 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: nightly
-          components: clippy
+          components: clippy, rustfmt
           target: wasm32-unknown-unknown
           override: true
           profile: minimal
@@ -35,6 +35,11 @@ jobs:
           restore-keys: |
             cargo-${{ runner.os }}-browser-tests-
             cargo-${{ runner.os }}-
+
+      - name: Check formatting
+        working-directory: ./node-manager
+        run: cargo fmt --check
+
       - name: Run tests
         working-directory: ./node-manager
         run: wasm-pack test --headless --firefox --chrome

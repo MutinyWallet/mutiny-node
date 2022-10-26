@@ -1,5 +1,5 @@
-use std::str::FromStr;
 use futures::lock::Mutex;
+use std::str::FromStr;
 
 use bdk::blockchain::EsploraBlockchain;
 use bdk::keys::ExtendedKey;
