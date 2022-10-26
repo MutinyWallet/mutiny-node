@@ -31,8 +31,6 @@ impl MutinyWallet {
         let (receive_descriptor_template, change_descriptor_template) =
             get_tr_descriptors_for_extended_key(xkey, network, account_number);
 
-        let db = MutinyBrowserStorage::default();
-
         let url = match network {
             Network::Bitcoin => Ok("https://blockstream.info/api"),
             Network::Testnet => Ok("https://blockstream.info/testnet/api"),
