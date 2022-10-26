@@ -138,26 +138,8 @@ impl NodeManager {
         };
 
         // Get the pubkey of this node before we save it
-        // TODO too many unwraps here, maybe iterate through
-        // indexes in case there's a problem with a specific
-        // index's bytes.
-        let xpriv = XPrv::new(&self.mnemonic.to_seed(""))
-            .unwrap()
-            .derive_child(bip32::ChildNumber::new(next_node_index as u32, true).unwrap())
-            .unwrap();
-        let current_time = instant::now();
-        let keys_manager = Arc::new(KeysManager::new(
-            &xpriv.to_bytes(),
-            (current_time / 1000.0).round() as u64,
-            (current_time * 1000.0).round() as u32,
-        ));
-        let mut secp_ctx = Secp256k1::new();
-        let keys_manager_clone = keys_manager.clone();
-        secp_ctx.seeded_randomize(&keys_manager_clone.get_secure_random_bytes());
-        let our_network_key = keys_manager_clone
-            .get_node_secret(Recipient::Node)
-            .expect("cannot parse node secret");
-        let pubkey = PublicKey::from_secret_key(&secp_ctx, &our_network_key).to_string();
+        let pubkey =
+            seedgen::derive_pubkey_child(self.mnemonic.clone(), next_node_index as u32).to_string();
 
         // Create and save a new node using the next child index
         let next_node = NodeIndex {
@@ -200,12 +182,6 @@ mod tests {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
-    macro_rules! log {
-        ( $( $t:tt )* ) => {
-            web_sys::console::log_1(&format!( $( $t )* ).into());
-        }
-    }
-
     #[test]
     fn create_node_manager() {
         log!("creating node manager!");
@@ -226,6 +202,36 @@ mod tests {
 
         assert!(NodeManager::has_node_manager());
         assert_eq!(seed.to_string(), nm.show_seed());
+
+        cleanup_test();
+    }
+
+    #[test]
+    async fn created_new_nodes() {
+        log!("creating new nodes");
+
+        let seed = generate_seed();
+        let nm = NodeManager::new(Some(seed.to_string()));
+
+        {
+            let node_pubkey = nm.new_node().await;
+            let node_storage = nm.node_storage.lock().await;
+
+            assert_ne!("", node_pubkey);
+            assert_eq!(1, node_storage.nodes.len());
+            assert_eq!(node_pubkey, node_storage.nodes[0].pubkey);
+            assert_eq!(1, node_storage.nodes[0].child_index);
+        }
+
+        {
+            let node_pubkey = nm.new_node().await;
+            let node_storage = nm.node_storage.lock().await;
+
+            assert_ne!("", node_pubkey);
+            assert_eq!(2, node_storage.nodes.len());
+            assert_eq!(node_pubkey, node_storage.nodes[1].pubkey);
+            assert_eq!(2, node_storage.nodes[1].child_index);
+        }
 
         cleanup_test();
     }
