@@ -4,10 +4,10 @@
 
 mod encrypt;
 mod error;
+mod keymanager;
 mod localstorage;
 mod node;
 mod nodemanager;
-mod seedgen;
 mod utils;
 mod wallet;
 
