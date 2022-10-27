@@ -13,6 +13,7 @@ use uuid::Uuid;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
+use crate::node::Node;
 use crate::{
     localstorage::MutinyBrowserStorage, seedgen, utils::set_panic_hook, wallet::MutinyWallet,
 };
@@ -22,6 +23,7 @@ pub struct NodeManager {
     mnemonic: Mnemonic,
     wallet: MutinyWallet,
     node_storage: Mutex<NodeStorage>,
+    nodes: Arc<Mutex<HashMap<String, Arc<Node>>>>,
     ws_write: Arc<Mutex<SplitSink<WebSocket, Message>>>,
     counter: usize,
 }
@@ -81,6 +83,7 @@ impl NodeManager {
             mnemonic,
             wallet,
             node_storage: Mutex::new(node_storage),
+            nodes: Arc::new(Mutex::new(HashMap::new())), // TODO init the nodes
             ws_write: Arc::new(Mutex::new(write)),
             counter: 0,
         }
@@ -178,7 +181,8 @@ pub(crate) async fn create_new_node_from_node_manager(node_manager: &NodeManager
     };
 
     // Get the pubkey of this node before we save it
-    let pubkey = seedgen::derive_pubkey_child(node_manager.mnemonic.clone(), next_node_index);
+    let (pubkey, xpriv) =
+        seedgen::derive_pubkey_child(node_manager.mnemonic.clone(), next_node_index);
 
     // Create and save a new node using the next child index
     let next_node = NodeIndex {
@@ -186,9 +190,22 @@ pub(crate) async fn create_new_node_from_node_manager(node_manager: &NodeManager
         pubkey,
         child_index: next_node_index,
     };
-    existing_nodes.nodes.insert(pubkey.to_string(), next_node);
+    existing_nodes
+        .nodes
+        .insert(pubkey.to_string(), next_node.clone());
     MutinyBrowserStorage::insert_nodes(existing_nodes.clone()).expect("could not insert nodes");
     node_mutex.nodes = existing_nodes.nodes.clone();
+
+    // now create the node process and init it
+    let new_node =
+        Node::new(next_node.id.clone(), pubkey, xpriv).expect("could not initialize node");
+    node_manager
+        .nodes
+        .clone()
+        .lock()
+        .await
+        .insert(pubkey.to_string(), Arc::new(new_node));
+
     pubkey
 }
 

@@ -5,6 +5,7 @@
 mod encrypt;
 mod error;
 mod localstorage;
+mod node;
 mod nodemanager;
 mod seedgen;
 mod utils;

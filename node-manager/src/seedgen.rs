@@ -11,7 +11,7 @@ pub fn generate_seed() -> Mnemonic {
 
 // A node private key will be derived from `m/0'/X'`, where it's node pubkey will
 // be derived from the LDK default being `m/0'/X'/0'`.
-pub fn derive_pubkey_child(mnemonic: Mnemonic, child_index: u32) -> PublicKey {
+pub fn derive_pubkey_child(mnemonic: Mnemonic, child_index: u32) -> (PublicKey, XPrv) {
     let xpriv = XPrv::new(mnemonic.to_seed(""))
         .unwrap()
         .derive_child(bip32::ChildNumber::new(0, true).unwrap())
@@ -29,7 +29,11 @@ pub fn derive_pubkey_child(mnemonic: Mnemonic, child_index: u32) -> PublicKey {
     let our_network_key = keys_manager
         .get_node_secret(Recipient::Node)
         .expect("cannot parse node secret");
-    PublicKey::from_secret_key(&secp_ctx, &our_network_key)
+
+    (
+        PublicKey::from_secret_key(&secp_ctx, &our_network_key),
+        xpriv,
+    )
 }
 
 #[cfg(test)]
@@ -50,19 +54,19 @@ mod tests {
 
         let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
 
-        let pubkey = derive_pubkey_child(mnemonic.clone(), 1);
+        let (pubkey, _) = derive_pubkey_child(mnemonic.clone(), 1);
         assert_eq!(
             "02cae09cf2c8842ace44068a5bf3117a494ebbf69a99e79712483c36f97cdb7b54",
             pubkey.to_string()
         );
 
-        let second_pubkey = derive_pubkey_child(mnemonic.clone(), 2);
+        let (second_pubkey, _) = derive_pubkey_child(mnemonic.clone(), 2);
         assert_eq!(
             "03fcc9eaaf0b84946ea7935e3bc4f2b498893c2f53e5d2994d6877d149601ce553",
             second_pubkey.to_string()
         );
 
-        let second_pubkey_again = derive_pubkey_child(mnemonic.clone(), 2);
+        let (second_pubkey_again, _) = derive_pubkey_child(mnemonic.clone(), 2);
         assert_eq!(second_pubkey, second_pubkey_again);
     }
 }
