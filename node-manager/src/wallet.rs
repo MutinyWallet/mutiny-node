@@ -1,19 +1,21 @@
 use futures::lock::Mutex;
+use log::debug;
 use std::str::FromStr;
 
-use bdk::blockchain::EsploraBlockchain;
+use bdk::blockchain::{Blockchain, EsploraBlockchain};
 use bdk::keys::ExtendedKey;
 use bdk::template::DescriptorTemplateOut;
-use bdk::{SyncOptions, Wallet};
+use bdk::{FeeRate, SignOptions, SyncOptions, Wallet};
 use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
-use bitcoin::Network;
+use bitcoin::{Address, Network};
 
 use crate::localstorage::MutinyBrowserStorage;
 
 #[derive(Debug)]
 pub struct MutinyWallet {
     pub wallet: Mutex<Wallet<MutinyBrowserStorage>>,
+    blockchain: EsploraBlockchain,
 }
 
 impl MutinyWallet {
@@ -29,6 +31,18 @@ impl MutinyWallet {
         let (receive_descriptor_template, change_descriptor_template) =
             get_tr_descriptors_for_extended_key(xkey, network, account_number);
 
+        let url = match network {
+            Network::Bitcoin => Ok("https://blockstream.info/api"),
+            Network::Testnet => Ok("https://blockstream.info/testnet/api"),
+            Network::Signet => Ok("https://mempool.space/signet/api"),
+            Network::Regtest => Err(bdk::Error::Generic(
+                "No esplora client available for regtest".to_string(),
+            )),
+        }
+        .expect("What did I tell you about regtest?");
+
+        let blockchain = EsploraBlockchain::new(url, 20);
+
         let wallet = Wallet::new(
             receive_descriptor_template,
             Some(change_descriptor_template),
@@ -39,22 +53,69 @@ impl MutinyWallet {
 
         MutinyWallet {
             wallet: Mutex::new(wallet),
+            blockchain,
         }
     }
 
     pub async fn sync(&self) -> Result<(), bdk::Error> {
         let wallet = self.wallet.lock().await;
-        let url = match wallet.network() {
-            Network::Bitcoin => Ok("https://blockstream.info/api"),
-            Network::Testnet => Ok("https://blockstream.info/testnet/api"),
-            Network::Signet => Ok("https://mempool.space/signet/api"),
+
+        wallet.sync(&self.blockchain, SyncOptions::default()).await
+    }
+
+    pub async fn send(
+        &self,
+        destination_address: String,
+        amount: u64,
+        fee_rate: Option<f32>,
+    ) -> Result<bitcoin::Txid, bdk::Error> {
+        let wallet = self.wallet.lock().await;
+
+        let send_to = Address::from_str(&destination_address)
+            .map_err(|e| bdk::Error::Generic(e.to_string()))?;
+
+        let fee_rate = if let Some(rate) = fee_rate {
+            FeeRate::from_sat_per_vb(rate)
+        } else {
+            self.blockchain.estimate_fee(1).await?
+        };
+
+        let (psbt, details) = {
+            let mut builder = wallet.build_tx();
+            builder
+                .add_recipient(send_to.script_pubkey(), amount)
+                .enable_rbf()
+                .fee_rate(fee_rate);
+            builder.finish()?
+        };
+
+        debug!("Transaction details: {:#?}", details);
+        debug!("Unsigned PSBT: {}", &psbt);
+
+        let mut psbt = psbt;
+
+        let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
+
+        debug!("{}", finalized);
+
+        let raw_transaction = psbt.extract_tx();
+        let txid = raw_transaction.txid();
+
+        let _ = &self.blockchain.broadcast(&raw_transaction).await?;
+
+        let explorer_url = match wallet.network() {
+            Network::Bitcoin => Ok("https://mempool.space/tx/"),
+            Network::Testnet => Ok("https://mempool.space/testnet/tx/"),
+            Network::Signet => Ok("https://mempool.space/signet/tx/"),
             Network::Regtest => Err(bdk::Error::Generic(
                 "No esplora client available for regtest".to_string(),
             )),
-        }?;
+        }
+        .expect("What did I tell you about regtest?");
 
-        let blockchain = EsploraBlockchain::new(url, 20);
-        wallet.sync(&blockchain, SyncOptions::default()).await
+        debug!("Transaction broadcast! TXID: {txid}.\nExplorer URL: {explorer_url}{txid}");
+
+        Ok(txid)
     }
 }
 

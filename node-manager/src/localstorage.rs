@@ -409,7 +409,7 @@ impl Database for MutinyBrowserStorage {
         path: u32,
     ) -> Result<Option<Script>, bdk::Error> {
         let key = MapKey::Path((Some(keychain), Some(path))).as_map_key();
-        Ok(self.get::<Script>(&key).ok())
+        Ok(self.get::<Script>(key).ok())
     }
 
     fn get_path_from_script_pubkey(
@@ -418,7 +418,7 @@ impl Database for MutinyBrowserStorage {
     ) -> Result<Option<(KeychainKind, u32)>, bdk::Error> {
         let key = MapKey::Script(Some(script)).as_map_key();
         Ok(self
-            .get::<ScriptPubKeyInfo>(&key)
+            .get::<ScriptPubKeyInfo>(key)
             .ok()
             .map(|info| (info.keychain, info.path)))
     }
@@ -432,7 +432,7 @@ impl Database for MutinyBrowserStorage {
 
     fn get_raw_tx(&self, txid: &Txid) -> Result<Option<Transaction>, bdk::Error> {
         let key = MapKey::RawTx(Some(txid)).as_map_key();
-        Ok(self.get::<Transaction>(&key).ok())
+        Ok(self.get::<Transaction>(key).ok())
     }
 
     fn get_tx(
@@ -442,7 +442,7 @@ impl Database for MutinyBrowserStorage {
     ) -> Result<Option<TransactionDetails>, bdk::Error> {
         let key = MapKey::Transaction(Some(txid)).as_map_key();
         Ok(self
-            .get::<TransactionDetails>(&key)
+            .get::<TransactionDetails>(key)
             .ok()
             .map(|mut txdetails| {
                 if include_raw {

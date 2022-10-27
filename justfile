@@ -12,3 +12,9 @@ test-mac:
 
 cert:
     mkdir -p ./frontend/.cert && mkcert -key-file ./frontend/.cert/key.pem -cert-file ./frontend/.cert/cert.pem "localhost"
+
+clippy:
+    cargo clippy --target=wasm32-unknown-unknown
+
+clippy-mac:
+    cd ./node-manager && AR=/opt/homebrew/opt/llvm/bin/llvm-ar CC=/opt/homebrew/opt/llvm/bin/clang cargo clippy --target=wasm32-unknown-unknown

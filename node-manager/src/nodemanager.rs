@@ -115,6 +115,21 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
+    pub async fn send_to_address(
+        &self,
+        destination_address: String,
+        amount: u64,
+        fee_rate: Option<f32>,
+    ) -> String {
+        let txid = self
+            .wallet
+            .send(destination_address, amount, fee_rate)
+            .await
+            .expect("Failed to send");
+        txid.to_owned().to_string()
+    }
+
+    #[wasm_bindgen]
     pub async fn sync(&self) {
         self.wallet.sync().await.expect("Wallet failed to sync")
     }
@@ -133,7 +148,7 @@ impl NodeManager {
                 .clone()
                 .lock()
                 .await
-                .send(Message::Text(format!("Test number {}", count)))
+                .send(Message::Text(format!("Test number {count}")))
                 .await
                 .unwrap();
         });
