@@ -3,7 +3,6 @@ use std::{str::FromStr, sync::Arc};
 
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
-use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
 use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
@@ -14,7 +13,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::keymanager;
-use crate::node::{self, Node};
+use crate::node::Node;
 use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
 
 #[wasm_bindgen]
@@ -27,15 +26,38 @@ pub struct NodeManager {
     counter: usize,
 }
 
+// This is the NodeStorage object saved to the DB
 #[derive(Serialize, Deserialize, Clone)]
-pub struct NodeStorage {
+pub(crate) struct NodeStorage {
     pub nodes: HashMap<String, NodeIndex>,
 }
 
+// This is the NodeIndex reference that is saved to the DB
 #[derive(Serialize, Deserialize, Clone)]
-pub struct NodeIndex {
+pub(crate) struct NodeIndex {
     pub uuid: String,
     pub child_index: u32,
+}
+
+// This is the NodeIdentity that refer to a specific node
+// Used for public facing identification.
+#[wasm_bindgen]
+pub struct NodeIdentity {
+    uuid: String,
+    pubkey: String,
+}
+
+#[wasm_bindgen]
+impl NodeIdentity {
+    #[wasm_bindgen(getter)]
+    pub fn uuid(&self) -> String {
+        self.uuid.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn pubkey(&self) -> String {
+        self.pubkey.clone()
+    }
 }
 
 #[wasm_bindgen]
@@ -136,8 +158,8 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub async fn new_node(&self) -> String {
-        create_new_node_from_node_manager(self).await.to_string()
+    pub async fn new_node(&self) -> NodeIdentity {
+        create_new_node_from_node_manager(self).await
     }
 
     #[wasm_bindgen]
@@ -158,7 +180,7 @@ impl NodeManager {
 }
 
 // This will create a new node with a node manager and return the PublicKey of the node created.
-pub(crate) async fn create_new_node_from_node_manager(node_manager: &NodeManager) -> PublicKey {
+pub(crate) async fn create_new_node_from_node_manager(node_manager: &NodeManager) -> NodeIdentity {
     // Begin with a mutex lock so that nothing else can
     // save or alter the node list while it is about to
     // be saved.
@@ -179,21 +201,22 @@ pub(crate) async fn create_new_node_from_node_manager(node_manager: &NodeManager
     };
 
     // Create and save a new node using the next child index
+    let next_node_uuid = Uuid::new_v4().to_string();
     let next_node = NodeIndex {
-        uuid: Uuid::new_v4().to_string(),
+        uuid: next_node_uuid.clone(),
         child_index: next_node_index,
     };
 
     existing_nodes
         .nodes
-        .insert(next_node.uuid.clone(), next_node.clone());
+        .insert(next_node_uuid.clone(), next_node.clone());
 
     MutinyBrowserStorage::insert_nodes(existing_nodes.clone()).expect("could not insert nodes");
     node_mutex.nodes = existing_nodes.nodes.clone();
 
     // now create the node process and init it
-    let new_node =
-        Node::new(next_node, node_manager.mnemonic.clone()).expect("could not initialize node");
+    let new_node = Node::new(next_node.clone(), node_manager.mnemonic.clone())
+        .expect("could not initialize node");
 
     let node_pubkey = new_node.pubkey;
     node_manager
@@ -203,7 +226,10 @@ pub(crate) async fn create_new_node_from_node_manager(node_manager: &NodeManager
         .await
         .insert(node_pubkey.clone().to_string(), Arc::new(new_node));
 
-    node_pubkey
+    NodeIdentity {
+        uuid: next_node.uuid.clone(),
+        pubkey: node_pubkey.clone().to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -248,28 +274,28 @@ mod tests {
         let seed = generate_seed();
         let nm = NodeManager::new("password".to_string(), Some(seed.to_string()));
 
-        // TODO: reimpl with uuid somehow
+        {
+            let node_identity = nm.new_node().await;
+            let node_storage = nm.node_storage.lock().await;
+            assert_ne!("", node_identity.uuid);
+            assert_ne!("", node_identity.pubkey);
+            assert_eq!(1, node_storage.nodes.len());
 
-        // {
-        //     let node_pubkey = nm.new_node().await;
-        //     let node_storage = nm.node_storage.lock().await;
-        //     assert_ne!("", node_pubkey);
-        //     assert_eq!(1, node_storage.nodes.len());
+            let retrieved_node = node_storage.nodes.get(&node_identity.uuid).unwrap();
+            assert_eq!(0, retrieved_node.child_index);
+        }
 
-        //     let retrieved_node = node_storage.nodes.get(&node_pubkey.to_string()).unwrap();
-        //     assert_eq!(0, retrieved_node.child_index);
-        // }
+        {
+            let node_identity = nm.new_node().await;
+            let node_storage = nm.node_storage.lock().await;
 
-        // {
-        //     let node_pubkey = nm.new_node().await;
-        //     let node_storage = nm.node_storage.lock().await;
+            assert_ne!("", node_identity.uuid);
+            assert_ne!("", node_identity.pubkey);
+            assert_eq!(2, node_storage.nodes.len());
 
-        //     assert_ne!("", node_pubkey);
-        //     assert_eq!(2, node_storage.nodes.len());
-
-        //     let retrieved_node = node_storage.nodes.get(&node_pubkey.to_string()).unwrap();
-        //     assert_eq!(1, retrieved_node.child_index);
-        // }
+            let retrieved_node = node_storage.nodes.get(&node_identity.uuid).unwrap();
+            assert_eq!(1, retrieved_node.child_index);
+        }
 
         cleanup_test();
     }

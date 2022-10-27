@@ -5,10 +5,9 @@ use crate::{
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
     nodemanager::NodeIndex,
 };
-use bip32::XPrv;
 use bip39::Mnemonic;
-use bitcoin::secp256k1::{PublicKey, Secp256k1};
-use lightning::chain::keysinterface::{KeysInterface, KeysManager};
+use bitcoin::secp256k1::PublicKey;
+use lightning::chain::keysinterface::KeysManager;
 use log::info;
 
 pub struct Node {
@@ -18,7 +17,7 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new(node_index: NodeIndex, mnemonic: Mnemonic) -> Result<Self, error::Error> {
+    pub(crate) fn new(node_index: NodeIndex, mnemonic: Mnemonic) -> Result<Self, error::Error> {
         info!("initialized a new node: {}", node_index.uuid);
 
         let keys_manager = create_keys_manager(mnemonic, node_index.child_index);
