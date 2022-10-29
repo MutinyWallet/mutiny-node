@@ -2,13 +2,20 @@ use futures::lock::Mutex;
 use log::debug;
 use std::str::FromStr;
 
-use bdk::blockchain::{Blockchain, EsploraBlockchain};
+use crate::error::Error::ChainAccessFailed;
+use bdk::blockchain::{Blockchain, EsploraBlockchain, GetHeight};
 use bdk::keys::ExtendedKey;
 use bdk::template::DescriptorTemplateOut;
 use bdk::{FeeRate, SignOptions, SyncOptions, Wallet};
 use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
-use bitcoin::{Address, Network};
+use bitcoin::util::uint::Uint256;
+use bitcoin::{Address, Block, BlockHash, Network, Transaction};
+use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
+use lightning_block_sync::BlockData::FullBlock;
+use lightning_block_sync::{
+    AsyncBlockSourceResult, BlockData, BlockHeaderData, BlockSource, BlockSourceError,
+};
 
 use crate::localstorage::MutinyBrowserStorage;
 
@@ -116,6 +123,69 @@ impl MutinyWallet {
         debug!("Transaction broadcast! TXID: {txid}.\nExplorer URL: {explorer_url}{txid}");
 
         Ok(txid)
+    }
+}
+
+impl BlockSource for MutinyWallet {
+    fn get_header<'a>(
+        &'a self,
+        header_hash: &'a BlockHash,
+        _height_hint: Option<u32>,
+    ) -> AsyncBlockSourceResult<'a, BlockHeaderData> {
+        Box::pin(async move {
+            let status = self.blockchain.get_block_status(header_hash).await.unwrap();
+            let res = self.blockchain.get_header_by_hash(header_hash).await.unwrap();
+            let converted_res = BlockHeaderData {
+                header: bitcoin::BlockHeader {
+                    version: res.version,
+                    prev_blockhash: res.prev_blockhash,
+                    merkle_root: res.merkle_root,
+                    time: res.time as u32,
+                    bits: res.bits,
+                    nonce: res.nonce,
+                },
+                height: status.height.unwrap(),
+                chainwork: unimplemented!(),
+            };
+            Ok(converted_res)
+        })
+    }
+
+    fn get_block<'a>(
+        &'a self,
+        header_hash: &'a BlockHash,
+    ) -> AsyncBlockSourceResult<'a, BlockData> {
+        Box::pin(async move {
+            let res_opt = self.blockchain.get_block_raw(header_hash).await.unwrap();
+
+            match res_opt {
+                Some(res) => Ok(FullBlock(res)),
+                None => Err(BlockSourceError::transient(ChainAccessFailed)),
+            }
+        })
+    }
+
+    fn get_best_block<'a>(&'a self) -> AsyncBlockSourceResult<(BlockHash, Option<u32>)> {
+        Box::pin(async {
+            let height = self.blockchain.get_height()?;
+            let hash = self.blockchain.get_tip_hash().await?;
+
+            let tuple = (hash, Some(height));
+            Ok(tuple)
+        })
+    }
+}
+
+impl FeeEstimator for MutinyWallet {
+    fn get_est_sat_per_1000_weight(&self, _confirmation_target: ConfirmationTarget) -> u32 {
+        // todo pull for fees in a separate thread
+        4000 as u32
+    }
+}
+
+impl BroadcasterInterface for MutinyWallet {
+    fn broadcast_transaction(&self, tx: &Transaction) {
+        self.blockchain.broadcast(&tx).unwrap()
     }
 }
 
