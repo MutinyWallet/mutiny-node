@@ -1,4 +1,5 @@
 use futures::lock::Mutex;
+use futures::TryFutureExt;
 use log::debug;
 use std::str::FromStr;
 
@@ -9,8 +10,7 @@ use bdk::template::DescriptorTemplateOut;
 use bdk::{FeeRate, SignOptions, SyncOptions, Wallet};
 use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
-use bitcoin::util::uint::Uint256;
-use bitcoin::{Address, Block, BlockHash, Network, Transaction};
+use bitcoin::{Address, BlockHash, Network, Transaction};
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
 use lightning_block_sync::BlockData::FullBlock;
 use lightning_block_sync::{
@@ -87,7 +87,7 @@ impl MutinyWallet {
             self.blockchain.estimate_fee(1).await?
         };
 
-        let (psbt, details) = {
+        let (mut psbt, details) = {
             let mut builder = wallet.build_tx();
             builder
                 .add_recipient(send_to.script_pubkey(), amount)
@@ -98,8 +98,6 @@ impl MutinyWallet {
 
         debug!("Transaction details: {:#?}", details);
         debug!("Unsigned PSBT: {}", &psbt);
-
-        let mut psbt = psbt;
 
         let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
 
@@ -134,7 +132,11 @@ impl BlockSource for MutinyWallet {
     ) -> AsyncBlockSourceResult<'a, BlockHeaderData> {
         Box::pin(async move {
             let status = self.blockchain.get_block_status(header_hash).await.unwrap();
-            let res = self.blockchain.get_header_by_hash(header_hash).await.unwrap();
+            let res = self
+                .blockchain
+                .get_header_by_hash(header_hash)
+                .await
+                .unwrap();
             let converted_res = BlockHeaderData {
                 header: bitcoin::BlockHeader {
                     version: res.version,
@@ -145,7 +147,7 @@ impl BlockSource for MutinyWallet {
                     nonce: res.nonce,
                 },
                 height: status.height.unwrap(),
-                chainwork: unimplemented!(),
+                chainwork: res.work(),
             };
             Ok(converted_res)
         })
@@ -167,8 +169,17 @@ impl BlockSource for MutinyWallet {
 
     fn get_best_block<'a>(&'a self) -> AsyncBlockSourceResult<(BlockHash, Option<u32>)> {
         Box::pin(async {
-            let height = self.blockchain.get_height()?;
-            let hash = self.blockchain.get_tip_hash().await?;
+            // May want to use BlockSourceError::transient instead depending on the bdk::Error variant
+            let height = self
+                .blockchain
+                .get_height()
+                .map_err(BlockSourceError::persistent)
+                .await?;
+            let hash = self
+                .blockchain
+                .get_tip_hash()
+                .map_err(BlockSourceError::persistent)
+                .await?;
 
             let tuple = (hash, Some(height));
             Ok(tuple)
@@ -185,7 +196,7 @@ impl FeeEstimator for MutinyWallet {
 
 impl BroadcasterInterface for MutinyWallet {
     fn broadcast_transaction(&self, tx: &Transaction) {
-        self.blockchain.broadcast(&tx).unwrap()
+        self.blockchain.broadcast(&tx);
     }
 }
 
