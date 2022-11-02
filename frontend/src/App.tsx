@@ -76,6 +76,15 @@ function App() {
   }
 
 
+  async function new_node() {
+    if (nodeManager) {
+      let new_node_identity = await nodeManager.new_node()
+      if (new_node_identity) {
+        setNewPubkey(new_node_identity.pubkey)
+      }
+    }
+  }
+
   function createNodeManager() {
     // todo enter password
     setNodeManager(new NodeManager("", undefined))
@@ -123,7 +132,7 @@ function App() {
               <code>{newPubkey}</code>
             </pre>
             <p>
-              <button onClick={async () => setNewPubkey(await nodeManager.new_node())}>New Node!</button>
+              <button onClick={async () => new_node()}>New Node!</button>
             </p>
             <p>
               <button onClick={async () => sync()}>Sync Wallet</button>

@@ -71,13 +71,13 @@ impl MutinyBrowserStorage {
         map
     }
 
-    pub fn insert_mnemonic(&self, mnemonic: Mnemonic) -> Mnemonic {
+    pub(crate) fn insert_mnemonic(&self, mnemonic: Mnemonic) -> Mnemonic {
         self.set(mnemonic_key, mnemonic.to_string())
             .expect("Failed to write to storage");
         mnemonic
     }
 
-    pub fn get_mnemonic(&self) -> gloo_storage::Result<Mnemonic> {
+    pub(crate) fn get_mnemonic(&self) -> gloo_storage::Result<Mnemonic> {
         let res: gloo_storage::Result<String> = self.get(mnemonic_key);
         match res {
             Ok(str) => Ok(Mnemonic::from_str(&str).expect("could not parse specified mnemonic")),
@@ -85,16 +85,16 @@ impl MutinyBrowserStorage {
         }
     }
 
-    pub fn has_mnemonic() -> bool {
+    pub(crate) fn has_mnemonic() -> bool {
         LocalStorage::get::<String>("mnemonic").is_ok()
     }
 
     #[allow(dead_code)]
-    pub fn delete_mnemonic() {
+    pub(crate) fn delete_mnemonic() {
         LocalStorage::delete(mnemonic_key);
     }
 
-    pub fn get_nodes() -> gloo_storage::Result<NodeStorage> {
+    pub(crate) fn get_nodes() -> gloo_storage::Result<NodeStorage> {
         let res: gloo_storage::Result<NodeStorage> = LocalStorage::get(nodes_key);
         match res {
             Ok(k) => Ok(k),
@@ -107,7 +107,7 @@ impl MutinyBrowserStorage {
         }
     }
 
-    pub fn insert_nodes(nodes: NodeStorage) -> gloo_storage::Result<()> {
+    pub(crate) fn insert_nodes(nodes: NodeStorage) -> gloo_storage::Result<()> {
         LocalStorage::set(nodes_key, nodes)
     }
 }
