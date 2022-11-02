@@ -1,3 +1,4 @@
+use anyhow::Context;
 use futures::lock::Mutex;
 use log::debug;
 use std::str::FromStr;
@@ -10,6 +11,7 @@ use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network};
 
+use crate::error::MutinyError;
 use crate::localstorage::MutinyBrowserStorage;
 
 #[derive(Debug)]
@@ -57,10 +59,12 @@ impl MutinyWallet {
         }
     }
 
-    pub async fn sync(&self) -> Result<(), bdk::Error> {
+    pub async fn sync(&self) -> Result<(), MutinyError> {
         let wallet = self.wallet.lock().await;
 
-        wallet.sync(&self.blockchain, SyncOptions::default()).await
+        Ok(wallet
+            .sync(&self.blockchain, SyncOptions::default())
+            .await?)
     }
 
     pub async fn send(
@@ -68,11 +72,21 @@ impl MutinyWallet {
         destination_address: String,
         amount: u64,
         fee_rate: Option<f32>,
-    ) -> Result<bitcoin::Txid, bdk::Error> {
+    ) -> Result<bitcoin::Txid, MutinyError> {
         let wallet = self.wallet.lock().await;
 
-        let send_to = Address::from_str(&destination_address)
-            .map_err(|e| bdk::Error::Generic(e.to_string()))?;
+        // TODO: would like to be able to convert from Bitcoin lib errors directly to MutinyError somehow
+        // Like this doesn't seem to do anything:
+        // #[derive(Error, Debug)]
+        // pub enum MutinyBitcoinError {
+        //     #[error("Failed to use browser storage")]
+        //     AddressError {
+        //         #[from]
+        //         source: bitcoin::util::address::Error,
+        //     },
+        // }
+        let send_to =
+            Address::from_str(&destination_address).with_context(|| "Address parse error")?;
 
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)

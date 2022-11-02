@@ -44,6 +44,8 @@ wasm-logger = "0.2.0"
 log = "0.4.17"
 gloo-net = "0.2.4"
 futures = "0.3.25"
+thiserror = "1.0"
+anyhow = "1.0"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.13"
