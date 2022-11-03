@@ -6,6 +6,7 @@ mod encrypt;
 mod error;
 mod keymanager;
 mod localstorage;
+mod logging;
 mod node;
 mod nodemanager;
 mod utils;
