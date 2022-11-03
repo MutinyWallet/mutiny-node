@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    error,
+    error::MutinyError,
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
     nodemanager::NodeIndex,
 };
@@ -17,7 +17,7 @@ pub struct Node {
 }
 
 impl Node {
-    pub(crate) fn new(node_index: NodeIndex, mnemonic: Mnemonic) -> Result<Self, error::Error> {
+    pub(crate) fn new(node_index: NodeIndex, mnemonic: Mnemonic) -> Result<Self, MutinyError> {
         info!("initialized a new node: {}", node_index.uuid);
 
         let keys_manager = create_keys_manager(mnemonic, node_index.child_index);
