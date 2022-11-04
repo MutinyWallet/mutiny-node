@@ -22,7 +22,7 @@ function App() {
     const [destinationAddress, setDestinationAddress] = useState("")
 
     // TODO make proxy configurable
-    const [proxyAddress, setProxyAddress] = useState("ws://127.0.0.1:3001")
+    const [proxyAddress, _] = useState("ws://127.0.0.1:3001")
     const [connectPeer, setConnectPeer] = useState("")
 
     function handleAmountChange(e: React.ChangeEvent<HTMLInputElement>) {
