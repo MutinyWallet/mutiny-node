@@ -22,8 +22,9 @@ async fn main() {
         TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::default().include_headers(true)),
     );
 
+    // TODO let this be configurable
     let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
-    tracing::debug!("listening on {}", addr);
+    tracing::info!("listening on {}", addr);
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await
@@ -35,9 +36,9 @@ async fn ws_handler(
     ws: WebSocketUpgrade,
     user_agent: Option<TypedHeader<headers::UserAgent>>,
 ) -> impl IntoResponse {
-    println!("ip: {}, port: {}", ip, port);
+    tracing::info!("ip: {}, port: {}", ip, port);
     if let Some(TypedHeader(user_agent)) = user_agent {
-        println!("`{}` connected", user_agent.as_str());
+        tracing::info!("`{}` connected", user_agent.as_str());
     }
 
     ws.protocols(["binary"])
