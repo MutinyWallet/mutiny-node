@@ -2,18 +2,52 @@
 @tailwind components;
 @tailwind utilities;
 
+/* yantramanav-300 - latin */
+@font-face {
+  font-family: "Yantramanav";
+  font-style: normal;
+  font-weight: 300;
+  src: local(""), url("./fonts/yantramanav-v11-latin-300.woff2") format("woff2"),
+    /* Chrome 26+, Opera 23+, Firefox 39+ */
+      url("./fonts/yantramanav-v11-latin-300.woff") format("woff"); /* Chrome 6+, Firefox 3.6+, IE 9+, Safari 5.1+ */
+}
+
+/* yantramanav-regular - latin */
+@font-face {
+  font-family: "Yantramanav";
+  font-style: normal;
+  font-weight: 400;
+  src: local(""),
+    url("./fonts/yantramanav-v11-latin-regular.woff2") format("woff2"),
+    /* Chrome 26+, Opera 23+, Firefox 39+ */
+      url("./fonts/yantramanav-v11-latin-regular.woff") format("woff"); /* Chrome 6+, Firefox 3.6+, IE 9+, Safari 5.1+ */
+}
+
 body {
-  @apply h-screen text-white bg-fixed bg-no-repeat bg-gradient-to-b from-black to-[#0b215b];
+  @apply h-screen;
+  @apply text-white;
+  @apply overscroll-none;
+  @apply bg-fixed bg-no-repeat bg-gradient-to-b from-black to-[#0b215b] bg-[#0b215b];
+  font-family: ;
 }
 
 button,
 input[type="submit"] {
-  background: linear-gradient(192.14deg, #ffffff -0.54%, #d9d9d9 101.77%);
-
   border-radius: 6px;
   @apply text-black font-light text-xl;
-  @apply shadow-lg p-2;
-  @apply shadow-inner-button;
+  @apply py-2 px-4;
+  @apply bg-gray-button;
+  @apply shadow-button active:shadow-button-inverted;
+  @apply uppercase;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+button.blue-button {
+  @apply text-white bg-blue-button;
+}
+
+button.green-button {
+  @apply text-white bg-green-button;
 }
 
 input[type="text"] {
