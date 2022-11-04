@@ -20,8 +20,8 @@ module.exports = {
       },
       backgroundImage: {
         'gray-button': 'linear-gradient(192.14deg, #FFFFFF -0.54%, #D9D9D9 101.77%)',
-        'blue-button': 'linear-gradient(192.14deg, #7294EE -0.54%, #3861CE 101.77%);',
-        'green-button': 'linear-gradient(192.14deg, #38CDA3 -0.54%, #1EA67F 101.77%);'
+        'blue-button': 'linear-gradient(192.14deg, #6895F5 -0.54%, #3861CE 101.77%);',
+        'green-button': 'linear-gradient(192.14deg, #00D1A0 -0.54%, #1EA67F 101.77%);'
       }
     },
   },
