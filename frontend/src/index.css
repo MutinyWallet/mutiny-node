@@ -28,3 +28,7 @@ pre {
   white-space: pre-wrap;
   @apply border rounded shadow-lg p-4 my-4;
 }
+
+a {
+  @apply underline;
+}
