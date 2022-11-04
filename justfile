@@ -15,6 +15,9 @@ test-mac:
 cert:
     mkdir -p ./frontend/.cert && mkcert -key-file ./frontend/.cert/key.pem -cert-file ./frontend/.cert/cert.pem "localhost"
 
+proxy:
+    cargo run -p websocket-tcp-proxy
+
 clippy:
     cargo clippy
 
