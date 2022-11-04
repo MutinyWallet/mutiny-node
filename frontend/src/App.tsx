@@ -21,9 +21,9 @@ function App() {
   const [amount, setAmount] = useState("")
   const [destinationAddress, setDestinationAddress] = useState("")
 
-// TODO make these configurable via input box
+  // TODO make proxy configurable
   const [proxyAddress, setProxyAddress] = useState("ws://127.0.0.1:3001")
-  const [connectPeer, setConnectPeer] = useState("0307a40e17f451e1030401ef8dd698dac0a4a37bae2e904a337aeeefd39a78b2b9@127.0.0.1:4000")
+  const [connectPeer, setConnectPeer] = useState("")
 
   function handleAmountChange(e: React.ChangeEvent<HTMLInputElement>) {
     setAmount(e.target.value);
@@ -31,6 +31,10 @@ function App() {
 
   function handleDestinationAddressChange(e: React.ChangeEvent<HTMLInputElement>) {
     setDestinationAddress(e.target.value);
+  }
+
+  function handleConnectPeerChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setConnectPeer(e.target.value);
   }
 
   useEffect(() => {
@@ -49,12 +53,6 @@ function App() {
       if (balance) {
         setBalance(balance.toLocaleString())
       }
-    }
-  }
-
-  async function connect_peer() {
-    if (nodeManager) {
-      await nodeManager.connect_to_peer(newPubkey, proxyAddress, connectPeer)
     }
   }
 
@@ -80,6 +78,15 @@ function App() {
         setAmount("")
         setDestinationAddress("")
       }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function connect_peer(e: React.SyntheticEvent) {
+    e.preventDefault()
+    try {
+      await nodeManager?.connect_to_peer(newPubkey, proxyAddress, connectPeer)
     } catch (e) {
       console.error(e);
     }
@@ -148,9 +155,11 @@ function App() {
               <button onClick={async () => new_node()}>New Node!</button>
             </p>
             {newPubkey &&
-              <p>
-                <button onClick={async () => connect_peer()}>Connect Peer</button>
-              </p>
+              <form onSubmit={connect_peer} className="flex flex-col items-start gap-4 my-4">
+                <h2>Connect Peer:</h2>
+                <input type="text" placeholder='Peer Connection String' onChange={handleConnectPeerChange}></input>
+                <input type="submit" value="Connect" />
+              </form>
             }
           </>
         }
