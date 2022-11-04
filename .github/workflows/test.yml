@@ -4,6 +4,48 @@ on:
   pull_request:
 
 jobs:
+  website:
+    name: Build Website
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          components: clippy
+          target: wasm32-unknown-unknown
+          override: true
+          profile: minimal
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-browser-tests-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-browser-tests-
+            cargo-${{ runner.os }}-
+
+      - name: Build wasm
+        working-directory: ./node-manager
+        run: wasm-pack build --target web
+
+      - name: Use Node.js 18.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18.x
+
+      - name: Build
+        working-directory: ./frontend
+        run: |
+          npm install
+          npm run build
+
   browser_tests:
     name: Browser Tests
     runs-on: ubuntu-latest
