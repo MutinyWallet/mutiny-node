@@ -12,6 +12,7 @@ mod localstorage;
 mod logging;
 mod node;
 mod nodemanager;
+mod tcpproxy;
 mod utils;
 mod wallet;
 

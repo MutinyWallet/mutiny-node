@@ -14,12 +14,16 @@ function App() {
 
   const [nodeManager, setNodeManager] = useState<NodeManager>();
 
-  const [newPubkey, setNewPubkey] = useState("...")
+  const [newPubkey, setNewPubkey] = useState("")
 
   // Send state
   const [txid, setTxid] = useState("...")
   const [amount, setAmount] = useState("")
   const [destinationAddress, setDestinationAddress] = useState("")
+
+  // TODO make proxy configurable
+  const [proxyAddress, setProxyAddress] = useState("ws://127.0.0.1:3001")
+  const [connectPeer, setConnectPeer] = useState("")
 
   function handleAmountChange(e: React.ChangeEvent<HTMLInputElement>) {
     setAmount(e.target.value);
@@ -27,6 +31,10 @@ function App() {
 
   function handleDestinationAddressChange(e: React.ChangeEvent<HTMLInputElement>) {
     setDestinationAddress(e.target.value);
+  }
+
+  function handleConnectPeerChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setConnectPeer(e.target.value);
   }
 
   useEffect(() => {
@@ -75,6 +83,15 @@ function App() {
     }
   }
 
+  async function connect_peer(e: React.SyntheticEvent) {
+    e.preventDefault()
+    try {
+      await nodeManager?.connect_to_peer(newPubkey, proxyAddress, connectPeer)
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
 
   async function new_node() {
     if (nodeManager) {
@@ -113,6 +130,9 @@ function App() {
             <p>
               {`Wallet Balance: ${balance} sats`}
             </p>
+            <p>
+              <button onClick={async () => sync()}>Sync Wallet</button>
+            </p>
             <pre>
               <code>{address}</code>
             </pre>
@@ -134,13 +154,13 @@ function App() {
             <p>
               <button onClick={async () => new_node()}>New Node!</button>
             </p>
-            <p>
-              <button onClick={async () => sync()}>Sync Wallet</button>
-            </p>
-            <p>
-              <button onClick={() => nodeManager.test_ws()}>Test Websockets</button>
-            </p>
-
+            {newPubkey &&
+              <form onSubmit={connect_peer} className="flex flex-col items-start gap-4 my-4">
+                <h2>Connect Peer:</h2>
+                <input type="text" placeholder='Peer Connection String' onChange={handleConnectPeerChange}></input>
+                <input type="submit" value="Connect" />
+              </form>
+            }
           </>
         }
       </main>

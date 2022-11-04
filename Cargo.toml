@@ -1,0 +1,11 @@
+[workspace]
+
+members = [
+    "node-manager",
+    "websocket-tcp-proxy",
+]
+
+[profile.release.package.node-manager]
+# Tell `rustc` to optimize for small code size.
+opt-level = "s"
+

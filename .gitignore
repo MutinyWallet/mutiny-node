@@ -1,1 +1,4 @@
 .DS_Store
+debug/
+target/
+./*/Cargo.lock

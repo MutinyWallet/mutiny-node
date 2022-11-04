@@ -1,7 +1,10 @@
+cargo-features = ["per-package-target"]
+
 [package]
 name = "node-manager"
 version = "0.1.0"
 edition = "2021"
+forced-target = "wasm32-unknown-unknown"
 
 [lib]
 crate-type = ["cdylib"]
@@ -51,10 +54,6 @@ anyhow = "1.0"
 [dev-dependencies]
 wasm-bindgen-test = "0.3.13"
 web-sys = { version = "0.3.60", features = ["console"] }
-
-[profile.release]
-# Tell `rustc` to optimize for small code size.
-opt-level = "s"
 
 [features]
 # default = ["console_error_panic_hook" ,"wee_alloc"]
