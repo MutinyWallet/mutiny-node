@@ -92,3 +92,21 @@ Then start react with SSL flags:
 ```
 npm run start-ssl
 ```
+
+### PWA
+
+To test out PWA stuff you need to `build` and then run the built artifact:
+
+```
+npm run build
+```
+
+(if you don't have a server installed: `npm install -g serve`)
+
+Then serve the build folder:
+
+```
+serve -s build
+```
+
+They recommend running this in an incognito window because caching can be annoying with this stuff. Works for me in Chrome to install Mutiny as a desktop app.
