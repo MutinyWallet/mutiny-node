@@ -6,8 +6,11 @@ use crate::node::Node;
 use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
-use bitcoin::Network;
+use bitcoin::consensus::deserialize;
+use bitcoin::hashes::hex::FromHex;
+use bitcoin::{Network, Transaction};
 use futures::lock::Mutex;
+use lightning::chain::chaininterface::BroadcasterInterface;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -90,6 +93,14 @@ impl NodeManager {
             node_storage: Mutex::new(node_storage),
             nodes: Arc::new(Mutex::new(HashMap::new())), // TODO init the nodes
         }
+    }
+
+    #[wasm_bindgen]
+    pub fn broadcast_transaction(&self, str: String) {
+        let tx_bytes = Vec::from_hex(str.as_str()).unwrap();
+        let tx: Transaction = deserialize(&tx_bytes).unwrap();
+
+        self.wallet.broadcast_transaction(&tx)
     }
 
     #[wasm_bindgen]
