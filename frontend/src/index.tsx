@@ -9,6 +9,7 @@ import {
   RouterProvider,
 } from "react-router-dom";
 import KitchenSink from './routes/KitchenSink';
+import Send from './routes/Send';
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
@@ -18,6 +19,10 @@ const router = createBrowserRouter([
   {
     path: "/",
     element: <App />,
+  },
+  {
+    path: "/send",
+    element: <Send />,
   },
   {
     path: "/tests",

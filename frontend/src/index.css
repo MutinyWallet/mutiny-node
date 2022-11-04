@@ -50,6 +50,10 @@ button.green-button {
   @apply text-white bg-green-button;
 }
 
+h1.green-header {
+  @apply border-b-2 border-b-green;
+}
+
 input[type="text"] {
   @apply p-4;
   @apply text-black font-light text-xl;
