@@ -10,6 +10,8 @@ function App() {
 
     const [balance, setBalance] = useState("0")
 
+    const [tx, setTx] = useState("")
+
     const [address, setAddress] = useState("")
 
     const [nodeManager, setNodeManager] = useState<NodeManager>();
@@ -35,6 +37,10 @@ function App() {
 
     function handleConnectPeerChange(e: React.ChangeEvent<HTMLInputElement>) {
         setConnectPeer(e.target.value);
+    }
+
+    function handleTxChange(e: React.ChangeEvent<HTMLInputElement>) {
+        setTx(e.target.value);
     }
 
     useEffect(() => {
@@ -78,6 +84,15 @@ function App() {
                 setAmount("")
                 setDestinationAddress("")
             }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    async function broadcastTx(e: React.SyntheticEvent) {
+        e.preventDefault()
+        try {
+            await nodeManager?.broadcast_transaction(tx);
         } catch (e) {
             console.error(e);
         }
@@ -147,6 +162,11 @@ function App() {
                             <pre>
                                 <code>Txid: {txid}</code>
                             </pre>
+                        </form>
+                        <form onSubmit={broadcastTx} className="flex flex-col items-start gap-4 my-4">
+                            <h2>Broadcast Tx:</h2>
+                            <input type="text" placeholder='tx' onChange={handleTxChange}></input>
+                            <input type="submit" value="Send" />
                         </form>
                         <pre>
                             <code>{newPubkey}</code>

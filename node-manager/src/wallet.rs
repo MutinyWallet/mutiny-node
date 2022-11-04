@@ -1,7 +1,8 @@
 use anyhow::Context;
 use futures::lock::Mutex;
-use log::debug;
+use log::{debug, error};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use bdk::blockchain::{Blockchain, EsploraBlockchain};
 use bdk::keys::ExtendedKey;
@@ -9,7 +10,9 @@ use bdk::template::DescriptorTemplateOut;
 use bdk::{FeeRate, SignOptions, SyncOptions, Wallet};
 use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
-use bitcoin::{Address, Network};
+use bitcoin::{Address, Network, Transaction};
+use lightning::chain::chaininterface::BroadcasterInterface;
+use wasm_bindgen_futures::spawn_local;
 
 use crate::error::MutinyError;
 use crate::localstorage::MutinyBrowserStorage;
@@ -17,7 +20,7 @@ use crate::localstorage::MutinyBrowserStorage;
 #[derive(Debug)]
 pub struct MutinyWallet {
     pub wallet: Mutex<Wallet<MutinyBrowserStorage>>,
-    blockchain: EsploraBlockchain,
+    blockchain: Arc<EsploraBlockchain>,
 }
 
 impl MutinyWallet {
@@ -55,7 +58,7 @@ impl MutinyWallet {
 
         MutinyWallet {
             wallet: Mutex::new(wallet),
-            blockchain,
+            blockchain: Arc::new(blockchain),
         }
     }
 
@@ -130,6 +133,19 @@ impl MutinyWallet {
         debug!("Transaction broadcast! TXID: {txid}.\nExplorer URL: {explorer_url}{txid}");
 
         Ok(txid)
+    }
+}
+
+impl BroadcasterInterface for MutinyWallet {
+    fn broadcast_transaction(&self, tx: &Transaction) {
+        let blockchain = self.blockchain.clone();
+        let tx_clone = tx.clone();
+        spawn_local(async move {
+            blockchain
+                .broadcast(&tx_clone)
+                .await
+                .unwrap_or_else(|_| error!("failed to broadcast tx! {}", tx_clone.txid()))
+        });
     }
 }
 
