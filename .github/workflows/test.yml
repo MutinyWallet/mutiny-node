@@ -75,7 +75,7 @@ jobs:
 
       - name: Check clippy
         working-directory: .
-        run: cargo clippy -- -D warnings
+        run: cargo clippy 
 
       - name: Run all cargo tests besides node-manager
         working-directory: .
