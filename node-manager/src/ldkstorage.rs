@@ -3,6 +3,7 @@ use std::io::Cursor;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use crate::error::MutinyError;
 use bitcoin::BlockHash;
 use lightning::chain::channelmonitor::ChannelMonitor;
 use lightning::chain::keysinterface::{KeysInterface, Sign};
@@ -25,9 +26,11 @@ impl MutinyNodePersister {
         format!("{}_{}", key, self.node_id)
     }
 
-    fn read_value(&self, _key: &str) -> Result<Vec<u8>, io::Error> {
+    // name this param _key so it is not confused with the key
+    // that has the concatenated node_id
+    fn read_value(&self, _key: &str) -> Result<Vec<u8>, MutinyError> {
         let key = self.get_key(_key);
-        self.storage.get(key).map_err(io::Error::other)
+        self.storage.get(key).map_err(MutinyError::read_err)
     }
 
     pub fn persist_network_graph(&self, network_graph: &NetworkGraph) -> io::Result<()> {
@@ -39,22 +42,18 @@ impl MutinyNodePersister {
         genesis_hash: BlockHash,
         logger: Arc<MutinyLogger>,
     ) -> NetworkGraph {
-        let (already_init, kv_value) = match self.read_value("network") {
-            Ok(kv_value) => (!kv_value.is_empty(), kv_value),
-            Err(_) => (false, vec![]),
-        };
-
-        if already_init {
-            let mut readable_kv_value = Cursor::new(kv_value);
-            match NetworkGraph::read(&mut readable_kv_value, logger.clone()) {
-                Ok(graph) => graph,
-                Err(e) => {
-                    error!("Error reading NetworkGraph: {}", e.to_string());
-                    NetworkGraph::new(genesis_hash, logger)
+        match self.read_value("network") {
+            Ok(kv_value) => {
+                let mut readable_kv_value = Cursor::new(kv_value);
+                match NetworkGraph::read(&mut readable_kv_value, logger.clone()) {
+                    Ok(graph) => graph,
+                    Err(e) => {
+                        error!("Error reading NetworkGraph: {}", e.to_string());
+                        NetworkGraph::new(genesis_hash, logger)
+                    }
                 }
             }
-        } else {
-            NetworkGraph::new(genesis_hash, logger)
+            Err(_) => NetworkGraph::new(genesis_hash, logger),
         }
     }
 
@@ -71,23 +70,20 @@ impl MutinyNodePersister {
         logger: Arc<MutinyLogger>,
     ) -> ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>> {
         let params = ProbabilisticScoringParameters::default();
-        let (already_init, kv_value) = match self.read_value("prob_scorer") {
-            Ok(kv_value) => (!kv_value.is_empty(), kv_value),
-            Err(_) => (false, vec![]),
-        };
 
-        if already_init {
-            let mut readable_kv_value = Cursor::new(kv_value);
-            let args = (params.clone(), Arc::clone(&graph), Arc::clone(&logger));
-            match ProbabilisticScorer::read(&mut readable_kv_value, args) {
-                Ok(graph) => graph,
-                Err(e) => {
-                    error!("Error reading ProbabilisticScorer: {}", e.to_string());
-                    ProbabilisticScorer::new(params, graph, logger)
+        match self.read_value("prob_scorer") {
+            Ok(kv_value) => {
+                let mut readable_kv_value = Cursor::new(kv_value);
+                let args = (params.clone(), Arc::clone(&graph), Arc::clone(&logger));
+                match ProbabilisticScorer::read(&mut readable_kv_value, args) {
+                    Ok(scorer) => scorer,
+                    Err(e) => {
+                        error!("Error reading ProbabilisticScorer: {}", e.to_string());
+                        ProbabilisticScorer::new(params, graph, logger)
+                    }
                 }
             }
-        } else {
-            ProbabilisticScorer::new(params, graph, logger)
+            Err(_) => ProbabilisticScorer::new(params, graph, logger),
         }
     }
 
