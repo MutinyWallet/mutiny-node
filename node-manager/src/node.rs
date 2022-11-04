@@ -3,12 +3,16 @@ use std::sync::Arc;
 use crate::{
     error::MutinyError,
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
+    logging::MutinyLogger,
     nodemanager::NodeIndex,
 };
 use bip39::Mnemonic;
 use bitcoin::secp256k1::PublicKey;
 use lightning::chain::keysinterface::KeysManager;
+use lightning::routing::gossip;
 use log::info;
+
+pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
 pub struct Node {
     pub uuid: String,

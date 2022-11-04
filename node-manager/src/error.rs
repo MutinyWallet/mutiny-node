@@ -44,6 +44,8 @@ pub enum MutinyError {
         #[from]
         source: MutinyStorageError,
     },
+    #[error("Failed to read data from storage.")]
+    ReadError { source: MutinyStorageError },
     /// A wallet operation failed.
     #[error("Failed to conduct wallet operation.")]
     WalletOperationFailed,
@@ -71,6 +73,12 @@ pub enum MutinyStorageError {
     },
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+impl MutinyError {
+    pub fn read_err(e: MutinyStorageError) -> Self {
+        MutinyError::ReadError { source: e }
+    }
 }
 
 impl From<bdk::Error> for MutinyError {

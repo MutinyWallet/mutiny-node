@@ -47,7 +47,7 @@ impl MutinyBrowserStorage {
     }
 
     // mostly a copy of self.get_all()
-    pub(crate) fn scan_prefix(&self, prefix: String) -> Map<String, Value> {
+    pub(crate) fn scan(&self, prefix: &str, suffix: Option<&str>) -> Map<String, Value> {
         let local_storage = LocalStorage::raw();
         let length = LocalStorage::length();
         let mut map = Map::with_capacity(length as usize);
@@ -55,7 +55,7 @@ impl MutinyBrowserStorage {
             let key_opt: Option<String> = local_storage.key(index).unwrap();
 
             if let Some(key) = key_opt {
-                if key.starts_with(String::as_str(&prefix)) {
+                if key.starts_with(prefix) && (suffix.is_none() || key.ends_with(suffix.unwrap())) {
                     let value: Value = self.get(&key).unwrap();
                     map.insert(key, value);
                 }
