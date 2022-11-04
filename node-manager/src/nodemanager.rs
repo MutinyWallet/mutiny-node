@@ -1,20 +1,16 @@
 use std::collections::HashMap;
 use std::{str::FromStr, sync::Arc};
 
-use bdk::wallet::AddressIndex;
-use bip39::Mnemonic;
-use bitcoin::Network;
-use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
-use gloo_net::websocket::{futures::WebSocket, Message};
-use log::{debug, info};
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-use wasm_bindgen::prelude::*;
-use wasm_bindgen_futures::spawn_local;
-
 use crate::keymanager;
 use crate::node::Node;
 use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
+use bdk::wallet::AddressIndex;
+use bip39::Mnemonic;
+use bitcoin::Network;
+use futures::lock::Mutex;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct NodeManager {
@@ -22,8 +18,6 @@ pub struct NodeManager {
     wallet: MutinyWallet,
     node_storage: Mutex<NodeStorage>,
     nodes: Arc<Mutex<HashMap<String, Arc<Node>>>>,
-    ws_write: Arc<Mutex<SplitSink<WebSocket, Message>>>,
-    counter: usize,
 }
 
 // This is the NodeStorage object saved to the DB
@@ -87,16 +81,6 @@ impl NodeManager {
 
         let wallet = MutinyWallet::new(mnemonic.clone(), storage, Network::Testnet);
 
-        let ws = WebSocket::open("wss://ws.postman-echo.com/raw").unwrap();
-        let (write, mut read) = ws.split();
-
-        spawn_local(async move {
-            while let Some(msg) = read.next().await {
-                info!("1. {:?}", msg)
-            }
-            debug!("WebSocket Closed")
-        });
-
         let node_storage = MutinyBrowserStorage::get_nodes().expect("could not retrieve node keys");
 
         NodeManager {
@@ -104,8 +88,6 @@ impl NodeManager {
             wallet,
             node_storage: Mutex::new(node_storage),
             nodes: Arc::new(Mutex::new(HashMap::new())), // TODO init the nodes
-            ws_write: Arc::new(Mutex::new(write)),
-            counter: 0,
         }
     }
 
@@ -163,19 +145,20 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub fn test_ws(&mut self) {
-        let write = self.ws_write.clone();
-        let count = self.counter;
-        spawn_local(async move {
-            write
-                .clone()
-                .lock()
-                .await
-                .send(Message::Text(format!("Test number {count}")))
-                .await
-                .unwrap();
-        });
-        self.counter += 1;
+    pub async fn connect_to_peer(
+        &self,
+        self_node_pubkey: String,
+        websocket_proxy_addr: String,
+        connection_string: String,
+    ) {
+        if let Some(node) = self.nodes.lock().await.get(&self_node_pubkey) {
+            // TODO handle error after paul does his errors thing
+            let _ = node
+                .connect_peer(websocket_proxy_addr, connection_string)
+                .await;
+        } else {
+            // TODO error after paul does his errors thing
+        }
     }
 }
 

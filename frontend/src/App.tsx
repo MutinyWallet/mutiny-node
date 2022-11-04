@@ -14,12 +14,16 @@ function App() {
 
   const [nodeManager, setNodeManager] = useState<NodeManager>();
 
-  const [newPubkey, setNewPubkey] = useState("...")
+  const [newPubkey, setNewPubkey] = useState("")
 
   // Send state
   const [txid, setTxid] = useState("...")
   const [amount, setAmount] = useState("")
   const [destinationAddress, setDestinationAddress] = useState("")
+
+// TODO make these configurable via input box
+  const [proxyAddress, setProxyAddress] = useState("ws://127.0.0.1:3001")
+  const [connectPeer, setConnectPeer] = useState("0307a40e17f451e1030401ef8dd698dac0a4a37bae2e904a337aeeefd39a78b2b9@127.0.0.1:4000")
 
   function handleAmountChange(e: React.ChangeEvent<HTMLInputElement>) {
     setAmount(e.target.value);
@@ -45,6 +49,12 @@ function App() {
       if (balance) {
         setBalance(balance.toLocaleString())
       }
+    }
+  }
+
+  async function connect_peer() {
+    if (nodeManager) {
+      await nodeManager.connect_to_peer(newPubkey, proxyAddress, connectPeer)
     }
   }
 
@@ -113,6 +123,9 @@ function App() {
             <p>
               {`Wallet Balance: ${balance} sats`}
             </p>
+            <p>
+              <button onClick={async () => sync()}>Sync Wallet</button>
+            </p>
             <pre>
               <code>{address}</code>
             </pre>
@@ -134,13 +147,11 @@ function App() {
             <p>
               <button onClick={async () => new_node()}>New Node!</button>
             </p>
-            <p>
-              <button onClick={async () => sync()}>Sync Wallet</button>
-            </p>
-            <p>
-              <button onClick={() => nodeManager.test_ws()}>Test Websockets</button>
-            </p>
-
+            {newPubkey &&
+              <p>
+                <button onClick={async () => connect_peer()}>Connect Peer</button>
+              </p>
+            }
           </>
         }
       </main>

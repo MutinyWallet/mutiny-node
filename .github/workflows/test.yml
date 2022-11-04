@@ -36,10 +36,47 @@ jobs:
             cargo-${{ runner.os }}-browser-tests-
             cargo-${{ runner.os }}-
 
-      - name: Check formatting
-        working-directory: ./node-manager
-        run: cargo fmt --check
-
-      - name: Run tests
+      - name: Run node-manager wasm tests
         working-directory: ./node-manager
         run: wasm-pack test --headless --firefox --chrome
+
+  rust_tests:
+    name: Rust Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          components: clippy, rustfmt
+          target: wasm32-unknown-unknown
+          override: true
+          profile: minimal
+
+      - name: Setup trunk
+        uses: jetli/trunk-action@v0.1.0
+        with:
+          version: 'latest'
+
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-rust-tests-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-rust-tests-
+            cargo-${{ runner.os }}-
+
+      - name: Check formatting
+        working-directory: .
+        run: cargo fmt --check
+
+      - name: Check clippy
+        working-directory: .
+        run: cargo clippy -- -D warnings
+
+      - name: Run all cargo tests besides node-manager
+        working-directory: .
+        run: cargo test --workspace --exclude node-manager
