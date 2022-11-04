@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import logo from './mutiny-logo.svg';
+import logo from '../images/mutiny-logo.svg';
 import init, { NodeManager, InitOutput } from "node-manager";
 
 function App() {
