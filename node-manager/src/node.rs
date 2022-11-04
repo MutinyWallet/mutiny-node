@@ -1,13 +1,14 @@
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::tcpproxy::TcpProxy;
-use crate::utils;
 use crate::{
     error::MutinyError,
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
     nodemanager::NodeIndex,
 };
+use anyhow::Context;
 use bip39::Mnemonic;
 use bitcoin::secp256k1::PublicKey;
 use lightning::chain::keysinterface::KeysManager;
@@ -37,32 +38,28 @@ impl Node {
         &self,
         websocket_proxy_addr: String,
         peer_pubkey_and_ip_addr: String,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), MutinyError> {
         if peer_pubkey_and_ip_addr.is_empty() {
-            info!(
-                "ERROR: connectpeer requires peer connection info: `connectpeer pubkey@host:port`"
-            );
-            return Err("connectpeer requires peer connection info".into());
+            return Err(MutinyError::PeerInfoParseFailed)
+                .context("connect_peer requires peer connection info")?;
         };
         let (pubkey, peer_addr) = match parse_peer_info(peer_pubkey_and_ip_addr) {
             Ok(info) => info,
             Err(e) => {
-                info!("ERROR: could not parse peer info: {}", e);
-                return Err(e.into());
+                return Err(MutinyError::PeerInfoParseFailed)
+                    .with_context(|| format!("could not parse peer info: {}", e))?;
             }
         };
 
         if connect_peer_if_necessary(websocket_proxy_addr, pubkey, peer_addr)
             .await
-            .is_ok()
+            .is_err()
         {
-            info!("SUCCESS: connected to peer: {}", pubkey);
-            Ok(())
-        } else {
-            info!("ERROR: could not connect to peer: {}", pubkey);
-
-            Err("could not connect to peer".into())
+            Err(MutinyError::PeerInfoParseFailed)
+                .with_context(|| format!("could not connect to peer: {pubkey}"))?
         }
+
+        Ok(())
     }
 }
 
@@ -96,15 +93,14 @@ pub(crate) async fn connect_peer_if_necessary(
 
 pub(crate) fn parse_peer_info(
     peer_pubkey_and_ip_addr: String,
-) -> Result<(PublicKey, SocketAddr), std::io::Error> {
+) -> Result<(PublicKey, SocketAddr), MutinyError> {
     let mut pubkey_and_addr = peer_pubkey_and_ip_addr.split('@');
     let pubkey = pubkey_and_addr.next();
     let peer_addr_str = pubkey_and_addr.next();
     if peer_addr_str.is_none() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "ERROR: incorrectly formatted peer info. Should be formatted as: `pubkey@host:port`",
-        ));
+        return Err(MutinyError::PeerInfoParseFailed).context(
+            "incorrectly formatted peer info. Should be formatted as: `pubkey@host:port`",
+        )?;
     }
 
     let peer_addr = peer_addr_str
@@ -112,18 +108,14 @@ pub(crate) fn parse_peer_info(
         .to_socket_addrs()
         .map(|mut r| r.next());
     if peer_addr.is_err() || peer_addr.as_ref().unwrap().is_none() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "ERROR: couldn't parse pubkey@host:port into a socket address",
-        ));
+        return Err(MutinyError::PeerInfoParseFailed)
+            .context("couldn't parse pubkey@host:port into a socket address")?;
     }
 
-    let pubkey = utils::to_compressed_pubkey(pubkey.unwrap());
-    if pubkey.is_none() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "ERROR: unable to parse given pubkey for node",
-        ));
+    let pubkey = PublicKey::from_str(pubkey.unwrap());
+    if pubkey.is_err() {
+        return Err(MutinyError::PeerInfoParseFailed)
+            .context("unable to parse given pubkey for node")?;
     }
 
     Ok((pubkey.unwrap(), peer_addr.unwrap().unwrap()))

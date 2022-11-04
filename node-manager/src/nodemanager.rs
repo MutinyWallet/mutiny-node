@@ -8,6 +8,7 @@ use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
 use bitcoin::Network;
 use futures::lock::Mutex;
+use log::{error, info};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
@@ -152,12 +153,19 @@ impl NodeManager {
         connection_string: String,
     ) {
         if let Some(node) = self.nodes.lock().await.get(&self_node_pubkey) {
-            // TODO handle error after paul does his errors thing
-            let _ = node
-                .connect_peer(websocket_proxy_addr, connection_string)
+            let res = node
+                .connect_peer(websocket_proxy_addr, connection_string.clone())
                 .await;
+            match res {
+                Ok(_) => {
+                    info!("connected to peer: {connection_string}")
+                }
+                Err(e) => {
+                    error!("could not connect to peer: {connection_string} - {e}")
+                }
+            };
         } else {
-            // TODO error after paul does his errors thing
+            error!("could not find internal node {self_node_pubkey}")
         }
     }
 }
