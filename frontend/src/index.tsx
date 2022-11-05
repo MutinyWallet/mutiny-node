@@ -10,6 +10,7 @@ import {
 } from "react-router-dom";
 import KitchenSink from './routes/KitchenSink';
 import Send from './routes/Send';
+import Deposit from './routes/Deposit';
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
@@ -23,6 +24,10 @@ const router = createBrowserRouter([
   {
     path: "/send",
     element: <Send />,
+  },
+  {
+    path: "/deposit",
+    element: <Deposit />,
   },
   {
     path: "/tests",

@@ -1,7 +1,19 @@
 
 import logo from '../images/mutiny-logo.svg';
+import { useNavigate } from "react-router-dom";
+
 
 function App() {
+  let navigate = useNavigate();
+
+  function handleNavSend() {
+    navigate("/send")
+  }
+
+  function handleNavDeposit() {
+    navigate("/deposit")
+  }
+
   return (
     <div className="flex flex-col h-screen">
       <header className='p-8'>
@@ -15,8 +27,8 @@ function App() {
         <div />
         <div className='flex flex-col gap-2 items-start'>
 
-          <button className='green-button'>Send</button>
-          <button className='blue-button'>Deposit</button>
+          <button className='green-button' onClick={handleNavSend}>Send</button>
+          <button className='blue-button' onClick={handleNavDeposit}>Deposit</button>
         </div>
 
       </main>

@@ -26,7 +26,7 @@
 body {
   @apply h-screen;
   @apply text-white;
-  @apply overscroll-none;
+  @apply overscroll-y-none;
   @apply bg-fixed bg-no-repeat bg-gradient-to-b from-black to-[#0b215b] bg-[#0b215b];
   font-family: ;
 }
@@ -58,7 +58,7 @@ input[type="text"] {
   @apply p-4;
   @apply text-black font-light text-xl;
   @apply placeholder-[#4E5B7E];
-  @apply border-[2px] border-[#38CDA3] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#38CDA3] ring-offset-black;
+  @apply border-[2px] focus:outline-none focus:ring-2 focus:ring-offset-2  ring-offset-black;
 }
 
 pre {
