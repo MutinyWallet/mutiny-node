@@ -147,8 +147,7 @@ mod tests {
         .unwrap();
         let addr = "127.0.0.1:4000";
 
-        let (peer_pubkey, peer_addr) =
-            parse_peer_info(format!("{}@{addr}", pub_key.to_string()).to_string()).unwrap();
+        let (peer_pubkey, peer_addr) = parse_peer_info(format!("{}@{addr}", pub_key)).unwrap();
 
         assert_eq!(pub_key, peer_pubkey);
         assert_eq!(addr.parse::<SocketAddr>().unwrap(), peer_addr);
