@@ -8,6 +8,7 @@ use bdk::blockchain::{Blockchain, EsploraBlockchain};
 use bdk::keys::ExtendedKey;
 use bdk::template::DescriptorTemplateOut;
 use bdk::{FeeRate, SignOptions, SyncOptions, Wallet};
+use bdk_macros::maybe_await;
 use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, Transaction};
@@ -65,9 +66,9 @@ impl MutinyWallet {
     pub async fn sync(&self) -> Result<(), MutinyError> {
         let wallet = self.wallet.lock().await;
 
-        Ok(wallet
-            .sync(&self.blockchain, SyncOptions::default())
-            .await?)
+        let sync = maybe_await!(wallet.sync(&self.blockchain, SyncOptions::default()))?;
+
+        Ok(sync)
     }
 
     pub async fn send(
@@ -118,7 +119,7 @@ impl MutinyWallet {
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
 
-        let _ = &self.blockchain.broadcast(&raw_transaction).await?;
+        maybe_await!(self.blockchain.broadcast(&raw_transaction))?;
 
         let explorer_url = match wallet.network() {
             Network::Bitcoin => Ok("https://mempool.space/tx/"),
@@ -141,9 +142,7 @@ impl BroadcasterInterface for MutinyWallet {
         let blockchain = self.blockchain.clone();
         let tx_clone = tx.clone();
         spawn_local(async move {
-            blockchain
-                .broadcast(&tx_clone)
-                .await
+            maybe_await!(blockchain.broadcast(&tx_clone))
                 .unwrap_or_else(|_| error!("failed to broadcast tx! {}", tx_clone.txid()))
         });
     }
