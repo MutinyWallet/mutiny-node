@@ -3,6 +3,7 @@ import logo from '../images/mutiny-logo.svg';
 import init, { NodeManager, InitOutput } from "node-manager";
 
 function App() {
+    const [wasmSupported, setWasmSupported] = useState(true)
 
     const [wasm, setWasm] = useState<InitOutput>();
 
@@ -44,6 +45,21 @@ function App() {
     }
 
     useEffect(() => {
+        // https://stackoverflow.com/questions/47879864/how-can-i-check-if-a-browser-supports-webassembly
+        let wasmSupported = (() => {
+            try {
+                if (typeof WebAssembly === "object"
+                    && typeof WebAssembly.instantiate === "function") {
+                    const module = new WebAssembly.Module(Uint8Array.of(0x0, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00));
+                    if (module instanceof WebAssembly.Module)
+                        return new WebAssembly.Instance(module) instanceof WebAssembly.Instance;
+                }
+            } catch (e) {
+            }
+            return false;
+        })();
+        setWasmSupported(wasmSupported);
+
         // TODO: learn why we init this but don't actually call stuff on it
         init().then((wasmModule) => {
             setWasm(wasmModule)
@@ -128,6 +144,12 @@ function App() {
                 <img src={logo} className="App-logo" alt="logo" />
             </header>
             <main className='flex flex-col gap-4'>
+		{!wasmSupported &&
+                    <p>
+			WASM does not seem supported in your browser, this might not work for you!
+			You may have to turn on Javascript JIT in your browser settings.
+		    </p>
+		}
                 <p>Here is the seed phrase for your node manager:</p>
                 <pre>
                     <code>{mnemonic}</code>
