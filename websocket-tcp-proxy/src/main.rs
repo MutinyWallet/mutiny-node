@@ -7,6 +7,7 @@ use axum::{
     routing::get,
     Router,
 };
+use std::env;
 use std::net::SocketAddr;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -22,8 +23,11 @@ async fn main() {
         TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::default().include_headers(true)),
     );
 
-    // TODO let this be configurable
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
+    let port = match env::var("PORT") {
+        Ok(p) => p.parse().expect("port must be a u16 string"),
+        Err(_) => 3001,
+    };
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!("listening on {}", addr);
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
