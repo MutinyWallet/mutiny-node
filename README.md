@@ -121,5 +121,5 @@ DOCKER_BUILDKIT=1 docker build -f Dockerfile-Proxy -t bitcoindevshop/websocket-t
 
 Run the docker image locally
 ```
-docker run -d -p 8080:8080 bitcoindevshop/websocket-tcp-proxy
+docker run -d -p 3001:3001 bitcoindevshop/websocket-tcp-proxy
 ```
