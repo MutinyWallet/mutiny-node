@@ -17,13 +17,14 @@ use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 
 #[tokio::main]
 async fn main() {
+    println!("Running websocket-tcp-proxy");
     tracing_subscriber::fmt::init();
 
     let app = Router::new().route("/v1/:ip/:port", get(ws_handler)).layer(
         TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::default().include_headers(true)),
     );
 
-    let port = match env::var("PORT") {
+    let port = match env::var("MUTINY_PROXY_PORT") {
         Ok(p) => p.parse().expect("port must be a u16 string"),
         Err(_) => 3001,
     };
@@ -33,6 +34,7 @@ async fn main() {
         .serve(app.into_make_service())
         .await
         .unwrap();
+    println!("Stopping websocket-tcp-proxy");
 }
 
 async fn ws_handler(
