@@ -2,7 +2,7 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::tcpproxy::TcpProxy;
+use crate::tcpproxy::{SocketDescriptor, TcpProxy};
 use crate::{
     error::MutinyError,
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
@@ -13,10 +13,22 @@ use anyhow::Context;
 use bip39::Mnemonic;
 use bitcoin::secp256k1::PublicKey;
 use lightning::chain::keysinterface::KeysManager;
+use lightning::ln::peer_handler::{
+    ErroringMessageHandler, IgnoringMessageHandler, PeerManager as LdkPeerManager,
+};
 use lightning::routing::gossip;
 use log::info;
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
+
+pub(crate) type PeerManager = LdkPeerManager<
+    SocketDescriptor,
+    Arc<ErroringMessageHandler>,
+    Arc<IgnoringMessageHandler>,
+    Arc<IgnoringMessageHandler>,
+    Arc<MutinyLogger>,
+    Arc<IgnoringMessageHandler>,
+>;
 
 pub struct Node {
     pub uuid: String,
@@ -61,9 +73,9 @@ impl Node {
         {
             Err(MutinyError::PeerInfoParseFailed)
                 .with_context(|| format!("could not connect to peer: {pubkey}"))?
+        } else {
+            Ok(())
         }
-
-        Ok(())
     }
 }
 
@@ -86,7 +98,7 @@ pub(crate) async fn connect_peer_if_necessary(
     let tcp_proxy = TcpProxy::new(websocket_proxy_addr, peer_addr).await;
 
     // TODO remove the test send
-    tcp_proxy.send();
+    tcp_proxy.send(String::from("test\n").into_bytes().to_vec());
 
     // TODO then give that connection to the peer manager
 
