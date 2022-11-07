@@ -3,7 +3,6 @@ import logo from '../images/mutiny-logo.svg';
 import init, { NodeManager, InitOutput } from "node-manager";
 
 function App() {
-
     const [wasm, setWasm] = useState<InitOutput>();
 
     const [mnemonic, setMnemonic] = useState("...")
