@@ -7,6 +7,16 @@ module.exports = {
     "./components/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
+    colors: {
+      transparent: 'transparent',
+      current: 'currentColor',
+      green: '#00D1A0',
+      blue: '#6895F5',
+      'dark-blue': '#071831',
+      red: '#F61D5B',
+      white: '#FBF5E9',
+      black: '#000000'
+    },
     extend: {
       fontFamily: {
         'sans': ['Yantramanav', 'system-ui', ...defaultTheme.fontFamily.sans],
