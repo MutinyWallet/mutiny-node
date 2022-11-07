@@ -66,9 +66,9 @@ impl MutinyWallet {
     pub async fn sync(&self) -> Result<(), MutinyError> {
         let wallet = self.wallet.lock().await;
 
-        let sync = maybe_await!(wallet.sync(&self.blockchain, SyncOptions::default()))?;
+        maybe_await!(wallet.sync(&self.blockchain, SyncOptions::default()))?;
 
-        Ok(sync)
+        Ok(())
     }
 
     pub async fn send(
@@ -98,7 +98,7 @@ impl MutinyWallet {
             self.blockchain.estimate_fee(1).await?
         };
 
-        let (psbt, details) = {
+        let (mut psbt, details) = {
             let mut builder = wallet.build_tx();
             builder
                 .add_recipient(send_to.script_pubkey(), amount)
@@ -109,8 +109,6 @@ impl MutinyWallet {
 
         debug!("Transaction details: {:#?}", details);
         debug!("Unsigned PSBT: {}", &psbt);
-
-        let mut psbt = psbt;
 
         let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
 
@@ -128,8 +126,7 @@ impl MutinyWallet {
             Network::Regtest => Err(bdk::Error::Generic(
                 "No esplora client available for regtest".to_string(),
             )),
-        }
-        .expect("What did I tell you about regtest?");
+        }?;
 
         debug!("Transaction broadcast! TXID: {txid}.\nExplorer URL: {explorer_url}{txid}");
 
@@ -157,7 +154,9 @@ fn get_tr_descriptors_for_extended_key(
     let master_xprv = xkey.into_xprv(network).unwrap();
     let coin_type = match network {
         Network::Bitcoin => 0,
-        _ => 1,
+        Network::Testnet => 1,
+        Network::Signet => 1,
+        Network::Regtest => 1,
     };
 
     let base_path = DerivationPath::from_str("m/86'").unwrap();

@@ -69,7 +69,7 @@ mod tests {
             second_pubkey.to_string()
         );
 
-        let km = create_keys_manager(mnemonic.clone(), 2);
+        let km = create_keys_manager(mnemonic, 2);
         let second_pubkey_again = pubkey_from_keys_manager(&km);
 
         assert_eq!(second_pubkey, second_pubkey_again);
