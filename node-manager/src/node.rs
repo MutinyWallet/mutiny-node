@@ -73,9 +73,9 @@ impl Node {
         {
             Err(MutinyError::PeerInfoParseFailed)
                 .with_context(|| format!("could not connect to peer: {pubkey}"))?
+        } else {
+            Ok(())
         }
-
-        Ok(())
     }
 }
 
