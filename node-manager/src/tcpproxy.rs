@@ -1,7 +1,10 @@
+use std::hash::Hash;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{net::SocketAddr, sync::Arc};
 
 use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
+use lightning::ln::peer_handler;
 use log::{debug, info};
 use wasm_bindgen_futures::spawn_local;
 
@@ -44,7 +47,7 @@ impl TcpProxy {
         }
     }
 
-    pub fn send(&self) {
+    pub fn send(&self, data: Vec<u8>) {
         debug!("initiating sending down websocket");
 
         // There can only be one sender at a time
@@ -53,16 +56,7 @@ impl TcpProxy {
         let cloned_conn = self.connection.clone();
         spawn_local(async move {
             let mut write = cloned_conn.lock().await;
-            write
-                .send(Message::Bytes(String::from("test\n").into_bytes().to_vec()))
-                .await
-                .unwrap();
-            write
-                .send(Message::Bytes(
-                    String::from("test 2\n").into_bytes().to_vec(),
-                ))
-                .await
-                .unwrap();
+            write.send(Message::Bytes(data)).await.unwrap();
             debug!("sent data down websocket");
         });
     }
@@ -74,6 +68,54 @@ fn proxy_to_url(proxy_url: String, peer_addr: SocketAddr) -> String {
         peer_addr.ip().to_string().replace('.', "_"),
         peer_addr.port()
     )
+}
+
+static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+pub struct SocketDescriptor {
+    conn: Arc<TcpProxy>,
+    id: u64,
+}
+impl SocketDescriptor {
+    fn new(conn: Arc<TcpProxy>) -> Self {
+        let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
+        Self { conn, id }
+    }
+}
+impl peer_handler::SocketDescriptor for SocketDescriptor {
+    fn send_data(&mut self, data: &[u8], _resume_read: bool) -> usize {
+        let vec = Vec::from(data);
+        self.conn.send(vec);
+        data.len()
+    }
+
+    fn disconnect_socket(&mut self) {
+        let cloned = self.conn.connection.clone();
+        spawn_local(async move {
+            let mut conn = cloned.lock().await;
+            let _ = conn.close();
+            debug!("closed websocket");
+        });
+    }
+}
+impl Clone for SocketDescriptor {
+    fn clone(&self) -> Self {
+        Self {
+            conn: Arc::clone(&self.conn),
+            id: self.id,
+        }
+    }
+}
+impl Eq for SocketDescriptor {}
+impl PartialEq for SocketDescriptor {
+    fn eq(&self, o: &Self) -> bool {
+        self.id == o.id
+    }
+}
+impl Hash for SocketDescriptor {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
 }
 
 #[cfg(test)]
