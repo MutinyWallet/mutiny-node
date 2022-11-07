@@ -123,3 +123,9 @@ Run the docker image locally
 ```
 docker run -d -p 3001:3001 bitcoindevshop/websocket-tcp-proxy
 ```
+
+Deploy the docker image:
+```
+docker tag bitcoindevshop/websocket-tcp-proxy registry.digitalocean.com/bitcoindevshop-do/websocket-tcp-proxy
+docker push registry.digitalocean.com/bitcoindevshop-do/websocket-tcp-proxy
+```
