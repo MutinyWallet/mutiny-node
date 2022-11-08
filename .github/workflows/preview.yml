@@ -35,7 +35,7 @@ jobs:
 
       - name: Build wasm
         working-directory: ./node-manager
-        run: wasm-pack build --target web
+        run: wasm-pack build --release --target web
 
       - name: Use Node.js 18.x
         uses: actions/setup-node@v3
