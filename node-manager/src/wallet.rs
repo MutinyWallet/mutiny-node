@@ -12,7 +12,7 @@ use bdk_macros::maybe_await;
 use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, Transaction};
-use lightning::chain::chaininterface::BroadcasterInterface;
+use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::error::MutinyError;
@@ -37,18 +37,6 @@ impl MutinyWallet {
         let (receive_descriptor_template, change_descriptor_template) =
             get_tr_descriptors_for_extended_key(xkey, network, account_number);
 
-        let url = match network {
-            Network::Bitcoin => Ok("https://blockstream.info/api"),
-            Network::Testnet => Ok("https://blockstream.info/testnet/api"),
-            Network::Signet => Ok("https://mempool.space/signet/api"),
-            Network::Regtest => Err(bdk::Error::Generic(
-                "No esplora client available for regtest".to_string(),
-            )),
-        }
-        .expect("What did I tell you about regtest?");
-
-        let blockchain = EsploraBlockchain::new(url, 20);
-
         let wallet = Wallet::new(
             receive_descriptor_template,
             Some(change_descriptor_template),
@@ -59,7 +47,7 @@ impl MutinyWallet {
 
         MutinyWallet {
             wallet: Mutex::new(wallet),
-            blockchain: Arc::new(blockchain),
+            blockchain: Arc::new(esplora_from_network(network)),
         }
     }
 
@@ -145,6 +133,15 @@ impl BroadcasterInterface for MutinyWallet {
     }
 }
 
+const MIN_FEERATE: u32 = 253 * 4;
+
+impl FeeEstimator for MutinyWallet {
+    fn get_est_sat_per_1000_weight(&self, confirmation_target: ConfirmationTarget) -> u32 {
+        // TODO
+        MIN_FEERATE
+    }
+}
+
 // mostly copied from sensei
 fn get_tr_descriptors_for_extended_key(
     xkey: ExtendedKey,
@@ -177,4 +174,18 @@ fn get_tr_descriptors_for_extended_key(
     .unwrap();
 
     (receive_descriptor_template, change_descriptor_template)
+}
+
+pub fn esplora_from_network(network: Network) -> EsploraBlockchain {
+    let url = match network {
+        Network::Bitcoin => Ok("https://blockstream.info/api"),
+        Network::Testnet => Ok("https://blockstream.info/testnet/api"),
+        Network::Signet => Ok("https://mempool.space/signet/api"),
+        Network::Regtest => Err(bdk::Error::Generic(
+            "No esplora client available for regtest".to_string(),
+        )),
+    }
+    .expect("What did I tell you about regtest?");
+    let blockchain = EsploraBlockchain::new(url, 20);
+    blockchain
 }

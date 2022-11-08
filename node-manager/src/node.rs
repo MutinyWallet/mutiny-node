@@ -1,3 +1,9 @@
+use crate::ldkstorage::MutinyNodePersister;
+use crate::localstorage::MutinyBrowserStorage;
+use crate::wallet::{esplora_from_network, MutinyWallet};
+use bdk::blockchain::EsploraBlockchain;
+use bitcoin::Network;
+use lightning::chain::{chainmonitor, Filter};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -12,7 +18,7 @@ use crate::{
 use anyhow::Context;
 use bip39::Mnemonic;
 use bitcoin::secp256k1::PublicKey;
-use lightning::chain::keysinterface::{KeysInterface, KeysManager, Recipient};
+use lightning::chain::keysinterface::{InMemorySigner, KeysInterface, KeysManager, Recipient};
 use lightning::ln::peer_handler::{
     ErroringMessageHandler, IgnoringMessageHandler, MessageHandler as LdkMessageHandler,
     PeerManager as LdkPeerManager,
@@ -37,21 +43,69 @@ pub(crate) type PeerManager = LdkPeerManager<
     Arc<IgnoringMessageHandler>,
 >;
 
+type ChainMonitor = chainmonitor::ChainMonitor<
+    InMemorySigner,
+    Arc<dyn Filter + Send + Sync>,
+    Arc<MutinyWallet>,
+    Arc<MutinyWallet>,
+    Arc<MutinyLogger>,
+    Arc<MutinyNodePersister>,
+>;
+
 pub struct Node {
     pub uuid: String,
     pub pubkey: PublicKey,
     pub peer_manager: Arc<PeerManager>,
     pub keys_manager: Arc<KeysManager>,
+    blockchain: Arc<EsploraBlockchain>,
 }
 
 impl Node {
-    pub(crate) fn new(node_index: NodeIndex, mnemonic: Mnemonic) -> Result<Self, MutinyError> {
+    pub(crate) fn new(
+        node_index: NodeIndex,
+        mnemonic: Mnemonic,
+        storage: MutinyBrowserStorage,
+        network: Network,
+    ) -> Result<Self, MutinyError> {
         info!("initialized a new node: {}", node_index.uuid);
 
         let logger = Arc::new(MutinyLogger::default());
 
-        let keys_manager = Arc::new(create_keys_manager(mnemonic, node_index.child_index));
+        let keys_manager = Arc::new(create_keys_manager(
+            mnemonic.clone(),
+            node_index.child_index,
+        ));
         let pubkey = pubkey_from_keys_manager(&keys_manager);
+
+        // init the persister
+        let persister = Arc::new(MutinyNodePersister::new(
+            node_index.uuid.clone(),
+            storage.clone(),
+        ));
+
+        // init esplora
+        let blockchain = Arc::new(esplora_from_network(network));
+
+        // init wallet
+        let wallet = Arc::new(MutinyWallet::new(
+            mnemonic.clone(),
+            storage.clone(),
+            network,
+        ));
+
+        // init chain monitor
+        let chain_monitor: Arc<ChainMonitor> = Arc::new(chainmonitor::ChainMonitor::new(
+            None,
+            wallet.clone(),
+            Arc::new(MutinyLogger {}),
+            wallet,
+            persister.clone(),
+        ));
+
+        // read channelmonitor state from disk
+        let channelmonitors = persister
+            .read_channel_monitors(keys_manager.clone())
+            .unwrap();
 
         // todo replace chan_handler with real channel handler
         let ln_msg_handler = MessageHandler {
@@ -66,7 +120,8 @@ impl Node {
             uuid: node_index.uuid,
             pubkey,
             peer_manager: Arc::new(peer_man),
-            keys_manager,
+            keys_manager: keys_manager.clone(),
+            blockchain,
         })
     }
 
