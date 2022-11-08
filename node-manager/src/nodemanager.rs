@@ -278,7 +278,9 @@ pub(crate) async fn create_new_node_from_node_manager(
         node_manager.storage.clone(),
         node_manager.chain.clone(),
         node_manager.network,
-    ) {
+    )
+    .await
+    {
         Ok(new_node) => new_node,
         Err(e) => return Err(e),
     };
