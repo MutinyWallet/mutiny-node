@@ -87,17 +87,13 @@ impl Node {
         let blockchain = Arc::new(esplora_from_network(network));
 
         // init wallet
-        let wallet = Arc::new(MutinyWallet::new(
-            mnemonic.clone(),
-            storage.clone(),
-            network,
-        ));
+        let wallet = Arc::new(MutinyWallet::new(mnemonic, storage, network));
 
         // init chain monitor
         let chain_monitor: Arc<ChainMonitor> = Arc::new(chainmonitor::ChainMonitor::new(
             None,
             wallet.clone(),
-            Arc::new(MutinyLogger {}),
+            logger.clone(),
             wallet,
             persister.clone(),
         ));
@@ -120,7 +116,7 @@ impl Node {
             uuid: node_index.uuid,
             pubkey,
             peer_manager: Arc::new(peer_man),
-            keys_manager: keys_manager.clone(),
+            keys_manager,
             blockchain,
         })
     }
