@@ -186,6 +186,5 @@ pub fn esplora_from_network(network: Network) -> EsploraBlockchain {
         )),
     }
     .expect("What did I tell you about regtest?");
-    let blockchain = EsploraBlockchain::new(url, 20);
-    blockchain
+    EsploraBlockchain::new(url, 20)
 }
