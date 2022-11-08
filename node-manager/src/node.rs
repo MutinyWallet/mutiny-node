@@ -12,14 +12,21 @@ use crate::{
 use anyhow::Context;
 use bip39::Mnemonic;
 use bitcoin::secp256k1::PublicKey;
-use lightning::chain::keysinterface::KeysManager;
+use lightning::chain::keysinterface::{KeysInterface, KeysManager, Recipient};
 use lightning::ln::peer_handler::{
-    ErroringMessageHandler, IgnoringMessageHandler, PeerManager as LdkPeerManager,
+    ErroringMessageHandler, IgnoringMessageHandler, MessageHandler as LdkMessageHandler,
+    PeerManager as LdkPeerManager,
 };
 use lightning::routing::gossip;
 use log::info;
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
+
+pub(crate) type MessageHandler = LdkMessageHandler<
+    Arc<ErroringMessageHandler>,
+    Arc<IgnoringMessageHandler>,
+    Arc<IgnoringMessageHandler>,
+>;
 
 pub(crate) type PeerManager = LdkPeerManager<
     SocketDescriptor,
@@ -33,6 +40,7 @@ pub(crate) type PeerManager = LdkPeerManager<
 pub struct Node {
     pub uuid: String,
     pub pubkey: PublicKey,
+    pub peer_manager: Arc<PeerManager>,
     pub keys_manager: Arc<KeysManager>,
 }
 
@@ -40,13 +48,24 @@ impl Node {
     pub(crate) fn new(node_index: NodeIndex, mnemonic: Mnemonic) -> Result<Self, MutinyError> {
         info!("initialized a new node: {}", node_index.uuid);
 
-        let keys_manager = create_keys_manager(mnemonic, node_index.child_index);
+        let logger = Arc::new(MutinyLogger::default());
+
+        let keys_manager = Arc::new(create_keys_manager(mnemonic, node_index.child_index));
         let pubkey = pubkey_from_keys_manager(&keys_manager);
+
+        let ln_msg_handler = MessageHandler {
+            chan_handler: Arc::new(ErroringMessageHandler::new()),
+            route_handler: Arc::new(IgnoringMessageHandler {}),
+            onion_message_handler: Arc::new(IgnoringMessageHandler {}),
+        };
+
+        let peer_man = create_peer_manager(keys_manager.clone(), ln_msg_handler, logger);
 
         Ok(Node {
             uuid: node_index.uuid,
             pubkey,
-            keys_manager: Arc::new(keys_manager),
+            peer_manager: Arc::new(peer_man),
+            keys_manager,
         })
     }
 
@@ -105,6 +124,25 @@ pub(crate) async fn connect_peer_if_necessary(
     // TODO then schedule a reader on the connection
 
     Ok(())
+}
+
+pub(crate) fn create_peer_manager(
+    km: Arc<KeysManager>,
+    lightning_msg_handler: MessageHandler,
+    logger: Arc<MutinyLogger>,
+) -> PeerManager {
+    let current_time = instant::now();
+    let mut ephemeral_bytes = [0u8; 32];
+    getrandom::getrandom(&mut ephemeral_bytes).expect("Failed to generate entropy");
+
+    PeerManager::new(
+        lightning_msg_handler,
+        km.get_node_secret(Recipient::Node).unwrap(),
+        current_time as u32,
+        &ephemeral_bytes,
+        logger,
+        Arc::new(IgnoringMessageHandler {}),
+    )
 }
 
 pub(crate) fn parse_peer_info(
