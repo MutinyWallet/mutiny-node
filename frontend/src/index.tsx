@@ -11,6 +11,7 @@ import {
 import KitchenSink from './routes/KitchenSink';
 import Send from './routes/Send';
 import Deposit from './routes/Deposit';
+import SendConfirm from './routes/SendConfirm';
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
@@ -24,6 +25,10 @@ const router = createBrowserRouter([
   {
     path: "/send",
     element: <Send />,
+  },
+  {
+    path: "/send/confirm",
+    element: <SendConfirm />,
   },
   {
     path: "/deposit",
