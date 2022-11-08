@@ -3,10 +3,14 @@ use crate::localstorage::MutinyBrowserStorage;
 use crate::wallet::{esplora_from_network, MutinyWallet};
 use bdk::blockchain::EsploraBlockchain;
 use bitcoin::Network;
+use futures::StreamExt;
+use gloo_net::websocket::Message;
 use lightning::chain::{chainmonitor, Filter};
+use lightning::ln::msgs::NetAddress;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::Arc;
+use wasm_bindgen_futures::spawn_local;
 
 use crate::tcpproxy::{SocketDescriptor, TcpProxy};
 use crate::{
@@ -21,10 +25,10 @@ use bitcoin::secp256k1::PublicKey;
 use lightning::chain::keysinterface::{InMemorySigner, KeysInterface, KeysManager, Recipient};
 use lightning::ln::peer_handler::{
     ErroringMessageHandler, IgnoringMessageHandler, MessageHandler as LdkMessageHandler,
-    PeerManager as LdkPeerManager,
+    PeerManager as LdkPeerManager, SocketDescriptor as LdkSocketDescriptor,
 };
 use lightning::routing::gossip;
-use log::info;
+use log::{debug, error, info, warn};
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
@@ -138,9 +142,14 @@ impl Node {
             }
         };
 
-        if connect_peer_if_necessary(websocket_proxy_addr, pubkey, peer_addr)
-            .await
-            .is_err()
+        if connect_peer_if_necessary(
+            websocket_proxy_addr,
+            pubkey,
+            peer_addr,
+            self.peer_manager.clone(),
+        )
+        .await
+        .is_err()
         {
             Err(MutinyError::PeerInfoParseFailed)
                 .with_context(|| format!("could not connect to peer: {pubkey}"))?
@@ -152,10 +161,10 @@ impl Node {
 
 pub(crate) async fn connect_peer_if_necessary(
     websocket_proxy_addr: String,
-    _pubkey: PublicKey,
+    pubkey: PublicKey,
     peer_addr: SocketAddr,
-    // peer_manager: Arc<PeerManager>,
-) -> Result<(), ()> {
+    peer_manager: Arc<PeerManager>,
+) -> Result<(), MutinyError> {
     // TODO add this when the peer manager is ready
     /*
     for node_pubkey in peer_manager.get_peer_node_ids() {
@@ -166,16 +175,66 @@ pub(crate) async fn connect_peer_if_necessary(
     */
 
     // first make a connection to the node
-    let tcp_proxy = TcpProxy::new(websocket_proxy_addr, peer_addr).await;
+    let tcp_proxy = Arc::new(TcpProxy::new(websocket_proxy_addr, peer_addr).await);
+    let mut descriptor = SocketDescriptor::new(tcp_proxy);
 
-    // TODO remove the test send
-    tcp_proxy.send(String::from("test\n").into_bytes().to_vec());
+    // then give that connection to the peer manager
+    let initial_bytes = peer_manager.new_outbound_connection(
+        pubkey,
+        descriptor.clone(),
+        Some(get_net_addr_from_socket(peer_addr)),
+    )?;
 
-    // TODO then give that connection to the peer manager
+    let sent_bytes = descriptor.send_data(&initial_bytes, true);
+    debug!("sent {sent_bytes} to node: {pubkey}");
 
-    // TODO then schedule a reader on the connection
+    // schedule a reader on the connection
+    let mut new_descriptor = descriptor.clone();
+    spawn_local(async move {
+        while let Some(msg) = descriptor.conn.read.lock().await.next().await {
+            if let Ok(msg_contents) = msg {
+                match msg_contents {
+                    Message::Text(t) => {
+                        warn!(
+                            "received text from websocket when we should only receive binary: {}",
+                            t
+                        )
+                    }
+                    Message::Bytes(b) => {
+                        debug!("received binary data from websocket");
+
+                        let read_res = peer_manager.read_event(&mut new_descriptor, &b);
+                        match read_res {
+                            // TODO handle read boolean event
+                            Ok(_read_bool) => {
+                                debug!("read event from the node");
+                                peer_manager.process_events();
+                            }
+                            Err(e) => error!("got an error reading event: {}", e),
+                        }
+                    }
+                };
+            }
+        }
+
+        // TODO when we detect an error, lock the writes and close connection.
+        debug!("WebSocket Closed")
+    });
 
     Ok(())
+}
+
+fn get_net_addr_from_socket(socket_addr: SocketAddr) -> NetAddress {
+    match socket_addr {
+        SocketAddr::V4(sockaddr) => NetAddress::IPv4 {
+            addr: sockaddr.ip().octets(),
+            port: sockaddr.port(),
+        },
+        SocketAddr::V6(sockaddr) => NetAddress::IPv6 {
+            addr: sockaddr.ip().octets(),
+            port: sockaddr.port(),
+        },
+    }
 }
 
 pub(crate) fn create_peer_manager(
