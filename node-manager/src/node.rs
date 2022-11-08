@@ -53,6 +53,7 @@ impl Node {
         let keys_manager = Arc::new(create_keys_manager(mnemonic, node_index.child_index));
         let pubkey = pubkey_from_keys_manager(&keys_manager);
 
+        // todo replace chan_handler with real channel handler
         let ln_msg_handler = MessageHandler {
             chan_handler: Arc::new(ErroringMessageHandler::new()),
             route_handler: Arc::new(IgnoringMessageHandler {}),
@@ -137,7 +138,8 @@ pub(crate) fn create_peer_manager(
 
     PeerManager::new(
         lightning_msg_handler,
-        km.get_node_secret(Recipient::Node).unwrap(),
+        km.get_node_secret(Recipient::Node)
+            .expect("Failed to get node secret"),
         current_time as u32,
         &ephemeral_bytes,
         logger,
