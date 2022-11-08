@@ -22,8 +22,7 @@ function App() {
     const [amount, setAmount] = useState("")
     const [destinationAddress, setDestinationAddress] = useState("")
 
-    // TODO make proxy configurable
-    const [proxyAddress] = useState("ws://127.0.0.1:3001")
+    const [proxyAddress, setProxyAddress] = useState("ws://127.0.0.1:3001")
     const [connectPeer, setConnectPeer] = useState("")
 
     function handleAmountChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -36,6 +35,10 @@ function App() {
 
     function handleConnectPeerChange(e: React.ChangeEvent<HTMLInputElement>) {
         setConnectPeer(e.target.value);
+    }
+
+    function handleProxyAddressChange(e: React.ChangeEvent<HTMLInputElement>) {
+        setProxyAddress(e.target.value);
     }
 
     function handleTxChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -176,6 +179,7 @@ function App() {
                         {newPubkey &&
                             <form onSubmit={connect_peer} className="flex flex-col items-start gap-4 my-4">
                                 <h2>Connect Peer:</h2>
+                                <input type="text" placeholder='Websocket Proxy Address' onChange={handleProxyAddressChange}></input>
                                 <input type="text" placeholder='Peer Connection String' onChange={handleConnectPeerChange}></input>
                                 <input type="submit" value="Connect" />
                             </form>

@@ -110,3 +110,22 @@ serve -s build
 ```
 
 They recommend running this in an incognito window because caching can be annoying with this stuff. Works for me in Chrome to install Mutiny as a desktop app.
+
+### Docker
+
+Build the websocket-tcp-proxy image
+
+```
+DOCKER_BUILDKIT=1 docker build -f Dockerfile-Proxy -t bitcoindevshop/websocket-tcp-proxy .
+```
+
+Run the docker image locally
+```
+docker run -d -p 3001:3001 bitcoindevshop/websocket-tcp-proxy
+```
+
+Deploy the docker image:
+```
+docker tag bitcoindevshop/websocket-tcp-proxy registry.digitalocean.com/bitcoindevshop-do/websocket-tcp-proxy
+docker push registry.digitalocean.com/bitcoindevshop-do/websocket-tcp-proxy
+```
