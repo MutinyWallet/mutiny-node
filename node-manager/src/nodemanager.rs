@@ -96,7 +96,7 @@ impl NodeManager {
             mnemonic,
             network,
             wallet,
-            storage: storage.clone(),
+            storage,
             node_storage: Mutex::new(node_storage),
             nodes: Arc::new(Mutex::new(HashMap::new())), // TODO init the nodes
         }
