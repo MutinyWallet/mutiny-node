@@ -57,19 +57,27 @@ function App() {
     async function setup() {
         if (NodeManager.has_node_manager()) {
             createNodeManager()
-            let balance = await nodeManager?.get_wallet_balance()
-            if (balance) {
-                setBalance(balance.toLocaleString())
+            try {
+                let balance = await nodeManager?.get_wallet_balance()
+                if (balance) {
+                    setBalance(balance.toLocaleString())
+                }
+            } catch (e) {
+                console.error(e);
             }
         }
     }
 
     async function sync() {
         if (nodeManager) {
-            await nodeManager.sync()
-            let balance = await nodeManager.get_wallet_balance()
-            if (balance) {
-                setBalance(balance.toLocaleString())
+            try {
+                await nodeManager.sync()
+                let balance = await nodeManager.get_wallet_balance()
+                if (balance) {
+                   setBalance(balance.toLocaleString())
+                }
+            } catch (e) {
+                console.error(e);
             }
         }
     }
@@ -112,16 +120,25 @@ function App() {
 
     async function new_node() {
         if (nodeManager) {
-            let new_node_identity = await nodeManager.new_node()
-            if (new_node_identity) {
-                setNewPubkey(new_node_identity.pubkey)
+	    try {
+              let new_node_identity = await nodeManager.new_node()
+              if (new_node_identity) {
+                  setNewPubkey(new_node_identity.pubkey)
+              }
+            } catch (e) {
+              console.error(e)
             }
         }
     }
 
-    function createNodeManager() {
+    async function createNodeManager() {
         // todo enter password
-        setNodeManager(new NodeManager("", undefined))
+        try {
+          let nodeManager = await new NodeManager("", undefined)
+          setNodeManager(nodeManager)
+	} catch (e) {
+	  console.error(e)
+	}
     }
 
     return (

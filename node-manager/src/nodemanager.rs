@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::{str::FromStr, sync::Arc};
 
+use crate::error::{MutinyError, MutinyJsError, MutinyStorageError};
 use crate::keymanager;
 use crate::node::Node;
 use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
@@ -68,7 +69,7 @@ impl NodeManager {
     }
 
     #[wasm_bindgen(constructor)]
-    pub fn new(password: String, mnemonic: Option<String>) -> NodeManager {
+    pub fn new(password: String, mnemonic: Option<String>) -> Result<NodeManager, MutinyJsError> {
         set_panic_hook();
 
         // TODO get network from frontend
@@ -78,8 +79,10 @@ impl NodeManager {
 
         let mnemonic = match mnemonic {
             Some(m) => {
-                let seed = Mnemonic::from_str(String::as_str(&m))
-                    .expect("could not parse specified mnemonic");
+                let seed = match Mnemonic::from_str(String::as_str(&m)) {
+                    Ok(seed) => seed,
+                    Err(_) => return Err(MutinyError::WalletOperationFailed.into()),
+                };
                 storage.insert_mnemonic(seed)
             }
             None => storage.get_mnemonic().unwrap_or_else(|_| {
@@ -90,24 +93,39 @@ impl NodeManager {
 
         let wallet = MutinyWallet::new(mnemonic.clone(), storage.clone(), network);
 
-        let node_storage = MutinyBrowserStorage::get_nodes().expect("could not retrieve node keys");
+        let node_storage = match MutinyBrowserStorage::get_nodes() {
+            Ok(node_storage) => node_storage,
+            Err(e) => {
+                return Err(MutinyError::ReadError {
+                    source: MutinyStorageError::Other(e.into()),
+                }
+                .into())
+            }
+        };
 
-        NodeManager {
+        Ok(NodeManager {
             mnemonic,
             network,
             wallet,
             storage,
             node_storage: Mutex::new(node_storage),
             nodes: Arc::new(Mutex::new(HashMap::new())), // TODO init the nodes
-        }
+        })
     }
 
     #[wasm_bindgen]
-    pub fn broadcast_transaction(&self, str: String) {
-        let tx_bytes = Vec::from_hex(str.as_str()).unwrap();
-        let tx: Transaction = deserialize(&tx_bytes).unwrap();
+    pub fn broadcast_transaction(&self, str: String) -> Result<(), MutinyJsError> {
+        let tx_bytes = match Vec::from_hex(str.as_str()) {
+            Ok(tx_bytes) => tx_bytes,
+            Err(_) => return Err(MutinyError::WalletOperationFailed.into()),
+        };
+        let tx: Transaction = match deserialize(&tx_bytes) {
+            Ok(tx) => tx,
+            Err(_) => return Err(MutinyError::WalletOperationFailed.into()),
+        };
 
-        self.wallet.broadcast_transaction(&tx)
+        self.wallet.broadcast_transaction(&tx);
+        Ok(())
     }
 
     #[wasm_bindgen]
@@ -116,26 +134,25 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub async fn get_new_address(&self) -> String {
-        self.wallet
+    pub async fn get_new_address(&self) -> Result<String, MutinyJsError> {
+        match self
+            .wallet
             .wallet
             .lock()
             .await
             .get_address(AddressIndex::New)
-            .unwrap()
-            .address
-            .to_string()
+        {
+            Ok(addr) => Ok(addr.address.to_string()),
+            Err(_) => Err(MutinyError::WalletOperationFailed.into()),
+        }
     }
 
     #[wasm_bindgen]
-    pub async fn get_wallet_balance(&self) -> u64 {
-        self.wallet
-            .wallet
-            .lock()
-            .await
-            .get_balance()
-            .unwrap()
-            .get_total()
+    pub async fn get_wallet_balance(&self) -> Result<u64, MutinyJsError> {
+        match self.wallet.wallet.lock().await.get_balance() {
+            Ok(balance) => Ok(balance.get_total()),
+            Err(_) => Err(MutinyJsError::WalletOperationFailed),
+        }
     }
 
     #[wasm_bindgen]
@@ -144,23 +161,31 @@ impl NodeManager {
         destination_address: String,
         amount: u64,
         fee_rate: Option<f32>,
-    ) -> String {
-        let txid = self
+    ) -> Result<String, MutinyJsError> {
+        match self
             .wallet
             .send(destination_address, amount, fee_rate)
             .await
-            .expect("Failed to send");
-        txid.to_owned().to_string()
+        {
+            Ok(txid) => Ok(txid.to_owned().to_string()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     #[wasm_bindgen]
-    pub async fn sync(&self) {
-        self.wallet.sync().await.expect("Wallet failed to sync")
+    pub async fn sync(&self) -> Result<(), MutinyJsError> {
+        match self.wallet.sync().await {
+            Ok(()) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     #[wasm_bindgen]
-    pub async fn new_node(&self) -> NodeIdentity {
-        create_new_node_from_node_manager(self).await
+    pub async fn new_node(&self) -> Result<NodeIdentity, MutinyJsError> {
+        match create_new_node_from_node_manager(self).await {
+            Ok(node_identity) => Ok(node_identity),
+            Err(e) => Err(e.into()),
+        }
     }
 
     #[wasm_bindgen]
@@ -169,27 +194,32 @@ impl NodeManager {
         self_node_pubkey: String,
         websocket_proxy_addr: String,
         connection_string: String,
-    ) {
+    ) -> Result<(), MutinyJsError> {
         if let Some(node) = self.nodes.lock().await.get(&self_node_pubkey) {
             let res = node
                 .connect_peer(websocket_proxy_addr, connection_string.clone())
                 .await;
             match res {
                 Ok(_) => {
-                    info!("connected to peer: {connection_string}")
+                    info!("connected to peer: {connection_string}");
+                    return Ok(());
                 }
                 Err(e) => {
-                    error!("could not connect to peer: {connection_string} - {e}")
+                    error!("could not connect to peer: {connection_string} - {e}");
+                    return Err(e.into());
                 }
             };
-        } else {
-            error!("could not find internal node {self_node_pubkey}")
         }
+
+        error!("could not find internal node {self_node_pubkey}");
+        Err(MutinyError::WalletOperationFailed.into())
     }
 }
 
 // This will create a new node with a node manager and return the PublicKey of the node created.
-pub(crate) async fn create_new_node_from_node_manager(node_manager: &NodeManager) -> NodeIdentity {
+pub(crate) async fn create_new_node_from_node_manager(
+    node_manager: &NodeManager,
+) -> Result<NodeIdentity, MutinyError> {
     // Begin with a mutex lock so that nothing else can
     // save or alter the node list while it is about to
     // be saved.
@@ -199,7 +229,10 @@ pub(crate) async fn create_new_node_from_node_manager(node_manager: &NodeManager
     // so that we can create another node with the next.
     // Always get it from our storage, the node_mutex is
     // mostly for read only and locking.
-    let mut existing_nodes = MutinyBrowserStorage::get_nodes().expect("could not retrieve nodes");
+    let mut existing_nodes = match MutinyBrowserStorage::get_nodes() {
+        Ok(existing_nodes) => existing_nodes,
+        Err(e) => return Err(MutinyError::ReadError { source: e }),
+    };
     let next_node_index = match existing_nodes
         .nodes
         .iter()
@@ -220,17 +253,19 @@ pub(crate) async fn create_new_node_from_node_manager(node_manager: &NodeManager
         .nodes
         .insert(next_node_uuid.clone(), next_node.clone());
 
-    MutinyBrowserStorage::insert_nodes(existing_nodes.clone()).expect("could not insert nodes");
+    MutinyBrowserStorage::insert_nodes(existing_nodes.clone())?;
     node_mutex.nodes = existing_nodes.nodes.clone();
 
     // now create the node process and init it
-    let new_node = Node::new(
+    let new_node = match Node::new(
         next_node.clone(),
         node_manager.mnemonic.clone(),
         node_manager.storage.clone(),
         node_manager.network,
-    )
-    .expect("could not initialize node");
+    ) {
+        Ok(new_node) => new_node,
+        Err(e) => return Err(e),
+    };
 
     let node_pubkey = new_node.pubkey;
     node_manager
@@ -240,10 +275,10 @@ pub(crate) async fn create_new_node_from_node_manager(node_manager: &NodeManager
         .await
         .insert(node_pubkey.clone().to_string(), Arc::new(new_node));
 
-    NodeIdentity {
+    Ok(NodeIdentity {
         uuid: next_node.uuid.clone(),
         pubkey: node_pubkey.clone().to_string(),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -262,7 +297,7 @@ mod tests {
         log!("creating node manager!");
 
         assert!(!NodeManager::has_node_manager());
-        NodeManager::new("password".to_string(), None);
+        NodeManager::new("password".to_string(), None).expect("node manager should initialize");
         assert!(NodeManager::has_node_manager());
 
         cleanup_test();
@@ -273,7 +308,7 @@ mod tests {
         log!("showing seed");
 
         let seed = generate_seed();
-        let nm = NodeManager::new("password".to_string(), Some(seed.to_string()));
+        let nm = NodeManager::new("password".to_string(), Some(seed.to_string())).unwrap();
 
         assert!(NodeManager::has_node_manager());
         assert_eq!(seed.to_string(), nm.show_seed());
@@ -286,10 +321,11 @@ mod tests {
         log!("creating new nodes");
 
         let seed = generate_seed();
-        let nm = NodeManager::new("password".to_string(), Some(seed.to_string()));
+        let nm = NodeManager::new("password".to_string(), Some(seed.to_string()))
+            .expect("node manager should initialize");
 
         {
-            let node_identity = nm.new_node().await;
+            let node_identity = nm.new_node().await.expect("should create new node");
             let node_storage = nm.node_storage.lock().await;
             assert_ne!("", node_identity.uuid);
             assert_ne!("", node_identity.pubkey);
@@ -300,7 +336,7 @@ mod tests {
         }
 
         {
-            let node_identity = nm.new_node().await;
+            let node_identity = nm.new_node().await.expect("node manager should initialize");
             let node_storage = nm.node_storage.lock().await;
 
             assert_ne!("", node_identity.uuid);
