@@ -1,4 +1,5 @@
 use thiserror::Error;
+use wasm_bindgen::JsValue;
 
 #[derive(Error, Debug)]
 #[allow(dead_code)]
@@ -101,5 +102,89 @@ impl From<MutinyStorageError> for bdk::Error {
             }
             _ => bdk::Error::Generic("Unexpected Mutiny storage Error".to_string()),
         }
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum MutinyJsError {
+    /// Returned when trying to start Mutiny while it is already running.
+    #[error("Mutiny is already running.")]
+    AlreadyRunning,
+    /// Returned when trying to stop Mutiny while it is not running.
+    #[error("Mutiny is not running.")]
+    NotRunning,
+    /// The funding transaction could not be created.
+    #[error("Funding transaction could not be created.")]
+    FundingTxCreationFailed,
+    /// A network connection has been closed.
+    #[error("Network connection closed.")]
+    ConnectionFailed,
+    /// Payment of the given invoice has already been initiated.
+    #[error("An invoice must not get payed twice.")]
+    NonUniquePaymentHash,
+    /// The given invoice is invalid.
+    #[error("The given invoice is invalid.")]
+    InvoiceInvalid,
+    /// Invoice creation failed.
+    #[error("Failed to create invoice.")]
+    InvoiceCreationFailed,
+    /// No route for the given target could be found.
+    #[error("Failed to find route.")]
+    RoutingFailed,
+    /// A given peer info could not be parsed.
+    #[error("Failed to parse the given peer information.")]
+    PeerInfoParseFailed,
+    /// A channel could not be opened.
+    #[error("Failed to create channel.")]
+    ChannelCreationFailed,
+    /// A channel could not be closed.
+    #[error("Failed to close channel.")]
+    ChannelClosingFailed,
+    /// Persistence failed.
+    #[error("Failed to persist data.")]
+    PersistenceFailed,
+    #[error("Failed to read data from storage.")]
+    ReadError,
+    /// A wallet operation failed.
+    #[error("Failed to conduct wallet operation.")]
+    WalletOperationFailed,
+    /// A signing operation failed.
+    #[error("Failed to sign given transaction.")]
+    WalletSigningFailed,
+    /// A chain access operation failed.
+    #[error("Failed to conduct chain access operation.")]
+    ChainAccessFailed,
+    /// Unknown error.
+    #[error("Unknown Error")]
+    UnknownError,
+}
+
+impl From<MutinyError> for MutinyJsError {
+    fn from(e: MutinyError) -> Self {
+        match e {
+            MutinyError::AlreadyRunning => MutinyJsError::AlreadyRunning,
+            MutinyError::NotRunning => MutinyJsError::NotRunning,
+            MutinyError::FundingTxCreationFailed => MutinyJsError::FundingTxCreationFailed,
+            MutinyError::ConnectionFailed => MutinyJsError::ConnectionFailed,
+            MutinyError::NonUniquePaymentHash => MutinyJsError::NonUniquePaymentHash,
+            MutinyError::InvoiceInvalid => MutinyJsError::InvoiceInvalid,
+            MutinyError::InvoiceCreationFailed => MutinyJsError::InvoiceCreationFailed,
+            MutinyError::RoutingFailed => MutinyJsError::RoutingFailed,
+            MutinyError::PeerInfoParseFailed => MutinyJsError::PeerInfoParseFailed,
+            MutinyError::ChannelCreationFailed => MutinyJsError::ChannelCreationFailed,
+            MutinyError::ChannelClosingFailed => MutinyJsError::ChannelClosingFailed,
+            MutinyError::PersistenceFailed { source: _ } => MutinyJsError::PersistenceFailed,
+            MutinyError::ReadError { source: _ } => MutinyJsError::ReadError,
+            MutinyError::WalletOperationFailed => MutinyJsError::WalletOperationFailed,
+            MutinyError::WalletSigningFailed => MutinyJsError::WalletSigningFailed,
+            MutinyError::ChainAccessFailed => MutinyJsError::ChainAccessFailed,
+            MutinyError::Other(_) => MutinyJsError::UnknownError,
+        }
+    }
+}
+
+impl From<MutinyJsError> for JsValue {
+    fn from(e: MutinyJsError) -> Self {
+        JsValue::from(e.to_string())
     }
 }
