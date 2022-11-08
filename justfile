@@ -1,10 +1,10 @@
 dev:
     cd ./frontend && npm run start-ssl
 pack:
-    wasm-pack build ./node-manager --target web
+    wasm-pack build ./node-manager --dev --target web
 
 pack-mac:
-    AR=/opt/homebrew/opt/llvm/bin/llvm-ar CC=/opt/homebrew/opt/llvm/bin/clang wasm-pack build ./node-manager --target web
+    AR=/opt/homebrew/opt/llvm/bin/llvm-ar CC=/opt/homebrew/opt/llvm/bin/clang wasm-pack build ./node-manager --dev --target web
 
 test:
     cargo test --package websocket-tcp-proxy
