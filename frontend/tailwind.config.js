@@ -14,8 +14,10 @@ module.exports = {
       blue: '#6895F5',
       'dark-blue': '#071831',
       red: '#F61D5B',
-      white: '#FBF5E9',
-      black: '#000000'
+      white: '#FFFFFF',
+      'off-white': '#FBF5E9',
+      black: '#000000',
+      faint: "rgba(255,255,255,0.05)"
     },
     extend: {
       fontFamily: {

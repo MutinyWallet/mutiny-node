@@ -2,6 +2,7 @@
 import logo from '../images/mutiny-logo.svg';
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from 'react';
+import ScreenMain from '../components/ScreenMain';
 
 
 function App() {
@@ -52,9 +53,7 @@ function App() {
           </p>
         }
       </header>
-      <main className='flex flex-grow flex-col h-full justify-between p-8'>
-
-
+      <ScreenMain>
         <div />
         <h1 className='text-4xl font-light uppercase'>69_420 <span className='text-2xl'>sats</span></h1>
         <div />
@@ -63,8 +62,7 @@ function App() {
           <button className='green-button' onClick={handleNavSend}>Send</button>
           <button className='blue-button' onClick={handleNavDeposit}>Deposit</button>
         </div>
-
-      </main>
+      </ScreenMain>
     </div>
   );
 }

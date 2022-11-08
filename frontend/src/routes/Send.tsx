@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
+import ScreenMain from "../components/ScreenMain";
 import { inputStyle } from "../styles";
 
 function Send() {
@@ -15,7 +16,7 @@ function Send() {
         <PageTitle title="Send" theme="green" />
         <Close />
       </header>
-      <main className='flex flex-grow flex-col h-full justify-between p-8 mb-4'>
+      <ScreenMain>
         <div />
         <div>
           <input className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice' />
@@ -23,7 +24,7 @@ function Send() {
         <div className='flex justify-start'>
           <button onClick={handleContinue}>Continue</button>
         </div>
-      </main>
+      </ScreenMain>
     </div>
   );
 }
