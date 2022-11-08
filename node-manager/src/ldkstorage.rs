@@ -22,6 +22,10 @@ pub struct MutinyNodePersister {
 }
 
 impl MutinyNodePersister {
+    pub fn new(node_id: String, storage: MutinyBrowserStorage) -> Self {
+        MutinyNodePersister { node_id, storage }
+    }
+
     fn get_key(&self, key: &str) -> String {
         format!("{}_{}", key, self.node_id)
     }

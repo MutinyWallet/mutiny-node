@@ -19,7 +19,9 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 pub struct NodeManager {
     mnemonic: Mnemonic,
+    network: Network,
     wallet: MutinyWallet,
+    storage: MutinyBrowserStorage,
     node_storage: Mutex<NodeStorage>,
     nodes: Arc<Mutex<HashMap<String, Arc<Node>>>>,
 }
@@ -69,6 +71,9 @@ impl NodeManager {
     pub fn new(password: String, mnemonic: Option<String>) -> NodeManager {
         set_panic_hook();
 
+        // TODO get network from frontend
+        let network = Network::Testnet;
+
         let storage = MutinyBrowserStorage::new(password);
 
         let mnemonic = match mnemonic {
@@ -83,13 +88,15 @@ impl NodeManager {
             }),
         };
 
-        let wallet = MutinyWallet::new(mnemonic.clone(), storage, Network::Testnet);
+        let wallet = MutinyWallet::new(mnemonic.clone(), storage.clone(), network);
 
         let node_storage = MutinyBrowserStorage::get_nodes().expect("could not retrieve node keys");
 
         NodeManager {
             mnemonic,
+            network,
             wallet,
+            storage,
             node_storage: Mutex::new(node_storage),
             nodes: Arc::new(Mutex::new(HashMap::new())), // TODO init the nodes
         }
@@ -217,8 +224,13 @@ pub(crate) async fn create_new_node_from_node_manager(node_manager: &NodeManager
     node_mutex.nodes = existing_nodes.nodes.clone();
 
     // now create the node process and init it
-    let new_node = Node::new(next_node.clone(), node_manager.mnemonic.clone())
-        .expect("could not initialize node");
+    let new_node = Node::new(
+        next_node.clone(),
+        node_manager.mnemonic.clone(),
+        node_manager.storage.clone(),
+        node_manager.network,
+    )
+    .expect("could not initialize node");
 
     let node_pubkey = new_node.pubkey;
     node_manager
