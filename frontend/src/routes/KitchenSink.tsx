@@ -196,6 +196,7 @@ function App() {
                         {newPubkey &&
                             <form onSubmit={connect_peer} className="flex flex-col items-start gap-4 my-4">
                                 <h2>Connect Peer:</h2>
+                                <p>You may want to use "wss://websocket-tcp-proxy-fywbx.ondigitalocean.app" as the example websocket proxy</p>
                                 <input type="text" placeholder='Websocket Proxy Address' onChange={handleProxyAddressChange}></input>
                                 <input type="text" placeholder='Peer Connection String' onChange={handleConnectPeerChange}></input>
                                 <input type="submit" value="Connect" />

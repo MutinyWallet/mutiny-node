@@ -2,6 +2,7 @@ use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{net::SocketAddr, sync::Arc};
 
+use futures::stream::SplitStream;
 use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
 use lightning::ln::peer_handler;
@@ -9,41 +10,20 @@ use log::{debug, info};
 use wasm_bindgen_futures::spawn_local;
 
 pub struct TcpProxy {
-    connection: WsSplit,
+    pub write: WsSplit,
+    pub read: ReadSplit,
 }
 
 type WsSplit = Arc<Mutex<SplitSink<WebSocket, Message>>>;
+type ReadSplit = Arc<Mutex<SplitStream<WebSocket>>>;
 
 impl TcpProxy {
     pub async fn new(proxy_url: String, peer_addr: SocketAddr) -> Self {
         let ws = WebSocket::open(String::as_str(&proxy_to_url(proxy_url, peer_addr))).unwrap();
-        let (write, mut read) = ws.split();
-
-        spawn_local(async move {
-            // TODO callback or pass bytes over to some stream reader.
-            // need to figure out how LDK wants this incoming data.
-            while let Some(msg) = read.next().await {
-                if let Ok(msg_contents) = msg {
-                    match msg_contents {
-                        Message::Text(t) => {
-                            info!("receive text from websocket {}", t)
-                        }
-                        Message::Bytes(b) => {
-                            info!(
-                                "receive binary from websocket {}",
-                                String::from_utf8_lossy(&b)
-                            )
-                        }
-                    };
-                }
-            }
-
-            // TODO when we detect an error, lock the writes and close connection.
-            debug!("WebSocket Closed")
-        });
-
+        let (write, read) = ws.split();
         TcpProxy {
-            connection: Arc::new(Mutex::new(write)),
+            write: Arc::new(Mutex::new(write)),
+            read: Arc::new(Mutex::new(read)),
         }
     }
 
@@ -53,7 +33,7 @@ impl TcpProxy {
         // There can only be one sender at a time
         // Cannot send and write at the same time either
         // TODO check if the connection is closed before trying to send.
-        let cloned_conn = self.connection.clone();
+        let cloned_conn = self.write.clone();
         spawn_local(async move {
             let mut write = cloned_conn.lock().await;
             write.send(Message::Bytes(data)).await.unwrap();
@@ -73,11 +53,11 @@ fn proxy_to_url(proxy_url: String, peer_addr: SocketAddr) -> String {
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub struct SocketDescriptor {
-    conn: Arc<TcpProxy>,
+    pub conn: Arc<TcpProxy>,
     id: u64,
 }
 impl SocketDescriptor {
-    fn new(conn: Arc<TcpProxy>) -> Self {
+    pub fn new(conn: Arc<TcpProxy>) -> Self {
         let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
         Self { conn, id }
     }
@@ -90,7 +70,7 @@ impl peer_handler::SocketDescriptor for SocketDescriptor {
     }
 
     fn disconnect_socket(&mut self) {
-        let cloned = self.conn.connection.clone();
+        let cloned = self.conn.write.clone();
         spawn_local(async move {
             let mut conn = cloned.lock().await;
             let _ = conn.close();

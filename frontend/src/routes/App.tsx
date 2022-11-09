@@ -44,6 +44,7 @@ function App() {
       <header className='p-8'>
         <img src={logo} className="App-logo" alt="logo" />
         <h2>You're probably looking for <a href="/tests">the tests</a></h2>
+        <p>View the <a href="https://github.com/BitcoinDevShop/mutiny-web-poc">source</a></p>
         {wasmSupported ? <p>WASM works!</p> :
           <p>
             WASM does not seem supported in your browser, this might not work for you!
