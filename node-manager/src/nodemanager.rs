@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::{str::FromStr, sync::Arc};
 
+use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyJsError, MutinyStorageError};
 use crate::keymanager;
+use crate::logging::MutinyLogger;
 use crate::node::Node;
 use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
 use bdk::wallet::AddressIndex;
@@ -21,7 +23,8 @@ use wasm_bindgen::prelude::*;
 pub struct NodeManager {
     mnemonic: Mnemonic,
     network: Network,
-    wallet: MutinyWallet,
+    wallet: Arc<MutinyWallet>,
+    chain: Arc<MutinyChain>,
     storage: MutinyBrowserStorage,
     node_storage: Mutex<NodeStorage>,
     nodes: Arc<Mutex<HashMap<String, Arc<Node>>>>,
@@ -91,7 +94,13 @@ impl NodeManager {
             }),
         };
 
-        let wallet = MutinyWallet::new(mnemonic.clone(), storage.clone(), network);
+        let wallet = Arc::new(MutinyWallet::new(
+            mnemonic.clone(),
+            storage.clone(),
+            network,
+        ));
+
+        let chain = Arc::new(MutinyChain::new(wallet.clone()));
 
         let node_storage = match MutinyBrowserStorage::get_nodes() {
             Ok(node_storage) => node_storage,
@@ -99,7 +108,7 @@ impl NodeManager {
                 return Err(MutinyError::ReadError {
                     source: MutinyStorageError::Other(e.into()),
                 }
-                .into())
+                .into());
             }
         };
 
@@ -107,6 +116,7 @@ impl NodeManager {
             mnemonic,
             network,
             wallet,
+            chain,
             storage,
             node_storage: Mutex::new(node_storage),
             nodes: Arc::new(Mutex::new(HashMap::new())), // TODO init the nodes
@@ -124,7 +134,7 @@ impl NodeManager {
             Err(_) => return Err(MutinyError::WalletOperationFailed.into()),
         };
 
-        self.wallet.broadcast_transaction(&tx);
+        self.chain.broadcast_transaction(&tx);
         Ok(())
     }
 
@@ -174,8 +184,13 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub async fn sync(&self) -> Result<(), MutinyJsError> {
+        // sync bdk wallet
         match self.wallet.sync().await {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                // sync ldk wallet
+                // todo get new chain txs and pass them in the vec
+                self.chain.sync(Vec::new()).await.map_err(|e| e.into())
+            }
             Err(e) => Err(e.into()),
         }
     }
@@ -261,6 +276,7 @@ pub(crate) async fn create_new_node_from_node_manager(
         next_node.clone(),
         node_manager.mnemonic.clone(),
         node_manager.storage.clone(),
+        node_manager.chain.clone(),
         node_manager.network,
     ) {
         Ok(new_node) => new_node,

@@ -1,6 +1,6 @@
 use anyhow::Context;
 use futures::lock::Mutex;
-use log::{debug, error};
+use log::debug;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -11,9 +11,7 @@ use bdk::{FeeRate, SignOptions, SyncOptions, Wallet};
 use bdk_macros::maybe_await;
 use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
-use bitcoin::{Address, Network, Transaction};
-use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
-use wasm_bindgen_futures::spawn_local;
+use bitcoin::{Address, Network};
 
 use crate::error::MutinyError;
 use crate::localstorage::MutinyBrowserStorage;
@@ -21,7 +19,7 @@ use crate::localstorage::MutinyBrowserStorage;
 #[derive(Debug)]
 pub struct MutinyWallet {
     pub wallet: Mutex<Wallet<MutinyBrowserStorage>>,
-    blockchain: Arc<EsploraBlockchain>,
+    pub blockchain: Arc<EsploraBlockchain>,
 }
 
 impl MutinyWallet {
@@ -119,26 +117,6 @@ impl MutinyWallet {
         debug!("Transaction broadcast! TXID: {txid}.\nExplorer URL: {explorer_url}{txid}");
 
         Ok(txid)
-    }
-}
-
-impl BroadcasterInterface for MutinyWallet {
-    fn broadcast_transaction(&self, tx: &Transaction) {
-        let blockchain = self.blockchain.clone();
-        let tx_clone = tx.clone();
-        spawn_local(async move {
-            maybe_await!(blockchain.broadcast(&tx_clone))
-                .unwrap_or_else(|_| error!("failed to broadcast tx! {}", tx_clone.txid()))
-        });
-    }
-}
-
-const MIN_FEERATE: u32 = 253 * 4;
-
-impl FeeEstimator for MutinyWallet {
-    fn get_est_sat_per_1000_weight(&self, confirmation_target: ConfirmationTarget) -> u32 {
-        // TODO
-        MIN_FEERATE
     }
 }
 
