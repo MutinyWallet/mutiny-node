@@ -1,6 +1,8 @@
+use bdk::{LocalUtxo, TransactionDetails};
 use std::collections::HashMap;
 use std::{str::FromStr, sync::Arc};
 
+use crate::api::{MutinyBalance, MutinyChannel, MutinyInvoice};
 use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyJsError, MutinyStorageError};
 use crate::keymanager;
@@ -11,7 +13,7 @@ use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
 use bitcoin::consensus::deserialize;
 use bitcoin::hashes::hex::FromHex;
-use bitcoin::{Network, Transaction};
+use bitcoin::{Network, OutPoint, Transaction, Txid};
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::BroadcasterInterface;
 use log::{error, info};
@@ -183,6 +185,50 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
+    pub async fn check_address(
+        &self,
+        _address: String,
+    ) -> Result<TransactionDetails, MutinyJsError> {
+        todo!()
+    }
+
+    #[wasm_bindgen]
+    pub async fn list_onchain(&self) -> Result<Vec<TransactionDetails>, MutinyJsError> {
+        self.wallet
+            .wallet
+            .lock()
+            .await
+            .list_transactions(false)
+            .map_err(|e| e.into())
+    }
+
+    #[wasm_bindgen]
+    pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyJsError> {
+        match self.wallet.wallet.lock().await.get_balance() {
+            Ok(onchain) => {
+                let balance = MutinyBalance {
+                    confirmed: onchain.confirmed,
+                    unconfirmed: onchain.untrusted_pending + onchain.trusted_pending,
+                    lightning: 0,
+                };
+
+                Ok(balance)
+            }
+            Err(_) => Err(MutinyJsError::WalletOperationFailed),
+        }
+    }
+
+    #[wasm_bindgen]
+    pub async fn list_utxos(&self) -> Result<Vec<LocalUtxo>, MutinyJsError> {
+        self.wallet
+            .wallet
+            .lock()
+            .await
+            .list_unspent()
+            .map_err(|e| e.into())
+    }
+
+    #[wasm_bindgen]
     pub async fn sync(&self) -> Result<(), MutinyJsError> {
         // sync bdk wallet
         match self.wallet.sync().await {
@@ -228,6 +274,77 @@ impl NodeManager {
 
         error!("could not find internal node {self_node_pubkey}");
         Err(MutinyError::WalletOperationFailed.into())
+    }
+
+    // all values in sats
+
+    #[wasm_bindgen]
+    pub async fn create_invoice(
+        &self,
+        _amount: u64,
+        _description: String,
+    ) -> Result<MutinyInvoice, MutinyJsError> {
+        todo!()
+    }
+
+    #[wasm_bindgen]
+    pub async fn pay_invoice(&self, _invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
+        todo!()
+    }
+
+    #[wasm_bindgen]
+    pub async fn decode_invoice(&self, _invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
+        todo!()
+    }
+
+    #[wasm_bindgen]
+    pub async fn get_invoice(&self, _invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
+        todo!()
+    }
+
+    #[wasm_bindgen]
+    pub async fn get_invoice_by_hash(&self, _hash: String) -> Result<MutinyInvoice, MutinyJsError> {
+        todo!()
+    }
+
+    #[wasm_bindgen]
+    pub async fn list_invoices(
+        &self,
+        _invoice: String,
+    ) -> Result<Vec<MutinyInvoice>, MutinyJsError> {
+        todo!()
+    }
+
+    #[wasm_bindgen]
+    pub async fn open_channel(
+        &self,
+        _pubkey: String,
+        _host: Option<String>,
+        _port: Option<u16>,
+        _amount: u64,
+        _fee_rate: Option<u16>,
+    ) -> Result<MutinyChannel, MutinyJsError> {
+        todo!()
+    }
+
+    #[wasm_bindgen]
+    pub async fn close_channel(&self, _outpoint: OutPoint) -> Result<OutPoint, MutinyJsError> {
+        todo!()
+    }
+
+    #[wasm_bindgen]
+    pub async fn list_channels(&self) -> Result<MutinyChannel, MutinyJsError> {
+        todo!()
+    }
+
+    #[wasm_bindgen]
+    pub async fn list_peers(&self) -> Result<Vec<String>, MutinyJsError> {
+        todo!()
+    }
+
+    #[wasm_bindgen]
+    pub async fn list_ln_txs(&self) -> Result<Vec<MutinyInvoice>, MutinyJsError> {
+        todo!()
     }
 }
 
