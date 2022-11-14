@@ -1,3 +1,4 @@
+use bdk::esplora_client;
 use lightning::ln::peer_handler::PeerHandleError;
 use thiserror::Error;
 use wasm_bindgen::JsValue;
@@ -89,6 +90,14 @@ impl From<bdk::Error> for MutinyError {
             bdk::Error::Signer(_) => Self::WalletSigningFailed,
             _ => Self::WalletOperationFailed,
         }
+    }
+}
+
+// TODO add more granular errors for esplora failures
+impl From<esplora_client::Error> for MutinyError {
+    fn from(_e: esplora_client::Error) -> Self {
+        // This is most likely a chain access failure
+        Self::ChainAccessFailed
     }
 }
 

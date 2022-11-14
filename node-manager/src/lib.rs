@@ -4,6 +4,7 @@
 // https://github.com/rustwasm/wasm-bindgen/issues/2882
 
 mod bdkstorage;
+mod chain;
 mod encrypt;
 mod error;
 mod keymanager;
