@@ -279,7 +279,7 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub async fn list_onchain(&self) -> Result<JsValue, MutinyJsError> {
-        let txs = self.wallet.wallet.lock().await.list_transactions(false)?;
+        let txs = self.wallet.list_transactions(false).await?;
 
         Ok(serde_wasm_bindgen::to_value(&txs)?)
     }
@@ -302,7 +302,7 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub async fn list_utxos(&self) -> Result<JsValue, MutinyJsError> {
-        let utxos = self.wallet.wallet.lock().await.list_unspent()?;
+        let utxos = self.wallet.list_utxos().await?;
 
         Ok(serde_wasm_bindgen::to_value(&utxos)?)
     }

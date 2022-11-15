@@ -203,15 +203,6 @@ impl From<MutinyError> for MutinyJsError {
     }
 }
 
-impl From<bdk::Error> for MutinyJsError {
-    fn from(e: bdk::Error) -> Self {
-        match e {
-            bdk::Error::Signer(_) => Self::WalletSigningFailed,
-            _ => Self::WalletOperationFailed,
-        }
-    }
-}
-
 impl From<serde_wasm_bindgen::Error> for MutinyJsError {
     fn from(_: serde_wasm_bindgen::Error) -> Self {
         Self::JsonReadWriteError

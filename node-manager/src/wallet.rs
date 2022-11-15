@@ -7,7 +7,7 @@ use std::sync::Arc;
 use bdk::blockchain::{Blockchain, EsploraBlockchain};
 use bdk::keys::ExtendedKey;
 use bdk::template::DescriptorTemplateOut;
-use bdk::{FeeRate, SignOptions, SyncOptions, Wallet};
+use bdk::{FeeRate, LocalUtxo, SignOptions, SyncOptions, TransactionDetails, Wallet};
 use bdk_macros::maybe_await;
 use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
@@ -55,6 +55,17 @@ impl MutinyWallet {
         maybe_await!(wallet.sync(&self.blockchain, SyncOptions::default()))?;
 
         Ok(())
+    }
+
+    pub async fn list_utxos(&self) -> Result<Vec<LocalUtxo>, MutinyError> {
+        Ok(self.wallet.lock().await.list_unspent()?)
+    }
+
+    pub async fn list_transactions(
+        &self,
+        include_raw: bool,
+    ) -> Result<Vec<TransactionDetails>, MutinyError> {
+        Ok(self.wallet.lock().await.list_transactions(include_raw)?)
     }
 
     pub async fn send(
