@@ -50,6 +50,10 @@ button.green-button {
   @apply text-white bg-green-button;
 }
 
+button.secondary {
+  @apply bg-none border-2 border-white text-white shadow-none;
+}
+
 h1.green-header {
   @apply border-b-2 border-b-green;
 }

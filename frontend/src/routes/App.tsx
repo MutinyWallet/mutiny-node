@@ -14,8 +14,13 @@ function App() {
     navigate("/send")
   }
 
-  function handleNavDeposit() {
-    navigate("/deposit")
+  // function handleNavDeposit() {
+  //   navigate("/deposit")
+  // }
+
+  function handleNavReceive() {
+    navigate("/receive")
+
   }
 
   useEffect(() => {
@@ -60,7 +65,9 @@ function App() {
         <div className='flex flex-col gap-2 items-start'>
 
           <button className='green-button' onClick={handleNavSend}>Send</button>
-          <button className='blue-button' onClick={handleNavDeposit}>Deposit</button>
+          {/* TODO if no funds can do deposit instead of receive */}
+          {/* <button className='blue-button' onClick={handleNavDeposit}>Deposit</button> */}
+          <button className='blue-button' onClick={handleNavReceive}>Receive</button>
         </div>
       </ScreenMain>
     </div>

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useNavigate } from "react-router";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
@@ -6,9 +7,18 @@ import { inputStyle } from "../styles";
 
 function Send() {
   let navigate = useNavigate();
-  function handleContinue() {
-    navigate("/send/confirm")
 
+  const [destination, setDestination] = useState("")
+
+  const [showAmountInput, setShowAmountInput] = useState(false)
+  const [amount, setAmount] = useState("")
+
+  function handleContinue() {
+    if (destination && !amount) {
+      setShowAmountInput(true)
+    } else if (destination && amount) {
+      navigate("/send/confirm")
+    }
   }
   return (
     <div className="flex flex-col h-screen">
@@ -18,9 +28,13 @@ function Send() {
       </header>
       <ScreenMain>
         <div />
-        <div>
-          <input className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice or address' />
-        </div>
+        {!showAmountInput && <input onChange={e => setDestination(e.target.value)} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice or address' />}
+        {showAmountInput &&
+          <div className="flex flex-col gap-4">
+            <p className="text-2xl font-light">How much would you like to send?</p>
+            <input onChange={e => setAmount(e.target.value)} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='sats' />
+          </div>
+        }
         <div className='flex justify-start'>
           <button onClick={handleContinue}>Continue</button>
         </div>
