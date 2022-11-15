@@ -71,11 +71,34 @@ pub struct MutinyInvoice {
     description: Option<String>,
     payment_hash: String,
     preimage: Option<String>,
-    amount_sats: Option<u64>,
-    expire: Option<u64>,
-    paid: bool,
-    fees_paid: u64,
-    is_send: bool,
+    pub amount_sats: Option<u64>,
+    pub expire: Option<u64>,
+    pub paid: bool,
+    pub fees_paid: u64,
+    pub is_send: bool,
+}
+
+#[wasm_bindgen]
+impl MutinyInvoice {
+    #[wasm_bindgen(getter)]
+    pub fn bolt11(&self) -> String {
+        self.bolt11.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn description(&self) -> Option<String> {
+        self.description.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn payment_hash(&self) -> String {
+        self.payment_hash.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn preimage(&self) -> Option<String> {
+        self.preimage.clone()
+    }
 }
 
 impl From<Invoice> for MutinyInvoice {
@@ -101,18 +124,31 @@ impl From<Invoice> for MutinyInvoice {
 
 #[wasm_bindgen]
 pub struct MutinyChannel {
-    balance: u64,
-    size: u64,
+    pub balance: u64,
+    pub size: u64,
     outpoint: String,
     peer: String,
-    confirmed: bool,
+    pub confirmed: bool,
+}
+
+#[wasm_bindgen]
+impl MutinyChannel {
+    #[wasm_bindgen(getter)]
+    pub fn outpoint(&self) -> String {
+        self.outpoint.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn peer(&self) -> String {
+        self.peer.clone()
+    }
 }
 
 #[wasm_bindgen]
 pub struct MutinyBalance {
-    confirmed: u64,
-    unconfirmed: u64,
-    lightning: u64,
+    pub confirmed: u64,
+    pub unconfirmed: u64,
+    pub lightning: u64,
 }
 
 #[wasm_bindgen]
