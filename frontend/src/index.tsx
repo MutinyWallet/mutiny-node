@@ -13,6 +13,11 @@ import Send from './routes/Send';
 import Deposit from './routes/Deposit';
 import SendConfirm from './routes/SendConfirm';
 import Receive from './routes/Receive';
+import ManagerRoot from './routes/ManagerRoot';
+import Transactions from './routes/Transactions';
+import Peers from './routes/Peers';
+import Channels from './routes/Channels';
+import Settings from './routes/Settings';
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
@@ -43,6 +48,28 @@ const router = createBrowserRouter([
     path: "/tests",
     element: <KitchenSink />,
   },
+  {
+    path: "/manager",
+    element: <ManagerRoot />,
+    children: [
+      {
+        path: "transactions",
+        element: <Transactions />
+      },
+      {
+        path: "peers",
+        element: <Peers />
+      },
+      {
+        path: "channels",
+        element: <Channels />
+      },
+      {
+        path: "settings",
+        element: <Settings />
+      }
+    ]
+  }
 ]);
 
 root.render(

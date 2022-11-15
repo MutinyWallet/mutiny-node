@@ -42,6 +42,10 @@ input[type="submit"] {
   text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.15);
 }
 
+button:has(> img) {
+  @apply text-sm flex flex-col justify-center items-center h-[6rem] w-[6rem];
+}
+
 button.blue-button {
   @apply text-white bg-blue-button;
 }
@@ -51,7 +55,7 @@ button.green-button {
 }
 
 button.secondary {
-  @apply bg-none border-2 border-white text-white shadow-none;
+  @apply bg-none outline outline-white text-white shadow-none;
 }
 
 h1.green-header {
@@ -87,7 +91,13 @@ dd {
   @apply font-light;
 }
 
-h4 {
-  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.15);
-  @apply text-xl text-black uppercase p-2 font-light;
+/* For Webkit-based browsers (Chrome, Safari and Opera) */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* For IE, Edge and Firefox */
+.scrollbar-hide {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
 }

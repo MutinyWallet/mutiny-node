@@ -33,8 +33,9 @@ module.exports = {
       },
       backgroundImage: {
         'gray-button': 'linear-gradient(192.14deg, #FFFFFF -0.54%, #D9D9D9 101.77%)',
-        'blue-button': 'linear-gradient(192.14deg, #6895F5 -0.54%, #3861CE 101.77%);',
-        'green-button': 'linear-gradient(192.14deg, #00D1A0 -0.54%, #1EA67F 101.77%);'
+        'blue-button': 'linear-gradient(192.14deg, #6895F5 -0.54%, #3861CE 101.77%)',
+        'green-button': 'linear-gradient(192.14deg, #00D1A0 -0.54%, #1EA67F 101.77%)',
+        'fade-to-blue': 'linear-gradient(1.63deg, #0B215B 32.05%, rgba(11, 33, 91, 0) 84.78%)'
       }
     },
   },

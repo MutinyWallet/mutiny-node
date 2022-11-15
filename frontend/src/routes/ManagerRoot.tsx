@@ -1,0 +1,51 @@
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import TxIcon from "../images/tx-icon.png"
+import ChannelsIcon from "../images/channels-icon.png"
+import SettingsIcon from "../images/settings-icon.png"
+import UtxosIcon from "../images/utxos-icon.png"
+import PeersIcon from "../images/peers-icon.png"
+
+function ManagerRoot() {
+    let navigate = useNavigate();
+    let location = useLocation();
+
+    const shouldBeActive = (matcher: string) => {
+        return location.pathname === `/manager/${matcher}` ? "" : "secondary"
+    }
+
+    return (
+        <div className="h-screen flex flex-col justify-between overflow-hidden">
+            <Outlet />
+            <nav className="relative">
+                <ul className="pb-8 pt-16 px-8 flex overflow-scroll gap-2 absolute bottom-0 left-0 max-w-full bg-fade-to-blue scrollbar-hide">
+                    <li>
+                        <button onClick={() => navigate("transactions")} className={shouldBeActive("transactions")} >
+                            <img src={TxIcon} alt="transactions icon" />
+                            TXs
+                        </button>
+                    </li>
+                    <li>
+                        <button onClick={() => navigate("channels")} className={shouldBeActive("channels")}>
+                            <img src={ChannelsIcon} alt="transactions icon" />
+                            Channels
+                        </button>
+                    </li>
+                    <li>
+                        <button onClick={() => navigate("peers")} className={shouldBeActive("peers")}>
+                            <img src={PeersIcon} alt="peers icon" />
+                            Peers
+                        </button>
+                    </li>
+                    <li>
+                        <button onClick={() => navigate("settings")} className={shouldBeActive("settings")}>
+                            <img src={SettingsIcon} alt="settings icon" />
+                            Settings
+                        </button>
+                    </li>
+                </ul>
+            </nav>
+        </div>
+    )
+}
+
+export default ManagerRoot
