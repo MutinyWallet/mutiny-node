@@ -19,7 +19,7 @@ function Send() {
       <ScreenMain>
         <div />
         <div>
-          <input className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice' />
+          <input className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice or address' />
         </div>
         <div className='flex justify-start'>
           <button onClick={handleContinue}>Continue</button>
