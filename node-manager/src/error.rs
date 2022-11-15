@@ -171,6 +171,9 @@ pub enum MutinyJsError {
     /// A chain access operation failed.
     #[error("Failed to conduct chain access operation.")]
     ChainAccessFailed,
+    /// An error when reading/writing json to the front end.
+    #[error("Failed to read or write json from the front end")]
+    JsonReadWriteError,
     /// Unknown error.
     #[error("Unknown Error")]
     UnknownError,
@@ -197,6 +200,21 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::ChainAccessFailed => MutinyJsError::ChainAccessFailed,
             MutinyError::Other(_) => MutinyJsError::UnknownError,
         }
+    }
+}
+
+impl From<bdk::Error> for MutinyJsError {
+    fn from(e: bdk::Error) -> Self {
+        match e {
+            bdk::Error::Signer(_) => Self::WalletSigningFailed,
+            _ => Self::WalletOperationFailed,
+        }
+    }
+}
+
+impl From<serde_wasm_bindgen::Error> for MutinyJsError {
+    fn from(_: serde_wasm_bindgen::Error) -> Self {
+        Self::JsonReadWriteError
     }
 }
 

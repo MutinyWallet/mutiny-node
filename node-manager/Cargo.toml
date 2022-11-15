@@ -12,10 +12,11 @@ crate-type = ["cdylib"]
 [dependencies]
 cfg-if = "1.0.0"
 wasm-bindgen = "0.2.83"
+serde-wasm-bindgen = "0.4"
 bip39 = { version = "1.0.1" }
 bip32 = "0.4.0"
 secp256k1 = "0.24.0"
-bitcoin = "0.29.2"
+bitcoin = {version = "0.29.2", features = ["serde"] }
 bdk = { version = "0.24.0", default-features = false, features = ["keys-bip39", "esplora", "use-esplora-reqwest"] }
 bdk-macros = "0.6.0"
 getrandom = { version = "0.2", features = ["js"] }

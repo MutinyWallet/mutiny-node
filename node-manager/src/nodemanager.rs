@@ -1,21 +1,19 @@
-use bdk::{LocalUtxo, TransactionDetails};
 use std::collections::HashMap;
 use std::{str::FromStr, sync::Arc};
 
-use crate::api::{MutinyBalance, MutinyChannel, MutinyInvoice};
 use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyJsError, MutinyStorageError};
 use crate::keymanager;
-use crate::logging::MutinyLogger;
 use crate::node::Node;
 use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
 use bitcoin::consensus::deserialize;
-use bitcoin::hashes::hex::FromHex;
-use bitcoin::{Network, OutPoint, Transaction, Txid};
+use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::{Network, Transaction};
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::BroadcasterInterface;
+use lightning_invoice::{Invoice, InvoiceDescription};
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -64,6 +62,57 @@ impl NodeIdentity {
     pub fn pubkey(&self) -> String {
         self.pubkey.clone()
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[wasm_bindgen]
+pub struct MutinyInvoice {
+    bolt11: String,
+    description: Option<String>,
+    payment_hash: String,
+    preimage: Option<String>,
+    amount_sats: Option<u64>,
+    expire: Option<u64>,
+    paid: bool,
+    fees_paid: u64,
+    is_send: bool,
+}
+
+impl From<Invoice> for MutinyInvoice {
+    fn from(value: Invoice) -> Self {
+        let description = match value.description() {
+            InvoiceDescription::Direct(a) => Some(a.to_string()),
+            InvoiceDescription::Hash(_) => None,
+        };
+
+        MutinyInvoice {
+            bolt11: value.to_string(),
+            description,
+            payment_hash: value.payment_hash().to_owned().to_hex(),
+            preimage: None,
+            amount_sats: value.amount_milli_satoshis().map(|m| m / 1000),
+            expire: None, // todo
+            paid: false,
+            fees_paid: 0,
+            is_send: false, // todo this could be bad
+        }
+    }
+}
+
+#[wasm_bindgen]
+pub struct MutinyChannel {
+    balance: u64,
+    size: u64,
+    outpoint: String,
+    peer: String,
+    confirmed: bool,
+}
+
+#[wasm_bindgen]
+pub struct MutinyBalance {
+    confirmed: u64,
+    unconfirmed: u64,
+    lightning: u64,
 }
 
 #[wasm_bindgen]
@@ -188,18 +237,15 @@ impl NodeManager {
     pub async fn check_address(
         &self,
         _address: String,
-    ) -> Result<TransactionDetails, MutinyJsError> {
+    ) -> Result<JsValue /* TransactionDetails */, MutinyJsError> {
         todo!()
     }
 
     #[wasm_bindgen]
-    pub async fn list_onchain(&self) -> Result<Vec<TransactionDetails>, MutinyJsError> {
-        self.wallet
-            .wallet
-            .lock()
-            .await
-            .list_transactions(false)
-            .map_err(|e| e.into())
+    pub async fn list_onchain(&self) -> Result<JsValue, MutinyJsError> {
+        let txs = self.wallet.wallet.lock().await.list_transactions(false)?;
+
+        Ok(serde_wasm_bindgen::to_value(&txs)?)
     }
 
     #[wasm_bindgen]
@@ -219,13 +265,10 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub async fn list_utxos(&self) -> Result<Vec<LocalUtxo>, MutinyJsError> {
-        self.wallet
-            .wallet
-            .lock()
-            .await
-            .list_unspent()
-            .map_err(|e| e.into())
+    pub async fn list_utxos(&self) -> Result<JsValue, MutinyJsError> {
+        let utxos = self.wallet.wallet.lock().await.list_unspent()?;
+
+        Ok(serde_wasm_bindgen::to_value(&utxos)?)
     }
 
     #[wasm_bindgen]
@@ -311,7 +354,7 @@ impl NodeManager {
     pub async fn list_invoices(
         &self,
         _invoice: String,
-    ) -> Result<Vec<MutinyInvoice>, MutinyJsError> {
+    ) -> Result<JsValue /* Vec<MutinyInvoice> */, MutinyJsError> {
         todo!()
     }
 
@@ -328,7 +371,7 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub async fn close_channel(&self, _outpoint: OutPoint) -> Result<OutPoint, MutinyJsError> {
+    pub async fn close_channel(&self, _outpoint: JsValue) -> Result<JsValue, MutinyJsError> {
         todo!()
     }
 
@@ -338,12 +381,12 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub async fn list_peers(&self) -> Result<Vec<String>, MutinyJsError> {
+    pub async fn list_peers(&self) -> Result<JsValue /* Vec<String> */, MutinyJsError> {
         todo!()
     }
 
     #[wasm_bindgen]
-    pub async fn list_ln_txs(&self) -> Result<Vec<MutinyInvoice>, MutinyJsError> {
+    pub async fn list_ln_txs(&self) -> Result<JsValue /* Vec<MutinyInvoice> */, MutinyJsError> {
         todo!()
     }
 }
