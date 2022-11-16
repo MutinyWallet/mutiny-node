@@ -25,6 +25,11 @@ use std::io::Cursor;
 use std::ops::Deref;
 use std::sync::Arc;
 
+const NETWORK_KEY: &str = "network";
+const PROB_SCORER_KEY: &str = "prob_scorer";
+const CHANNEL_MANAGER_KEY: &str = "manager";
+const MONITORS_PREFIX_KEY: &str = "monitors/";
+
 pub(crate) type ChannelManager =
     SimpleArcChannelManager<ChainMonitor, MutinyChain, MutinyChain, MutinyLogger>;
 
@@ -50,7 +55,7 @@ impl MutinyNodePersister {
     }
 
     pub fn persist_network_graph(&self, network_graph: &NetworkGraph) -> io::Result<()> {
-        self.persist("network", network_graph)
+        self.persist(NETWORK_KEY, network_graph)
     }
 
     pub fn read_network_graph(
@@ -58,7 +63,7 @@ impl MutinyNodePersister {
         genesis_hash: BlockHash,
         logger: Arc<MutinyLogger>,
     ) -> NetworkGraph {
-        match self.read_value("network") {
+        match self.read_value(NETWORK_KEY) {
             Ok(kv_value) => {
                 let mut readable_kv_value = Cursor::new(kv_value);
                 match NetworkGraph::read(&mut readable_kv_value, logger.clone()) {
@@ -77,7 +82,7 @@ impl MutinyNodePersister {
         &self,
         scorer: &ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>,
     ) -> io::Result<()> {
-        self.persist("prob_scorer", scorer)
+        self.persist(PROB_SCORER_KEY, scorer)
     }
 
     pub fn read_scorer(
@@ -87,7 +92,7 @@ impl MutinyNodePersister {
     ) -> ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>> {
         let params = ProbabilisticScoringParameters::default();
 
-        match self.read_value("prob_scorer") {
+        match self.read_value(PROB_SCORER_KEY) {
             Ok(kv_value) => {
                 let mut readable_kv_value = Cursor::new(kv_value);
                 let args = (params.clone(), Arc::clone(&graph), Arc::clone(&logger));
@@ -114,7 +119,7 @@ impl MutinyNodePersister {
 
         // Get all the channel monitor buffers that exist for this node
         let suffix = self.node_id.as_str();
-        let channel_monitor_list = self.storage.scan("monitors/", Some(suffix));
+        let channel_monitor_list = self.storage.scan(MONITORS_PREFIX_KEY, Some(suffix));
 
         // TODO probably could use a fold here instead
         for (_, value) in channel_monitor_list {
@@ -145,7 +150,7 @@ impl MutinyNodePersister {
         keys_manager: Arc<KeysManager>,
         mut channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
     ) -> Result<ChannelManager, MutinyError> {
-        match self.read_value("manager") {
+        match self.read_value(CHANNEL_MANAGER_KEY) {
             Ok(kv_value) => {
                 let mut channel_monitor_mut_references = Vec::new();
                 for (_, channel_monitor) in channel_monitors.iter_mut() {
