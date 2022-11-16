@@ -6,6 +6,7 @@ use crate::logging::MutinyLogger;
 use crate::node::ChainMonitor;
 use crate::node::NetworkGraph;
 use crate::wallet::esplora_from_network;
+use anyhow::anyhow;
 use bitcoin::BlockHash;
 use bitcoin::Network;
 use futures::{try_join, TryFutureExt};
@@ -166,9 +167,9 @@ impl MutinyNodePersister {
                     channel_monitor_mut_references,
                 );
                 let mut readable_kv_value = Cursor::new(kv_value);
-                let (_, channel_manager) =
-                    <(BlockHash, ChannelManager)>::read(&mut readable_kv_value, read_args)
-                        .expect("paul your error type handling is so confusing to use, how can i return a simple mutiny storage error");
+                let Ok((_, channel_manager)) = <(BlockHash, ChannelManager)>::read(&mut readable_kv_value, read_args) else {
+                    return Err(MutinyError::ReadError { source: error::MutinyStorageError::Other(anyhow!("could not read manager")) })
+                };
                 Ok(channel_manager)
             }
             Err(_) => {
@@ -184,7 +185,7 @@ impl MutinyNodePersister {
                 let (height, hash) = try_join!(height_future, hash_future)?;
                 let chain_params = ChainParameters {
                     network,
-                    best_block: BestBlock::new(hash, height as u32),
+                    best_block: BestBlock::new(hash, height),
                 };
 
                 let fresh_channel_manager = channelmanager::ChannelManager::new(
