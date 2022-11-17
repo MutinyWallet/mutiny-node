@@ -88,10 +88,13 @@ impl NodeManager {
                 };
                 storage.insert_mnemonic(seed)
             }
-            None => storage.get_mnemonic().unwrap_or_else(|_| {
-                let seed = keymanager::generate_seed();
-                storage.insert_mnemonic(seed)
-            }),
+            None => match storage.get_mnemonic() {
+                Ok(mnemonic) => mnemonic,
+                Err(_) => {
+                    let seed = keymanager::generate_seed(12)?;
+                    storage.insert_mnemonic(seed)
+                }
+            },
         };
 
         let wallet = Arc::new(MutinyWallet::new(
@@ -325,7 +328,7 @@ mod tests {
     fn correctly_show_seed() {
         log!("showing seed");
 
-        let seed = generate_seed();
+        let seed = generate_seed(12).expect("Failed to gen seed");
         let nm = NodeManager::new("password".to_string(), Some(seed.to_string())).unwrap();
 
         assert!(NodeManager::has_node_manager());
@@ -338,7 +341,7 @@ mod tests {
     async fn created_new_nodes() {
         log!("creating new nodes");
 
-        let seed = generate_seed();
+        let seed = generate_seed(12).expect("Failed to gen seed");
         let nm = NodeManager::new("password".to_string(), Some(seed.to_string()))
             .expect("node manager should initialize");
 

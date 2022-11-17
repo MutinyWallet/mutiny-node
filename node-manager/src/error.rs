@@ -49,6 +49,9 @@ pub enum MutinyError {
     },
     #[error("Failed to read data from storage.")]
     ReadError { source: MutinyStorageError },
+    /// A failure to generate a mnemonic seed.
+    #[error("Failed to generate seed")]
+    SeedGenerationFailed,
     /// A wallet operation failed.
     #[error("Failed to conduct wallet operation.")]
     WalletOperationFailed,
@@ -162,6 +165,9 @@ pub enum MutinyJsError {
     PersistenceFailed,
     #[error("Failed to read data from storage.")]
     ReadError,
+    /// A failure to generate a mnemonic seed.
+    #[error("Failed to generate seed")]
+    SeedGenerationFailed,
     /// A wallet operation failed.
     #[error("Failed to conduct wallet operation.")]
     WalletOperationFailed,
@@ -192,6 +198,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::ChannelClosingFailed => MutinyJsError::ChannelClosingFailed,
             MutinyError::PersistenceFailed { source: _ } => MutinyJsError::PersistenceFailed,
             MutinyError::ReadError { source: _ } => MutinyJsError::ReadError,
+            MutinyError::SeedGenerationFailed => MutinyJsError::SeedGenerationFailed,
             MutinyError::WalletOperationFailed => MutinyJsError::WalletOperationFailed,
             MutinyError::WalletSigningFailed => MutinyJsError::WalletSigningFailed,
             MutinyError::ChainAccessFailed => MutinyJsError::ChainAccessFailed,

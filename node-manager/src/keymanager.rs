@@ -1,12 +1,31 @@
+use crate::error::MutinyError;
 use bip32::XPrv;
 use bip39::Mnemonic;
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use lightning::chain::keysinterface::{KeysInterface, KeysManager, Recipient};
 
-pub(crate) fn generate_seed() -> Mnemonic {
+pub(crate) fn generate_seed(num_words: u8) -> Result<Mnemonic, MutinyError> {
+    match num_words {
+        12 => generate_12_word_seed(),
+        24 => generate_24_word_seed(),
+        _ => Err(MutinyError::SeedGenerationFailed),
+    }
+}
+
+fn generate_24_word_seed() -> Result<Mnemonic, MutinyError> {
     let mut entropy = [0u8; 32];
-    getrandom::getrandom(&mut entropy).expect("Failed to generate entropy");
-    Mnemonic::from_entropy(&entropy).expect("Could not generate seed")
+    getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
+    let mnemonic =
+        Mnemonic::from_entropy(&entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
+    Ok(mnemonic)
+}
+
+fn generate_12_word_seed() -> Result<Mnemonic, MutinyError> {
+    let mut entropy = [0u8; 16];
+    getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
+    let mnemonic =
+        Mnemonic::from_entropy(&entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
+    Ok(mnemonic)
 }
 
 // A node private key will be derived from `m/0'/X'`, where it's node pubkey will
