@@ -19,6 +19,7 @@ import Peers from './routes/Peers';
 import Channels from './routes/Channels';
 import Settings from './routes/Settings';
 import OnChain from './routes/OnChain';
+import OpenChannel from './routes/OpenChannel';
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
@@ -44,6 +45,10 @@ const router = createBrowserRouter([
   {
     path: "/receive",
     element: <Receive />,
+  },
+  {
+    path: "/openchannel",
+    element: <OpenChannel />,
   },
   {
     path: "/tests",

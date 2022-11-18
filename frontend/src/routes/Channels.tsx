@@ -1,9 +1,12 @@
+import { useNavigate } from "react-router-dom"
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
 import ScreenMain from "../components/ScreenMain"
 import { ReactComponent as EjectIcon } from "../images/icons/eject.svg"
 
 function SingleChannel() {
+
+
 
     return (
         <li className="text-off-white border-b border-blue py-2 mb-2 flex flex-col">
@@ -25,6 +28,13 @@ function SingleChannel() {
 }
 
 function Channels() {
+
+    const navigate = useNavigate();
+
+    function handleNavOpen() {
+        navigate("/openchannel")
+    }
+
     return (
         <div className="h-full">
             <header className='px-8 pt-8 flex justify-between items-center'>
@@ -32,7 +42,7 @@ function Channels() {
                 <Close />
             </header>
             <ScreenMain padSides={false}>
-                <button className="mx-8">Add Channel</button>
+                <button className="mx-8" onClick={handleNavOpen}>Add Channel</button>
                 <ul className="flex-1 overflow-y-scroll px-8 pb-[12rem]">
                     <SingleChannel />
                     <SingleChannel />

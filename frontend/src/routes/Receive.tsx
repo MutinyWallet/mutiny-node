@@ -63,7 +63,7 @@ function Receive() {
                             {/* <p className="text-lg font-mono font-light break-all"> */}
                             <pre className="flex-1">
                                 <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                    {isLightning ? takeN(TEST_INVOICE, 30) : takeN(TEST_ADDRESS, 30)}
+                                    {isLightning ? takeN(TEST_INVOICE, 28) : takeN(TEST_ADDRESS, 28)}
                                 </code>
                             </pre>
                             <div className="flex-0">
@@ -71,19 +71,9 @@ function Receive() {
                                     <Copy copyValue={TEST_ADDRESS} />}
                             </div>
                         </div>
-                        <div className="flex items-center">
-                            {/* <p className="text-lg font-mono font-light break-all"> */}
-                            <pre>
-                                <code className="line-clamp-3 break-all">
-                                    {isLightning ? takeN(TEST_INVOICE, 30) : takeN(TEST_ADDRESS, 30)}
-                                </code>
-                            </pre>
-                            {isLightning ? <Copy copyValue={TEST_INVOICE} /> :
-                                <Copy copyValue={TEST_ADDRESS} />}
-                        </div>
                     </div>
 
-                    <div className='flex justify-start'>
+                    <div className='flex justify-start gap-2'>
                         <button onClick={handleCancel}>Cancel</button>
                         <button onClick={handlePretend}>Pretend</button>
                     </div>
