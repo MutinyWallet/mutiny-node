@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
 import ScreenMain from "../components/ScreenMain";
 import { inputStyle } from "../styles";
-import toast, { Toaster } from "react-hot-toast"
+import toast from "react-hot-toast"
 import MutinyToaster from "../components/MutinyToaster";
 
 function Send() {

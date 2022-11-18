@@ -1,7 +1,6 @@
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
 import ScreenMain from "../components/ScreenMain"
-import { ReactComponent as EjectIcon } from "../images/icons/eject.svg"
 
 function SinglePeer() {
 

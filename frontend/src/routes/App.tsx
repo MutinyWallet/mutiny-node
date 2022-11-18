@@ -15,10 +15,6 @@ function App() {
     navigate("/send")
   }
 
-  // function handleNavDeposit() {
-  //   navigate("/deposit")
-  // }
-
   function handleNavReceive() {
     navigate("/receive")
 

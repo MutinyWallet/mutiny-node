@@ -1,4 +1,4 @@
-import toast, { Toaster, resolveValue } from "react-hot-toast"
+import { Toaster, resolveValue } from "react-hot-toast"
 
 export default function MutinyToaster() {
     return (

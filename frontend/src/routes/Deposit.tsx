@@ -1,7 +1,6 @@
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
 import ScreenMain from "../components/ScreenMain";
-import { inputStyle } from "../styles";
 import QRCode from "react-qr-code"
 import Copy from "../components/Copy";
 import { useNavigate } from "react-router";

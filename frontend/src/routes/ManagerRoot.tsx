@@ -1,4 +1,4 @@
-import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import TxIcon from "../images/tx-icon.png"
 import ChannelsIcon from "../images/channels-icon.png"
 import SettingsIcon from "../images/settings-icon.png"

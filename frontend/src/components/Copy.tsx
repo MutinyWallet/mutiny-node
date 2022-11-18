@@ -1,4 +1,3 @@
-import { Link } from "react-router-dom";
 import { ReactComponent as CopyIcon } from "../images/icons/copy.svg"
 
 type Props = {

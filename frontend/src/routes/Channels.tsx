@@ -5,9 +5,6 @@ import ScreenMain from "../components/ScreenMain"
 import { ReactComponent as EjectIcon } from "../images/icons/eject.svg"
 
 function SingleChannel() {
-
-
-
     return (
         <li className="text-off-white border-b border-blue py-2 mb-2 flex flex-col">
             <h3 className="text-lg">
@@ -22,7 +19,7 @@ function SingleChannel() {
                 </div>
                 <button className="h-[3rem] w-[3rem] p-1 flex items-center justify-center flex-0"><EjectIcon /></button>
             </div>
-            <small className="text-sm font-light opacity-50 mt-2">e0b3e74144a4c2ae934da10c6ea1fe10a4e5bd970b07...</small>
+            <small className="text-sm font-light opacity-50 mt-2">abc123nodeid...</small>
         </li>
     )
 }
