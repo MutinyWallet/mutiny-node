@@ -110,7 +110,6 @@ impl Node {
             .await?;
         let channel_manager: Arc<ChannelManager> = Arc::new(channel_manager);
 
-        // todo replace chan_handler with real channel handler
         let ln_msg_handler = MessageHandler {
             chan_handler: channel_manager.clone(),
             route_handler: Arc::new(IgnoringMessageHandler {}),
