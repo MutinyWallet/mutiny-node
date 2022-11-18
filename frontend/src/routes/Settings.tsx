@@ -3,8 +3,9 @@ import PageTitle from "../components/PageTitle"
 import ScreenMain from "../components/ScreenMain"
 import { ReactComponent as EjectIcon } from "../images/icons/eject.svg"
 
-function SingleSetting() {
+const WORDS = "apart main neck basket measure pottery vote fuel fame chuckle wink absurd"
 
+function SingleSetting() {
     return (
         <li className="text-off-white border-b border-blue py-2 mb-2 flex flex-col">
             <h3 className="text-lg">
@@ -32,13 +33,12 @@ function Settings() {
                 <Close />
             </header>
             <ScreenMain padSides={false}>
-                <ul className="flex-1 overflow-y-scroll px-8 pb-[12rem]">
-                    <SingleSetting />
-                    <SingleSetting />
-                    <SingleSetting />
-                    <SingleSetting />
-                    <SingleSetting />
-                </ul>
+                <div className="flex-1 overflow-y-scroll px-8 pb-[12rem]">
+                    <p className="text-2xl font-light">Write down these words or you'll die!</p>
+                    <pre>
+                        <code>{WORDS}</code>
+                    </pre>
+                </div>
             </ScreenMain>
         </div>
     )

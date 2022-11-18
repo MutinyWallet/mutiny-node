@@ -32,6 +32,7 @@ function Channels() {
                 <Close />
             </header>
             <ScreenMain padSides={false}>
+                <button className="mx-8">Add Channel</button>
                 <ul className="flex-1 overflow-y-scroll px-8 pb-[12rem]">
                     <SingleChannel />
                     <SingleChannel />
