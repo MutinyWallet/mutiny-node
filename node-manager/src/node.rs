@@ -61,6 +61,8 @@ pub struct Node {
     pub peer_manager: Arc<PeerManager>,
     pub keys_manager: Arc<KeysManager>,
     pub chain: Arc<MutinyChain>,
+    pub channel_manager: Arc<ChannelManager>,
+    pub chain_monitor: Arc<ChainMonitor>,
 }
 
 impl Node {
@@ -99,7 +101,7 @@ impl Node {
         let channel_manager = persister
             .read_channel_manager(
                 network,
-                chain_monitor,
+                chain_monitor.clone(),
                 chain.clone(),
                 logger.clone(),
                 keys_manager.clone(),
@@ -123,6 +125,8 @@ impl Node {
             peer_manager: Arc::new(peer_man),
             keys_manager,
             chain,
+            channel_manager,
+            chain_monitor,
         })
     }
 

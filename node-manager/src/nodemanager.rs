@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::{str::FromStr, sync::Arc};
 
 use crate::chain::MutinyChain;
@@ -13,6 +14,7 @@ use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::{Network, Transaction};
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::BroadcasterInterface;
+use lightning::chain::Confirm;
 use lightning_invoice::{Invoice, InvoiceDescription};
 use log::{error, info};
 use serde::{Deserialize, Serialize};
@@ -316,8 +318,19 @@ impl NodeManager {
         match self.wallet.sync().await {
             Ok(()) => {
                 // sync ldk wallet
-                // todo get new chain txs and pass them in the vec
-                self.chain.sync(Vec::new()).await.map_err(|e| e.into())
+                let nodes = self.nodes.lock().await;
+
+                let confirmables: Vec<&(dyn Confirm + Sync)> = nodes
+                    .iter()
+                    .flat_map(|(_, node)| {
+                        let vec: Vec<&(dyn Confirm + Sync)> =
+                            vec![node.channel_manager.deref(), node.chain_monitor.deref()];
+                        vec
+                    })
+                    .collect();
+
+                self.chain.sync(confirmables).await?;
+                Ok(())
             }
             Err(e) => Err(e.into()),
         }
