@@ -3,6 +3,7 @@ import logo from '../images/mutiny-logo.svg';
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from 'react';
 import ScreenMain from '../components/ScreenMain';
+import More from '../components/More';
 
 
 function App() {
@@ -62,12 +63,15 @@ function App() {
         <div />
         <h1 className='text-4xl font-light uppercase'>69_420 <span className='text-2xl'>sats</span></h1>
         <div />
-        <div className='flex flex-col gap-2 items-start'>
+        <div className='flex justify-between items-end'>
 
-          <button className='green-button' onClick={handleNavSend}>Send</button>
-          {/* TODO if no funds can do deposit instead of receive */}
-          {/* <button className='blue-button' onClick={handleNavDeposit}>Deposit</button> */}
-          <button className='blue-button' onClick={handleNavReceive}>Receive</button>
+          <div className='flex flex-col gap-2 items-start'>
+            <button className='green-button' onClick={handleNavSend}>Send</button>
+            {/* TODO if no funds can do deposit instead of receive */}
+            {/* <button className='blue-button' onClick={handleNavDeposit}>Deposit</button> */}
+            <button className='blue-button' onClick={handleNavReceive}>Receive</button>
+          </div>
+          <More />
         </div>
       </ScreenMain>
     </div>
