@@ -24,11 +24,10 @@
 }
 
 body {
-  @apply h-screen;
+  @apply h-full;
   @apply text-white;
-  @apply overscroll-y-none;
+  @apply overscroll-y-none fixed w-full;
   @apply bg-fixed bg-no-repeat bg-gradient-to-b from-black to-[#0b215b] bg-[#0b215b];
-  font-family: ;
 }
 
 button,

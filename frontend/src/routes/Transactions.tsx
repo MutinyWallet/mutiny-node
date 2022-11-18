@@ -16,7 +16,7 @@ function SingleTransaction() {
 
 function Transactions() {
     return (
-        <div className="flex flex-col h-screen">
+        <div className="h-full">
             <header className='px-8 pt-8 flex justify-between items-center'>
                 <PageTitle title="Transactions" theme="green" />
                 <Close />

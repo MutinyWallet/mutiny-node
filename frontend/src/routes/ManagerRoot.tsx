@@ -14,7 +14,7 @@ function ManagerRoot() {
     }
 
     return (
-        <div className="h-screen flex flex-col justify-between overflow-hidden">
+        <div className="flex flex-col h-full fixed w-full">
             <Outlet />
             <nav className="relative">
                 <ul className="pb-8 pt-16 px-8 flex overflow-scroll gap-2 absolute bottom-0 left-0 max-w-full bg-fade-to-blue scrollbar-hide">
