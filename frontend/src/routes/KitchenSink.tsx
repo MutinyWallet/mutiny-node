@@ -55,13 +55,12 @@ function App() {
     }, [])
 
     async function setup() {
-        if (NodeManager.has_node_manager()) {
+        if (NodeManager.has_node_manager() && nodeManager) {
             createNodeManager()
             try {
-                let balance = await nodeManager?.get_wallet_balance()
-                if (balance) {
-                    setBalance(balance.toLocaleString())
-                }
+                let balance = await nodeManager.get_balance();
+                let str = `confirmed: ${balance.confirmed.toLocaleString()} sats, unconfirmed: ${balance.unconfirmed.toLocaleString()} sats, ln: ${balance.lightning.toLocaleString()} sats`
+                setBalance(str)
             } catch (e) {
                 console.error(e);
             }
@@ -72,10 +71,9 @@ function App() {
         if (nodeManager) {
             try {
                 await nodeManager.sync()
-                let balance = await nodeManager.get_wallet_balance()
-                if (balance) {
-                   setBalance(balance.toLocaleString())
-                }
+                let balance = await nodeManager.get_balance();
+                let str = `confirmed: ${balance.confirmed.toLocaleString()} sats, unconfirmed: ${balance.unconfirmed.toLocaleString()} sats, ln: ${balance.lightning.toLocaleString()} sats`
+                setBalance(str)
             } catch (e) {
                 console.error(e);
             }
@@ -162,7 +160,7 @@ function App() {
                             <button onClick={() => setMnemonic(nodeManager.show_seed())}>Reveal Seed!</button>
                         </p>
                         <p>
-                            {`Wallet Balance: ${balance} sats`}
+                            {`Wallet Balance: ${balance}`}
                         </p>
                         <p>
                             <button onClick={async () => sync()}>Sync Wallet</button>

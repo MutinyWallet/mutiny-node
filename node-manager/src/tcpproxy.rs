@@ -6,7 +6,7 @@ use futures::stream::SplitStream;
 use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
 use lightning::ln::peer_handler;
-use log::{debug, info};
+use log::debug;
 use wasm_bindgen_futures::spawn_local;
 
 pub struct TcpProxy {
