@@ -369,7 +369,7 @@ impl FeeEstimator for MutinyChain {
     }
 }
 
-fn fallback_fee_from_conf_target(confirmation_target: ConfirmationTarget) -> u32 {
+pub fn fallback_fee_from_conf_target(confirmation_target: ConfirmationTarget) -> u32 {
     match confirmation_target {
         ConfirmationTarget::Background => FEERATE_FLOOR_SATS_PER_KW,
         ConfirmationTarget::Normal => 2000,

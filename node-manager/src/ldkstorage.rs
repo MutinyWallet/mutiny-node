@@ -1,10 +1,12 @@
 use crate::chain::MutinyChain;
 use crate::error;
 use crate::error::MutinyError;
+use crate::event::PaymentInfo;
 use crate::localstorage::MutinyBrowserStorage;
 use crate::logging::MutinyLogger;
 use crate::node::ChainMonitor;
 use crate::node::NetworkGraph;
+use crate::utils::hex_str;
 use crate::wallet::esplora_from_network;
 use anyhow::anyhow;
 use bitcoin::BlockHash;
@@ -16,11 +18,14 @@ use lightning::chain::keysinterface::{KeysInterface, Sign};
 use lightning::chain::BestBlock;
 use lightning::ln::channelmanager::ChannelManagerReadArgs;
 use lightning::ln::channelmanager::{self, ChainParameters, SimpleArcChannelManager};
+use lightning::ln::PaymentHash;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
 use lightning::util::config::UserConfig;
 use lightning::util::persist::KVStorePersister;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use log::error;
+use serde::de::Deserialize;
+use std::hash::Hash;
 use std::io;
 use std::io::Cursor;
 use std::ops::Deref;
@@ -30,6 +35,8 @@ const NETWORK_KEY: &str = "network";
 const PROB_SCORER_KEY: &str = "prob_scorer";
 const CHANNEL_MANAGER_KEY: &str = "manager";
 const MONITORS_PREFIX_KEY: &str = "monitors/";
+const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
+const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
 
 pub(crate) type ChannelManager =
     SimpleArcChannelManager<ChainMonitor, MutinyChain, MutinyChain, MutinyLogger>;
@@ -202,6 +209,48 @@ impl MutinyNodePersister {
             }
         }
     }
+
+    pub(crate) fn persist_payment_info(
+        &self,
+        payment_hash: PaymentHash,
+        payment_info: PaymentInfo,
+        inbound: bool,
+    ) -> io::Result<()> {
+        self.storage
+            .set(payment_key(inbound, payment_hash), &payment_info)
+            .map_err(io::Error::other)
+    }
+
+    pub(crate) fn read_payment_info(
+        &self,
+        payment_hash: PaymentHash,
+        inbound: bool,
+    ) -> Option<PaymentInfo> {
+        match self.read_value(&payment_key(inbound, payment_hash)) {
+            Ok(kv_value) => {
+                let deserialized_value: PaymentInfo = Deserialize::deserialize(kv_value).unwrap();
+                Some(deserialized_value)
+            }
+            Err(_) => None,
+        }
+    }
+}
+
+fn payment_key(inbound: bool, payment_hash: PaymentHash) -> String {
+    let key = if inbound {
+        format!(
+            "{}{}",
+            PAYMENT_INBOUND_PREFIX_KEY,
+            String::as_str(&hex_str(&payment_hash.0))
+        )
+    } else {
+        format!(
+            "{}{}",
+            PAYMENT_OUTBOUND_PREFIX_KEY,
+            String::as_str(&hex_str(&payment_hash.0))
+        )
+    };
+    key
 }
 
 impl KVStorePersister for MutinyNodePersister {
