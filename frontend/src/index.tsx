@@ -18,6 +18,7 @@ import Transactions from './routes/Transactions';
 import Peers from './routes/Peers';
 import Channels from './routes/Channels';
 import Settings from './routes/Settings';
+import OnChain from './routes/OnChain';
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
@@ -55,6 +56,10 @@ const router = createBrowserRouter([
       {
         path: "transactions",
         element: <Transactions />
+      },
+      {
+        path: "onchain",
+        element: <OnChain />
       },
       {
         path: "peers",

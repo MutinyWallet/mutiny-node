@@ -2,7 +2,7 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import TxIcon from "../images/tx-icon.png"
 import ChannelsIcon from "../images/channels-icon.png"
 import SettingsIcon from "../images/settings-icon.png"
-import UtxosIcon from "../images/utxos-icon.png"
+import OnChainIcon from "../images/world-in-box-icon.png"
 import PeersIcon from "../images/peers-icon.png"
 
 function ManagerRoot() {
@@ -26,8 +26,14 @@ function ManagerRoot() {
                     </li>
                     <li>
                         <button onClick={() => navigate("channels")} className={shouldBeActive("channels")}>
-                            <img src={ChannelsIcon} alt="transactions icon" />
+                            <img src={ChannelsIcon} alt="chanels icon" />
                             Channels
+                        </button>
+                    </li>
+                    <li>
+                        <button onClick={() => navigate("onchain")} className={shouldBeActive("onchain")}>
+                            <img src={OnChainIcon} alt="onchain icon" />
+                            On-chain
                         </button>
                     </li>
                     <li>
