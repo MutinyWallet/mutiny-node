@@ -9,7 +9,7 @@ use lightning::chain::{chainmonitor, Filter};
 use lightning::ln::msgs::NetAddress;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::chain::MutinyChain;
@@ -22,6 +22,7 @@ use crate::{
 };
 use anyhow::Context;
 use bip39::Mnemonic;
+use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::secp256k1::PublicKey;
 use lightning::chain::keysinterface::{InMemorySigner, KeysInterface, KeysManager, Recipient};
 use lightning::ln::peer_handler::{
@@ -29,6 +30,9 @@ use lightning::ln::peer_handler::{
     SocketDescriptor as LdkSocketDescriptor,
 };
 use lightning::routing::gossip;
+use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
+use lightning_invoice::payment;
+use lightning_invoice::utils::DefaultRouter;
 use log::{debug, error, info, warn};
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
@@ -57,6 +61,15 @@ pub(crate) type ChainMonitor = chainmonitor::ChainMonitor<
     Arc<MutinyNodePersister>,
 >;
 
+pub(crate) type InvoicePayer<E> =
+    payment::InvoicePayer<Arc<ChannelManager>, Router, Arc<MutinyLogger>, E>;
+
+type Router = DefaultRouter<
+    Arc<NetworkGraph>,
+    Arc<MutinyLogger>,
+    Arc<Mutex<ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>>>,
+>;
+
 pub struct Node {
     pub uuid: String,
     pub pubkey: PublicKey,
@@ -65,6 +78,7 @@ pub struct Node {
     pub chain: Arc<MutinyChain>,
     pub channel_manager: Arc<ChannelManager>,
     pub chain_monitor: Arc<ChainMonitor>,
+    pub invoice_payer: Arc<InvoicePayer<EventHandler>>,
 }
 
 impl Node {
@@ -120,18 +134,45 @@ impl Node {
             onion_message_handler: Arc::new(IgnoringMessageHandler {}),
         };
 
-        let peer_man = create_peer_manager(keys_manager.clone(), ln_msg_handler, logger.clone());
-
         // init event handler
-        let _event_handler = EventHandler::new(
+        let event_handler = EventHandler::new(
             channel_manager.clone(),
             chain.clone(),
             wallet.clone(),
             keys_manager.clone(),
-            persister,
+            persister.clone(),
             network,
-            logger,
+            logger.clone(),
         );
+        let peer_man = create_peer_manager(keys_manager.clone(), ln_msg_handler, logger.clone());
+
+        // todo use RGS
+        // get network graph
+        let genesis_hash = genesis_block(network).block_hash();
+        let network_graph = Arc::new(persister.read_network_graph(genesis_hash, logger.clone()));
+
+        // create scorer
+        let params = ProbabilisticScoringParameters::default();
+        let scorer = Arc::new(Mutex::new(ProbabilisticScorer::new(
+            params,
+            network_graph.clone(),
+            logger.clone(),
+        )));
+
+        let router: Router = DefaultRouter::new(
+            network_graph,
+            logger.clone(),
+            keys_manager.get_secure_random_bytes(),
+            scorer,
+        );
+
+        let invoice_payer: Arc<InvoicePayer<EventHandler>> = Arc::new(InvoicePayer::new(
+            Arc::clone(&channel_manager),
+            router,
+            Arc::clone(&logger),
+            event_handler,
+            payment::Retry::Attempts(5), // todo potentially rethink
+        ));
 
         Ok(Node {
             uuid: node_index.uuid,
@@ -141,6 +182,7 @@ impl Node {
             chain,
             channel_manager,
             chain_monitor,
+            invoice_payer,
         })
     }
 
