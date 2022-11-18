@@ -2,7 +2,9 @@
 import logo from '../images/mutiny-logo.svg';
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from 'react';
-
+import ScreenMain from '../components/ScreenMain';
+import More from '../components/More';
+import MutinyToaster from '../components/MutinyToaster';
 
 function App() {
   const [wasmSupported, setWasmSupported] = useState(true)
@@ -13,8 +15,9 @@ function App() {
     navigate("/send")
   }
 
-  function handleNavDeposit() {
-    navigate("/deposit")
+  function handleNavReceive() {
+    navigate("/receive")
+
   }
 
   useEffect(() => {
@@ -40,7 +43,7 @@ function App() {
   }, [])
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col h-full fixed w-full">
       <header className='p-8'>
         <img src={logo} className="App-logo" alt="logo" />
         <h2>You're probably looking for <a href="/tests">the tests</a></h2>
@@ -52,19 +55,21 @@ function App() {
           </p>
         }
       </header>
-      <main className='flex flex-grow flex-col h-full justify-between p-8'>
-
-
+      <ScreenMain>
         <div />
         <h1 className='text-4xl font-light uppercase'>69_420 <span className='text-2xl'>sats</span></h1>
         <div />
         <div className='flex flex-col gap-2 items-start'>
-
           <button className='green-button' onClick={handleNavSend}>Send</button>
-          <button className='blue-button' onClick={handleNavDeposit}>Deposit</button>
+          {/* TODO if no funds can do deposit instead of receive */}
+          {/* <button className='blue-button' onClick={handleNavDeposit}>Deposit</button> */}
+          <div className='w-full flex justify-between items-center'>
+            <button className='blue-button' onClick={handleNavReceive}>Receive</button>
+            <More />
+          </div>
         </div>
-
-      </main>
+        <MutinyToaster />
+      </ScreenMain>
     </div>
   );
 }
