@@ -17,8 +17,6 @@ function Receive() {
         navigate("/")
     }
 
-
-
     const [isLightning, setIsLightning] = useState(true);
     const [received, setReceived] = useState(false);
 
@@ -30,8 +28,12 @@ function Receive() {
         setIsLightning(!isLightning);
     }
 
+    function takeN(s: string, n: number): string {
+        return `${s.substring(0, n)}…`
+    }
+
     return (
-        <div className="flex flex-col h-screen">
+        <div className="flex flex-col h-full fixed w-full">
             <header className='p-8 flex justify-between items-center'>
                 <PageTitle title="Receive" theme="blue"></PageTitle>
                 <Close />
@@ -57,10 +59,25 @@ function Receive() {
                             {isLightning ? <QRCode value={TEST_INVOICE} /> :
                                 <QRCode value={TEST_ADDRESS} />}
                         </div>
-                        <div className="bg-faint rounded p-2 my-2 flex gap-2 items-center">
-                            <div className="flex-1">
-                                <p className="text-lg font-mono font-light break-all">{isLightning ? TEST_INVOICE : TEST_ADDRESS}</p>
+                        <div className="flex items-center gap-2 w-full">
+                            {/* <p className="text-lg font-mono font-light break-all"> */}
+                            <pre className="flex-1">
+                                <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
+                                    {isLightning ? takeN(TEST_INVOICE, 30) : takeN(TEST_ADDRESS, 30)}
+                                </code>
+                            </pre>
+                            <div className="flex-0">
+                                {isLightning ? <Copy copyValue={TEST_INVOICE} /> :
+                                    <Copy copyValue={TEST_ADDRESS} />}
                             </div>
+                        </div>
+                        <div className="flex items-center">
+                            {/* <p className="text-lg font-mono font-light break-all"> */}
+                            <pre>
+                                <code className="line-clamp-3 break-all">
+                                    {isLightning ? takeN(TEST_INVOICE, 30) : takeN(TEST_ADDRESS, 30)}
+                                </code>
+                            </pre>
                             {isLightning ? <Copy copyValue={TEST_INVOICE} /> :
                                 <Copy copyValue={TEST_ADDRESS} />}
                         </div>
@@ -73,7 +90,7 @@ function Receive() {
                 </ScreenMain>
             }
 
-        </div>
+        </div >
     );
 }
 

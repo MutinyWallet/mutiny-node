@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from 'react';
 import ScreenMain from '../components/ScreenMain';
 import More from '../components/More';
-
+import MutinyToaster from '../components/MutinyToaster';
 
 function App() {
   const [wasmSupported, setWasmSupported] = useState(true)
@@ -63,7 +63,6 @@ function App() {
         <div />
         <h1 className='text-4xl font-light uppercase'>69_420 <span className='text-2xl'>sats</span></h1>
         <div />
-
         <div className='flex flex-col gap-2 items-start'>
           <button className='green-button' onClick={handleNavSend}>Send</button>
           {/* TODO if no funds can do deposit instead of receive */}
@@ -73,6 +72,7 @@ function App() {
             <More />
           </div>
         </div>
+        <MutinyToaster />
       </ScreenMain>
     </div>
   );

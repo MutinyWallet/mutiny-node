@@ -2,6 +2,9 @@ const defaultTheme = require('tailwindcss/defaultTheme')
 
 /** @type {import('tailwindcss').Config} */
 module.exports = {
+  plugins: [
+    require('@tailwindcss/line-clamp'),
+  ],
   content: [
     "./src/**/*.{js,ts,jsx,tsx}", // Note the addition of the `app` directory.
     "./components/**/*.{js,ts,jsx,tsx}",

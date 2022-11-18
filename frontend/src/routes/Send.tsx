@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
 import ScreenMain from "../components/ScreenMain";
 import { inputStyle } from "../styles";
+import toast, { Toaster } from "react-hot-toast"
+import MutinyToaster from "../components/MutinyToaster";
 
 function Send() {
   let navigate = useNavigate();
@@ -14,14 +16,21 @@ function Send() {
   const [amount, setAmount] = useState("")
 
   function handleContinue() {
+    if (!destination) {
+      toast("You didn't paste anything!");
+    }
+
     if (destination && !amount) {
       setShowAmountInput(true)
-    } else if (destination && amount) {
+      return
+    }
+
+    if (destination && amount) {
       navigate("/send/confirm")
     }
   }
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col h-full fixed w-full">
       <header className='p-8 flex justify-between items-center'>
         <PageTitle title="Send" theme="green" />
         <Close />
@@ -39,6 +48,7 @@ function Send() {
           <button onClick={handleContinue}>Continue</button>
         </div>
       </ScreenMain>
+      <MutinyToaster />
     </div>
   );
 }
