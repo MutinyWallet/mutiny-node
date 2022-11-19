@@ -43,7 +43,7 @@ function App() {
   }, [])
 
   return (
-    <div className="flex flex-col h-full fixed w-full">
+    <div className="flex flex-col h-full w-full">
       <header className='p-8'>
         <img src={logo} className="App-logo" alt="logo" />
         <h2>You're probably looking for <a href="/tests">the tests</a></h2>

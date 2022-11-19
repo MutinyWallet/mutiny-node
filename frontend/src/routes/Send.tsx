@@ -30,7 +30,7 @@ function Send() {
     }
   }
   return (
-    <div className="flex flex-col h-full fixed w-full">
+    <div className="flex flex-col h-full w-full">
       <header className='p-8 flex justify-between items-center'>
         <PageTitle title="Send" theme="green" />
         <Close />
