@@ -6,7 +6,7 @@ type Props = {
 }
 
 const ScreenMain: React.FC<Props> = ({ children, padSides = true }) => {
-	return (<main className={`flex flex-grow flex-col justify-between ${padSides ? "p-8" : "py-8"} mb-4 gap-4`}>
+	return (<main className={`flex flex-col justify-between overflow-y-scroll ${padSides ? "p-8" : "py-8"} mb-4 gap-4`}>
 		{children}
 	</main>
 	)
