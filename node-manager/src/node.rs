@@ -124,7 +124,7 @@ impl Node {
 
         // init event handler
         let _event_handler = EventHandler::new(
-            channel_manager,
+            channel_manager.clone(),
             chain.clone(),
             wallet.clone(),
             keys_manager.clone(),
