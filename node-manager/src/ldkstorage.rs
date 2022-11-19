@@ -24,7 +24,7 @@ use lightning::util::config::UserConfig;
 use lightning::util::persist::KVStorePersister;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use log::error;
-use serde::de::Deserialize;
+use serde::Deserialize;
 use std::hash::Hash;
 use std::io;
 use std::io::Cursor;
@@ -226,13 +226,10 @@ impl MutinyNodePersister {
         payment_hash: PaymentHash,
         inbound: bool,
     ) -> Option<PaymentInfo> {
-        match self.read_value(&payment_key(inbound, payment_hash)) {
-            Ok(kv_value) => {
-                let deserialized_value: PaymentInfo = Deserialize::deserialize(kv_value).unwrap();
-                Some(deserialized_value)
-            }
-            Err(_) => None,
-        }
+        let key = self.get_key(payment_key(inbound, payment_hash).as_str());
+        let deserialized_value: Result<PaymentInfo, MutinyError> =
+            self.storage.get(key).map_err(MutinyError::read_err);
+        deserialized_value.ok()
     }
 }
 
