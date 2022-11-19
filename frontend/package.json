@@ -34,10 +34,10 @@
     "workbox-streams": "^6.5.4"
   },
   "scripts": {
-    "start-ssl": "HTTPS=true SSL_CRT_FILE=./.cert/cert.pem SSL_KEY_FILE=./.cert/key.pem react-scripts start",
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
+    "start-ssl": "HTTPS=true SSL_CRT_FILE=./.cert/cert.pem SSL_KEY_FILE=./.cert/key.pem craco start",
+    "start": "craco start",
+    "build": "craco build",
+    "test": "craco test",
     "eject": "react-scripts eject",
     "lint": "eslint src"
   },
@@ -60,6 +60,8 @@
     ]
   },
   "devDependencies": {
+    "@craco/craco": "^7.0.0",
+    "craco-workbox": "^0.2.0",
     "@tailwindcss/line-clamp": "^0.4.2",
     "autoprefixer": "^10.4.13",
     "postcss": "^8.4.18",
