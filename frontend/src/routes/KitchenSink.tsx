@@ -59,7 +59,7 @@ function App() {
             createNodeManager()
             try {
                 let balance = await nodeManager.get_balance();
-                let str = `confirmed: ${balance.confirmed.toLocaleString()} sats, unconfirmed: ${balance.unconfirmed.toLocaleString()} sats, ln: ${balance.lightning.toLocaleString()} sats`
+                let str = `confirmed: ${balance.confirmed?.toLocaleString()} sats, unconfirmed: ${balance.unconfirmed?.toLocaleString()} sats, ln: ${balance.lightning.toLocaleString()} sats`
                 setBalance(str)
             } catch (e) {
                 console.error(e);
@@ -72,7 +72,7 @@ function App() {
             try {
                 await nodeManager.sync()
                 let balance = await nodeManager.get_balance();
-                let str = `confirmed: ${balance.confirmed.toLocaleString()} sats, unconfirmed: ${balance.unconfirmed.toLocaleString()} sats, ln: ${balance.lightning.toLocaleString()} sats`
+                let str = `confirmed: ${balance.confirmed?.toLocaleString()} sats, unconfirmed: ${balance.unconfirmed?.toLocaleString()} sats, ln: ${balance.lightning.toLocaleString()} sats`
                 setBalance(str)
             } catch (e) {
                 console.error(e);
@@ -118,13 +118,13 @@ function App() {
 
     async function new_node() {
         if (nodeManager) {
-	    try {
-              let new_node_identity = await nodeManager.new_node()
-              if (new_node_identity) {
-                  setNewPubkey(new_node_identity.pubkey)
-              }
+            try {
+                let new_node_identity = await nodeManager.new_node()
+                if (new_node_identity) {
+                    setNewPubkey(new_node_identity.pubkey)
+                }
             } catch (e) {
-              console.error(e)
+                console.error(e)
             }
         }
     }
@@ -132,11 +132,11 @@ function App() {
     async function createNodeManager() {
         // todo enter password
         try {
-          let nodeManager = await new NodeManager("", undefined)
-          setNodeManager(nodeManager)
-	} catch (e) {
-	  console.error(e)
-	}
+            let nodeManager = await new NodeManager("", undefined)
+            setNodeManager(nodeManager)
+        } catch (e) {
+            console.error(e)
+        }
     }
 
     return (

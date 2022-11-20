@@ -52,6 +52,9 @@ pub enum MutinyError {
     /// A failure to generate a mnemonic seed.
     #[error("Failed to generate seed")]
     SeedGenerationFailed,
+    /// User provided invalid menmonic.
+    #[error("Invalid mnemonic")]
+    InvalidMnemonic,
     /// A wallet operation failed.
     #[error("Failed to conduct wallet operation.")]
     WalletOperationFailed,
@@ -168,6 +171,9 @@ pub enum MutinyJsError {
     /// A failure to generate a mnemonic seed.
     #[error("Failed to generate seed")]
     SeedGenerationFailed,
+    /// User provided invalid menmonic.
+    #[error("Invalid mnemonic")]
+    InvalidMnemonic,
     /// A wallet operation failed.
     #[error("Failed to conduct wallet operation.")]
     WalletOperationFailed,
@@ -203,6 +209,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::ReadError { source: _ } => MutinyJsError::ReadError,
             MutinyError::SeedGenerationFailed => MutinyJsError::SeedGenerationFailed,
             MutinyError::WalletOperationFailed => MutinyJsError::WalletOperationFailed,
+            MutinyError::InvalidMnemonic => MutinyJsError::InvalidMnemonic,
             MutinyError::WalletSigningFailed => MutinyJsError::WalletSigningFailed,
             MutinyError::ChainAccessFailed => MutinyJsError::ChainAccessFailed,
             MutinyError::Other(_) => MutinyJsError::UnknownError,

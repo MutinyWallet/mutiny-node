@@ -5,9 +5,25 @@ import { useEffect, useState } from 'react';
 import ScreenMain from '../components/ScreenMain';
 import More from '../components/More';
 import MutinyToaster from '../components/MutinyToaster';
+import { useContext } from 'react';
+import { NodeManagerContext } from '@components/GlobalStateProvider';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 function App() {
   const [wasmSupported, setWasmSupported] = useState(true)
+
+  const nodeManager = useContext(NodeManagerContext);
+
+  const queryClient = useQueryClient()
+
+  const { error, data: balance } = useQuery({
+    queryKey: ['balance'],
+    queryFn: () => {
+      console.log("checking balance...")
+      return nodeManager?.get_balance()
+    },
+    enabled: !!nodeManager,
+  })
 
   let navigate = useNavigate();
 
@@ -17,7 +33,10 @@ function App() {
 
   function handleNavReceive() {
     navigate("/receive")
+  }
 
+  async function handleCheckBalance() {
+    queryClient.invalidateQueries({ queryKey: ['balance'] })
   }
 
   useEffect(() => {
@@ -39,7 +58,6 @@ function App() {
       }
     }
     checkWasm();
-
   }, [])
 
   return (
@@ -56,18 +74,24 @@ function App() {
         }
       </header>
       <ScreenMain>
-        <div />
-        <h1 className='text-4xl font-light uppercase'>69_420 <span className='text-2xl'>sats</span></h1>
-        <div />
-        <div className='flex flex-col gap-2 items-start'>
-          <button className='green-button' onClick={handleNavSend}>Send</button>
-          {/* TODO if no funds can do deposit instead of receive */}
-          {/* <button className='blue-button' onClick={handleNavDeposit}>Deposit</button> */}
-          <div className='w-full flex justify-between items-center'>
-            <button className='blue-button' onClick={handleNavReceive}>Receive</button>
-            <More />
-          </div>
-        </div>
+        {nodeManager ?
+          <>
+            <div />
+            {error && error instanceof Error && <h1>{error.message}</h1>}
+            <h1 className='text-4xl font-light uppercase'>{balance?.confirmed} <span className='text-2xl'>sats</span></h1>
+            <div />
+            <div className='flex flex-col gap-2 items-start'>
+              <button onClick={handleCheckBalance}>Check balance</button>
+              <button className='green-button' onClick={handleNavSend}>Send</button>
+              {/* TODO if no funds can do deposit instead of receive */}
+              {/* <button className='blue-button' onClick={handleNavDeposit}>Deposit</button> */}
+              <div className='w-full flex justify-between items-center'>
+                <button className='blue-button' onClick={handleNavReceive}>Receive</button>
+                <More />
+              </div>
+            </div>
+          </>
+          : <h1>Loading...</h1>}
         <MutinyToaster />
       </ScreenMain>
     </div>
