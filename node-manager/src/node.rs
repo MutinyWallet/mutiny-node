@@ -15,6 +15,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::chain::MutinyChain;
 use crate::tcpproxy::{SocketDescriptor, TcpProxy};
 use crate::{
+    background::{BackgroundProcessor, GossipSync},
     error::MutinyError,
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
     logging::MutinyLogger,
@@ -79,6 +80,7 @@ pub struct Node {
     pub channel_manager: Arc<ChannelManager>,
     pub chain_monitor: Arc<ChainMonitor>,
     pub invoice_payer: Arc<InvoicePayer<EventHandler>>,
+    _background_processor: BackgroundProcessor,
 }
 
 impl Node {
@@ -144,7 +146,11 @@ impl Node {
             network,
             logger.clone(),
         );
-        let peer_man = create_peer_manager(keys_manager.clone(), ln_msg_handler, logger.clone());
+        let peer_man = Arc::new(create_peer_manager(
+            keys_manager.clone(),
+            ln_msg_handler,
+            logger.clone(),
+        ));
 
         // todo use RGS
         // get network graph
@@ -163,7 +169,7 @@ impl Node {
             network_graph,
             logger.clone(),
             keys_manager.get_secure_random_bytes(),
-            scorer,
+            scorer.clone(),
         );
 
         let invoice_payer: Arc<InvoicePayer<EventHandler>> = Arc::new(InvoicePayer::new(
@@ -174,15 +180,34 @@ impl Node {
             payment::Retry::Attempts(5), // todo potentially rethink
         ));
 
+        let background_processor_logger = logger.clone();
+        let background_processor_invoice_payer = invoice_payer.clone();
+        let background_processor_peer_manager = peer_man.clone();
+        let background_processor_channel_manager = channel_manager.clone();
+        let background_chain_monitor = chain_monitor.clone();
+        let gs: GossipSync<_, _, &NetworkGraph, _, Arc<MutinyLogger>> = GossipSync::none();
+
+        let background_processor = BackgroundProcessor::start(
+            persister,
+            background_processor_invoice_payer.clone(),
+            background_chain_monitor.clone(),
+            background_processor_channel_manager.clone(),
+            gs,
+            background_processor_peer_manager.clone(),
+            background_processor_logger.clone(),
+            Some(scorer),
+        );
+
         Ok(Node {
             uuid: node_index.uuid,
             pubkey,
-            peer_manager: Arc::new(peer_man),
+            peer_manager: peer_man,
             keys_manager,
             chain,
             channel_manager,
             chain_monitor,
             invoice_payer,
+            _background_processor: background_processor,
         })
     }
 
