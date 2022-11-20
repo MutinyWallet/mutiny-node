@@ -147,11 +147,10 @@ impl MutinyChannel {
 }
 
 #[wasm_bindgen]
-// Using u32 so it's not a BigInt on the JS side
 pub struct MutinyBalance {
-    pub confirmed: Option<u32>,
-    pub unconfirmed: Option<u32>,
-    pub lightning: u32,
+    pub confirmed: u64,
+    pub unconfirmed: u64,
+    pub lightning: u64,
 }
 
 #[wasm_bindgen]
@@ -299,9 +298,8 @@ impl NodeManager {
         match self.wallet.wallet.lock().await.get_balance() {
             Ok(onchain) => {
                 let balance = MutinyBalance {
-                    confirmed: u32::try_from(onchain.confirmed).ok(),
-                    unconfirmed: u32::try_from(onchain.untrusted_pending + onchain.trusted_pending)
-                        .ok(),
+                    confirmed: onchain.confirmed,
+                    unconfirmed: onchain.untrusted_pending + onchain.trusted_pending,
                     lightning: 0,
                 };
                 Ok(balance)
