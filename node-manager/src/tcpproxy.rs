@@ -62,6 +62,8 @@ impl SocketDescriptor {
         Self { conn, id }
     }
 }
+unsafe impl Send for SocketDescriptor {}
+
 impl peer_handler::SocketDescriptor for SocketDescriptor {
     fn send_data(&mut self, data: &[u8], _resume_read: bool) -> usize {
         let vec = Vec::from(data);
