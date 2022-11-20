@@ -3,6 +3,7 @@
 // wasm_bindgen uses improper casing and it needs to be turned off:
 // https://github.com/rustwasm/wasm-bindgen/issues/2882
 
+mod background;
 mod bdkstorage;
 mod chain;
 mod encrypt;

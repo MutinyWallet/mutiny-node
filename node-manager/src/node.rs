@@ -5,9 +5,8 @@ use crate::wallet::MutinyWallet;
 use bitcoin::Network;
 use futures::StreamExt;
 use gloo_net::websocket::Message;
-use lightning::chain::{chainmonitor, Access, Filter};
+use lightning::chain::{chainmonitor, Filter};
 use lightning::ln::msgs::NetAddress;
-use lightning_background_processor::{BackgroundProcessor, GossipSync};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -16,6 +15,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::chain::MutinyChain;
 use crate::tcpproxy::{SocketDescriptor, TcpProxy};
 use crate::{
+    background::{BackgroundProcessor, GossipSync},
     error::MutinyError,
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
     logging::MutinyLogger,
@@ -80,6 +80,7 @@ pub struct Node {
     pub channel_manager: Arc<ChannelManager>,
     pub chain_monitor: Arc<ChainMonitor>,
     pub invoice_payer: Arc<InvoicePayer<EventHandler>>,
+    _background_processor: BackgroundProcessor,
 }
 
 impl Node {
@@ -180,26 +181,22 @@ impl Node {
         ));
 
         let background_processor_logger = logger.clone();
-        let background_processor_pubkey = pubkey.clone();
         let background_processor_invoice_payer = invoice_payer.clone();
         let background_processor_peer_manager = peer_man.clone();
         let background_processor_channel_manager = channel_manager.clone();
         let background_chain_monitor = chain_monitor.clone();
+        let gs: GossipSync<_, _, &NetworkGraph, _, Arc<MutinyLogger>> = GossipSync::none();
 
-        spawn_local(async move {
-            let gs: GossipSync<_, _, &NetworkGraph, _, Arc<MutinyLogger>> = GossipSync::none();
-
-            let _background_processor = BackgroundProcessor::start(
-                persister,
-                background_processor_invoice_payer.clone(),
-                background_chain_monitor.clone(),
-                background_processor_channel_manager.clone(),
-                gs,
-                background_processor_peer_manager.clone(),
-                background_processor_logger.clone(),
-                Some(scorer),
-            );
-        });
+        let background_processor = BackgroundProcessor::start(
+            persister,
+            background_processor_invoice_payer.clone(),
+            background_chain_monitor.clone(),
+            background_processor_channel_manager.clone(),
+            gs,
+            background_processor_peer_manager.clone(),
+            background_processor_logger.clone(),
+            Some(scorer),
+        );
 
         Ok(Node {
             uuid: node_index.uuid,
@@ -210,6 +207,7 @@ impl Node {
             channel_manager,
             chain_monitor,
             invoice_payer,
+            _background_processor: background_processor,
         })
     }
 
