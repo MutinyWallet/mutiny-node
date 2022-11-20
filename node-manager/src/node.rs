@@ -5,8 +5,9 @@ use crate::wallet::MutinyWallet;
 use bitcoin::Network;
 use futures::StreamExt;
 use gloo_net::websocket::Message;
-use lightning::chain::{chainmonitor, Filter};
+use lightning::chain::{chainmonitor, Access, Filter};
 use lightning::ln::msgs::NetAddress;
+use lightning_background_processor::{BackgroundProcessor, GossipSync};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -144,7 +145,11 @@ impl Node {
             network,
             logger.clone(),
         );
-        let peer_man = create_peer_manager(keys_manager.clone(), ln_msg_handler, logger.clone());
+        let peer_man = Arc::new(create_peer_manager(
+            keys_manager.clone(),
+            ln_msg_handler,
+            logger.clone(),
+        ));
 
         // todo use RGS
         // get network graph
@@ -163,7 +168,7 @@ impl Node {
             network_graph,
             logger.clone(),
             keys_manager.get_secure_random_bytes(),
-            scorer,
+            scorer.clone(),
         );
 
         let invoice_payer: Arc<InvoicePayer<EventHandler>> = Arc::new(InvoicePayer::new(
@@ -174,10 +179,32 @@ impl Node {
             payment::Retry::Attempts(5), // todo potentially rethink
         ));
 
+        let background_processor_logger = logger.clone();
+        let background_processor_pubkey = pubkey.clone();
+        let background_processor_invoice_payer = invoice_payer.clone();
+        let background_processor_peer_manager = peer_man.clone();
+        let background_processor_channel_manager = channel_manager.clone();
+        let background_chain_monitor = chain_monitor.clone();
+
+        spawn_local(async move {
+            let gs: GossipSync<_, _, &NetworkGraph, _, Arc<MutinyLogger>> = GossipSync::none();
+
+            let _background_processor = BackgroundProcessor::start(
+                persister,
+                background_processor_invoice_payer.clone(),
+                background_chain_monitor.clone(),
+                background_processor_channel_manager.clone(),
+                gs,
+                background_processor_peer_manager.clone(),
+                background_processor_logger.clone(),
+                Some(scorer),
+            );
+        });
+
         Ok(Node {
             uuid: node_index.uuid,
             pubkey,
-            peer_manager: Arc::new(peer_man),
+            peer_manager: peer_man,
             keys_manager,
             chain,
             channel_manager,
