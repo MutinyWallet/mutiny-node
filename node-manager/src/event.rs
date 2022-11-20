@@ -1,7 +1,5 @@
-use crate::chain::fallback_fee_from_conf_target;
 use crate::ldkstorage::MutinyNodePersister;
 use crate::logging::MutinyLogger;
-use crate::node::NetworkGraph;
 use crate::utils::{hex_str, sleep};
 use crate::wallet::MutinyWallet;
 use crate::{chain::MutinyChain, ldkstorage::ChannelManager};
@@ -9,8 +7,7 @@ use bdk::wallet::AddressIndex;
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::Network;
 use bitcoin_bech32::WitnessProgram;
-use lightning::chain::chaininterface::BroadcasterInterface;
-use lightning::chain::chaininterface::ConfirmationTarget;
+use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
 use lightning::chain::keysinterface::KeysManager;
 use lightning::util::events::{Event, EventHandler as LdkEventHandler, PaymentPurpose};
 use lightning::util::logger::{Logger, Record};
@@ -107,7 +104,7 @@ impl LdkEventHandler for EventHandler {
                 let counterparty_node_id_thread = counterparty_node_id.clone();
                 spawn_local(async move {
                     let psbt = match wallet_thread
-                        .create_signed_tx(addr, channel_values_satoshis_thread, None)
+                        .create_signed_psbt(addr, channel_values_satoshis_thread, None)
                         .await
                     {
                         Ok(psbt) => psbt,
@@ -166,13 +163,24 @@ impl LdkEventHandler for EventHandler {
                     0,
                 ));
 
-                let payment_preimage = match purpose {
+                let payment_preimage = if let Some(payment_preimage) = match purpose {
                     PaymentPurpose::InvoicePayment {
                         payment_preimage, ..
                     } => *payment_preimage,
                     PaymentPurpose::SpontaneousPayment(preimage) => Some(*preimage),
+                } {
+                    payment_preimage
+                } else {
+                    self.logger.log(&Record::new(
+                        lightning::util::logger::Level::Error,
+                        format_args!("ERROR: No payment preimage found"),
+                        "node",
+                        "",
+                        0,
+                    ));
+                    return;
                 };
-                self.channel_manager.claim_funds(payment_preimage.unwrap());
+                self.channel_manager.claim_funds(payment_preimage);
             }
             Event::PaymentClaimed {
                 payment_hash,
@@ -201,18 +209,8 @@ impl LdkEventHandler for EventHandler {
                 };
                 match self.persister.read_payment_info(*payment_hash, true) {
                     Some(mut saved_payment_info) => {
-                        let payment_preimage: Option<[u8; 32]> =
-                            if let Some(payment_preimage) = payment_preimage {
-                                Some(payment_preimage.0)
-                            } else {
-                                None
-                            };
-                        let payment_secret: Option<[u8; 32]> =
-                            if let Some(payment_secret) = payment_secret {
-                                Some(payment_secret.0)
-                            } else {
-                                None
-                            };
+                        let payment_preimage = payment_preimage.map(|p| p.0);
+                        let payment_secret = payment_secret.map(|p| p.0);
                         saved_payment_info.status = HTLCStatus::Succeeded;
                         saved_payment_info.preimage = payment_preimage;
                         saved_payment_info.secret = payment_secret;
@@ -234,19 +232,8 @@ impl LdkEventHandler for EventHandler {
                         }
                     }
                     None => {
-                        let payment_preimage: Option<[u8; 32]> =
-                            if let Some(payment_preimage) = payment_preimage {
-                                Some(payment_preimage.0)
-                            } else {
-                                None
-                            };
-                        let payment_secret: Option<[u8; 32]> =
-                            if let Some(payment_secret) = payment_secret {
-                                Some(payment_secret.0)
-                            } else {
-                                None
-                            };
-
+                        let payment_preimage = payment_preimage.map(|p| p.0);
+                        let payment_secret = payment_secret.map(|p| p.0);
                         let payment_info = PaymentInfo {
                             preimage: payment_preimage,
                             secret: payment_secret,
@@ -393,7 +380,7 @@ impl LdkEventHandler for EventHandler {
                         }
                     }
                     None => {
-                        // we succeeded in a payment that we didn't have saved? ...
+                        // we failed in a payment that we didn't have saved? ...
                         self.logger.log(&Record::new(
                             lightning::util::logger::Level::Warn,
                             format_args!("WARN: payment failed but we did not have it stored"),
@@ -455,10 +442,11 @@ impl LdkEventHandler for EventHandler {
                         .lock()
                         .await
                         .get_address(AddressIndex::New)
-                        .unwrap();
+                        .expect("could not get new address");
 
                     let output_descriptors = &outputs_thread.iter().collect::<Vec<_>>();
-                    let tx_feerate = fallback_fee_from_conf_target(ConfirmationTarget::Normal);
+                    let tx_feerate =
+                        chain_thread.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
                     let spending_tx = keys_manager_thread
                         .spend_spendable_outputs(
                             output_descriptors,
@@ -467,7 +455,7 @@ impl LdkEventHandler for EventHandler {
                             tx_feerate,
                             &Secp256k1::new(),
                         )
-                        .unwrap();
+                        .expect("could not spend spendable outputs");
                     chain_thread.broadcast_transaction(&spending_tx);
                 });
             }

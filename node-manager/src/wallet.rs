@@ -68,7 +68,7 @@ impl MutinyWallet {
         Ok(self.wallet.lock().await.list_transactions(include_raw)?)
     }
 
-    pub async fn create_signed_tx(
+    pub async fn create_signed_psbt(
         &self,
         destination_address: String,
         amount: u64,
@@ -104,25 +104,14 @@ impl MutinyWallet {
         fee_rate: Option<f32>,
     ) -> Result<bitcoin::Txid, MutinyError> {
         let psbt = self
-            .create_signed_tx(destination_address, amount, fee_rate)
+            .create_signed_psbt(destination_address, amount, fee_rate)
             .await?;
 
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
 
         maybe_await!(self.blockchain.broadcast(&raw_transaction))?;
-
-        let explorer_url = match self.wallet.lock().await.network() {
-            Network::Bitcoin => Ok("https://mempool.space/tx/"),
-            Network::Testnet => Ok("https://mempool.space/testnet/tx/"),
-            Network::Signet => Ok("https://mempool.space/signet/tx/"),
-            Network::Regtest => Err(bdk::Error::Generic(
-                "No esplora client available for regtest".to_string(),
-            )),
-        }?;
-
-        debug!("Transaction broadcast! TXID: {txid}.\nExplorer URL: {explorer_url}{txid}");
-
+        debug!("Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }
 }

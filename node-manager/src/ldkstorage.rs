@@ -24,8 +24,6 @@ use lightning::util::config::UserConfig;
 use lightning::util::persist::KVStorePersister;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use log::error;
-use serde::Deserialize;
-use std::hash::Hash;
 use std::io;
 use std::io::Cursor;
 use std::ops::Deref;
