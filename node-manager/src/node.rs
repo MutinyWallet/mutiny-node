@@ -1,5 +1,7 @@
+use crate::event::EventHandler;
 use crate::ldkstorage::{ChannelManager, MutinyNodePersister};
 use crate::localstorage::MutinyBrowserStorage;
+use crate::wallet::MutinyWallet;
 use bitcoin::Network;
 use futures::StreamExt;
 use gloo_net::websocket::Message;
@@ -71,6 +73,7 @@ impl Node {
         mnemonic: Mnemonic,
         storage: MutinyBrowserStorage,
         chain: Arc<MutinyChain>,
+        wallet: Arc<MutinyWallet>,
         network: Network,
     ) -> Result<Self, MutinyError> {
         info!("initialized a new node: {}", node_index.uuid);
@@ -110,14 +113,25 @@ impl Node {
             .await?;
         let channel_manager: Arc<ChannelManager> = Arc::new(channel_manager);
 
-        // todo replace chan_handler with real channel handler
+        // init peer manager
         let ln_msg_handler = MessageHandler {
             chan_handler: channel_manager.clone(),
             route_handler: Arc::new(IgnoringMessageHandler {}),
             onion_message_handler: Arc::new(IgnoringMessageHandler {}),
         };
 
-        let peer_man = create_peer_manager(keys_manager.clone(), ln_msg_handler, logger);
+        let peer_man = create_peer_manager(keys_manager.clone(), ln_msg_handler, logger.clone());
+
+        // init event handler
+        let _event_handler = EventHandler::new(
+            channel_manager.clone(),
+            chain.clone(),
+            wallet.clone(),
+            keys_manager.clone(),
+            persister,
+            network,
+            logger,
+        );
 
         Ok(Node {
             uuid: node_index.uuid,

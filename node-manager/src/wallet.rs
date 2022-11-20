@@ -68,33 +68,20 @@ impl MutinyWallet {
         Ok(self.wallet.lock().await.list_transactions(include_raw)?)
     }
 
-    pub async fn send(
+    pub async fn create_signed_psbt(
         &self,
         destination_address: String,
         amount: u64,
         fee_rate: Option<f32>,
-    ) -> Result<bitcoin::Txid, MutinyError> {
+    ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
         let wallet = self.wallet.lock().await;
-
-        // TODO: would like to be able to convert from Bitcoin lib errors directly to MutinyError somehow
-        // Like this doesn't seem to do anything:
-        // #[derive(Error, Debug)]
-        // pub enum MutinyBitcoinError {
-        //     #[error("Failed to use browser storage")]
-        //     AddressError {
-        //         #[from]
-        //         source: bitcoin::util::address::Error,
-        //     },
-        // }
         let send_to =
             Address::from_str(&destination_address).with_context(|| "Address parse error")?;
-
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
         } else {
             self.blockchain.estimate_fee(1).await?
         };
-
         let (mut psbt, details) = {
             let mut builder = wallet.build_tx();
             builder
@@ -103,30 +90,28 @@ impl MutinyWallet {
                 .fee_rate(fee_rate);
             builder.finish()?
         };
-
         debug!("Transaction details: {:#?}", details);
         debug!("Unsigned PSBT: {}", &psbt);
-
         let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
-
         debug!("{}", finalized);
+        Ok(psbt)
+    }
+
+    pub async fn send(
+        &self,
+        destination_address: String,
+        amount: u64,
+        fee_rate: Option<f32>,
+    ) -> Result<bitcoin::Txid, MutinyError> {
+        let psbt = self
+            .create_signed_psbt(destination_address, amount, fee_rate)
+            .await?;
 
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
 
         maybe_await!(self.blockchain.broadcast(&raw_transaction))?;
-
-        let explorer_url = match wallet.network() {
-            Network::Bitcoin => Ok("https://mempool.space/tx/"),
-            Network::Testnet => Ok("https://mempool.space/testnet/tx/"),
-            Network::Signet => Ok("https://mempool.space/signet/tx/"),
-            Network::Regtest => Err(bdk::Error::Generic(
-                "No esplora client available for regtest".to_string(),
-            )),
-        }?;
-
-        debug!("Transaction broadcast! TXID: {txid}.\nExplorer URL: {explorer_url}{txid}");
-
+        debug!("Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }
 }

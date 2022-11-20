@@ -489,6 +489,7 @@ pub(crate) async fn create_new_node_from_node_manager(
         node_manager.mnemonic.clone(),
         node_manager.storage.clone(),
         node_manager.chain.clone(),
+        node_manager.wallet.clone(),
         node_manager.network,
     )
     .await

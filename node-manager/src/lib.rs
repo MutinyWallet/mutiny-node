@@ -7,6 +7,7 @@ mod bdkstorage;
 mod chain;
 mod encrypt;
 mod error;
+mod event;
 mod keymanager;
 mod ldkstorage;
 mod localstorage;
