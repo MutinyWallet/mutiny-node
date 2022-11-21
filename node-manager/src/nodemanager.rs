@@ -16,7 +16,7 @@ use futures::lock::Mutex;
 use lightning::chain::chaininterface::BroadcasterInterface;
 use lightning::chain::Confirm;
 use lightning_invoice::{Invoice, InvoiceDescription};
-use log::{error, info};
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
@@ -171,9 +171,13 @@ impl NodeManager {
 
         let mnemonic = match mnemonic {
             Some(m) => {
+                debug!("{}", &m);
                 let seed = match Mnemonic::from_str(String::as_str(&m)) {
                     Ok(seed) => seed,
-                    Err(_) => return Err(MutinyError::WalletOperationFailed.into()),
+                    Err(e) => {
+                        error!("{}", e);
+                        return Err(MutinyError::InvalidMnemonic.into());
+                    }
                 };
                 storage.insert_mnemonic(seed)
             }
@@ -298,7 +302,6 @@ impl NodeManager {
                     unconfirmed: onchain.untrusted_pending + onchain.trusted_pending,
                     lightning: 0,
                 };
-
                 Ok(balance)
             }
             Err(_) => Err(MutinyJsError::WalletOperationFailed),

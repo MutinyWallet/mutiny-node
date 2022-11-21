@@ -1,90 +1,26 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
-import App from './routes/App';
 import * as serviceWorkerRegistration from './serviceWorkerRegistration';
 import reportWebVitals from './reportWebVitals';
-import {
-  createBrowserRouter,
-  RouterProvider,
-} from "react-router-dom";
-import KitchenSink from './routes/KitchenSink';
-import Send from './routes/Send';
-import Deposit from './routes/Deposit';
-import SendConfirm from './routes/SendConfirm';
-import Receive from './routes/Receive';
-import ManagerRoot from './routes/ManagerRoot';
-import Transactions from './routes/Transactions';
-import Peers from './routes/Peers';
-import Channels from './routes/Channels';
-import Settings from './routes/Settings';
-import OnChain from './routes/OnChain';
-import OpenChannel from './routes/OpenChannel';
+
+import Router from '@components/Router';
+import { GlobalStateProvider } from '@components/GlobalStateProvider';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
 );
 
-const router = createBrowserRouter([
-  {
-    path: "/",
-    element: <App />,
-  },
-  {
-    path: "/send",
-    element: <Send />,
-  },
-  {
-    path: "/send/confirm",
-    element: <SendConfirm />,
-  },
-  {
-    path: "/deposit",
-    element: <Deposit />,
-  },
-  {
-    path: "/receive",
-    element: <Receive />,
-  },
-  {
-    path: "/openchannel",
-    element: <OpenChannel />,
-  },
-  {
-    path: "/tests",
-    element: <KitchenSink />,
-  },
-  {
-    path: "/manager",
-    element: <ManagerRoot />,
-    children: [
-      {
-        path: "transactions",
-        element: <Transactions />
-      },
-      {
-        path: "onchain",
-        element: <OnChain />
-      },
-      {
-        path: "peers",
-        element: <Peers />
-      },
-      {
-        path: "channels",
-        element: <Channels />
-      },
-      {
-        path: "settings",
-        element: <Settings />
-      }
-    ]
-  }
-]);
+const queryClient = new QueryClient()
 
 root.render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    <GlobalStateProvider>
+      <QueryClientProvider client={queryClient}>
+        <Router />
+      </QueryClientProvider>
+    </GlobalStateProvider>
   </React.StrictMode>
 );
 
