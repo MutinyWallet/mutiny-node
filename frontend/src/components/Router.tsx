@@ -15,6 +15,7 @@ import Channels from '@routes/Channels';
 import Settings from '@routes/Settings';
 import OnChain from '@routes/OnChain';
 import OpenChannel from '@routes/OpenChannel';
+import Utxos from "@routes/Utxos";
 
 const router = createBrowserRouter([
     {
@@ -64,6 +65,10 @@ const router = createBrowserRouter([
             {
                 path: "channels",
                 element: <Channels />
+            },
+            {
+                path: "utxos",
+                element: <Utxos />
             },
             {
                 path: "settings",

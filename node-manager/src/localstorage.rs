@@ -32,8 +32,13 @@ impl MutinyBrowserStorage {
         T: Serialize,
     {
         let data = serde_json::to_string(&value)?;
-        let ciphertext = encrypt(data.as_str(), self.password.as_str());
-        Ok(LocalStorage::set(key, ciphertext)?)
+        // Only bother encrypting if a password is set
+        if self.password.is_empty() {
+            return Ok(LocalStorage::set(key, data)?);
+        } else {
+            let ciphertext = encrypt(data.as_str(), self.password.as_str());
+            return Ok(LocalStorage::set(key, ciphertext)?);
+        }
     }
 
     /// Get the value for the specified key
@@ -41,9 +46,14 @@ impl MutinyBrowserStorage {
     where
         T: for<'de> Deserialize<'de>,
     {
-        let ciphertext: String = LocalStorage::get(key)?;
-        let data = decrypt(ciphertext.as_str(), self.password.as_str());
-        Ok(serde_json::from_str::<T>(data.as_str())?)
+        let data: String = LocalStorage::get(key)?;
+        // Only bother decrypting if a password is set
+        if self.password.is_empty() {
+            return Ok(serde_json::from_str::<T>(data.as_str())?);
+        } else {
+            let decrypted_data = decrypt(data.as_str(), self.password.as_str());
+            return Ok(serde_json::from_str::<T>(decrypted_data.as_str())?);
+        }
     }
 
     // mostly a copy of self.get_all()

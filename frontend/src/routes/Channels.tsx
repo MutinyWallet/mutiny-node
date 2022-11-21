@@ -33,14 +33,14 @@ function Channels() {
     }
 
     return (
-        <div className="h-full">
+        <>
             <header className='px-8 pt-8 flex justify-between items-center'>
                 <PageTitle title="Channels" theme="blue" />
                 <Close />
             </header>
             <ScreenMain padSides={false}>
                 <button className="mx-8" onClick={handleNavOpen}>Add Channel</button>
-                <ul className="flex-1 overflow-y-scroll px-8 pb-[12rem]">
+                <ul className="overflow-y-scroll px-8 pb-[12rem]">
                     <SingleChannel />
                     <SingleChannel />
                     <SingleChannel />
@@ -48,7 +48,7 @@ function Channels() {
                     <SingleChannel />
                 </ul>
             </ScreenMain>
-        </div>
+        </>
     )
 }
 

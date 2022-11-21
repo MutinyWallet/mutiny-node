@@ -4,6 +4,7 @@ import ChannelsIcon from "../images/channels-icon.png"
 import SettingsIcon from "../images/settings-icon.png"
 import OnChainIcon from "../images/world-in-box-icon.png"
 import PeersIcon from "../images/peers-icon.png"
+import UtxosIcon from "@images/utxos-icon.png"
 
 function ManagerRoot() {
     let navigate = useNavigate();
@@ -17,7 +18,7 @@ function ManagerRoot() {
         <div className="flex flex-col h-full fixed w-full">
             <Outlet />
             <nav className="relative">
-                <ul className="pb-8 pt-16 px-8 flex overflow-scroll gap-2 absolute bottom-0 left-0 max-w-full bg-fade-to-blue scrollbar-hide">
+                <ul className="pb-8 pt-16 px-8 flex overflow-x-scroll gap-2 absolute bottom-0 left-0 max-w-full bg-fade-to-blue scrollbar-hide">
                     <li>
                         <button onClick={() => navigate("transactions")} className={shouldBeActive("transactions")} >
                             <img src={TxIcon} alt="transactions icon" />
@@ -40,6 +41,12 @@ function ManagerRoot() {
                         <button onClick={() => navigate("peers")} className={shouldBeActive("peers")}>
                             <img src={PeersIcon} alt="peers icon" />
                             Peers
+                        </button>
+                    </li>
+                    <li>
+                        <button onClick={() => navigate("utxos")} className={shouldBeActive("utxos")}>
+                            <img src={UtxosIcon} alt="utxos icon" />
+                            Utxos
                         </button>
                     </li>
                     <li>

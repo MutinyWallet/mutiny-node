@@ -26,11 +26,11 @@ function Send() {
     }
 
     if (destination && amount) {
-      navigate("/send/confirm")
+      navigate(`/send/confirm?destination=${destination}&amount=${amount}`)
     }
   }
   return (
-    <div className="flex flex-col h-full w-full">
+    <>
       <header className='p-8 flex justify-between items-center'>
         <PageTitle title="Send" theme="green" />
         <Close />
@@ -49,7 +49,7 @@ function Send() {
         </div>
       </ScreenMain>
       <MutinyToaster />
-    </div>
+    </>
   );
 }
 

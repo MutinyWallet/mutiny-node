@@ -14,7 +14,7 @@ function Deposit() {
 
   }
   return (
-    <div className="flex flex-col h-screen">
+    <>
       <header className='p-8 flex justify-between items-center'>
         <PageTitle title="Deposit" theme="blue"></PageTitle>
         <Close />
@@ -38,7 +38,7 @@ function Deposit() {
           <button onClick={handleCancel}>Cancel</button>
         </div>
       </ScreenMain>
-    </div>
+    </>
   );
 }
 
