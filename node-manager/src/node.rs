@@ -1,12 +1,18 @@
-use crate::event::EventHandler;
+use crate::event::{EventHandler, HTLCStatus, MillisatAmount, PaymentInfo};
+use crate::invoice::create_phantom_invoice;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::localstorage::MutinyBrowserStorage;
+use crate::utils::currency_from_network;
 use crate::wallet::MutinyWallet;
+use bitcoin::hashes::Hash;
 use bitcoin::Network;
 use futures::StreamExt;
 use gloo_net::websocket::Message;
 use lightning::chain::{chainmonitor, Filter};
+use lightning::ln::channelmanager::PhantomRouteHints;
 use lightning::ln::msgs::NetAddress;
+use lightning::ln::PaymentHash;
+use lightning::util::logger::{Logger, Record};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -34,8 +40,8 @@ use lightning::ln::peer_handler::{
 };
 use lightning::routing::gossip;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
-use lightning_invoice::payment;
 use lightning_invoice::utils::DefaultRouter;
+use lightning_invoice::{payment, Invoice};
 use log::{debug, error, info, warn};
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
@@ -82,7 +88,10 @@ pub struct Node {
     pub channel_manager: Arc<PhantomChannelManager>,
     pub chain_monitor: Arc<ChainMonitor>,
     pub invoice_payer: Arc<InvoicePayer<EventHandler>>,
+    network: Network,
+    persister: Arc<MutinyNodePersister>,
     _background_processor: BackgroundProcessor,
+    logger: Arc<MutinyLogger>,
 }
 
 impl Node {
@@ -190,7 +199,7 @@ impl Node {
         let gs: GossipSync<_, _, &NetworkGraph, _, Arc<MutinyLogger>> = GossipSync::none();
 
         let background_processor = BackgroundProcessor::start(
-            persister,
+            persister.clone(),
             background_processor_invoice_payer.clone(),
             background_chain_monitor.clone(),
             background_processor_channel_manager.clone(),
@@ -209,7 +218,10 @@ impl Node {
             channel_manager,
             chain_monitor,
             invoice_payer,
+            network,
+            persister,
             _background_processor: background_processor,
+            logger,
         })
     }
 
@@ -244,6 +256,72 @@ impl Node {
         } else {
             Ok(())
         }
+    }
+
+    pub fn get_phantom_route_hint(&self) -> PhantomRouteHints {
+        self.channel_manager.get_phantom_route_hints()
+    }
+
+    pub fn create_phantom_invoice(
+        &self,
+        amount_sat: u64,
+        description: String,
+        route_hints: Vec<PhantomRouteHints>,
+    ) -> Result<Invoice, MutinyError> {
+        let invoice = match create_phantom_invoice::<InMemorySigner, Arc<PhantomKeysManager>>(
+            Some(amount_sat * 1000),
+            None,
+            description,
+            1500,
+            route_hints,
+            self.keys_manager.clone(),
+            currency_from_network(self.network),
+        ) {
+            Ok(inv) => {
+                self.logger.log(&Record::new(
+                    lightning::util::logger::Level::Info,
+                    format_args!("SUCCESS: generated invoice: {}", inv),
+                    "node",
+                    "",
+                    0,
+                ));
+                inv
+            }
+            Err(e) => {
+                self.logger.log(&Record::new(
+                    lightning::util::logger::Level::Error,
+                    format_args!("ERROR: could not generate invoice: {}", e),
+                    "node",
+                    "",
+                    0,
+                ));
+                return Err(MutinyError::InvoiceCreationFailed);
+            }
+        };
+
+        let payment_hash = PaymentHash(invoice.payment_hash().into_inner());
+        let payment_info = PaymentInfo {
+            preimage: None,
+            secret: Some(invoice.payment_secret().0),
+            status: HTLCStatus::Pending,
+            amt_msat: MillisatAmount(Some(amount_sat * 1000)),
+        };
+        match self
+            .persister
+            .persist_payment_info(payment_hash, payment_info, true)
+        {
+            Ok(_) => (),
+            Err(e) => {
+                self.logger.log(&Record::new(
+                    lightning::util::logger::Level::Error,
+                    format_args!("ERROR: could not persist payment info: {}", e),
+                    "node",
+                    "",
+                    0,
+                ));
+            }
+        }
+        Ok(invoice)
     }
 }
 

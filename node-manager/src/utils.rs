@@ -1,4 +1,6 @@
+use bitcoin::Network;
 use js_sys;
+use lightning_invoice::Currency;
 use web_sys;
 
 pub fn set_panic_hook() {
@@ -30,4 +32,13 @@ pub fn hex_str(value: &[u8]) -> String {
         res += &format!("{:02x}", v);
     }
     res
+}
+
+pub fn currency_from_network(network: Network) -> Currency {
+    match network {
+        Network::Bitcoin => Currency::Bitcoin,
+        Network::Testnet => Currency::BitcoinTestnet,
+        Network::Signet => Currency::Signet,
+        Network::Regtest => Currency::Regtest,
+    }
 }

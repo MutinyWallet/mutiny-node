@@ -15,6 +15,7 @@ use bitcoin::{Network, Transaction};
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::BroadcasterInterface;
 use lightning::chain::Confirm;
+use lightning::ln::channelmanager::PhantomRouteHints;
 use lightning_invoice::{Invoice, InvoiceDescription};
 use log::{error, info};
 use serde::{Deserialize, Serialize};
@@ -76,7 +77,7 @@ pub struct MutinyInvoice {
     pub amount_sats: Option<u64>,
     pub expire: Option<u64>,
     pub paid: bool,
-    pub fees_paid: u64,
+    pub fees_paid: Option<u64>,
     pub is_send: bool,
 }
 
@@ -118,8 +119,8 @@ impl From<Invoice> for MutinyInvoice {
             amount_sats: value.amount_milli_satoshis().map(|m| m / 1000),
             expire: None, // todo
             paid: false,
-            fees_paid: 0,
-            is_send: false, // todo this could be bad
+            fees_paid: None, // todo
+            is_send: false,  // todo this could be bad
         }
     }
 }
@@ -376,10 +377,28 @@ impl NodeManager {
     #[wasm_bindgen]
     pub async fn create_invoice(
         &self,
-        _amount: u64,
-        _description: String,
+        amount: u64,
+        description: String,
     ) -> Result<MutinyInvoice, MutinyJsError> {
-        todo!()
+        // go through each node to get the route hints
+        let nodes = self.nodes.lock().await;
+        if nodes.len() == 0 {
+            return Err(MutinyJsError::InvoiceCreationFailed);
+        }
+
+        let route_hints: Vec<PhantomRouteHints> = nodes
+            .iter()
+            .map(|(_, n)| n.get_phantom_route_hint())
+            .collect();
+
+        // any of the nodes can process this, but just choose the first
+        let invoice = nodes
+            .values()
+            .nth(0)
+            .expect("should exist")
+            .create_phantom_invoice(amount, description, route_hints)?;
+
+        Ok(invoice.into())
     }
 
     #[wasm_bindgen]
