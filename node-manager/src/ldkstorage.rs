@@ -13,11 +13,13 @@ use bitcoin::BlockHash;
 use bitcoin::Network;
 use futures::{try_join, TryFutureExt};
 use lightning::chain::channelmonitor::ChannelMonitor;
-use lightning::chain::keysinterface::{InMemorySigner, KeysManager};
+use lightning::chain::keysinterface::InMemorySigner;
+use lightning::chain::keysinterface::PhantomKeysManager;
 use lightning::chain::keysinterface::{KeysInterface, Sign};
 use lightning::chain::BestBlock;
-use lightning::ln::channelmanager::ChannelManagerReadArgs;
-use lightning::ln::channelmanager::{self, ChainParameters, SimpleArcChannelManager};
+use lightning::ln::channelmanager::{
+    self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
+};
 use lightning::ln::PaymentHash;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
 use lightning::util::config::UserConfig;
@@ -36,8 +38,14 @@ const MONITORS_PREFIX_KEY: &str = "monitors/";
 const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
 const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
 
-pub(crate) type ChannelManager =
-    SimpleArcChannelManager<ChainMonitor, MutinyChain, MutinyChain, MutinyLogger>;
+pub(crate) type PhantomChannelManager = LdkChannelManager<
+    InMemorySigner,
+    Arc<ChainMonitor>,
+    Arc<MutinyChain>,
+    Arc<PhantomKeysManager>,
+    Arc<MutinyChain>,
+    Arc<MutinyLogger>,
+>;
 
 pub struct MutinyNodePersister {
     node_id: String,
@@ -153,9 +161,9 @@ impl MutinyNodePersister {
         chain_monitor: Arc<ChainMonitor>,
         mutiny_chain: Arc<MutinyChain>,
         mutiny_logger: Arc<MutinyLogger>,
-        keys_manager: Arc<KeysManager>,
+        keys_manager: Arc<PhantomKeysManager>,
         mut channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
-    ) -> Result<ChannelManager, MutinyError> {
+    ) -> Result<PhantomChannelManager, MutinyError> {
         match self.read_value(CHANNEL_MANAGER_KEY) {
             Ok(kv_value) => {
                 let mut channel_monitor_mut_references = Vec::new();
@@ -172,7 +180,7 @@ impl MutinyNodePersister {
                     channel_monitor_mut_references,
                 );
                 let mut readable_kv_value = Cursor::new(kv_value);
-                let Ok((_, channel_manager)) = <(BlockHash, ChannelManager)>::read(&mut readable_kv_value, read_args) else {
+                let Ok((_, channel_manager)) = <(BlockHash, PhantomChannelManager)>::read(&mut readable_kv_value, read_args) else {
                     return Err(MutinyError::ReadError { source: error::MutinyStorageError::Other(anyhow!("could not read manager")) })
                 };
                 Ok(channel_manager)

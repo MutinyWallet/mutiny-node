@@ -1,5 +1,5 @@
 use crate::event::EventHandler;
-use crate::ldkstorage::{ChannelManager, MutinyNodePersister};
+use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::localstorage::MutinyBrowserStorage;
 use crate::wallet::MutinyWallet;
 use bitcoin::Network;
@@ -25,7 +25,9 @@ use anyhow::Context;
 use bip39::Mnemonic;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::secp256k1::PublicKey;
-use lightning::chain::keysinterface::{InMemorySigner, KeysInterface, KeysManager, Recipient};
+use lightning::chain::keysinterface::{
+    InMemorySigner, KeysInterface, PhantomKeysManager, Recipient,
+};
 use lightning::ln::peer_handler::{
     IgnoringMessageHandler, MessageHandler as LdkMessageHandler, PeerManager as LdkPeerManager,
     SocketDescriptor as LdkSocketDescriptor,
@@ -39,14 +41,14 @@ use log::{debug, error, info, warn};
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
 pub(crate) type MessageHandler = LdkMessageHandler<
-    Arc<ChannelManager>,
+    Arc<PhantomChannelManager>,
     Arc<IgnoringMessageHandler>,
     Arc<IgnoringMessageHandler>,
 >;
 
 pub(crate) type PeerManager = LdkPeerManager<
     SocketDescriptor,
-    Arc<ChannelManager>,
+    Arc<PhantomChannelManager>,
     Arc<IgnoringMessageHandler>,
     Arc<IgnoringMessageHandler>,
     Arc<MutinyLogger>,
@@ -63,7 +65,7 @@ pub(crate) type ChainMonitor = chainmonitor::ChainMonitor<
 >;
 
 pub(crate) type InvoicePayer<E> =
-    payment::InvoicePayer<Arc<ChannelManager>, Router, Arc<MutinyLogger>, E>;
+    payment::InvoicePayer<Arc<PhantomChannelManager>, Router, Arc<MutinyLogger>, E>;
 
 type Router = DefaultRouter<
     Arc<NetworkGraph>,
@@ -75,9 +77,9 @@ pub struct Node {
     pub uuid: String,
     pub pubkey: PublicKey,
     pub peer_manager: Arc<PeerManager>,
-    pub keys_manager: Arc<KeysManager>,
+    pub keys_manager: Arc<PhantomKeysManager>,
     pub chain: Arc<MutinyChain>,
-    pub channel_manager: Arc<ChannelManager>,
+    pub channel_manager: Arc<PhantomChannelManager>,
     pub chain_monitor: Arc<ChainMonitor>,
     pub invoice_payer: Arc<InvoicePayer<EventHandler>>,
     _background_processor: BackgroundProcessor,
@@ -127,7 +129,7 @@ impl Node {
                 channel_monitors,
             )
             .await?;
-        let channel_manager: Arc<ChannelManager> = Arc::new(channel_manager);
+        let channel_manager: Arc<PhantomChannelManager> = Arc::new(channel_manager);
 
         // init peer manager
         let ln_msg_handler = MessageHandler {
@@ -324,7 +326,7 @@ fn get_net_addr_from_socket(socket_addr: SocketAddr) -> NetAddress {
 }
 
 pub(crate) fn create_peer_manager(
-    km: Arc<KeysManager>,
+    km: Arc<PhantomKeysManager>,
     lightning_msg_handler: MessageHandler,
     logger: Arc<MutinyLogger>,
 ) -> PeerManager {
