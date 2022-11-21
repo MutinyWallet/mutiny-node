@@ -27,7 +27,7 @@ function Transactions() {
                 <Close />
             </header>
             <ScreenMain padSides={false}>
-                <ul className="flex-1 overflow-y-scroll px-8 pb-[12rem]">
+                <ul className="overflow-y-scroll px-8 pb-[12rem]">
                     <SingleTransaction />
                     <SingleTransaction />
                     <SingleTransaction />

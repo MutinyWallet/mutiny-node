@@ -40,7 +40,7 @@ function Channels() {
             </header>
             <ScreenMain padSides={false}>
                 <button className="mx-8" onClick={handleNavOpen}>Add Channel</button>
-                <ul className="flex-1 overflow-y-scroll px-8 pb-[12rem]">
+                <ul className="overflow-y-scroll px-8 pb-[12rem]">
                     <SingleChannel />
                     <SingleChannel />
                     <SingleChannel />

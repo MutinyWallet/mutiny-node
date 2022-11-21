@@ -24,7 +24,7 @@ function Peers() {
             </header>
             <ScreenMain padSides={false}>
                 <button className="mx-8">Add Peer</button>
-                <ul className="flex-1 overflow-y-scroll px-8 pb-[12rem]">
+                <ul className="overflow-y-scroll px-8 pb-[12rem]">
                     <SinglePeer />
                     <SinglePeer />
                     <SinglePeer />
