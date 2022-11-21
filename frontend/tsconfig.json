@@ -18,7 +18,8 @@
     "paths": {
       "@routes/*": ["./src/routes/*"],
       "@components/*": ["./src/components/*"],
-      "@images/*": ["./src/images/*"]
+      "@images/*": ["./src/images/*"],
+      "@util/*": ["./src/utility/*"]
     }
   },
   "include": ["src"]

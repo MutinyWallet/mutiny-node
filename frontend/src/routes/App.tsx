@@ -9,9 +9,10 @@ import { useContext } from 'react';
 import { NodeManagerContext } from '@components/GlobalStateProvider';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { MutinyBalance } from 'node-manager';
+import prettyPrintAmount from '@util/prettyPrintAmount';
 
-function prettyPrintBalance(b: MutinyBalance) {
-  return b.confirmed.valueOf() + b.lightning.valueOf()
+function prettyPrintBalance(b: MutinyBalance): string {
+  return prettyPrintAmount(b.confirmed.valueOf() + b.lightning.valueOf())
 }
 
 function App() {
