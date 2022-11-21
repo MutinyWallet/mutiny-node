@@ -33,7 +33,7 @@ function Channels() {
     }
 
     return (
-        <div className="h-full">
+        <>
             <header className='px-8 pt-8 flex justify-between items-center'>
                 <PageTitle title="Channels" theme="blue" />
                 <Close />
@@ -48,7 +48,7 @@ function Channels() {
                     <SingleChannel />
                 </ul>
             </ScreenMain>
-        </div>
+        </>
     )
 }
 

@@ -16,7 +16,7 @@ function SingleTransaction() {
 
 function OnChain() {
     return (
-        <div className="h-full">
+        <>
             <header className='px-8 pt-8 flex justify-between items-center'>
                 <PageTitle title="On-chain txs" theme="red" />
                 <Close />
@@ -33,7 +33,7 @@ function OnChain() {
                     <SingleTransaction />
                 </ul>
             </ScreenMain>
-        </div>
+        </>
     )
 }
 

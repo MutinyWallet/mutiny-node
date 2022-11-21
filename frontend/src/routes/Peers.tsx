@@ -17,7 +17,7 @@ function SinglePeer() {
 
 function Peers() {
     return (
-        <div className="h-full">
+        <>
             <header className='px-8 pt-8 flex justify-between items-center'>
                 <PageTitle title="Peers" theme="white" />
                 <Close />
@@ -34,7 +34,7 @@ function Peers() {
                     <SinglePeer />
                 </ul>
             </ScreenMain>
-        </div>
+        </>
     )
 }
 

@@ -21,10 +21,21 @@
     url("./fonts/yantramanav-v11-latin-regular.woff") format("woff");
 }
 
-body {
+html {
+  @apply h-full overscroll-y-none bg-red;
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+#root {
   @apply h-full;
+  display: grid;
+  grid-template-rows: max-content 1fr;
+}
+
+body {
+  @apply w-full row-span-1;
   @apply text-white;
-  @apply overscroll-y-none w-full;
   @apply bg-fixed bg-no-repeat bg-gradient-to-b from-black to-[#0b215b] bg-[#0b215b];
 }
 
@@ -45,6 +56,14 @@ button:has(> img) {
 
 button:has(> img).secondary {
   @apply bg-none border-2 border-white text-white shadow-none active:bg-faint;
+}
+
+button.secondary {
+  @apply bg-none border-2 border-white text-white shadow-none active:bg-faint;
+}
+
+button.toggle {
+  @apply shadow-none;
 }
 
 button.blue-button {
