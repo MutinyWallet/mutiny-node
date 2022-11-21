@@ -7,8 +7,6 @@ interface Props {
 
 export const NodeManagerContext = createContext<NodeManager | undefined>(undefined);
 
-const MNEMONIC = "oak cart nasty cube noise icon pumpkin salmon photo fury asset file"
-
 export const GlobalStateProvider = ({ children }: Props) => {
     // eslint-disable-next-line
     const [_wasm, setWasm] = useState<InitOutput>();
@@ -53,7 +51,7 @@ export const GlobalStateProvider = ({ children }: Props) => {
         console.log("Starting setup...")
         try {
             console.log("Initializing Node Manager")
-            let nodeManager = await new NodeManager("", MNEMONIC)
+            let nodeManager = await new NodeManager("", undefined)
             // TODO this is some extra delay because the node manager isn't really "ready" the moment it's set
             await timeout(100)
             setNodeManager(nodeManager)
