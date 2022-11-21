@@ -26,7 +26,7 @@ function Send() {
     }
 
     if (destination && amount) {
-      navigate("/send/confirm")
+      navigate(`/send/confirm?destination=${destination}&amount=${amount}`)
     }
   }
   return (

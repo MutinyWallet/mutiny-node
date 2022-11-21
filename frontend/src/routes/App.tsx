@@ -1,7 +1,6 @@
 
 import logo from '../images/mutiny-logo.svg';
 import { useNavigate } from "react-router-dom";
-import { useEffect, useState } from 'react';
 import ScreenMain from '../components/ScreenMain';
 import More from '../components/More';
 import MutinyToaster from '../components/MutinyToaster';
