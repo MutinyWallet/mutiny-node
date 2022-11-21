@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::chain::MutinyChain;
+use crate::error::MutinyStorageError;
 use crate::tcpproxy::{SocketDescriptor, TcpProxy};
 use crate::{
     background::{BackgroundProcessor, GossipSync},
@@ -40,6 +41,7 @@ use lightning::ln::peer_handler::{
 };
 use lightning::routing::gossip;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
+use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
 use lightning_invoice::utils::DefaultRouter;
 use lightning_invoice::{payment, Invoice};
 use log::{debug, error, info, warn};
@@ -125,7 +127,9 @@ impl Node {
         // read channelmonitor state from disk
         let channel_monitors = persister
             .read_channel_monitors(keys_manager.clone())
-            .unwrap();
+            .map_err(|e| MutinyError::ReadError {
+                source: MutinyStorageError::Other(e.into()),
+            })?;
 
         // init channel manager
         let channel_manager = persister
@@ -322,6 +326,56 @@ impl Node {
             }
         }
         Ok(invoice)
+    }
+
+    pub async fn open_channel(
+        &self,
+        pubkey: PublicKey,
+        amount_sat: u64,
+    ) -> Result<[u8; 32], MutinyError> {
+        // todo rethink config
+        let config = UserConfig {
+            channel_handshake_limits: ChannelHandshakeLimits {
+                // lnd's max to_self_delay is 2016, so we want to be compatible.
+                their_to_self_delay: 2016,
+                ..Default::default()
+            },
+            channel_handshake_config: ChannelHandshakeConfig {
+                announced_channel: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        match self
+            .channel_manager
+            .create_channel(pubkey, amount_sat, 0, 0, Some(config))
+        {
+            Ok(res) => {
+                self.logger.log(&Record::new(
+                    lightning::util::logger::Level::Info,
+                    format_args!("SUCCESS: channel initiated with peer: {:?}", pubkey),
+                    "node",
+                    "",
+                    0,
+                ));
+
+                Ok(res)
+            }
+            Err(e) => {
+                self.logger.log(&Record::new(
+                    lightning::util::logger::Level::Error,
+                    format_args!(
+                        "ERROR: failed to open channel to pubkey {:?}: {:?}",
+                        pubkey, e
+                    ),
+                    "node",
+                    "",
+                    0,
+                ));
+                Err(MutinyError::ChannelCreationFailed)
+            }
+        }
     }
 }
 

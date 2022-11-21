@@ -27,9 +27,9 @@ serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
 gloo-storage = "0.2.2"
 uuid = { version = "1.1.2", features = ["v4"] }
-lightning = { version = "0.0.112", features = ["max_level_trace"] }
-lightning-invoice = { version = "0.20.0" }
-lightning-rapid-gossip-sync = { version = "0.0.112" }
+lightning = { version = "0.0.112", features = ["max_level_trace", "no-std"] }
+lightning-invoice = { version = "0.20.0", features = ["no-std"] }
+lightning-rapid-gossip-sync = { version = "0.0.112", features = ["no-std"] }
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 chrono = "0.4.22"
 

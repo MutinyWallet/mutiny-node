@@ -11,11 +11,13 @@ use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
 use bitcoin::consensus::deserialize;
 use bitcoin::hashes::hex::{FromHex, ToHex};
-use bitcoin::{Network, Transaction};
+use bitcoin::{Network, PublicKey, Transaction};
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::BroadcasterInterface;
+use lightning::chain::keysinterface::{KeysInterface, Recipient};
 use lightning::chain::Confirm;
-use lightning::ln::channelmanager::PhantomRouteHints;
+use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
+use lightning::ln::PaymentPreimage;
 use lightning_invoice::{Invoice, InvoiceDescription};
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
@@ -125,6 +127,7 @@ impl From<Invoice> for MutinyInvoice {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
 pub struct MutinyChannel {
     pub balance: u64,
@@ -147,6 +150,18 @@ impl MutinyChannel {
     }
 }
 
+impl From<&ChannelDetails> for MutinyChannel {
+    fn from(c: &ChannelDetails) -> Self {
+        MutinyChannel {
+            balance: c.balance_msat * 1_000,
+            size: c.channel_value_satoshis,
+            outpoint: c.funding_txo.unwrap().into_bitcoin_outpoint().to_string(),
+            peer: c.counterparty.node_id.to_hex(),
+            confirmed: c.is_channel_ready, // fixme not exactly correct
+        }
+    }
+}
+
 #[wasm_bindgen]
 pub struct MutinyBalance {
     pub confirmed: u64,
@@ -162,7 +177,10 @@ impl NodeManager {
     }
 
     #[wasm_bindgen(constructor)]
-    pub fn new(password: String, mnemonic: Option<String>) -> Result<NodeManager, MutinyJsError> {
+    pub async fn new(
+        password: String,
+        mnemonic: Option<String>,
+    ) -> Result<NodeManager, MutinyJsError> {
         set_panic_hook();
 
         // TODO get network from frontend
@@ -209,6 +227,27 @@ impl NodeManager {
             }
         };
 
+        let mut nodes_map = HashMap::new();
+
+        for node_item in node_storage.clone().nodes {
+            let node = Node::new(
+                node_item.1,
+                mnemonic.clone(),
+                storage.clone(),
+                chain.clone(),
+                wallet.clone(),
+                network,
+            )
+            .await?;
+
+            let id = node
+                .keys_manager
+                .get_node_id(Recipient::Node)
+                .expect(format!("Failed to get node id for {}", node_item.0).as_str());
+
+            nodes_map.insert(id.to_hex(), Arc::new(node));
+        }
+
         Ok(NodeManager {
             mnemonic,
             network,
@@ -216,7 +255,7 @@ impl NodeManager {
             chain,
             storage,
             node_storage: Mutex::new(node_storage),
-            nodes: Arc::new(Mutex::new(HashMap::new())), // TODO init the nodes
+            nodes: Arc::new(Mutex::new(nodes_map)),
         })
     }
 
@@ -298,10 +337,17 @@ impl NodeManager {
     pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyJsError> {
         match self.wallet.wallet.lock().await.get_balance() {
             Ok(onchain) => {
+                let nodes = self.nodes.lock().await;
+                let lightning_msats: u64 = nodes
+                    .iter()
+                    .flat_map(|(_, n)| n.channel_manager.list_channels())
+                    .map(|c| c.balance_msat)
+                    .sum();
+
                 let balance = MutinyBalance {
                     confirmed: onchain.confirmed,
                     unconfirmed: onchain.untrusted_pending + onchain.trusted_pending,
-                    lightning: 0,
+                    lightning: lightning_msats / 1000,
                 };
                 Ok(balance)
             }
@@ -407,8 +453,52 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub async fn pay_invoice(&self, _invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
-        todo!()
+    // todo change return to MutinyInvoice
+    pub async fn pay_invoice(
+        &self,
+        from_node: String,
+        invoice_str: String,
+    ) -> Result<(), MutinyJsError> {
+        let nodes = self.nodes.lock().await;
+        let node = nodes.get(from_node.as_str()).unwrap();
+
+        let invoice =
+            Invoice::from_str(invoice_str.as_str()).map_err(|_| MutinyJsError::InvoiceInvalid)?;
+        let pay_result = node.invoice_payer.pay_invoice(&invoice);
+
+        match pay_result {
+            Ok(_) => Ok(info!("Payment successful!")),
+            Err(_) => Err(MutinyJsError::RoutingFailed),
+        }
+    }
+
+    #[wasm_bindgen]
+    // todo change return to MutinyInvoice
+    pub async fn keysend(
+        &self,
+        from_node: String,
+        to_node: String,
+        amt_sats: u64,
+    ) -> Result<(), MutinyJsError> {
+        let nodes = self.nodes.lock().await;
+        let node = nodes.get(from_node.as_str()).unwrap();
+
+        let node_id = match PublicKey::from_str(to_node.as_str()) {
+            Ok(node_id) => Ok(node_id.inner),
+            Err(_) => Err(MutinyJsError::PubkeyInvalid),
+        }?;
+
+        let mut entropy = [0u8; 32];
+        getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
+        let preimage = PaymentPreimage(entropy);
+
+        let amt_msats = amt_sats * 1000;
+        let _ = node
+            .invoice_payer
+            .pay_pubkey(node_id, preimage, amt_msats, 40)
+            .unwrap();
+
+        Ok(())
     }
 
     #[wasm_bindgen]
@@ -437,13 +527,27 @@ impl NodeManager {
     #[wasm_bindgen]
     pub async fn open_channel(
         &self,
-        _pubkey: String,
-        _host: Option<String>,
-        _port: Option<u16>,
-        _amount: u64,
-        _fee_rate: Option<u16>,
+        from_node: String,
+        to_pubkey: String,
+        amount: u64,
     ) -> Result<MutinyChannel, MutinyJsError> {
-        todo!()
+        let nodes = self.nodes.lock().await;
+        let node = nodes.get(from_node.as_str()).unwrap();
+
+        let node_id = match PublicKey::from_str(to_pubkey.as_str()) {
+            Ok(node_id) => Ok(node_id.inner),
+            Err(_) => Err(MutinyJsError::PubkeyInvalid),
+        }?;
+
+        let chan_id = node.open_channel(node_id, amount).await?;
+
+        let all_channels = node.channel_manager.list_channels();
+        let found_channel = all_channels.iter().find(|chan| chan.channel_id == chan_id);
+
+        match found_channel {
+            Some(channel) => Ok(channel.into()),
+            None => Err(MutinyJsError::ChannelCreationFailed), // what should we do here?
+        }
     }
 
     #[wasm_bindgen]
@@ -452,8 +556,17 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub async fn list_channels(&self) -> Result<MutinyChannel, MutinyJsError> {
-        todo!()
+    pub async fn list_channels(&self) -> Result<JsValue, MutinyJsError> {
+        let nodes = self.nodes.lock().await;
+        let channels: Vec<ChannelDetails> = nodes
+            .iter()
+            .flat_map(|(_, n)| n.channel_manager.list_channels())
+            .collect();
+
+        let mutiny_channels: Vec<MutinyChannel> =
+            channels.iter().map(MutinyChannel::from).collect();
+
+        Ok(serde_wasm_bindgen::to_value(&mutiny_channels)?)
     }
 
     #[wasm_bindgen]
@@ -548,22 +661,26 @@ mod tests {
     wasm_bindgen_test_configure!(run_in_browser);
 
     #[test]
-    fn create_node_manager() {
+    async fn create_node_manager() {
         log!("creating node manager!");
 
         assert!(!NodeManager::has_node_manager());
-        NodeManager::new("password".to_string(), None).expect("node manager should initialize");
+        NodeManager::new("password".to_string(), None)
+            .await
+            .expect("node manager should initialize");
         assert!(NodeManager::has_node_manager());
 
         cleanup_test();
     }
 
     #[test]
-    fn correctly_show_seed() {
+    async fn correctly_show_seed() {
         log!("showing seed");
 
         let seed = generate_seed(12).expect("Failed to gen seed");
-        let nm = NodeManager::new("password".to_string(), Some(seed.to_string())).unwrap();
+        let nm = NodeManager::new("password".to_string(), Some(seed.to_string()))
+            .await
+            .unwrap();
 
         assert!(NodeManager::has_node_manager());
         assert_eq!(seed.to_string(), nm.show_seed());
@@ -577,6 +694,7 @@ mod tests {
 
         let seed = generate_seed(12).expect("Failed to gen seed");
         let nm = NodeManager::new("password".to_string(), Some(seed.to_string()))
+            .await
             .expect("node manager should initialize");
 
         {

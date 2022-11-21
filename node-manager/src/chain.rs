@@ -55,7 +55,7 @@ impl MutinyChain {
 
         let client = &*self.wallet.blockchain;
 
-        let mut tip_hash = client.get_tip_hash().await?;
+        let tip_hash = client.get_tip_hash().await?;
 
         loop {
             let registrations_are_pending = self.process_queues();
@@ -88,8 +88,8 @@ impl MutinyChain {
                 match self.get_confirmed_transactions().await {
                     Ok((confirmed_txs, unconfirmed_registered_txs, unspent_registered_outputs)) => {
                         // Double-check tip hash. If something changed, restart last-minute.
-                        tip_hash = client.get_tip_hash().await?;
-                        if Some(tip_hash) != *locked_last_sync_hash {
+                        let new_tip_hash = client.get_tip_hash().await?;
+                        if tip_hash != new_tip_hash {
                             continue;
                         }
 
