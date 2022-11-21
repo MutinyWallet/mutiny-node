@@ -1,3 +1,4 @@
+use bdk::{BlockTime, TransactionDetails};
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::{str::FromStr, sync::Arc};
@@ -11,7 +12,7 @@ use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
 use bitcoin::consensus::deserialize;
 use bitcoin::hashes::hex::{FromHex, ToHex};
-use bitcoin::{Network, PublicKey, Transaction};
+use bitcoin::{Address, Network, OutPoint, PublicKey, Transaction};
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::BroadcasterInterface;
 use lightning::chain::keysinterface::{KeysInterface, Recipient};
@@ -321,9 +322,35 @@ impl NodeManager {
     #[wasm_bindgen]
     pub async fn check_address(
         &self,
-        _address: String,
-    ) -> Result<JsValue /* TransactionDetails */, MutinyJsError> {
-        todo!()
+        address: String,
+    ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
+        let script = Address::from_str(address.as_str())?.payload.script_pubkey();
+        let txs = self.wallet.blockchain.scripthash_txs(&script, None).await?;
+
+        let details_opt = txs.first().map(|tx| {
+            let received: u64 = tx
+                .vout
+                .iter()
+                .filter(|v| v.scriptpubkey == script)
+                .map(|v| v.value)
+                .sum();
+
+            let confirmation_time = tx.confirmation_time().map(|c| BlockTime {
+                height: c.height,
+                timestamp: c.timestamp,
+            });
+
+            TransactionDetails {
+                transaction: Some(tx.to_tx()),
+                txid: tx.txid,
+                received,
+                sent: 0,
+                fee: None,
+                confirmation_time,
+            }
+        });
+
+        Ok(serde_wasm_bindgen::to_value(&details_opt)?)
     }
 
     #[wasm_bindgen]
@@ -551,8 +578,28 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub async fn close_channel(&self, _outpoint: JsValue) -> Result<JsValue, MutinyJsError> {
-        todo!()
+    pub async fn close_channel(&self, outpoint: String) -> Result<(), MutinyJsError> {
+        let outpoint: OutPoint =
+            OutPoint::from_str(outpoint.as_str()).expect("Failed to parse outpoint");
+        let nodes = self.nodes.lock().await;
+        let channel_opt: Option<(Arc<Node>, ChannelDetails)> = nodes.iter().find_map(|(_, n)| {
+            n.channel_manager
+                .list_channels()
+                .iter()
+                .find(|c| c.funding_txo.map(|f| f.into_bitcoin_outpoint()) == Some(outpoint))
+                .map(|c| (n.clone(), c.clone()))
+        });
+
+        match channel_opt {
+            Some((node, channel)) => {
+                node.channel_manager
+                    .close_channel(&channel.channel_id, &channel.counterparty.node_id)
+                    .map_err(|_| MutinyJsError::ChannelClosingFailed)?;
+
+                Ok(())
+            }
+            None => Err(MutinyJsError::ChannelClosingFailed),
+        }
     }
 
     #[wasm_bindgen]
@@ -571,7 +618,14 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub async fn list_peers(&self) -> Result<JsValue /* Vec<String> */, MutinyJsError> {
-        todo!()
+        let nodes = self.nodes.lock().await;
+        let peers: Vec<String> = nodes
+            .iter()
+            .flat_map(|(_, n)| n.peer_manager.get_peer_node_ids())
+            .map(|p| p.to_hex())
+            .collect();
+
+        Ok(serde_wasm_bindgen::to_value(&peers)?)
     }
 
     #[wasm_bindgen]

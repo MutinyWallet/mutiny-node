@@ -226,6 +226,19 @@ impl From<serde_wasm_bindgen::Error> for MutinyJsError {
     }
 }
 
+impl From<bitcoin::util::address::Error> for MutinyJsError {
+    fn from(_: bitcoin::util::address::Error) -> Self {
+        Self::JsonReadWriteError
+    }
+}
+
+impl From<esplora_client::Error> for MutinyJsError {
+    fn from(_e: esplora_client::Error) -> Self {
+        // This is most likely a chain access failure
+        Self::ChainAccessFailed
+    }
+}
+
 impl From<MutinyJsError> for JsValue {
     fn from(e: MutinyJsError) -> Self {
         JsValue::from(e.to_string())
