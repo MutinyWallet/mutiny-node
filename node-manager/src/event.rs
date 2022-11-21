@@ -2,13 +2,13 @@ use crate::ldkstorage::MutinyNodePersister;
 use crate::logging::MutinyLogger;
 use crate::utils::{hex_str, sleep};
 use crate::wallet::MutinyWallet;
-use crate::{chain::MutinyChain, ldkstorage::ChannelManager};
+use crate::{chain::MutinyChain, ldkstorage::PhantomChannelManager};
 use bdk::wallet::AddressIndex;
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::Network;
 use bitcoin_bech32::WitnessProgram;
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
-use lightning::chain::keysinterface::KeysManager;
+use lightning::chain::keysinterface::PhantomKeysManager;
 use lightning::util::events::{Event, EventHandler as LdkEventHandler, PaymentPurpose};
 use lightning::util::logger::{Logger, Record};
 use serde::{Deserialize, Serialize};
@@ -17,14 +17,14 @@ use wasm_bindgen_futures::spawn_local;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct PaymentInfo {
-    preimage: Option<[u8; 32]>,
-    secret: Option<[u8; 32]>,
-    status: HTLCStatus,
-    amt_msat: MillisatAmount,
+    pub preimage: Option<[u8; 32]>,
+    pub secret: Option<[u8; 32]>,
+    pub status: HTLCStatus,
+    pub amt_msat: MillisatAmount,
 }
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct MillisatAmount(Option<u64>);
+pub(crate) struct MillisatAmount(pub Option<u64>);
 
 #[derive(Serialize, Deserialize)]
 pub(crate) enum HTLCStatus {
@@ -34,10 +34,10 @@ pub(crate) enum HTLCStatus {
 }
 
 pub struct EventHandler {
-    channel_manager: Arc<ChannelManager>,
+    channel_manager: Arc<PhantomChannelManager>,
     chain: Arc<MutinyChain>,
     wallet: Arc<MutinyWallet>,
-    keys_manager: Arc<KeysManager>,
+    keys_manager: Arc<PhantomKeysManager>,
     persister: Arc<MutinyNodePersister>,
     network: Network,
     logger: Arc<MutinyLogger>,
@@ -45,10 +45,10 @@ pub struct EventHandler {
 
 impl EventHandler {
     pub(crate) fn new(
-        channel_manager: Arc<ChannelManager>,
+        channel_manager: Arc<PhantomChannelManager>,
         chain: Arc<MutinyChain>,
         wallet: Arc<MutinyWallet>,
-        keys_manager: Arc<KeysManager>,
+        keys_manager: Arc<PhantomKeysManager>,
         persister: Arc<MutinyNodePersister>,
         network: Network,
         logger: Arc<MutinyLogger>,

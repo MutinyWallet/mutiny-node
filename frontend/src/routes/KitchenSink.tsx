@@ -13,6 +13,8 @@ function App() {
 
     const [address, setAddress] = useState("")
 
+    const [invoice, setInvoice] = useState("")
+
     const [nodeManager, setNodeManager] = useState<NodeManager>();
 
     const [newPubkey, setNewPubkey] = useState("")
@@ -74,6 +76,17 @@ function App() {
                 let balance = await nodeManager.get_balance();
                 let str = `confirmed: ${balance.confirmed?.toLocaleString()} sats, unconfirmed: ${balance.unconfirmed?.toLocaleString()} sats, ln: ${balance.lightning.toLocaleString()} sats`
                 setBalance(str)
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    }
+
+    async function get_invoice() {
+        if (nodeManager) {
+            try {
+                let invoice = await nodeManager.create_invoice(BigInt(1000), "hello");
+                setInvoice(invoice.bolt11)
             } catch (e) {
                 console.error(e);
             }
@@ -192,6 +205,13 @@ function App() {
                             <button onClick={async () => new_node()}>New Node!</button>
                         </p>
                         {newPubkey &&
+			    <>
+                            <pre>
+                                <code>{invoice}</code>
+                            </pre>
+
+                            <button onClick={async () => get_invoice()}>Get Invoice</button>
+
                             <form onSubmit={connect_peer} className="flex flex-col items-start gap-4 my-4">
                                 <h2>Connect Peer:</h2>
                                 <p>You may want to use "wss://websocket-tcp-proxy-fywbx.ondigitalocean.app" as the example websocket proxy</p>
@@ -199,6 +219,7 @@ function App() {
                                 <input type="text" placeholder='Peer Connection String' onChange={handleConnectPeerChange}></input>
                                 <input type="submit" value="Connect" />
                             </form>
+			    </>
                         }
                     </>
                 }

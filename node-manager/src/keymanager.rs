@@ -2,7 +2,7 @@ use crate::error::MutinyError;
 use bip32::XPrv;
 use bip39::Mnemonic;
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
-use lightning::chain::keysinterface::{KeysInterface, KeysManager, Recipient};
+use lightning::chain::keysinterface::{KeysInterface, PhantomKeysManager, Recipient};
 
 pub(crate) fn generate_seed(num_words: u8) -> Result<Mnemonic, MutinyError> {
     match num_words {
@@ -29,8 +29,14 @@ fn generate_12_word_seed() -> Result<Mnemonic, MutinyError> {
 }
 
 // A node private key will be derived from `m/0'/X'`, where it's node pubkey will
-// be derived from the LDK default being `m/0'/X'/0'`.
-pub(crate) fn create_keys_manager(mnemonic: Mnemonic, child_index: u32) -> KeysManager {
+// be derived from the LDK default being `m/0'/X'/0'`. The PhantomKeysManager shared
+// key secret will be derived from `m/0'`.
+pub(crate) fn create_keys_manager(mnemonic: Mnemonic, child_index: u32) -> PhantomKeysManager {
+    let shared_key = XPrv::new(mnemonic.to_seed(""))
+        .unwrap()
+        .derive_child(bip32::ChildNumber::new(0, true).unwrap())
+        .unwrap();
+
     let xpriv = XPrv::new(mnemonic.to_seed(""))
         .unwrap()
         .derive_child(bip32::ChildNumber::new(0, true).unwrap())
@@ -38,14 +44,15 @@ pub(crate) fn create_keys_manager(mnemonic: Mnemonic, child_index: u32) -> KeysM
         .derive_child(bip32::ChildNumber::new(child_index, true).unwrap())
         .unwrap();
     let current_time = instant::now();
-    KeysManager::new(
+    PhantomKeysManager::new(
         &xpriv.to_bytes(),
         (current_time / 1000.0).round() as u64,
         (current_time * 1000.0).round() as u32,
+        &shared_key.to_bytes(),
     )
 }
 
-pub(crate) fn pubkey_from_keys_manager(keys_manager: &KeysManager) -> PublicKey {
+pub(crate) fn pubkey_from_keys_manager(keys_manager: &PhantomKeysManager) -> PublicKey {
     let mut secp_ctx = Secp256k1::new();
     secp_ctx.seeded_randomize(&keys_manager.get_secure_random_bytes());
 
