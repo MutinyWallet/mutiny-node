@@ -392,11 +392,13 @@ impl NodeManager {
             .collect();
 
         // any of the nodes can process this, but just choose the first
-        let invoice = nodes
-            .values()
-            .nth(0)
-            .expect("should exist")
-            .create_phantom_invoice(amount, description, route_hints)?;
+        let first_node = if let Some(node) = nodes.values().next() {
+            node
+        } else {
+            return Err(MutinyJsError::WalletOperationFailed);
+        };
+
+        let invoice = first_node.create_phantom_invoice(amount, description, route_hints)?;
 
         Ok(invoice.into())
     }

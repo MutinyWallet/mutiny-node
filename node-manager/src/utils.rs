@@ -1,7 +1,5 @@
 use bitcoin::Network;
-use js_sys;
 use lightning_invoice::Currency;
-use web_sys;
 
 pub fn set_panic_hook() {
     // When the `console_error_panic_hook` feature is enabled, we can call the

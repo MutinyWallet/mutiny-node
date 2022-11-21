@@ -1,3 +1,4 @@
+#![allow(clippy::all)]
 use lightning_invoice::{CreationError, Currency, Invoice, InvoiceBuilder, SignOrCreationError};
 
 use bitcoin::bech32::ToBase32;

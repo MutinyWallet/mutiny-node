@@ -205,7 +205,7 @@ impl Node {
             background_processor_channel_manager.clone(),
             gs,
             background_processor_peer_manager.clone(),
-            background_processor_logger.clone(),
+            background_processor_logger,
             Some(scorer),
         );
 
