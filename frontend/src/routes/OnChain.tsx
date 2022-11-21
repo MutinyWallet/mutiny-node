@@ -52,7 +52,6 @@ function OnChain() {
         enabled: !!nodeManager,
     })
 
-    console.log(transactions);
     return (
         <>
             <header className='px-8 pt-8 flex justify-between items-center'>
@@ -60,13 +59,13 @@ function OnChain() {
                 <Close />
             </header>
             <ScreenMain padSides={false} wontScroll={!transactions || transactions.length < 4}>
-                <ul className="overflow-y-scroll px-8 pb-[12rem]">
+                {transactions && <ul className="overflow-y-scroll px-8 pb-[12rem]">
                     {transactions?.sort((a, b) => b.confirmation_time.timestamp - a.confirmation_time.timestamp).map(tx => (
                         <li>
                             <SingleTransaction tx={tx} />
                         </li>
                     ))}
-                </ul>
+                </ul>}
             </ScreenMain>
         </>
     )

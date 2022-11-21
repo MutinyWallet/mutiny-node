@@ -73,7 +73,7 @@ function App() {
               </div>
             </div>
           </>
-          : <h1>Loading...</h1>}
+          : <><div /><p className="text-2xl font-light">Loading...</p><div /></>}
         <MutinyToaster />
       </ScreenMain>
     </>
