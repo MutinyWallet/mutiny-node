@@ -1,6 +1,5 @@
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import { useQuery } from "@tanstack/react-query";
-import prettyPrintTime from "@util/prettyPrintTime";
 import takeN from "@util/takeN";
 import { useContext } from "react";
 import Close from "../components/Close"

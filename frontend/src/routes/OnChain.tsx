@@ -21,7 +21,7 @@ type OnChainTx = {
 const SingleTransaction = ({ tx }: { tx: OnChainTx }) => {
     return (
         <li className="text-off-white border-b border-red py-2 mb-2">
-            <a href={`https://mempool.space/testnet/tx/${tx.txid}`} target="_blank">
+            <a href={`https://mempool.space/testnet/tx/${tx.txid}`} target="_blank" rel="noreferrer">
                 <h3 className="text-lg font-mono">
                     {takeN(tx.txid, 25)}
                 </h3>

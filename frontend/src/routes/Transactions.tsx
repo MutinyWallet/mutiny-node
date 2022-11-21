@@ -1,6 +1,3 @@
-import { NodeManagerContext } from "@components/GlobalStateProvider";
-import { useQuery } from "@tanstack/react-query";
-import { useContext } from "react";
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
 import ScreenMain from "../components/ScreenMain"
