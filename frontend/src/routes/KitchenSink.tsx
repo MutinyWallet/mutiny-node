@@ -1,10 +1,8 @@
-import { useEffect, useState } from 'react';
+import {useContext, useState} from 'react';
 import logo from '../images/mutiny-logo.svg';
-import init, { NodeManager, InitOutput } from "node-manager";
+import {NodeManagerContext} from "@components/GlobalStateProvider";
 
 function App() {
-    const [wasm, setWasm] = useState<InitOutput>();
-
     const [mnemonic, setMnemonic] = useState("...")
 
     const [balance, setBalance] = useState("0")
@@ -15,16 +13,22 @@ function App() {
 
     const [invoice, setInvoice] = useState("")
 
-    const [nodeManager, setNodeManager] = useState<NodeManager>();
+    const nodeManager = useContext(NodeManagerContext);
 
-    const [newPubkey, setNewPubkey] = useState("")
+    const [currentNode, setCurrentNode] = useState("")
+
+    const [peer, setPeer] = useState("")
+
+    const [invoiceToPay, setInvoiceToPay] = useState("")
+
+    const [keysend, setKeysend] = useState("")
 
     // Send state
     const [txid, setTxid] = useState("...")
     const [amount, setAmount] = useState("")
     const [destinationAddress, setDestinationAddress] = useState("")
 
-    const [proxyAddress, setProxyAddress] = useState("ws://127.0.0.1:3001")
+    const [proxyAddress, setProxyAddress] = useState("wss://websocket-tcp-proxy-fywbx.ondigitalocean.app")
     const [connectPeer, setConnectPeer] = useState("")
 
     function handleAmountChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -33,6 +37,18 @@ function App() {
 
     function handleDestinationAddressChange(e: React.ChangeEvent<HTMLInputElement>) {
         setDestinationAddress(e.target.value);
+    }
+
+    function handlePeerChange(e: React.ChangeEvent<HTMLInputElement>) {
+        setPeer(e.target.value);
+    }
+
+    function handleInvoiceToPayChange(e: React.ChangeEvent<HTMLInputElement>) {
+        setInvoiceToPay(e.target.value);
+    }
+
+    function handleKeysendChange(e: React.ChangeEvent<HTMLInputElement>) {
+        setKeysend(e.target.value);
     }
 
     function handleConnectPeerChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -47,26 +63,8 @@ function App() {
         setTx(e.target.value);
     }
 
-    useEffect(() => {
-        // TODO: learn why we init this but don't actually call stuff on it
-        init().then((wasmModule) => {
-            setWasm(wasmModule)
-            setup()
-        })
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [])
-
-    async function setup() {
-        if (NodeManager.has_node_manager() && nodeManager) {
-            createNodeManager()
-            try {
-                let balance = await nodeManager.get_balance();
-                let str = `confirmed: ${balance.confirmed?.toLocaleString()} sats, unconfirmed: ${balance.unconfirmed?.toLocaleString()} sats, ln: ${balance.lightning.toLocaleString()} sats`
-                setBalance(str)
-            } catch (e) {
-                console.error(e);
-            }
-        }
+    function handleCurrentNodeChange(e: React.ChangeEvent<HTMLInputElement>) {
+        setCurrentNode(e.target.value);
     }
 
     async function sync() {
@@ -119,10 +117,37 @@ function App() {
         }
     }
 
+    async function openChannel(e: React.SyntheticEvent) {
+        e.preventDefault()
+        try {
+            await nodeManager?.open_channel(currentNode, peer, BigInt(25000));
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    async function payInvoice(e: React.SyntheticEvent) {
+        e.preventDefault()
+        try {
+            await nodeManager?.pay_invoice(currentNode, invoiceToPay);
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    async function sendKeysend(e: React.SyntheticEvent) {
+        e.preventDefault()
+        try {
+            await nodeManager?.keysend(currentNode, keysend, BigInt(50));
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
     async function connect_peer(e: React.SyntheticEvent) {
         e.preventDefault()
         try {
-            await nodeManager?.connect_to_peer(newPubkey, proxyAddress, connectPeer)
+            await nodeManager?.connect_to_peer(currentNode, proxyAddress, connectPeer)
         } catch (e) {
             console.error(e);
         }
@@ -134,21 +159,11 @@ function App() {
             try {
                 let new_node_identity = await nodeManager.new_node()
                 if (new_node_identity) {
-                    setNewPubkey(new_node_identity.pubkey)
+                    setCurrentNode(new_node_identity.pubkey)
                 }
             } catch (e) {
                 console.error(e)
             }
-        }
-    }
-
-    async function createNodeManager() {
-        // todo enter password
-        try {
-            let nodeManager = await new NodeManager("", undefined)
-            setNodeManager(nodeManager)
-        } catch (e) {
-            console.error(e)
         }
     }
 
@@ -162,11 +177,6 @@ function App() {
                 <pre>
                     <code>{mnemonic}</code>
                 </pre>
-                {!nodeManager &&
-                    <p>
-                        <button onClick={() => wasm && createNodeManager()}>Create the node manager!</button>
-                    </p>
-                }
                 {nodeManager &&
                     <>
                         <p>
@@ -198,13 +208,11 @@ function App() {
                             <input type="text" placeholder='tx' onChange={handleTxChange}></input>
                             <input type="submit" value="Send" />
                         </form>
-                        <pre>
-                            <code>{newPubkey}</code>
-                        </pre>
+
+                        <input type="text" placeholder='...' onChange={handleCurrentNodeChange} value={currentNode}></input>
                         <p>
                             <button onClick={async () => new_node()}>New Node!</button>
                         </p>
-                        {newPubkey &&
 			    <>
                             <pre>
                                 <code>{invoice}</code>
@@ -215,12 +223,26 @@ function App() {
                             <form onSubmit={connect_peer} className="flex flex-col items-start gap-4 my-4">
                                 <h2>Connect Peer:</h2>
                                 <p>You may want to use "wss://websocket-tcp-proxy-fywbx.ondigitalocean.app" as the example websocket proxy</p>
-                                <input type="text" placeholder='Websocket Proxy Address' onChange={handleProxyAddressChange}></input>
+                                <input type="text" placeholder='Websocket Proxy Address' onChange={handleProxyAddressChange} value={proxyAddress}></input>
                                 <input type="text" placeholder='Peer Connection String' onChange={handleConnectPeerChange}></input>
                                 <input type="submit" value="Connect" />
                             </form>
 			    </>
-                        }
+                        <form onSubmit={openChannel} className="flex flex-col items-start gap-4 my-4">
+                            <h2>Open Channel:</h2>
+                            <input type="text" placeholder='02..' onChange={handlePeerChange}></input>
+                            <input type="submit" value="Open Channel" />
+                        </form>
+                        <form onSubmit={payInvoice} className="flex flex-col items-start gap-4 my-4">
+                            <h2>Pay Invoice:</h2>
+                            <input type="text" placeholder='lnbc...' onChange={handleInvoiceToPayChange}></input>
+                            <input type="submit" value="Pay Invoice" />
+                        </form>
+                        <form onSubmit={sendKeysend} className="flex flex-col items-start gap-4 my-4">
+                            <h2>Keysend:</h2>
+                            <input type="text" placeholder='02...' onChange={handleKeysendChange}></input>
+                            <input type="submit" value="Send" />
+                        </form>
                     </>
                 }
             </main>

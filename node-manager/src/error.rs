@@ -186,6 +186,9 @@ pub enum MutinyJsError {
     /// An error when reading/writing json to the front end.
     #[error("Failed to read or write json from the front end")]
     JsonReadWriteError,
+    /// Node pubkey given is invalid
+    #[error("The given node pubkey is invalid.")]
+    PubkeyInvalid,
     /// Unknown error.
     #[error("Unknown Error")]
     UnknownError,

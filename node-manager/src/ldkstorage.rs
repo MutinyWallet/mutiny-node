@@ -26,6 +26,7 @@ use lightning::util::config::UserConfig;
 use lightning::util::persist::KVStorePersister;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use log::error;
+use serde::Deserialize;
 use std::io;
 use std::io::Cursor;
 use std::ops::Deref;
@@ -137,7 +138,7 @@ impl MutinyNodePersister {
 
         // TODO probably could use a fold here instead
         for (_, value) in channel_monitor_list {
-            let data = value.to_string();
+            let data: Vec<u8> = Deserialize::deserialize(value)?;
             let mut buffer = Cursor::new(data);
             match <(BlockHash, ChannelMonitor<Signer>)>::read(&mut buffer, &*keys_manager) {
                 Ok((blockhash, channel_monitor)) => {
