@@ -53,6 +53,8 @@ function Settings() {
         const file: File = (target.files as FileList)[0];
         fileReader.readAsText(file, "UTF-8");
         fileReader.onload = e => {
+            handleClearState();
+
             const text = e.target?.result?.toString();
             const newStorage = JSON.parse(text!);
 
@@ -63,6 +65,11 @@ function Settings() {
             })
         };
     };
+
+    function handleClearState() {
+        console.log("Clearing local storage... So long, state!")
+        localStorage.clear();
+    }
 
     return (
         <>
@@ -78,6 +85,12 @@ function Settings() {
                             <code>{isLoading ? "..." : words}</code>
                         </pre>
                     </div>
+
+                    <div className="bg-red p-4 rounded w-full">
+                        <p className="text-2xl font-light text-white uppercase">Danger Zone</p>
+                    </div>
+
+                    <button onClick={handleClearState}>Clear State</button>
 
                     <button onClick={handleSave}>Save State As File</button>
 
