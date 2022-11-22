@@ -35,7 +35,7 @@ function Utxos() {
     const { data: utxos } = useQuery({
         queryKey: ['utxos'],
         queryFn: () => {
-            console.log("getting utxos...")
+            console.log("Getting utxos...")
             const txs = nodeManager?.list_utxos() as Promise<Utxo[]>;
             return txs
         },
@@ -51,9 +51,7 @@ function Utxos() {
             <ScreenMain padSides={false} wontScroll={!utxos || utxos.length < 4}>
                 <ul className="overflow-y-scroll px-8 pb-[12rem]">
                     {utxos?.map(utxo => (
-                        <li>
-                            <SingleUtxo utxo={utxo} />
-                        </li>
+                        <SingleUtxo utxo={utxo} key={utxo.outpoint} />
                     ))}
                 </ul>
             </ScreenMain>

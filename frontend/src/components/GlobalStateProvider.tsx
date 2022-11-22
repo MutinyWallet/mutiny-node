@@ -1,5 +1,5 @@
 import init, { InitOutput, NodeManager } from 'node-manager';
-import React, { createContext, useEffect, useState } from 'react';
+import React, { createContext, useEffect, useRef, useState } from 'react';
 
 interface Props {
     children: React.ReactElement;
@@ -9,7 +9,7 @@ export const NodeManagerContext = createContext<NodeManager | undefined>(undefin
 
 export const GlobalStateProvider = ({ children }: Props) => {
     // eslint-disable-next-line
-    const [_wasm, setWasm] = useState<InitOutput>();
+    const [wasm, setWasm] = useState<InitOutput>();
     const [nodeManager, setNodeManager] = useState<NodeManager>();
     const [wasmSupported, setWasmSupported] = useState(true)
 
@@ -34,20 +34,30 @@ export const GlobalStateProvider = ({ children }: Props) => {
         checkWasm();
     }, [])
 
+    const nodeManagerInitialized = useRef(false);
+
     useEffect(() => {
         // TODO: learn why we init this but don't actually call stuff on it
-        init().then((wasmModule) => {
-            setWasm(wasmModule)
-            setup().then(() => {
-                console.log("Setup complete")
-            }).catch((e) => {
-                console.error(e)
+        if (nodeManagerInitialized.current) {
+            console.debug("Already initialized Node Manager")
+        } else {
+            nodeManagerInitialized.current = true;
+            init().then((wasmModule) => {
+                setWasm(wasmModule)
+                setup().then(() => {
+                    console.log("Setup complete")
+                    console.timeEnd("Setup")
+                }).catch((e) => {
+                    console.error(e)
+                })
             })
-        })
+        }
+
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
     async function setup() {
+        console.time("Setup");
         console.log("Starting setup...")
         try {
             console.log("Initializing Node Manager")
@@ -55,6 +65,7 @@ export const GlobalStateProvider = ({ children }: Props) => {
             // TODO this is some extra delay because the node manager isn't really "ready" the moment it's set
             await timeout(100)
             setNodeManager(nodeManager)
+            nodeManagerInitialized.current = true;
         } catch (e) {
             console.error(e)
         }

@@ -22,7 +22,7 @@ function App() {
   const { error, data: balance } = useQuery({
     queryKey: ['balance'],
     queryFn: () => {
-      console.log("checking balance...")
+      console.log("Checking balance...")
       return nodeManager?.get_balance()
     },
     enabled: !!nodeManager,
@@ -43,7 +43,11 @@ function App() {
   }
 
   async function handleSync() {
+    console.time("BDK Sync Time")
+    console.groupCollapsed("BDK Sync")
     await nodeManager?.sync()
+    console.groupEnd();
+    console.timeEnd("BDK Sync Time")
     queryClient.invalidateQueries({ queryKey: ['balance'] })
   }
 

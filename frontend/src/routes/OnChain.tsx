@@ -45,7 +45,7 @@ function OnChain() {
     const { data: transactions } = useQuery({
         queryKey: ['transactions'],
         queryFn: () => {
-            console.log("getting transactions...")
+            console.log("Getting transactions...")
             const txs = nodeManager?.list_onchain() as Promise<OnChainTx[]>;
             return txs
         },
@@ -61,9 +61,7 @@ function OnChain() {
             <ScreenMain padSides={false} wontScroll={!transactions || transactions.length < 4}>
                 {transactions && <ul className="overflow-y-scroll px-8 pb-[12rem]">
                     {transactions?.sort((a, b) => b.confirmation_time.timestamp - a.confirmation_time.timestamp).map(tx => (
-                        <li>
-                            <SingleTransaction tx={tx} />
-                        </li>
+                        <SingleTransaction key={tx.txid} tx={tx} />
                     ))}
                 </ul>}
             </ScreenMain>
