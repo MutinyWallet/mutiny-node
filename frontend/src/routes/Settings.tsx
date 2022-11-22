@@ -21,7 +21,7 @@ function Settings() {
         let serializable: Record<string, any> = {};
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i)
-            serializable[key!] = JSON.parse(localStorage.getItem(key!)!);
+            serializable[key!] = localStorage.getItem(key!);
         }
         console.log(serializable)
 
@@ -58,10 +58,9 @@ function Settings() {
 
             console.log(newStorage)
 
-            for (let i = 0; i < newStorage.length; i++) {
-                const key = newStorage.key(i)
-                localStorage.setItem(key, newStorage[key]);
-            }
+            Object.entries(newStorage).forEach(([key, value]) => {
+                localStorage.setItem(key, value as string);
+            })
         };
     };
 
