@@ -7,7 +7,6 @@ use bip39::Mnemonic;
 use gloo_storage::errors::StorageError;
 use gloo_storage::{LocalStorage, Storage};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 
 use crate::encrypt::*;
 use crate::error::MutinyStorageError;
@@ -56,18 +55,20 @@ impl MutinyBrowserStorage {
         }
     }
 
-    // mostly a copy of self.get_all()
-    pub(crate) fn scan(&self, prefix: &str, suffix: Option<&str>) -> Map<String, Value> {
+    pub(crate) fn scan<T>(&self, prefix: &str, suffix: Option<&str>) -> Vec<(String, T)>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
         let local_storage = LocalStorage::raw();
         let length = LocalStorage::length();
-        let mut map = Map::with_capacity(length as usize);
+        let mut map = vec![];
         for index in 0..length {
             let key_opt: Option<String> = local_storage.key(index).unwrap();
 
             if let Some(key) = key_opt {
                 if key.starts_with(prefix) && (suffix.is_none() || key.ends_with(suffix.unwrap())) {
-                    let value: Value = self.get(&key).unwrap();
-                    map.insert(key, value);
+                    let value: T = self.get(&key).unwrap();
+                    map.push((key, value));
                 }
             }
         }

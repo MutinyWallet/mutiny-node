@@ -73,7 +73,7 @@ impl NodeIdentity {
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
 pub struct MutinyInvoice {
-    bolt11: String,
+    bolt11: Option<String>,
     description: Option<String>,
     payment_hash: String,
     preimage: Option<String>,
@@ -84,10 +84,36 @@ pub struct MutinyInvoice {
     pub is_send: bool,
 }
 
+impl MutinyInvoice {
+    pub fn new(
+        bolt11: Option<String>,
+        description: Option<String>,
+        payment_hash: String,
+        preimage: Option<String>,
+        amount_sats: Option<u64>,
+        expire: u64,
+        paid: bool,
+        fees_paid: Option<u64>,
+        is_send: bool,
+    ) -> Self {
+        MutinyInvoice {
+            bolt11,
+            description,
+            payment_hash,
+            preimage,
+            amount_sats,
+            expire,
+            paid,
+            fees_paid,
+            is_send,
+        }
+    }
+}
+
 #[wasm_bindgen]
 impl MutinyInvoice {
     #[wasm_bindgen(getter)]
-    pub fn bolt11(&self) -> String {
+    pub fn bolt11(&self) -> Option<String> {
         self.bolt11.clone()
     }
 
@@ -118,7 +144,7 @@ impl From<Invoice> for MutinyInvoice {
         let expiry = timestamp + value.expiry_time().as_secs();
 
         MutinyInvoice {
-            bolt11: value.to_string(),
+            bolt11: Some(value.to_string()),
             description,
             payment_hash: value.payment_hash().to_owned().to_hex(),
             preimage: None,
@@ -513,25 +539,14 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    // todo change return to MutinyInvoice
     pub async fn pay_invoice(
         &self,
         from_node: String,
         invoice_str: String,
-    ) -> Result<(), MutinyJsError> {
+    ) -> Result<MutinyInvoice, MutinyJsError> {
         let nodes = self.nodes.lock().await;
         let node = nodes.get(from_node.as_str()).unwrap();
-
-        let invoice =
-            Invoice::from_str(invoice_str.as_str()).map_err(|_| MutinyJsError::InvoiceInvalid)?;
-
-        // todo ensure payment hash is unique
-        let pay_result = node.invoice_payer.pay_invoice(&invoice);
-
-        match pay_result {
-            Ok(_) => Ok(info!("Payment successful!")),
-            Err(_) => Err(MutinyJsError::RoutingFailed),
-        }
+        node.pay_invoice(invoice_str).map_err(|e| e.into())
     }
 
     #[wasm_bindgen]
@@ -565,18 +580,37 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub async fn decode_invoice(&self, _invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
-        todo!()
+    pub async fn decode_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
+        Invoice::from_str(&invoice)
+            .map(|i| i.into())
+            .map_err(|e| e.into())
     }
 
     #[wasm_bindgen]
-    pub async fn get_invoice(&self, _invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
-        todo!()
+    pub async fn get_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
+        let nodes = self.nodes.lock().await;
+        let inv_opt: Option<MutinyInvoice> = nodes
+            .iter()
+            .find_map(|(_, n)| n.get_invoice(invoice.clone()).ok());
+        match inv_opt {
+            Some(i) => Ok(i),
+            None => Err(MutinyJsError::InvoiceInvalid),
+        }
     }
 
     #[wasm_bindgen]
-    pub async fn get_invoice_by_hash(&self, _hash: String) -> Result<MutinyInvoice, MutinyJsError> {
-        todo!()
+    pub async fn get_invoice_by_hash(&self, hash: String) -> Result<MutinyInvoice, MutinyJsError> {
+        let nodes = self.nodes.lock().await;
+        for (_, node) in nodes.iter() {
+            if let Ok(invs) = node.list_invoices() {
+                let inv_opt: Option<MutinyInvoice> =
+                    invs.into_iter().find(|i| i.payment_hash() == hash);
+                if let Some(i) = inv_opt {
+                    return Ok(i);
+                }
+            }
+        }
+        Err(MutinyJsError::InvoiceInvalid)
     }
 
     #[wasm_bindgen]
@@ -584,7 +618,14 @@ impl NodeManager {
         &self,
         _invoice: String,
     ) -> Result<JsValue /* Vec<MutinyInvoice> */, MutinyJsError> {
-        todo!()
+        let mut invoices: Vec<MutinyInvoice> = vec![];
+        let nodes = self.nodes.lock().await;
+        for (_, node) in nodes.iter() {
+            if let Ok(mut invs) = node.list_invoices() {
+                invoices.append(&mut invs)
+            }
+        }
+        Ok(serde_wasm_bindgen::to_value(&invoices)?)
     }
 
     #[wasm_bindgen]

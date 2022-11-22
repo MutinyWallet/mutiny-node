@@ -27,6 +27,7 @@ use lightning::util::persist::KVStorePersister;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use log::error;
 use serde::Deserialize;
+use serde_json::Value;
 use std::io;
 use std::io::Cursor;
 use std::ops::Deref;
@@ -134,7 +135,8 @@ impl MutinyNodePersister {
 
         // Get all the channel monitor buffers that exist for this node
         let suffix = self.node_id.as_str();
-        let channel_monitor_list = self.storage.scan(MONITORS_PREFIX_KEY, Some(suffix));
+        let channel_monitor_list: Vec<(String, Value)> =
+            self.storage.scan(MONITORS_PREFIX_KEY, Some(suffix));
 
         // TODO probably could use a fold here instead
         for (_, value) in channel_monitor_list {
@@ -224,7 +226,7 @@ impl MutinyNodePersister {
         inbound: bool,
     ) -> io::Result<()> {
         self.storage
-            .set(payment_key(inbound, payment_hash), &payment_info)
+            .set(payment_key(inbound, payment_hash), payment_info)
             .map_err(io::Error::other)
     }
 
@@ -237,6 +239,14 @@ impl MutinyNodePersister {
         let deserialized_value: Result<PaymentInfo, MutinyError> =
             self.storage.get(key).map_err(MutinyError::read_err);
         deserialized_value.ok()
+    }
+
+    pub(crate) fn list_payment_info(&self, inbound: bool) -> Vec<(String, PaymentInfo)> {
+        let prefix = match inbound {
+            true => PAYMENT_INBOUND_PREFIX_KEY,
+            false => PAYMENT_OUTBOUND_PREFIX_KEY,
+        };
+        self.storage.scan(prefix, None)
     }
 }
 
