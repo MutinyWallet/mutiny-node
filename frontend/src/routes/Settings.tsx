@@ -47,23 +47,30 @@ function Settings() {
         link.remove()
     };
 
-    function handleFileChoose(e: React.ChangeEvent) {
+    async function handleFileChoose(e: React.ChangeEvent) {
         const fileReader = new FileReader();
         const target = e.target as HTMLInputElement;
-        const file: File = (target.files as FileList)[0];
-        fileReader.readAsText(file, "UTF-8");
-        fileReader.onload = e => {
-            handleClearState();
 
-            const text = e.target?.result?.toString();
-            const newStorage = JSON.parse(text!);
+        try {
+            const file: File = (target.files as FileList)[0];
+            fileReader.readAsText(file, "UTF-8");
+            fileReader.onload = e => {
+                const text = e.target?.result?.toString();
 
-            console.log(newStorage)
+                // This should throw if there's a parse error, so we won't end up clearing
+                const newStorage = JSON.parse(text!);
 
-            Object.entries(newStorage).forEach(([key, value]) => {
-                localStorage.setItem(key, value as string);
-            })
-        };
+                console.log(newStorage)
+
+                handleClearState();
+
+                Object.entries(newStorage).forEach(([key, value]) => {
+                    localStorage.setItem(key, value as string);
+                })
+            }
+        } catch (e) {
+            console.error(e);
+        }
     };
 
     function handleClearState() {
