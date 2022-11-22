@@ -7,12 +7,12 @@ import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
 import ScreenMain from "../components/ScreenMain"
 
-type OnChainTx = {
+export type OnChainTx = {
     txid: string
     received: number
     sent: number
     fee: number
-    confirmation_time: {
+    confirmation_time?: {
         height: number
         timestamp: number
     }
@@ -32,11 +32,28 @@ const SingleTransaction = ({ tx }: { tx: OnChainTx }) => {
             {tx.received !== 0 &&
                 <h3 className="text-lg font-light"><span className="text-green">Received</span> {tx.received} sats</h3>
             }
-            <h3 className="text-lg font-light"><span className="opacity-70">Fee</span> {tx.fee} sats</h3>
-            <h4 className="text-sm font-light opacity-50">{prettyPrintTime(tx.confirmation_time.timestamp)}</h4>
-
+            {tx.fee &&
+                <h3 className="text-lg font-light"><span className="opacity-70">Fee</span> {tx.fee} sats</h3>
+            }
+            {tx.confirmation_time ?
+                <h4 className="text-sm font-light opacity-50">{prettyPrintTime(tx.confirmation_time.timestamp)}</h4> :
+                <h4 className="text-sm font-light opacity-50">Unconfirmed</h4>
+            }
         </li>
     )
+}
+
+// Sort by timestamp, but if there's no timestamp put it first
+function sortTx(a: OnChainTx, b: OnChainTx) {
+    if (b.confirmation_time && a.confirmation_time) {
+        return b.confirmation_time.timestamp - a.confirmation_time.timestamp
+    } else if (a.confirmation_time) {
+        return 1
+    } else if (b.confirmation_time) {
+        return -1
+    } else {
+        return 0
+    }
 }
 
 function OnChain() {
@@ -59,11 +76,11 @@ function OnChain() {
                 <Close />
             </header>
             <ScreenMain padSides={false} wontScroll={!transactions || transactions.length < 4}>
-                {transactions && <ul className="overflow-y-scroll px-8 pb-[12rem]">
-                    {transactions?.sort((a, b) => b.confirmation_time.timestamp - a.confirmation_time.timestamp).map(tx => (
+                <ul className="overflow-y-scroll h-full px-8 pb-[12rem]">
+                    {transactions?.sort(sortTx).map(tx => (
                         <SingleTransaction key={tx.txid} tx={tx} />
                     ))}
-                </ul>}
+                </ul>
             </ScreenMain>
         </>
     )

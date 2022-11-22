@@ -13,6 +13,7 @@ export const GlobalStateProvider = ({ children }: Props) => {
     const [nodeManager, setNodeManager] = useState<NodeManager>();
     const [wasmSupported, setWasmSupported] = useState(true)
 
+
     useEffect(() => {
         // https://stackoverflow.com/questions/47879864/how-can-i-check-if-a-browser-supports-webassembly
         const checkWasm = async () => {
@@ -70,8 +71,6 @@ export const GlobalStateProvider = ({ children }: Props) => {
             console.error(e)
         }
     }
-
-
 
     return (
         <>

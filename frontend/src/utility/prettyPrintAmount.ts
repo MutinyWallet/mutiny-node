@@ -1,3 +1,3 @@
 export default function prettyPrintAmount(n: number | bigint) {
-    return n.toLocaleString().replace(",", "_")
+    return n.toLocaleString().replaceAll(",", "_")
 }

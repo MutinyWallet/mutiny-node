@@ -1,5 +1,7 @@
+import Copy from "@components/Copy";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import takeN from "@util/takeN";
 import { useContext } from "react";
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
@@ -7,12 +9,22 @@ import ScreenMain from "../components/ScreenMain"
 
 function Settings() {
     const nodeManager = useContext(NodeManagerContext);
+    const queryClient = useQueryClient()
 
-    const { isLoading, data: words } = useQuery({
+    const { data: words } = useQuery({
         queryKey: ['words'],
         queryFn: () => {
             console.log("Getting mnemonic...")
             return nodeManager?.show_seed();
+        },
+        enabled: !!nodeManager,
+    })
+
+    const { data: nodes } = useQuery({
+        queryKey: ['nodes'],
+        queryFn: () => {
+            console.log("Getting nodes...")
+            return nodeManager?.list_nodes();
         },
         enabled: !!nodeManager,
     })
@@ -78,6 +90,15 @@ function Settings() {
         localStorage.clear();
     }
 
+    async function handleNewNode() {
+        try {
+            await nodeManager?.new_node()
+            queryClient.invalidateQueries({ queryKey: ['nodes'] })
+        } catch (e) {
+            console.error(e)
+        }
+    }
+
     return (
         <>
             <header className='px-8 pt-8 flex justify-between items-center'>
@@ -89,8 +110,21 @@ function Settings() {
                     <div>
                         <p className="text-2xl font-light">Write down these words or you'll die!</p>
                         <pre>
-                            <code>{isLoading ? "..." : words}</code>
+                            <code>{words}</code>
                         </pre>
+                    </div>
+                    <div>
+                        {nodes && nodes[0] ?
+                            <>
+                                <p className="text-2xl font-light">Node Pubkey</p>
+                                <div className="flex items-center gap-4">
+                                    <pre>
+                                        <code>{takeN(nodes[0], 25)}</code>
+                                    </pre>
+                                    <Copy copyValue={nodes[0]} />
+                                </div>
+                            </> : <button onClick={handleNewNode}>New Node</button>
+                        }
                     </div>
 
                     <div className="bg-red p-4 rounded w-full">

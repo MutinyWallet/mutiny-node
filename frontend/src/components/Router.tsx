@@ -16,6 +16,7 @@ import Settings from '@routes/Settings';
 import OnChain from '@routes/OnChain';
 import OpenChannel from '@routes/OpenChannel';
 import Utxos from "@routes/Utxos";
+import ConnectPeer from "@routes/ConnectPeer";
 
 const router = createBrowserRouter([
     {
@@ -41,6 +42,10 @@ const router = createBrowserRouter([
     {
         path: "/openchannel",
         element: <OpenChannel />,
+    },
+    {
+        path: "/connectpeer",
+        element: <ConnectPeer />,
     },
     {
         path: "/tests",
