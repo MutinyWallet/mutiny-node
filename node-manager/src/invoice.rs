@@ -91,8 +91,8 @@ where
         .duration_since_epoch(Duration::from_secs(now))
         .payment_hash(Hash::from_slice(&payment_hash.0).unwrap())
         .payment_secret(payment_secret)
-        .min_final_cltv_expiry(MIN_FINAL_CLTV_EXPIRY.into());
-    // .expiry_time(Duration::from_secs(invoice_expiry_delta_secs.into()));
+        .min_final_cltv_expiry(MIN_FINAL_CLTV_EXPIRY.into())
+        .expiry_time(Duration::from_secs(invoice_expiry_delta_secs.into()));
     if let Some(amt) = amt_msat {
         invoice = invoice.amount_milli_satoshis(amt);
     }
