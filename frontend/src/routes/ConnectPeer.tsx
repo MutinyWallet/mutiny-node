@@ -1,4 +1,5 @@
 import { NodeManagerContext } from "@components/GlobalStateProvider";
+import { getFirstNode } from "@util/dumb";
 import { useContext, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Close from "../components/Close";
@@ -19,15 +20,7 @@ export default function ConnectPeer() {
 	}
 	async function handleConnectPeer() {
 		try {
-			const myNodes = await nodeManager?.list_nodes();
-
-			console.log(myNodes);
-
-			const myNode = myNodes[0]
-
-			if (!myNode) {
-				throw new Error("We don't have a node set up yet!")
-			}
+			const myNode = await getFirstNode(nodeManager!);
 
 			await nodeManager?.connect_to_peer(myNode, WS_PROXY_ADDRESS, peerConnectString)
 
@@ -35,7 +28,6 @@ export default function ConnectPeer() {
 		} catch (e) {
 			console.error(e)
 		}
-
 	}
 	return (
 		<>

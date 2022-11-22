@@ -23,14 +23,15 @@ function SingleChannel({ channel }: { channel: MutinyChannel }) {
 
     let percent = Number(channel.balance / channel.size) * 100
     return (
-        <li className="text-off-white border-b border-blue py-2 mb-2 flex flex-col">
+        <li className="text-off-white border-b border-blue py-2 mb-2 flex flex-col w-full">
+            {!channel.confirmed && <h3 className="font-light text-2xl opacity-70">UNCONFIRMED</h3>}
             <h3 className="text-lg">
                 {channel.peer}
             </h3>
             <div className="flex items-center gap-4">
                 <div className="flex-1 flex flex-col gap-2">
                     <h3 className="text-lg">{prettyPrintAmount(channel.balance)} sats remaining</h3>
-                    <div className="shadow-bar-bg w-full h-6 bg-less-faint rounded">
+                    <div className="shadow-bar-bg h-6 bg-less-faint rounded">
                         <div className={"shadow-button bg-blue-button h-6 rounded"} style={{ width: `${percent}%` }} />
                     </div>
                 </div>
@@ -69,7 +70,7 @@ function Channels() {
             </header>
             <ScreenMain padSides={false} wontScroll={!channels || channels.length < 4}>
                 <button className="mx-8" onClick={handleNavOpen}>Add Channel</button>
-                <ul className="overflow-y-scroll px-8 pb-[12rem]">
+                <ul className="overflow-y-scroll px-8 pb-[12rem] w-full h-full">
                     {channels?.map((channel, i) => (
                         <SingleChannel channel={channel} key={i} />
                     ))}

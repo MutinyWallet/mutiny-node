@@ -76,11 +76,11 @@ function OnChain() {
                 <Close />
             </header>
             <ScreenMain padSides={false} wontScroll={!transactions || transactions.length < 4}>
-                {transactions && <ul className="overflow-y-scroll px-8 pb-[12rem]">
+                <ul className="overflow-y-scroll h-full px-8 pb-[12rem]">
                     {transactions?.sort(sortTx).map(tx => (
                         <SingleTransaction key={tx.txid} tx={tx} />
                     ))}
-                </ul>}
+                </ul>
             </ScreenMain>
         </>
     )
