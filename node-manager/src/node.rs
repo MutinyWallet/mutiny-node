@@ -92,7 +92,7 @@ pub struct Node {
     pub chain_monitor: Arc<ChainMonitor>,
     pub invoice_payer: Arc<InvoicePayer<EventHandler>>,
     network: Network,
-    persister: Arc<MutinyNodePersister>,
+    pub persister: Arc<MutinyNodePersister>,
     _background_processor: BackgroundProcessor,
     logger: Arc<MutinyLogger>,
 }
@@ -309,7 +309,7 @@ impl Node {
         route_hints: Vec<PhantomRouteHints>,
     ) -> Result<Invoice, MutinyError> {
         let invoice = match create_phantom_invoice::<InMemorySigner, Arc<PhantomKeysManager>>(
-            Some(amount_sat * 1),
+            Some(amount_sat * 1_000),
             None,
             description,
             1500,
@@ -345,6 +345,7 @@ impl Node {
             secret: Some(invoice.payment_secret().0),
             status: HTLCStatus::Pending,
             amt_msat: MillisatAmount(Some(amount_sat * 1000)),
+            fee_paid_msat: None,
         };
         match self
             .persister

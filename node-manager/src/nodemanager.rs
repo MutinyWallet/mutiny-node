@@ -78,7 +78,7 @@ pub struct MutinyInvoice {
     payment_hash: String,
     preimage: Option<String>,
     pub amount_sats: Option<u64>,
-    pub expire: Option<u64>,
+    pub expire: u64,
     pub paid: bool,
     pub fees_paid: Option<u64>,
     pub is_send: bool,
@@ -114,13 +114,16 @@ impl From<Invoice> for MutinyInvoice {
             InvoiceDescription::Hash(_) => None,
         };
 
+        let timestamp = value.duration_since_epoch().as_secs();
+        let expiry = timestamp + value.expiry_time().as_secs();
+
         MutinyInvoice {
             bolt11: value.to_string(),
             description,
             payment_hash: value.payment_hash().to_owned().to_hex(),
             preimage: None,
             amount_sats: value.amount_milli_satoshis().map(|m| m / 1000),
-            expire: None, // todo
+            expire: expiry,
             paid: false,
             fees_paid: None, // todo
             is_send: false,  // todo this could be bad
@@ -245,7 +248,7 @@ impl NodeManager {
             let id = node
                 .keys_manager
                 .get_node_id(Recipient::Node)
-                .expect(format!("Failed to get node id for {}", node_item.0).as_str());
+                .expect("Failed to get node id");
 
             nodes_map.insert(id.to_hex(), Arc::new(node));
         }
@@ -513,6 +516,8 @@ impl NodeManager {
 
         let invoice =
             Invoice::from_str(invoice_str.as_str()).map_err(|_| MutinyJsError::InvoiceInvalid)?;
+
+        // todo ensure payment hash is unique
         let pay_result = node.invoice_payer.pay_invoice(&invoice);
 
         match pay_result {
@@ -544,23 +549,9 @@ impl NodeManager {
 
         let amt_msats = amt_sats * 1000;
 
-        let chans = node.channel_manager.list_channels();
-        let chan = chans.first().unwrap();
-        let usable = node.channel_manager.list_usable_channels();
-
-        info!(
-            "confirmations_required: {}",
-            chan.confirmations_required.unwrap_or(69)
-        );
-        info!("is_channel_ready: {}", chan.is_channel_ready);
-        info!("is_usable: {}", chan.is_usable);
-        info!("is_public: {}", chan.is_public);
-        info!("usable: {}", usable.len());
-
         let _ = node
             .invoice_payer
-            .pay_pubkey(node_id, preimage, amt_msats, 40)
-            .unwrap();
+            .pay_pubkey(node_id, preimage, amt_msats, 40)?;
 
         Ok(info!("Keysend successful!"))
     }

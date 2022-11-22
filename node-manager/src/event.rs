@@ -21,6 +21,7 @@ pub(crate) struct PaymentInfo {
     pub secret: Option<[u8; 32]>,
     pub status: HTLCStatus,
     pub amt_msat: MillisatAmount,
+    pub fee_paid_msat: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -97,11 +98,11 @@ impl LdkEventHandler for EventHandler {
                 .to_address();
 
                 let wallet_thread = self.wallet.clone();
-                let channel_values_satoshis_thread = channel_value_satoshis.clone();
+                let channel_values_satoshis_thread = *channel_value_satoshis;
                 let channel_manager_thread = self.channel_manager.clone();
                 let logger_thread = self.logger.clone();
-                let temporary_channel_id_thread = temporary_channel_id.clone();
-                let counterparty_node_id_thread = counterparty_node_id.clone();
+                let temporary_channel_id_thread = *temporary_channel_id;
+                let counterparty_node_id_thread = *counterparty_node_id;
                 spawn_local(async move {
                     let psbt = match wallet_thread
                         .create_signed_psbt(addr, channel_values_satoshis_thread, None)
@@ -239,6 +240,7 @@ impl LdkEventHandler for EventHandler {
                             secret: payment_secret,
                             status: HTLCStatus::Succeeded,
                             amt_msat: MillisatAmount(Some(*amount_msat)),
+                            fee_paid_msat: None,
                         };
                         match self
                             .persister
@@ -261,6 +263,7 @@ impl LdkEventHandler for EventHandler {
             Event::PaymentSent {
                 payment_preimage,
                 payment_hash,
+                fee_paid_msat,
                 ..
             } => {
                 self.logger.log(&Record::new(
@@ -271,14 +274,15 @@ impl LdkEventHandler for EventHandler {
                     0,
                 ));
 
-                match self.persister.read_payment_info(*payment_hash, true) {
+                match self.persister.read_payment_info(*payment_hash, false) {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Succeeded;
                         saved_payment_info.preimage = Some(payment_preimage.0);
+                        saved_payment_info.fee_paid_msat = *fee_paid_msat;
                         match self.persister.persist_payment_info(
                             *payment_hash,
                             saved_payment_info,
-                            true,
+                            false,
                         ) {
                             Ok(_) => (),
                             Err(e) => {
@@ -359,13 +363,13 @@ impl LdkEventHandler for EventHandler {
                     0,
                 ));
 
-                match self.persister.read_payment_info(*payment_hash, true) {
+                match self.persister.read_payment_info(*payment_hash, false) {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Failed;
                         match self.persister.persist_payment_info(
                             *payment_hash,
                             saved_payment_info,
-                            true,
+                            false,
                         ) {
                             Ok(_) => (),
                             Err(e) => {
