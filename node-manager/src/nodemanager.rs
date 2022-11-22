@@ -426,6 +426,14 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
+    pub async fn list_nodes(&self) -> Result<JsValue /* Vec<String> */, MutinyJsError> {
+        let nodes = self.nodes.lock().await;
+        let peers: Vec<String> = nodes.iter().map(|(_, n)| n.pubkey.to_hex()).collect();
+
+        Ok(serde_wasm_bindgen::to_value(&peers)?)
+    }
+
+    #[wasm_bindgen]
     pub async fn connect_to_peer(
         &self,
         self_node_pubkey: String,
