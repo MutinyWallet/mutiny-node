@@ -164,7 +164,7 @@ impl MutinyNodePersister {
         mutiny_logger: Arc<MutinyLogger>,
         keys_manager: Arc<PhantomKeysManager>,
         mut channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
-    ) -> Result<PhantomChannelManager, MutinyError> {
+    ) -> Result<(PhantomChannelManager, bool), MutinyError> {
         match self.read_value(CHANNEL_MANAGER_KEY) {
             Ok(kv_value) => {
                 let mut channel_monitor_mut_references = Vec::new();
@@ -184,7 +184,7 @@ impl MutinyNodePersister {
                 let Ok((_, channel_manager)) = <(BlockHash, PhantomChannelManager)>::read(&mut readable_kv_value, read_args) else {
                     return Err(MutinyError::ReadError { source: error::MutinyStorageError::Other(anyhow!("could not read manager")) })
                 };
-                Ok(channel_manager)
+                Ok((channel_manager, true))
             }
             Err(_) => {
                 // no key manager stored, start a new one
@@ -212,7 +212,7 @@ impl MutinyNodePersister {
                     chain_params,
                 );
 
-                Ok(fresh_channel_manager)
+                Ok((fresh_channel_manager, false))
             }
         }
     }

@@ -8,7 +8,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::Network;
 use futures::StreamExt;
 use gloo_net::websocket::Message;
-use lightning::chain::{chainmonitor, Filter};
+use lightning::chain::{chainmonitor, Filter, Watch};
 use lightning::ln::channelmanager::PhantomRouteHints;
 use lightning::ln::msgs::NetAddress;
 use lightning::ln::PaymentHash;
@@ -32,6 +32,7 @@ use anyhow::Context;
 use bip39::Mnemonic;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::secp256k1::PublicKey;
+use instant::SystemTime;
 use lightning::chain::keysinterface::{
     InMemorySigner, KeysInterface, PhantomKeysManager, Recipient,
 };
@@ -132,7 +133,7 @@ impl Node {
             })?;
 
         // init channel manager
-        let channel_manager = persister
+        let (channel_manager, restarting_node) = persister
             .read_channel_manager(
                 network,
                 chain_monitor.clone(),
@@ -166,6 +167,41 @@ impl Node {
             ln_msg_handler,
             logger.clone(),
         ));
+
+        // fixme dont read from storage twice lol
+        // read channelmonitor state from disk again
+        let mut channel_monitors = persister
+            .read_channel_monitors(keys_manager.clone())
+            .map_err(|e| MutinyError::ReadError {
+                source: MutinyStorageError::Other(e.into()),
+            })?;
+
+        // sync to chain tip
+        let mut chain_listener_channel_monitors = Vec::new();
+        if restarting_node {
+            for (blockhash, channel_monitor) in channel_monitors.drain(..) {
+                let outpoint = channel_monitor.get_funding_txo().0;
+                chain_listener_channel_monitors.push((
+                    blockhash,
+                    (
+                        channel_monitor,
+                        chain.clone(),
+                        chain.clone(),
+                        logger.clone(),
+                    ),
+                    outpoint,
+                ));
+            }
+        }
+
+        // give channel monitors to chain monitor
+        for item in chain_listener_channel_monitors.drain(..) {
+            let channel_monitor = item.1 .0;
+            let funding_outpoint = item.2;
+            chain_monitor
+                .clone()
+                .watch_channel(funding_outpoint, channel_monitor);
+        }
 
         // todo use RGS
         // get network graph
@@ -273,7 +309,7 @@ impl Node {
         route_hints: Vec<PhantomRouteHints>,
     ) -> Result<Invoice, MutinyError> {
         let invoice = match create_phantom_invoice::<InMemorySigner, Arc<PhantomKeysManager>>(
-            Some(amount_sat * 1000),
+            Some(amount_sat * 1),
             None,
             description,
             1500,
@@ -462,7 +498,10 @@ pub(crate) fn create_peer_manager(
     lightning_msg_handler: MessageHandler,
     logger: Arc<MutinyLogger>,
 ) -> PeerManager {
-    let current_time = instant::now();
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let mut ephemeral_bytes = [0u8; 32];
     getrandom::getrandom(&mut ephemeral_bytes).expect("Failed to generate entropy");
 
@@ -470,7 +509,7 @@ pub(crate) fn create_peer_manager(
         lightning_msg_handler,
         km.get_node_secret(Recipient::Node)
             .expect("Failed to get node secret"),
-        current_time as u32,
+        now as u32,
         &ephemeral_bytes,
         logger,
         Arc::new(IgnoringMessageHandler {}),

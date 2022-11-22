@@ -28,8 +28,9 @@ function App() {
     const [amount, setAmount] = useState("")
     const [destinationAddress, setDestinationAddress] = useState("")
 
-    const [proxyAddress, setProxyAddress] = useState("wss://websocket-tcp-proxy-fywbx.ondigitalocean.app")
+    const [proxyAddress, setProxyAddress] = useState("ws://127.0.0.1:3001")
     const [connectPeer, setConnectPeer] = useState("")
+    const [disconnectPeer, setDisconnectPeer] = useState("")
 
     function handleAmountChange(e: React.ChangeEvent<HTMLInputElement>) {
         setAmount(e.target.value);
@@ -55,6 +56,10 @@ function App() {
         setConnectPeer(e.target.value);
     }
 
+    function handleDisconnectPeerChange(e: React.ChangeEvent<HTMLInputElement>) {
+        setDisconnectPeer(e.target.value);
+    }
+
     function handleProxyAddressChange(e: React.ChangeEvent<HTMLInputElement>) {
         setProxyAddress(e.target.value);
     }
@@ -71,6 +76,16 @@ function App() {
         if (nodeManager) {
             try {
                 await nodeManager.sync()
+                await updateBalance()
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    }
+
+    async function updateBalance() {
+        if (nodeManager) {
+            try {
                 let balance = await nodeManager.get_balance();
                 let str = `confirmed: ${balance.confirmed?.toLocaleString()} sats, unconfirmed: ${balance.unconfirmed?.toLocaleString()} sats, ln: ${balance.lightning.toLocaleString()} sats`
                 setBalance(str)
@@ -138,7 +153,7 @@ function App() {
     async function sendKeysend(e: React.SyntheticEvent) {
         e.preventDefault()
         try {
-            await nodeManager?.keysend(currentNode, keysend, BigInt(50));
+            await nodeManager?.keysend(currentNode, keysend, BigInt(5000));
         } catch (e) {
             console.error(e);
         }
@@ -153,6 +168,14 @@ function App() {
         }
     }
 
+    async function disconnect_peer(e: React.SyntheticEvent) {
+        e.preventDefault()
+        try {
+            await nodeManager?.disconnect_peer(currentNode, disconnectPeer)
+        } catch (e) {
+            console.error(e);
+        }
+    }
 
     async function new_node() {
         if (nodeManager) {
@@ -184,6 +207,9 @@ function App() {
                         </p>
                         <p>
                             {`Wallet Balance: ${balance}`}
+                        </p>
+                        <p>
+                            <button onClick={async () => updateBalance()}>Update Balance</button>
                         </p>
                         <p>
                             <button onClick={async () => sync()}>Sync Wallet</button>
@@ -226,6 +252,11 @@ function App() {
                                 <input type="text" placeholder='Websocket Proxy Address' onChange={handleProxyAddressChange} value={proxyAddress}></input>
                                 <input type="text" placeholder='Peer Connection String' onChange={handleConnectPeerChange}></input>
                                 <input type="submit" value="Connect" />
+                            </form>
+                            <form onSubmit={disconnect_peer} className="flex flex-col items-start gap-4 my-4">
+                                <h2>Disconnect Peer:</h2>
+                                <input type="text" placeholder='Peer' onChange={handleDisconnectPeerChange}></input>
+                                <input type="submit" value="Disconnect" />
                             </form>
 			    </>
                         <form onSubmit={openChannel} className="flex flex-col items-start gap-4 my-4">
