@@ -17,7 +17,7 @@ function SingleChannel({ channel }: { channel: MutinyChannel }) {
 
     // TODO: this should warn before closing
     async function handleCloseChannel() {
-        await nodeManager?.close_channel(channel.outpoint);
+        await nodeManager?.close_channel(channel.outpoint!);
         queryClient.invalidateQueries({ queryKey: ['channels'] })
     }
 
