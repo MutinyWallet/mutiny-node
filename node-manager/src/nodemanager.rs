@@ -183,7 +183,7 @@ impl MutinyChannel {
 impl From<&ChannelDetails> for MutinyChannel {
     fn from(c: &ChannelDetails) -> Self {
         MutinyChannel {
-            balance: c.balance_msat * 1_000,
+            balance: c.balance_msat / 1_000,
             size: c.channel_value_satoshis,
             outpoint: c.funding_txo.unwrap().into_bitcoin_outpoint().to_string(),
             peer: c.counterparty.node_id.to_hex(),
