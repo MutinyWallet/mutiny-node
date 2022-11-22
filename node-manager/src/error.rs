@@ -1,5 +1,6 @@
 use bdk::esplora_client;
 use lightning::ln::peer_handler::PeerHandleError;
+use lightning_invoice::payment::PaymentError;
 use thiserror::Error;
 use wasm_bindgen::JsValue;
 
@@ -111,6 +112,16 @@ impl From<PeerHandleError> for MutinyError {
     fn from(_e: PeerHandleError) -> Self {
         // TODO handle the case where `no_connection_possible`
         Self::ConnectionFailed
+    }
+}
+
+impl From<PaymentError> for MutinyError {
+    fn from(e: PaymentError) -> Self {
+        match e {
+            PaymentError::Invoice(_) => Self::InvoiceInvalid,
+            PaymentError::Routing(_) => Self::RoutingFailed,
+            PaymentError::Sending(_) => Self::RoutingFailed,
+        }
     }
 }
 
@@ -229,6 +240,16 @@ impl From<serde_wasm_bindgen::Error> for MutinyJsError {
 impl From<bitcoin::util::address::Error> for MutinyJsError {
     fn from(_: bitcoin::util::address::Error) -> Self {
         Self::JsonReadWriteError
+    }
+}
+
+impl From<PaymentError> for MutinyJsError {
+    fn from(e: PaymentError) -> Self {
+        match e {
+            PaymentError::Invoice(_) => Self::InvoiceInvalid,
+            PaymentError::Routing(_) => Self::RoutingFailed,
+            PaymentError::Sending(_) => Self::RoutingFailed,
+        }
     }
 }
 
