@@ -26,8 +26,7 @@ use lightning::util::config::UserConfig;
 use lightning::util::persist::KVStorePersister;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use log::error;
-use serde::Deserialize;
-use serde_json::Value;
+use std::collections::HashMap;
 use std::io;
 use std::io::Cursor;
 use std::ops::Deref;
@@ -135,12 +134,11 @@ impl MutinyNodePersister {
 
         // Get all the channel monitor buffers that exist for this node
         let suffix = self.node_id.as_str();
-        let channel_monitor_list: Vec<(String, Value)> =
+        let channel_monitor_list: HashMap<String, Vec<u8>> =
             self.storage.scan(MONITORS_PREFIX_KEY, Some(suffix));
 
         // TODO probably could use a fold here instead
-        for (_, value) in channel_monitor_list {
-            let data: Vec<u8> = Deserialize::deserialize(value)?;
+        for (_, data) in channel_monitor_list {
             let mut buffer = Cursor::new(data);
             match <(BlockHash, ChannelMonitor<Signer>)>::read(&mut buffer, &*keys_manager) {
                 Ok((blockhash, channel_monitor)) => {
@@ -246,7 +244,9 @@ impl MutinyNodePersister {
             true => PAYMENT_INBOUND_PREFIX_KEY,
             false => PAYMENT_OUTBOUND_PREFIX_KEY,
         };
-        self.storage.scan(prefix, None)
+        let map: HashMap<String, PaymentInfo> = self.storage.scan(prefix, None);
+
+        map.into_iter().collect()
     }
 }
 

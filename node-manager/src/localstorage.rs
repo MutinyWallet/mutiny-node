@@ -55,20 +55,20 @@ impl MutinyBrowserStorage {
         }
     }
 
-    pub(crate) fn scan<T>(&self, prefix: &str, suffix: Option<&str>) -> Vec<(String, T)>
+    pub(crate) fn scan<T>(&self, prefix: &str, suffix: Option<&str>) -> HashMap<String, T>
     where
         T: for<'de> Deserialize<'de>,
     {
         let local_storage = LocalStorage::raw();
         let length = LocalStorage::length();
-        let mut map = vec![];
+        let mut map = HashMap::with_capacity(length as usize);
         for index in 0..length {
             let key_opt: Option<String> = local_storage.key(index).unwrap();
 
             if let Some(key) = key_opt {
                 if key.starts_with(prefix) && (suffix.is_none() || key.ends_with(suffix.unwrap())) {
                     let value: T = self.get(&key).unwrap();
-                    map.push((key, value));
+                    map.insert(key, value);
                 }
             }
         }
