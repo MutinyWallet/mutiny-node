@@ -6,7 +6,7 @@ import More from '../components/More';
 import MutinyToaster from '../components/MutinyToaster';
 import { useContext } from 'react';
 import { NodeManagerContext } from '@components/GlobalStateProvider';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import MainBalance from '@components/MainBalance';
 
 function App() {
