@@ -7,26 +7,12 @@ import MutinyToaster from '../components/MutinyToaster';
 import { useContext } from 'react';
 import { NodeManagerContext } from '@components/GlobalStateProvider';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { MutinyBalance } from 'node-manager';
-import prettyPrintAmount from '@util/prettyPrintAmount';
-
-function prettyPrintBalance(b: MutinyBalance): string {
-  return prettyPrintAmount(b.confirmed.valueOf() + b.lightning.valueOf())
-}
+import MainBalance from '@components/MainBalance';
 
 function App() {
   const nodeManager = useContext(NodeManagerContext);
 
   const queryClient = useQueryClient()
-
-  const { error, data: balance } = useQuery({
-    queryKey: ['balance'],
-    queryFn: () => {
-      console.log("Checking balance...")
-      return nodeManager?.get_balance()
-    },
-    enabled: !!nodeManager,
-  })
 
   let navigate = useNavigate();
 
@@ -62,8 +48,7 @@ function App() {
         {nodeManager ?
           <>
             <div />
-            {error && error instanceof Error && <h1>{error.message}</h1>}
-            <h1 className='text-4xl font-light uppercase'>{balance && prettyPrintBalance(balance).toString()} <span className='text-2xl'>sats</span></h1>
+            <MainBalance />
             <div />
             <div className='flex flex-col gap-2 items-start'>
               <button onClick={handleSync}>Sync</button>
