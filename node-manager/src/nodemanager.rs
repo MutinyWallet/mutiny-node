@@ -544,9 +544,10 @@ impl NodeManager {
         from_node: String,
         invoice_str: String,
     ) -> Result<MutinyInvoice, MutinyJsError> {
+        let invoice = Invoice::from_str(&invoice_str)?;
         let nodes = self.nodes.lock().await;
         let node = nodes.get(from_node.as_str()).unwrap();
-        node.pay_invoice(invoice_str).map_err(|e| e.into())
+        node.pay_invoice(invoice).map_err(|e| e.into())
     }
 
     #[wasm_bindgen]
@@ -581,13 +582,12 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub async fn decode_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
-        Invoice::from_str(&invoice)
-            .map(|i| i.into())
-            .map_err(|e| e.into())
+        Invoice::from_str(&invoice).map(|i| Ok(i.into()))?
     }
 
     #[wasm_bindgen]
     pub async fn get_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
+        let invoice = Invoice::from_str(&invoice)?;
         let nodes = self.nodes.lock().await;
         let inv_opt: Option<MutinyInvoice> = nodes
             .iter()

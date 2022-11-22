@@ -242,8 +242,8 @@ impl Database for MutinyBrowserStorage {
     ) -> Result<Vec<Script>, bdk::Error> {
         let key = MapKey::Path((keychain, None)).as_map_key();
         self.scan::<Value>(key.as_str(), None)
-            .into_iter()
-            .map(|(_, value)| -> Result<_, bdk::Error> {
+            .into_values()
+            .map(|value| {
                 let str_opt = value.as_str();
 
                 match str_opt {
@@ -258,8 +258,8 @@ impl Database for MutinyBrowserStorage {
     fn iter_utxos(&self) -> Result<Vec<LocalUtxo>, bdk::Error> {
         let key = MapKey::Utxo(None).as_map_key();
         self.scan::<Value>(key.as_str(), None)
-            .into_iter()
-            .map(|(_, value)| -> Result<_, bdk::Error> {
+            .into_values()
+            .map(|value| {
                 let utxo: LocalUtxo = Deserialize::deserialize(value)?;
                 Ok(utxo)
             })
@@ -269,8 +269,8 @@ impl Database for MutinyBrowserStorage {
     fn iter_raw_txs(&self) -> Result<Vec<Transaction>, bdk::Error> {
         let key = MapKey::RawTx(None).as_map_key();
         self.scan::<Value>(key.as_str(), None)
-            .into_iter()
-            .map(|(_, value)| -> Result<_, bdk::Error> {
+            .into_values()
+            .map(|value| {
                 let tx: Transaction = Deserialize::deserialize(value)?;
                 Ok(tx)
             })

@@ -3,7 +3,7 @@ use crate::invoice::create_phantom_invoice;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::localstorage::MutinyBrowserStorage;
 use crate::nodemanager::MutinyInvoice;
-use crate::utils::currency_from_network;
+use crate::utils::{currency_from_network, hex_str};
 use crate::wallet::MutinyWallet;
 use bitcoin::hashes::Hash;
 use bitcoin::Network;
@@ -367,8 +367,7 @@ impl Node {
         Ok(invoice)
     }
 
-    pub fn get_invoice(&self, invoice_str: String) -> Result<MutinyInvoice, MutinyError> {
-        let invoice = Invoice::from_str(&invoice_str).map_err(Into::<MutinyError>::into)?;
+    pub fn get_invoice(&self, invoice: Invoice) -> Result<MutinyInvoice, MutinyError> {
         let payment_hash = invoice.payment_hash();
         let (payment_info, inbound) = self.get_payment_info_from_persisters(payment_hash)?;
         let mut mutiny_invoice: MutinyInvoice = invoice.into();
@@ -405,10 +404,20 @@ impl Node {
                 None => {
                     // Constructing MutinyInvoice from no invoice, harder
                     let paid = matches!(i.status, HTLCStatus::Succeeded);
-                    // TODO finish this properly
-                    let mutiny_invoice =
-                        MutinyInvoice::new(None, None, h, None, None, 0, paid, None, !inbound);
-                    Some(mutiny_invoice)
+                    let sats: Option<u64> = i.amt_msat.0.map(|s| s / 1_000);
+                    let fee_paid_sat = i.fee_paid_msat.map(|f| f / 1_000);
+                    let preimage = i.preimage.map(|p| hex_str(&p));
+                    Some(MutinyInvoice::new(
+                        None,
+                        None,
+                        h,
+                        preimage,
+                        sats,
+                        0,
+                        paid,
+                        fee_paid_sat,
+                        !inbound,
+                    ))
                 }
             })
             .collect()
@@ -436,10 +445,8 @@ impl Node {
         }
     }
 
-    // pay_invoice sends off the payment but does not wait for results
-    pub fn pay_invoice(&self, invoice_str: String) -> Result<MutinyInvoice, MutinyError> {
-        let invoice =
-            Invoice::from_str(invoice_str.as_str()).map_err(|_| MutinyError::InvoiceInvalid)?;
+    /// pay_invoice sends off the payment but does not wait for results
+    pub fn pay_invoice(&self, invoice: Invoice) -> Result<MutinyInvoice, MutinyError> {
         let pay_result = self.invoice_payer.pay_invoice(&invoice);
 
         let mut payment_info = PaymentInfo {
@@ -448,7 +455,7 @@ impl Node {
             status: HTLCStatus::Pending,
             amt_msat: MillisatAmount(invoice.amount_milli_satoshis()),
             fee_paid_msat: None,
-            bolt11: Some(invoice_str),
+            bolt11: Some(invoice.to_string()),
         };
         self.persister.persist_payment_info(
             PaymentHash(invoice.payment_hash().into_inner()),
