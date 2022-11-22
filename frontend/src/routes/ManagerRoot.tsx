@@ -18,7 +18,7 @@ function ManagerRoot() {
         <div className="flex flex-col h-full fixed w-full">
             <Outlet />
             <nav className="relative">
-                <ul className="pb-8 pt-16 px-8 flex overflow-x-scroll gap-2 absolute bottom-0 left-0 max-w-full bg-fade-to-blue scrollbar-hide">
+                <ul className="pb-8 pt-16 px-8 flex overflow-x-scroll gap-2 absolute bottom-0 left-0 right-0 max-w-full bg-fade-to-blue scrollbar-hide">
                     <li>
                         <button onClick={() => navigate("transactions")} className={shouldBeActive("transactions")} >
                             <img src={TxIcon} alt="transactions icon" />
