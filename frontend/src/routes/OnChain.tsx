@@ -43,9 +43,14 @@ const SingleTransaction = ({ tx }: { tx: OnChainTx }) => {
     )
 }
 
+// Sort by timestamp, but if there's no timestamp put it first
 function sortTx(a: OnChainTx, b: OnChainTx) {
     if (b.confirmation_time && a.confirmation_time) {
         return b.confirmation_time.timestamp - a.confirmation_time.timestamp
+    } else if (a.confirmation_time) {
+        return 1
+    } else if (b.confirmation_time) {
+        return -1
     } else {
         return 0
     }
