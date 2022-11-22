@@ -12,18 +12,15 @@ use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
 use bitcoin::consensus::deserialize;
 use bitcoin::hashes::hex::{FromHex, ToHex};
-use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::{Address, Network, OutPoint, PublicKey, Transaction};
-use bitcoin_hashes::Hash;
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::BroadcasterInterface;
 use lightning::chain::keysinterface::{KeysInterface, Recipient};
 use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
-use lightning::ln::{PaymentHash, PaymentPreimage};
+use lightning::ln::PaymentPreimage;
 use lightning_invoice::{Invoice, InvoiceDescription};
 use log::{debug, error, info};
-use secp256k1::ThirtyTwoByteHash;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
@@ -508,11 +505,12 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
+    // todo change return to MutinyInvoice
     pub async fn pay_invoice(
         &self,
         from_node: String,
         invoice_str: String,
-    ) -> Result<MutinyInvoice, MutinyJsError> {
+    ) -> Result<(), MutinyJsError> {
         let nodes = self.nodes.lock().await;
         let node = nodes.get(from_node.as_str()).unwrap();
 
@@ -520,33 +518,22 @@ impl NodeManager {
             Invoice::from_str(invoice_str.as_str()).map_err(|_| MutinyJsError::InvoiceInvalid)?;
 
         // todo ensure payment hash is unique
-        let payment_hash = PaymentHash(invoice.payment_hash().into_32());
+        let pay_result = node.invoice_payer.pay_invoice(&invoice);
 
-        let _ = node.invoice_payer.pay_invoice(&invoice)?;
-
-        info!("Payment successful!");
-
-        match node.persister.read_payment_info(payment_hash, false) {
-            Some(payment_info) => {
-                let mut mutiny_invoice = MutinyInvoice::from(invoice);
-
-                mutiny_invoice.is_send = true;
-                mutiny_invoice.paid = true;
-                mutiny_invoice.fees_paid = payment_info.fee_paid_msat;
-
-                Ok(mutiny_invoice)
-            }
-            None => Err(MutinyJsError::ReadError),
+        match pay_result {
+            Ok(_) => Ok(info!("Payment successful!")),
+            Err(_) => Err(MutinyJsError::RoutingFailed),
         }
     }
 
     #[wasm_bindgen]
+    // todo change return to MutinyInvoice
     pub async fn keysend(
         &self,
         from_node: String,
         to_node: String,
         amt_sats: u64,
-    ) -> Result<MutinyInvoice, MutinyJsError> {
+    ) -> Result<(), MutinyJsError> {
         let nodes = self.nodes.lock().await;
         debug!("Keysending to {to_node}");
         let node = nodes.get(from_node.as_str()).unwrap();
@@ -560,34 +547,13 @@ impl NodeManager {
         getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
         let preimage = PaymentPreimage(entropy);
 
-        let payment_hash = PaymentHash(Sha256::hash(&preimage.0).into_inner());
-
         let amt_msats = amt_sats * 1000;
 
         let _ = node
             .invoice_payer
             .pay_pubkey(node_id, preimage, amt_msats, 40)?;
 
-        info!("Keysend to {to_node} successful!");
-
-        match node.persister.read_payment_info(payment_hash, false) {
-            Some(payment_info) => {
-                let mutiny_invoice = MutinyInvoice {
-                    bolt11: "".to_string(),
-                    description: None,
-                    payment_hash: payment_hash.0.to_hex(),
-                    preimage: Some(preimage.0.to_hex()),
-                    amount_sats: Some(amt_sats),
-                    expire: 0,
-                    paid: true,
-                    fees_paid: payment_info.fee_paid_msat,
-                    is_send: true,
-                };
-
-                Ok(mutiny_invoice)
-            }
-            None => Err(MutinyJsError::ReadError),
-        }
+        Ok(info!("Keysend successful!"))
     }
 
     #[wasm_bindgen]
