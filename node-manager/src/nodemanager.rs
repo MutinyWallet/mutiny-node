@@ -151,8 +151,8 @@ impl From<Invoice> for MutinyInvoice {
             amount_sats: value.amount_milli_satoshis().map(|m| m / 1000),
             expire: expiry,
             paid: false,
-            fees_paid: None, // todo
-            is_send: false,  // todo this could be bad
+            fees_paid: None,
+            is_send: false, // todo this could be bad
         }
     }
 }
@@ -162,7 +162,7 @@ impl From<Invoice> for MutinyInvoice {
 pub struct MutinyChannel {
     pub balance: u64,
     pub size: u64,
-    outpoint: String,
+    outpoint: Option<String>,
     peer: String,
     pub confirmed: bool,
 }
@@ -170,7 +170,7 @@ pub struct MutinyChannel {
 #[wasm_bindgen]
 impl MutinyChannel {
     #[wasm_bindgen(getter)]
-    pub fn outpoint(&self) -> String {
+    pub fn outpoint(&self) -> Option<String> {
         self.outpoint.clone()
     }
 
@@ -183,9 +183,9 @@ impl MutinyChannel {
 impl From<&ChannelDetails> for MutinyChannel {
     fn from(c: &ChannelDetails) -> Self {
         MutinyChannel {
-            balance: c.balance_msat * 1_000,
+            balance: c.balance_msat / 1_000,
             size: c.channel_value_satoshis,
-            outpoint: c.funding_txo.unwrap().into_bitcoin_outpoint().to_string(),
+            outpoint: c.funding_txo.map(|f| f.into_bitcoin_outpoint().to_string()),
             peer: c.counterparty.node_id.to_hex(),
             confirmed: c.is_channel_ready, // fixme not exactly correct
         }

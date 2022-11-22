@@ -487,7 +487,6 @@ impl Node {
         pubkey: PublicKey,
         amount_sat: u64,
     ) -> Result<[u8; 32], MutinyError> {
-        // todo rethink config
         let config = UserConfig {
             channel_handshake_limits: ChannelHandshakeLimits {
                 // lnd's max to_self_delay is 2016, so we want to be compatible.
@@ -495,7 +494,9 @@ impl Node {
                 ..Default::default()
             },
             channel_handshake_config: ChannelHandshakeConfig {
-                announced_channel: true,
+                minimum_depth: 1,
+                announced_channel: false,
+                negotiate_scid_privacy: true,
                 ..Default::default()
             },
             ..Default::default()
@@ -539,14 +540,11 @@ pub(crate) async fn connect_peer_if_necessary(
     peer_addr: SocketAddr,
     peer_manager: Arc<PeerManager>,
 ) -> Result<(), MutinyError> {
-    // TODO add this when the peer manager is ready
-    /*
     for node_pubkey in peer_manager.get_peer_node_ids() {
         if node_pubkey == pubkey {
             return Ok(());
         }
     }
-    */
 
     // first make a connection to the node
     let tcp_proxy = Arc::new(TcpProxy::new(websocket_proxy_addr, peer_addr).await);
