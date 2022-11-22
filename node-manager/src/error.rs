@@ -1,6 +1,7 @@
 use bdk::esplora_client;
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning_invoice::payment::PaymentError;
+use lightning_invoice::ParseOrSemanticError;
 use thiserror::Error;
 use wasm_bindgen::JsValue;
 
@@ -108,6 +109,12 @@ impl From<esplora_client::Error> for MutinyError {
     }
 }
 
+impl From<ParseOrSemanticError> for MutinyError {
+    fn from(_e: ParseOrSemanticError) -> Self {
+        Self::InvoiceInvalid
+    }
+}
+
 impl From<PeerHandleError> for MutinyError {
     fn from(_e: PeerHandleError) -> Self {
         // TODO handle the case where `no_connection_possible`
@@ -135,6 +142,14 @@ impl From<MutinyStorageError> for bdk::Error {
                 bdk::Error::Generic(format!("Serde error: {source}"))
             }
             _ => bdk::Error::Generic("Unexpected Mutiny storage Error".to_string()),
+        }
+    }
+}
+
+impl From<std::io::Error> for MutinyError {
+    fn from(e: std::io::Error) -> Self {
+        MutinyError::PersistenceFailed {
+            source: MutinyStorageError::Other(e.into()),
         }
     }
 }
@@ -257,6 +272,12 @@ impl From<esplora_client::Error> for MutinyJsError {
     fn from(_e: esplora_client::Error) -> Self {
         // This is most likely a chain access failure
         Self::ChainAccessFailed
+    }
+}
+
+impl From<ParseOrSemanticError> for MutinyJsError {
+    fn from(_e: ParseOrSemanticError) -> Self {
+        Self::InvoiceInvalid
     }
 }
 

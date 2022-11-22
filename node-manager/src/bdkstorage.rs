@@ -9,6 +9,7 @@ use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::{OutPoint, Script, Transaction};
 use gloo_storage::{LocalStorage, Storage};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::localstorage::MutinyBrowserStorage;
 
@@ -240,9 +241,9 @@ impl Database for MutinyBrowserStorage {
         keychain: Option<KeychainKind>,
     ) -> Result<Vec<Script>, bdk::Error> {
         let key = MapKey::Path((keychain, None)).as_map_key();
-        self.scan(key.as_str(), None)
-            .into_iter()
-            .map(|(_, value)| -> Result<_, bdk::Error> {
+        self.scan::<Value>(key.as_str(), None)
+            .into_values()
+            .map(|value| {
                 let str_opt = value.as_str();
 
                 match str_opt {
@@ -256,9 +257,9 @@ impl Database for MutinyBrowserStorage {
 
     fn iter_utxos(&self) -> Result<Vec<LocalUtxo>, bdk::Error> {
         let key = MapKey::Utxo(None).as_map_key();
-        self.scan(key.as_str(), None)
-            .into_iter()
-            .map(|(_, value)| -> Result<_, bdk::Error> {
+        self.scan::<Value>(key.as_str(), None)
+            .into_values()
+            .map(|value| {
                 let utxo: LocalUtxo = Deserialize::deserialize(value)?;
                 Ok(utxo)
             })
@@ -267,9 +268,9 @@ impl Database for MutinyBrowserStorage {
 
     fn iter_raw_txs(&self) -> Result<Vec<Transaction>, bdk::Error> {
         let key = MapKey::RawTx(None).as_map_key();
-        self.scan(key.as_str(), None)
-            .into_iter()
-            .map(|(_, value)| -> Result<_, bdk::Error> {
+        self.scan::<Value>(key.as_str(), None)
+            .into_values()
+            .map(|value| {
                 let tx: Transaction = Deserialize::deserialize(value)?;
                 Ok(tx)
             })
@@ -278,7 +279,7 @@ impl Database for MutinyBrowserStorage {
 
     fn iter_txs(&self, include_raw: bool) -> Result<Vec<TransactionDetails>, bdk::Error> {
         let key = MapKey::Transaction(None).as_map_key();
-        self.scan(key.as_str(), None)
+        self.scan::<Value>(key.as_str(), None)
             .into_iter()
             .map(|(key, value)| -> Result<_, bdk::Error> {
                 let mut tx_details: TransactionDetails = Deserialize::deserialize(value)?;

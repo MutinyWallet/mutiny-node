@@ -99,7 +99,9 @@ function App() {
         if (nodeManager) {
             try {
                 let invoice = await nodeManager.create_invoice(BigInt(1000), "hello");
-                setInvoice(invoice.bolt11)
+		if (invoice.bolt11) {
+                    setInvoice(invoice.bolt11)
+		}
             } catch (e) {
                 console.error(e);
             }

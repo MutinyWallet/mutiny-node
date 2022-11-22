@@ -15,19 +15,20 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use wasm_bindgen_futures::spawn_local;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct PaymentInfo {
     pub preimage: Option<[u8; 32]>,
     pub secret: Option<[u8; 32]>,
     pub status: HTLCStatus,
     pub amt_msat: MillisatAmount,
     pub fee_paid_msat: Option<u64>,
+    pub bolt11: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct MillisatAmount(pub Option<u64>);
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub(crate) enum HTLCStatus {
     Pending,
     Succeeded,
@@ -241,6 +242,7 @@ impl LdkEventHandler for EventHandler {
                             status: HTLCStatus::Succeeded,
                             amt_msat: MillisatAmount(Some(*amount_msat)),
                             fee_paid_msat: None,
+                            bolt11: None,
                         };
                         match self
                             .persister

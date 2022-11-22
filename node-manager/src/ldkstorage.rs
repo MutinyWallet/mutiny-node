@@ -26,7 +26,7 @@ use lightning::util::config::UserConfig;
 use lightning::util::persist::KVStorePersister;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use log::error;
-use serde::Deserialize;
+use std::collections::HashMap;
 use std::io;
 use std::io::Cursor;
 use std::ops::Deref;
@@ -134,11 +134,11 @@ impl MutinyNodePersister {
 
         // Get all the channel monitor buffers that exist for this node
         let suffix = self.node_id.as_str();
-        let channel_monitor_list = self.storage.scan(MONITORS_PREFIX_KEY, Some(suffix));
+        let channel_monitor_list: HashMap<String, Vec<u8>> =
+            self.storage.scan(MONITORS_PREFIX_KEY, Some(suffix));
 
         // TODO probably could use a fold here instead
-        for (_, value) in channel_monitor_list {
-            let data: Vec<u8> = Deserialize::deserialize(value)?;
+        for (_, data) in channel_monitor_list {
             let mut buffer = Cursor::new(data);
             match <(BlockHash, ChannelMonitor<Signer>)>::read(&mut buffer, &*keys_manager) {
                 Ok((blockhash, channel_monitor)) => {
@@ -224,7 +224,7 @@ impl MutinyNodePersister {
         inbound: bool,
     ) -> io::Result<()> {
         self.storage
-            .set(payment_key(inbound, payment_hash), &payment_info)
+            .set(payment_key(inbound, payment_hash), payment_info)
             .map_err(io::Error::other)
     }
 
@@ -237,6 +237,16 @@ impl MutinyNodePersister {
         let deserialized_value: Result<PaymentInfo, MutinyError> =
             self.storage.get(key).map_err(MutinyError::read_err);
         deserialized_value.ok()
+    }
+
+    pub(crate) fn list_payment_info(&self, inbound: bool) -> Vec<(String, PaymentInfo)> {
+        let prefix = match inbound {
+            true => PAYMENT_INBOUND_PREFIX_KEY,
+            false => PAYMENT_OUTBOUND_PREFIX_KEY,
+        };
+        let map: HashMap<String, PaymentInfo> = self.storage.scan(prefix, None);
+
+        map.into_iter().collect()
     }
 }
 

@@ -2,7 +2,8 @@ use crate::event::{EventHandler, HTLCStatus, MillisatAmount, PaymentInfo};
 use crate::invoice::create_phantom_invoice;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::localstorage::MutinyBrowserStorage;
-use crate::utils::currency_from_network;
+use crate::nodemanager::MutinyInvoice;
+use crate::utils::{currency_from_network, hex_str};
 use crate::wallet::MutinyWallet;
 use bitcoin::hashes::Hash;
 use bitcoin::Network;
@@ -346,6 +347,7 @@ impl Node {
             status: HTLCStatus::Pending,
             amt_msat: MillisatAmount(Some(amount_sat * 1000)),
             fee_paid_msat: None,
+            bolt11: Some(invoice.to_string()),
         };
         match self
             .persister
@@ -363,6 +365,121 @@ impl Node {
             }
         }
         Ok(invoice)
+    }
+
+    pub fn get_invoice(&self, invoice: Invoice) -> Result<MutinyInvoice, MutinyError> {
+        let payment_hash = invoice.payment_hash();
+        let (payment_info, inbound) = self.get_payment_info_from_persisters(payment_hash)?;
+        let mut mutiny_invoice: MutinyInvoice = invoice.into();
+        mutiny_invoice.is_send = !inbound;
+        mutiny_invoice.paid = matches!(payment_info.status, HTLCStatus::Succeeded);
+        Ok(mutiny_invoice)
+    }
+
+    pub fn list_invoices(&self) -> Result<Vec<MutinyInvoice>, MutinyError> {
+        let mut inbound_invoices = self.list_payment_info_from_persisters(true);
+        let mut outbound_invoices = self.list_payment_info_from_persisters(false);
+        inbound_invoices.append(&mut outbound_invoices);
+        Ok(inbound_invoices)
+    }
+
+    fn list_payment_info_from_persisters(&self, inbound: bool) -> Vec<MutinyInvoice> {
+        self.persister
+            .list_payment_info(inbound)
+            .into_iter()
+            .filter_map(|(h, i)| match i.bolt11 {
+                Some(bolt11) => {
+                    // Construct an invoice from a bolt11, easy
+                    let invoice_res = Invoice::from_str(&bolt11).map_err(Into::<MutinyError>::into);
+                    match invoice_res {
+                        Ok(invoice) => {
+                            let mut mutiny_invoice: MutinyInvoice = invoice.into();
+                            mutiny_invoice.is_send = !inbound;
+                            mutiny_invoice.paid = matches!(i.status, HTLCStatus::Succeeded);
+                            Some(mutiny_invoice)
+                        }
+                        Err(_) => None,
+                    }
+                }
+                None => {
+                    // Constructing MutinyInvoice from no invoice, harder
+                    let paid = matches!(i.status, HTLCStatus::Succeeded);
+                    let sats: Option<u64> = i.amt_msat.0.map(|s| s / 1_000);
+                    let fee_paid_sat = i.fee_paid_msat.map(|f| f / 1_000);
+                    let preimage = i.preimage.map(|p| hex_str(&p));
+                    Some(MutinyInvoice::new(
+                        None,
+                        None,
+                        h,
+                        preimage,
+                        sats,
+                        0,
+                        paid,
+                        fee_paid_sat,
+                        !inbound,
+                    ))
+                }
+            })
+            .collect()
+    }
+
+    fn get_payment_info_from_persisters(
+        &self,
+        payment_hash: &bitcoin_hashes::sha256::Hash,
+    ) -> Result<(PaymentInfo, bool), MutinyError> {
+        // try inbound first
+        if let Some(payment_info) = self
+            .persister
+            .read_payment_info(PaymentHash(payment_hash.into_inner()), true)
+        {
+            return Ok((payment_info, true));
+        }
+
+        // if no inbound check outbound
+        match self
+            .persister
+            .read_payment_info(PaymentHash(payment_hash.into_inner()), false)
+        {
+            Some(payment_info) => Ok((payment_info, false)),
+            None => Err(MutinyError::InvoiceInvalid),
+        }
+    }
+
+    /// pay_invoice sends off the payment but does not wait for results
+    pub fn pay_invoice(&self, invoice: Invoice) -> Result<MutinyInvoice, MutinyError> {
+        let pay_result = self.invoice_payer.pay_invoice(&invoice);
+
+        let mut payment_info = PaymentInfo {
+            preimage: None,
+            secret: None,
+            status: HTLCStatus::Pending,
+            amt_msat: MillisatAmount(invoice.amount_milli_satoshis()),
+            fee_paid_msat: None,
+            bolt11: Some(invoice.to_string()),
+        };
+        self.persister.persist_payment_info(
+            PaymentHash(invoice.payment_hash().into_inner()),
+            payment_info.clone(),
+            false,
+        )?;
+
+        match pay_result {
+            Ok(_) => {
+                let mut mutiny_invoice: MutinyInvoice = invoice.into();
+                mutiny_invoice.paid = false;
+                mutiny_invoice.is_send = true;
+                Ok(mutiny_invoice)
+            }
+            Err(_) => {
+                payment_info.status = HTLCStatus::Failed;
+                self.persister.persist_payment_info(
+                    PaymentHash(invoice.payment_hash().into_inner()),
+                    payment_info,
+                    false,
+                )?;
+                Err(MutinyError::RoutingFailed)
+            }
+        }
     }
 
     pub async fn open_channel(
