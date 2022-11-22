@@ -309,7 +309,7 @@ impl Node {
         route_hints: Vec<PhantomRouteHints>,
     ) -> Result<Invoice, MutinyError> {
         let invoice = match create_phantom_invoice::<InMemorySigner, Arc<PhantomKeysManager>>(
-            Some(amount_sat * 1),
+            Some(amount_sat * 1_000),
             None,
             description,
             1500,
