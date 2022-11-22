@@ -393,26 +393,34 @@ impl NodeManager {
         Ok(serde_wasm_bindgen::to_value(&utxos)?)
     }
 
+    async fn sync_ldk(&self) -> Result<(), MutinyError> {
+        let nodes = self.nodes.lock().await;
+
+        let confirmables: Vec<&(dyn Confirm + Sync)> = nodes
+            .iter()
+            .flat_map(|(_, node)| {
+                let vec: Vec<&(dyn Confirm + Sync)> =
+                    vec![node.channel_manager.deref(), node.chain_monitor.deref()];
+                vec
+            })
+            .collect();
+
+        self.chain.sync(confirmables).await?;
+
+        Ok(())
+    }
+
     #[wasm_bindgen]
     pub async fn sync(&self) -> Result<(), MutinyJsError> {
+        // Sync ldk first because it may broadcast transactions
+        // to addresses that are in our bdk wallet. This way
+        // they are found on this iteration of syncing instead
+        // of the next one.
+        self.sync_ldk().await?;
+
         // sync bdk wallet
         match self.wallet.sync().await {
-            Ok(()) => {
-                // sync ldk wallet
-                let nodes = self.nodes.lock().await;
-
-                let confirmables: Vec<&(dyn Confirm + Sync)> = nodes
-                    .iter()
-                    .flat_map(|(_, node)| {
-                        let vec: Vec<&(dyn Confirm + Sync)> =
-                            vec![node.channel_manager.deref(), node.chain_monitor.deref()];
-                        vec
-                    })
-                    .collect();
-
-                self.chain.sync(confirmables).await?;
-                Ok(info!("We are synced!"))
-            }
+            Ok(()) => Ok(info!("We are synced!")),
             Err(e) => Err(e.into()),
         }
     }
