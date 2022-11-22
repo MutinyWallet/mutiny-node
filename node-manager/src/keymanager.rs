@@ -2,6 +2,7 @@ use crate::error::MutinyError;
 use bip32::XPrv;
 use bip39::Mnemonic;
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
+use instant::SystemTime;
 use lightning::chain::keysinterface::{KeysInterface, PhantomKeysManager, Recipient};
 
 pub(crate) fn generate_seed(num_words: u8) -> Result<Mnemonic, MutinyError> {
@@ -43,11 +44,15 @@ pub(crate) fn create_keys_manager(mnemonic: Mnemonic, child_index: u32) -> Phant
         .unwrap()
         .derive_child(bip32::ChildNumber::new(child_index, true).unwrap())
         .unwrap();
-    let current_time = instant::now();
+
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap();
+
     PhantomKeysManager::new(
         &xpriv.to_bytes(),
-        (current_time / 1000.0).round() as u64,
-        (current_time * 1000.0).round() as u32,
+        now.as_secs(),
+        now.as_nanos() as u32,
         &shared_key.to_bytes(),
     )
 }

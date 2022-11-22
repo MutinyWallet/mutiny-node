@@ -8,7 +8,7 @@ use lightning::chain::chaininterface::{
     BroadcasterInterface, ConfirmationTarget, FeeEstimator, FEERATE_FLOOR_SATS_PER_KW,
 };
 use lightning::chain::{Confirm, Filter, WatchedOutput};
-use log::error;
+use log::{debug, error, info, warn};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use wasm_bindgen_futures::spawn_local;
@@ -171,6 +171,10 @@ impl MutinyChain {
         unconfirmed_registered_txs: HashSet<Txid>,
         unspent_registered_outputs: HashSet<WatchedOutput>,
     ) {
+        for c in &confirmed_txs {
+            debug!("confirming tx! {}", c.tx.txid())
+        }
+
         for ctx in confirmed_txs {
             for c in confirmables {
                 c.transactions_confirmed(
@@ -202,10 +206,14 @@ impl MutinyChain {
         // Remember all registered but unconfirmed transactions for future processing.
         let mut unconfirmed_registered_txs = HashSet::new();
 
+        info!("registered tx size: {}", registered_txs.len());
         for txid in registered_txs {
+            info!("registered tx: {}", txid);
             if let Some(confirmed_tx) = self.get_confirmed_tx(&txid, None, None).await? {
+                info!("confirmed tx: {}", txid);
                 confirmed_txs.push(confirmed_tx);
             } else {
+                warn!("unconfirmed tx: {}", txid);
                 unconfirmed_registered_txs.insert(txid);
             }
         }
@@ -311,11 +319,14 @@ impl MutinyChain {
             .iter()
             .flat_map(|c| c.get_relevant_txids())
             .collect::<Vec<Txid>>();
+        let mut to_watch: HashSet<Txid> = HashSet::new();
         for txid in relevant_txids {
+            debug!("unconfirmed: {}", txid);
             match client.get_tx_status(&txid).await {
                 Ok(Some(status)) => {
                     // Skip if the tx in question is still confirmed.
                     if status.confirmed {
+                        to_watch.insert(txid);
                         continue;
                     }
                 }
@@ -329,6 +340,8 @@ impl MutinyChain {
                 c.transaction_unconfirmed(&txid);
             }
         }
+
+        *self.watched_transactions.lock().unwrap() = to_watch;
 
         Ok(())
     }

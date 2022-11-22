@@ -5,6 +5,7 @@ use bitcoin::bech32::ToBase32;
 use bitcoin_hashes::Hash;
 use core::ops::Deref;
 use core::time::Duration;
+use instant::SystemTime;
 use lightning::chain::keysinterface::{KeysInterface, Recipient, Sign};
 use lightning::ln::channelmanager::{ChannelDetails, MIN_FINAL_CLTV_EXPIRY};
 use lightning::ln::channelmanager::{PhantomRouteHints, MIN_CLTV_EXPIRY_DELTA};
@@ -56,6 +57,11 @@ where
         ));
     }
 
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
     let invoice = InvoiceBuilder::new(network).description(description);
 
     // If we ever see performance here being too slow then we should probably take this ExpandedKey as a parameter instead.
@@ -66,7 +72,7 @@ where
             amt_msat,
             payment_hash,
             invoice_expiry_delta_secs,
-            1000 * instant::now() as u64,
+            now,
         )
         .map_err(|_| SignOrCreationError::CreationError(CreationError::InvalidAmount))?;
         (payment_hash, payment_secret)
@@ -76,17 +82,17 @@ where
             amt_msat,
             invoice_expiry_delta_secs,
             &keys_manager,
-            1000 * instant::now() as u64,
+            now,
         )
         .map_err(|_| SignOrCreationError::CreationError(CreationError::InvalidAmount))?
     };
 
     let mut invoice = invoice
-        .duration_since_epoch(Duration::from_secs(1000 * instant::now() as u64))
+        .duration_since_epoch(Duration::from_secs(now))
         .payment_hash(Hash::from_slice(&payment_hash.0).unwrap())
         .payment_secret(payment_secret)
-        .min_final_cltv_expiry(MIN_FINAL_CLTV_EXPIRY.into())
-        .expiry_time(Duration::from_secs(invoice_expiry_delta_secs.into()));
+        .min_final_cltv_expiry(MIN_FINAL_CLTV_EXPIRY.into());
+    // .expiry_time(Duration::from_secs(invoice_expiry_delta_secs.into()));
     if let Some(amt) = amt_msat {
         invoice = invoice.amount_milli_satoshis(amt);
     }

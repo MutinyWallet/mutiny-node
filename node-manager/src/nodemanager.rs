@@ -408,7 +408,7 @@ impl NodeManager {
                     .collect();
 
                 self.chain.sync(confirmables).await?;
-                Ok(())
+                Ok(info!("We are synced!"))
             }
             Err(e) => Err(e.into()),
         }
@@ -447,6 +447,27 @@ impl NodeManager {
 
         error!("could not find internal node {self_node_pubkey}");
         Err(MutinyError::WalletOperationFailed.into())
+    }
+
+    #[wasm_bindgen]
+    pub async fn disconnect_peer(
+        &self,
+        self_node_pubkey: String,
+        peer: String,
+    ) -> Result<(), MutinyJsError> {
+        if let Some(node) = self.nodes.lock().await.get(&self_node_pubkey) {
+            let node_id = match PublicKey::from_str(peer.as_str()) {
+                Ok(node_id) => Ok(node_id.inner),
+                Err(_) => Err(MutinyJsError::PubkeyInvalid),
+            }?;
+
+            node.peer_manager.disconnect_by_node_id(node_id, false);
+            info!("disconnected from peer: {peer}");
+            Ok(())
+        } else {
+            error!("could not find internal node {self_node_pubkey}");
+            Err(MutinyError::WalletOperationFailed.into())
+        }
     }
 
     // all values in sats
@@ -509,6 +530,7 @@ impl NodeManager {
         amt_sats: u64,
     ) -> Result<(), MutinyJsError> {
         let nodes = self.nodes.lock().await;
+        debug!("Keysending to {to_node}");
         let node = nodes.get(from_node.as_str()).unwrap();
 
         let node_id = match PublicKey::from_str(to_node.as_str()) {
@@ -521,12 +543,26 @@ impl NodeManager {
         let preimage = PaymentPreimage(entropy);
 
         let amt_msats = amt_sats * 1000;
+
+        let chans = node.channel_manager.list_channels();
+        let chan = chans.first().unwrap();
+        let usable = node.channel_manager.list_usable_channels();
+
+        info!(
+            "confirmations_required: {}",
+            chan.confirmations_required.unwrap_or(69)
+        );
+        info!("is_channel_ready: {}", chan.is_channel_ready);
+        info!("is_usable: {}", chan.is_usable);
+        info!("is_public: {}", chan.is_public);
+        info!("usable: {}", usable.len());
+
         let _ = node
             .invoice_payer
             .pay_pubkey(node_id, preimage, amt_msats, 40)
             .unwrap();
 
-        Ok(())
+        Ok(info!("Keysend successful!"))
     }
 
     #[wasm_bindgen]
