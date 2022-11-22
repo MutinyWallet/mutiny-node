@@ -451,8 +451,8 @@ impl BackgroundProcessor {
     {
         let stop_thread = Arc::new(AtomicBool::new(false));
         let stop_thread_clone = stop_thread.clone();
-        let _ = spawn_local(async move {
-            let _ = define_run_body!(
+        spawn_local(async move {
+            define_run_body!(
                 persister,
                 event_handler,
                 chain_monitor,

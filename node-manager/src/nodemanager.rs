@@ -251,7 +251,7 @@ impl NodeManager {
             let id = node
                 .keys_manager
                 .get_node_id(Recipient::Node)
-                .expect(format!("Failed to get node id for {}", node_item.0).as_str());
+                .expect("Failed to get node id");
 
             nodes_map.insert(id.to_hex(), Arc::new(node));
         }

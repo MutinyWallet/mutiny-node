@@ -98,11 +98,11 @@ impl LdkEventHandler for EventHandler {
                 .to_address();
 
                 let wallet_thread = self.wallet.clone();
-                let channel_values_satoshis_thread = channel_value_satoshis.clone();
+                let channel_values_satoshis_thread = *channel_value_satoshis;
                 let channel_manager_thread = self.channel_manager.clone();
                 let logger_thread = self.logger.clone();
-                let temporary_channel_id_thread = temporary_channel_id.clone();
-                let counterparty_node_id_thread = counterparty_node_id.clone();
+                let temporary_channel_id_thread = *temporary_channel_id;
+                let counterparty_node_id_thread = *counterparty_node_id;
                 spawn_local(async move {
                     let psbt = match wallet_thread
                         .create_signed_psbt(addr, channel_values_satoshis_thread, None)
