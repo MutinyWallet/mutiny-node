@@ -151,8 +151,8 @@ impl From<Invoice> for MutinyInvoice {
             amount_sats: value.amount_milli_satoshis().map(|m| m / 1000),
             expire: expiry,
             paid: false,
-            fees_paid: None, // todo
-            is_send: false,  // todo this could be bad
+            fees_paid: None,
+            is_send: false, // todo this could be bad
         }
     }
 }
