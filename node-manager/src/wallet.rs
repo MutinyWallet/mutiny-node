@@ -152,13 +152,10 @@ fn get_tr_descriptors_for_extended_key(
 
 pub fn esplora_from_network(network: Network) -> EsploraBlockchain {
     let url = match network {
-        Network::Bitcoin => Ok("https://blockstream.info/api"),
-        Network::Testnet => Ok("https://blockstream.info/testnet/api"),
-        Network::Signet => Ok("https://mempool.space/signet/api"),
-        Network::Regtest => Err(bdk::Error::Generic(
-            "No esplora client available for regtest".to_string(),
-        )),
-    }
-    .expect("What did I tell you about regtest?");
+        Network::Bitcoin => "https://blockstream.info/api",
+        Network::Testnet => "https://blockstream.info/testnet/api",
+        Network::Signet => "https://mempool.space/signet/api",
+        Network::Regtest => "http://localhost:3003",
+    };
     EsploraBlockchain::new(url, 20)
 }

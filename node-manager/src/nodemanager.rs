@@ -186,6 +186,7 @@ impl NodeManager {
 
         // TODO get network from frontend
         let network = Network::Testnet;
+        //let network = Network::Regtest;
 
         let storage = MutinyBrowserStorage::new(password);
 

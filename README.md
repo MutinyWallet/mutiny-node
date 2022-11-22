@@ -129,3 +129,46 @@ Deploy the docker image:
 docker tag bitcoindevshop/websocket-tcp-proxy registry.digitalocean.com/bitcoindevshop-do/websocket-tcp-proxy
 docker push registry.digitalocean.com/bitcoindevshop-do/websocket-tcp-proxy
 ```
+
+### Regtest development
+
+You'll need a regtest bitcoin node, electrs, and an exposed port to whatever regtest node you are connecting to.
+
+#### For Regtest mutiny
+
+For the time being, this is hardcoded. Change the line in `nodemanager.rs` that sets regtest:
+
+```
+    #[wasm_bindgen(constructor)]
+    pub async fn new(
+        password: String,
+        mnemonic: Option<String>,
+    ) -> Result<NodeManager, MutinyJsError> {
+        set_panic_hook();
+
+        // TODO get network from frontend
+        let network = Network::Testnet;
+        //let network = Network::Regtest;
+```
+
+#### For [electrs](https://github.com/Blockstream/electrs)
+First build it, then run this script for regtest, replacing paths and passwords where necessary. YMMV. One special note is that this is for cookie password based auth.
+
+```
+/path/to/target/release/electrs -vvvv --daemon-dir /path/to/.bitcoin/regtest/data/ --timestamp --blocks-dir /path/to/.bitcoin/regtest/data/regtest/blocks/ --cookie="bitcoinrpc:{cookiebasedpassword}" --db-dir /path/to/.electrs/ --network regtest --http-addr 0.0.0.0:3003
+```
+
+#### Expose lightning node regtest
+
+I use bore for this. Swap out 9735 with whatever your OTHER node's port is running on. Typically 9735.
+```
+bore local 9735 --to bore.pub
+```
+
+Whenever you are wanting to connect to this node from the webbrowser, put our default websocket proxy url into it along with the following for the pubkey connect string.
+
+You'll want the pubkey you're connecting to, the IP address of bore (this could change but hasn't changed for me yet), and the port that bore returns that always changes, so look at the bore logs.
+
+```
+{other_node_pubkey}@159.223.171.199:{port_returned_from_bore}
+```
