@@ -6,8 +6,7 @@ import { inputStyle } from "../styles";
 
 export default function OpenChannel() {
 	return (
-
-		<div className="flex flex-col h-full w-full">
+		<>
 			<header className='p-8 flex justify-between items-center'>
 				<PageTitle title="Open Channel" theme="blue"></PageTitle>
 				<Close />
@@ -25,7 +24,7 @@ export default function OpenChannel() {
 				</div>
 			</ScreenMain>
 
-		</div>
+		</>
 	)
 
 

@@ -67,7 +67,7 @@ function Channels() {
                 <PageTitle title="Channels" theme="blue" />
                 <Close />
             </header>
-            <ScreenMain padSides={false}>
+            <ScreenMain padSides={false} wontScroll={!channels || channels.length < 4}>
                 <button className="mx-8" onClick={handleNavOpen}>Add Channel</button>
                 <ul className="overflow-y-scroll px-8 pb-[12rem]">
                     {channels?.map((channel, i) => (
