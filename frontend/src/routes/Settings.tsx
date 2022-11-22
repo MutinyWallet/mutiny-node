@@ -11,7 +11,7 @@ function Settings() {
     const { isLoading, data: words } = useQuery({
         queryKey: ['words'],
         queryFn: () => {
-            console.log("getting mnemonic...")
+            console.log("Getting mnemonic...")
             return nodeManager?.show_seed();
         },
         enabled: !!nodeManager,

@@ -19,8 +19,6 @@ function SendConfirm() {
   const amount = searchParams.get("amount")
   const destination = searchParams.get("destination")
 
-  console.log(searchParams);
-
   searchParams.forEach((value, key) => {
     console.log(key, value);
   });

@@ -19,7 +19,7 @@ function Receive() {
     const { data: onchainAddress } = useQuery({
         queryKey: ['onchainAddress'],
         queryFn: () => {
-            console.log("getting mnemonic...")
+            console.log("Getting mnemonic...")
             return nodeManager?.get_new_address();
         },
         enabled: !!nodeManager,

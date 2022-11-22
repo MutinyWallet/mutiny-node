@@ -35,8 +35,7 @@ cfg_if! {
 #[wasm_bindgen(start)]
 pub async fn main_js() -> Result<(), JsValue> {
     wasm_logger::init(wasm_logger::Config::new(Level::Debug).message_on_new_line());
-    debug!("Main function begins");
-    debug!("Main function ends");
+    debug!("Main function begins and ends");
     Ok(())
 }
 
