@@ -215,6 +215,9 @@ pub enum MutinyJsError {
     /// Node pubkey given is invalid
     #[error("The given node pubkey is invalid.")]
     PubkeyInvalid,
+    /// Error getting the bitcoin price
+    #[error("Failed to get the bitcoin price.")]
+    BitcoinPriceError,
     /// Unknown error.
     #[error("Unknown Error")]
     UnknownError,
@@ -278,6 +281,12 @@ impl From<esplora_client::Error> for MutinyJsError {
 impl From<ParseOrSemanticError> for MutinyJsError {
     fn from(_e: ParseOrSemanticError) -> Self {
         Self::InvoiceInvalid
+    }
+}
+
+impl From<reqwest::Error> for MutinyJsError {
+    fn from(_e: reqwest::Error) -> Self {
+        Self::BitcoinPriceError
     }
 }
 

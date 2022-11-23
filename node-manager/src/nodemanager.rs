@@ -20,6 +20,7 @@ use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning_invoice::{Invoice, InvoiceDescription};
 use log::{debug, error, info};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
@@ -742,6 +743,30 @@ impl NodeManager {
 
         Ok(serde_wasm_bindgen::to_value(&peers)?)
     }
+
+    #[wasm_bindgen]
+    pub async fn get_bitcoin_price(&self) -> Result<f32, MutinyJsError> {
+        let client = Client::builder().build().unwrap();
+
+        let resp = client
+            .get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd")
+            .send()
+            .await?;
+
+        let response: CoingeckoResponse = resp.error_for_status()?.json().await?;
+
+        Ok(response.bitcoin.usd)
+    }
+}
+
+#[derive(Deserialize, Clone, Copy, Debug)]
+struct CoingeckoResponse {
+    pub bitcoin: CoingeckoPrice,
+}
+
+#[derive(Deserialize, Clone, Copy, Debug)]
+struct CoingeckoPrice {
+    pub usd: f32,
 }
 
 // This will create a new node with a node manager and return the PublicKey of the node created.

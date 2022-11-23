@@ -5,6 +5,8 @@ import {NodeManagerContext} from "@components/GlobalStateProvider";
 function App() {
     const [mnemonic, setMnemonic] = useState("...")
 
+    const [price, setBitcoinPrice] = useState("$0")
+
     const [feeEstimate, setFeeEstimate] = useState("...")
 
     const [balance, setBalance] = useState("0")
@@ -79,6 +81,7 @@ function App() {
             try {
                 await nodeManager.sync()
                 await updateBalance()
+                await updatePrice()
                 const fee = nodeManager.estimate_fee_normal()
                 setFeeEstimate(fee.toLocaleString())
             } catch (e) {
@@ -93,6 +96,17 @@ function App() {
                 let balance = await nodeManager.get_balance();
                 let str = `confirmed: ${balance.confirmed?.toLocaleString()} sats, unconfirmed: ${balance.unconfirmed?.toLocaleString()} sats, ln: ${balance.lightning.toLocaleString()} sats`
                 setBalance(str)
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    }
+
+    async function updatePrice() {
+        if (nodeManager) {
+            try {
+                let price = await nodeManager.get_bitcoin_price();
+                setBitcoinPrice(`$ ${price}`)
             } catch (e) {
                 console.error(e);
             }
@@ -205,6 +219,9 @@ function App() {
                 <p>Here is the seed phrase for your node manager:</p>
                 <pre>
                     <code>{mnemonic}</code>
+                </pre>
+                <pre>
+                    <code>Bitcoin Price: {price}</code>
                 </pre>
                 {nodeManager &&
                     <>

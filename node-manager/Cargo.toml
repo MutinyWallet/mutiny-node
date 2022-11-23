@@ -32,6 +32,7 @@ lightning-invoice = { version = "0.20.0", default-features = false, features = [
 lightning-rapid-gossip-sync = { version = "0.0.112", features = ["no-std"] }
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 chrono = "0.4.22"
+reqwest = { version = "0.11", default-features = false, features = ["json"] }
 
 base64 = "0.13.0"
 pbkdf2 = "0.11"
