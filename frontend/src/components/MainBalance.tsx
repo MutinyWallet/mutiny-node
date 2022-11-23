@@ -15,8 +15,6 @@ function prettyPrintUnconfirmed(b: MutinyBalance): string {
 export default function MainBalance() {
     const nodeManager = useContext(NodeManagerContext);
 
-    const [showUnconfirmed, setShowUnconfirmed] = useState(false)
-
     const { data: balance } = useQuery({
         queryKey: ['balance'],
         queryFn: () => {
@@ -25,9 +23,9 @@ export default function MainBalance() {
         },
         enabled: !!nodeManager,
     })
-    return (<div className="flex flex-col gap-4 cursor-pointer" onClick={() => setShowUnconfirmed(!showUnconfirmed)}>
+    return (<div className="flex flex-col gap-4 cursor-pointer">
         <h1 className='text-4xl font-light uppercase'>{balance && prettyPrintBalance(balance).toString()} <span className='text-2xl'>sats</span></h1>
-        {showUnconfirmed &&
+        {(balance && balance.unconfirmed?.valueOf() > 0) &&
             <div>
                 <h1 className='text-4xl font-light uppercase opacity-70'>{balance && prettyPrintUnconfirmed(balance).toString()} <span className='text-2xl'>sats</span></h1>
                 <small className='text-lg font-light uppercase opacity-70'>Unconfirmed</small>
