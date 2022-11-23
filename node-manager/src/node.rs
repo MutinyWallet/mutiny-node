@@ -271,10 +271,17 @@ impl Node {
                     0,
                 ));
                 let peer_connections = connect_persister.list_peer_connection_info();
-                for (peer_pubkey, conn_str) in peer_connections.iter() {
+                let current_connections = connect_peer_man.get_peer_node_ids();
+
+                let not_connected: Vec<&(PublicKey, String)> = peer_connections
+                    .iter()
+                    .filter(|(p, _)| !current_connections.contains(p))
+                    .collect();
+
+                for (pubkey, conn_str) in not_connected.iter() {
                     connect_logger.log(&Record::new(
                         lightning::util::logger::Level::Debug,
-                        format_args!("DEBUG: going to auto connect to peer: {}", peer_pubkey),
+                        format_args!("DEBUG: going to auto connect to peer: {}", pubkey),
                         "node",
                         "",
                         0,
@@ -283,13 +290,9 @@ impl Node {
                     if conn.is_err() {
                         continue;
                     }
-                    let pubkey = PublicKey::from_str(peer_pubkey);
-                    if pubkey.is_err() {
-                        continue;
-                    }
-                    match connect_peer_if_necessary(
+                    match connect_peer(
                         connect_proxy.clone(),
-                        pubkey.unwrap(),
+                        pubkey.to_owned(),
                         conn.unwrap(),
                         connect_peer_man.clone(),
                     )
@@ -298,7 +301,7 @@ impl Node {
                         Ok(_) => {
                             connect_logger.log(&Record::new(
                                 lightning::util::logger::Level::Debug,
-                                format_args!("DEBUG: auto connected peer: {}", peer_pubkey),
+                                format_args!("DEBUG: auto connected peer: {}", pubkey),
                                 "node",
                                 "",
                                 0,
@@ -721,6 +724,14 @@ pub(crate) async fn connect_peer_if_necessary(
         }
     }
 
+    connect_peer(websocket_proxy_addr, pubkey, peer_addr, peer_manager).await
+}
+pub(crate) async fn connect_peer(
+    websocket_proxy_addr: String,
+    pubkey: PublicKey,
+    peer_addr: SocketAddr,
+    peer_manager: Arc<PeerManager>,
+) -> Result<(), MutinyError> {
     // first make a connection to the node
     let tcp_proxy = Arc::new(TcpProxy::new(websocket_proxy_addr, peer_addr).await);
     let mut descriptor = SocketDescriptor::new(tcp_proxy);

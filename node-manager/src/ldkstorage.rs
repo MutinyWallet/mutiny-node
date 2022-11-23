@@ -27,10 +27,12 @@ use lightning::util::logger::Record;
 use lightning::util::persist::KVStorePersister;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use log::error;
+use secp256k1::PublicKey;
 use std::collections::HashMap;
 use std::io;
 use std::io::Cursor;
 use std::ops::Deref;
+use std::str::FromStr;
 use std::sync::Arc;
 
 const NETWORK_KEY: &str = "network";
@@ -283,14 +285,15 @@ impl MutinyNodePersister {
         MutinyBrowserStorage::delete(key)
     }
 
-    pub(crate) fn list_peer_connection_info(&self) -> Vec<(String, String)> {
+    pub(crate) fn list_peer_connection_info(&self) -> Vec<(PublicKey, String)> {
         let suffix = self.node_id.as_str();
         let map: HashMap<String, String> = self.storage.scan(PEER_PREFIX_KEY, Some(suffix));
         map.into_iter()
             .map(|(k, v)| {
                 let k = String::from(k.strip_prefix(PEER_PREFIX_KEY).unwrap());
-                let k = String::from(k.strip_suffix(suffix).unwrap().strip_suffix('_').unwrap());
-                (k, v)
+                let k = k.strip_suffix(suffix).unwrap().strip_suffix('_').unwrap();
+                let pubkey = PublicKey::from_str(k).unwrap();
+                (pubkey, v)
             })
             .collect()
     }
