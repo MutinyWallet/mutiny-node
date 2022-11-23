@@ -414,7 +414,7 @@ impl BackgroundProcessor {
         CMH: 'static + Deref + Send + Sync,
         OMH: 'static + Deref + Send + Sync,
         RMH: 'static + Deref + Send + Sync,
-        EH: 'static + EventHandler + Send,
+        EH: 'static + EventHandler,
         PS: 'static + Deref + Send,
         M: 'static + Deref<Target = ChainMonitor<Signer, CF, T, F, L, P>> + Send + Sync,
         CM: 'static + Deref<Target = ChannelManager<Signer, CW, T, K, F, L>> + Send + Sync,
