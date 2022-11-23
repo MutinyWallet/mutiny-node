@@ -8,6 +8,7 @@ import Router from '@components/Router';
 import { GlobalStateProvider } from '@components/GlobalStateProvider';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ManagerRouteProvider from '@components/ManagerRouteProvider';
+import SyncOnInterval from '@components/SyncOnInterval';
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
@@ -19,9 +20,11 @@ root.render(
   <React.StrictMode>
     <GlobalStateProvider>
       <QueryClientProvider client={queryClient}>
-        <ManagerRouteProvider>
-          <Router />
-        </ManagerRouteProvider>
+        <SyncOnInterval>
+          <ManagerRouteProvider>
+            <Router />
+          </ManagerRouteProvider>
+        </SyncOnInterval>
       </QueryClientProvider>
     </GlobalStateProvider>
   </React.StrictMode>
