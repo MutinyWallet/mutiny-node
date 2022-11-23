@@ -522,8 +522,23 @@ impl Node {
     }
 
     /// pay_invoice sends off the payment but does not wait for results
-    pub fn pay_invoice(&self, invoice: Invoice) -> Result<MutinyInvoice, MutinyError> {
-        let pay_result = self.invoice_payer.pay_invoice(&invoice);
+    pub fn pay_invoice(
+        &self,
+        invoice: Invoice,
+        amt_sats: Option<u64>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        let pay_result = if invoice.amount_milli_satoshis().is_none() {
+            if amt_sats.is_none() {
+                return Err(MutinyError::InvoiceInvalid);
+            }
+            self.invoice_payer
+                .pay_zero_value_invoice(&invoice, amt_sats.unwrap())
+        } else {
+            if amt_sats.is_some() {
+                return Err(MutinyError::InvoiceInvalid);
+            }
+            self.invoice_payer.pay_invoice(&invoice)
+        };
 
         let last_update = crate::utils::now().as_secs();
         let mut payment_info = PaymentInfo {
