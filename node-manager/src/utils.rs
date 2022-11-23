@@ -23,15 +23,6 @@ pub async fn sleep(millis: i32) {
     wasm_bindgen_futures::JsFuture::from(p).await.unwrap();
 }
 
-#[inline]
-pub fn hex_str(value: &[u8]) -> String {
-    let mut res = String::with_capacity(64);
-    for v in value {
-        res += &format!("{:02x}", v);
-    }
-    res
-}
-
 pub fn currency_from_network(network: Network) -> Currency {
     match network {
         Network::Bitcoin => Currency::Bitcoin,

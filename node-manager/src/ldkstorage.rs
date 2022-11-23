@@ -6,11 +6,11 @@ use crate::localstorage::MutinyBrowserStorage;
 use crate::logging::MutinyLogger;
 use crate::node::NetworkGraph;
 use crate::node::{default_user_config, ChainMonitor};
-use crate::utils::hex_str;
 use crate::wallet::esplora_from_network;
 use anyhow::anyhow;
 use bitcoin::BlockHash;
 use bitcoin::Network;
+use bitcoin_hashes::hex::ToHex;
 use futures::{try_join, TryFutureExt};
 use lightning::chain::channelmonitor::ChannelMonitor;
 use lightning::chain::keysinterface::InMemorySigner;
@@ -294,13 +294,13 @@ fn payment_key(inbound: bool, payment_hash: PaymentHash) -> String {
         format!(
             "{}{}",
             PAYMENT_INBOUND_PREFIX_KEY,
-            String::as_str(&hex_str(&payment_hash.0))
+            payment_hash.0.to_hex().as_str()
         )
     } else {
         format!(
             "{}{}",
             PAYMENT_OUTBOUND_PREFIX_KEY,
-            String::as_str(&hex_str(&payment_hash.0))
+            payment_hash.0.to_hex().as_str()
         )
     };
     key

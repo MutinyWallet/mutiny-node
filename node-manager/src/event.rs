@@ -1,12 +1,13 @@
 use crate::ldkstorage::MutinyNodePersister;
 use crate::logging::MutinyLogger;
-use crate::utils::{hex_str, sleep};
+use crate::utils::sleep;
 use crate::wallet::MutinyWallet;
 use crate::{chain::MutinyChain, ldkstorage::PhantomChannelManager};
 use bdk::wallet::AddressIndex;
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::Network;
 use bitcoin_bech32::WitnessProgram;
+use bitcoin_hashes::hex::ToHex;
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
 use lightning::chain::keysinterface::PhantomKeysManager;
 use lightning::util::events::{Event, EventHandler as LdkEventHandler, PaymentPurpose};
@@ -157,7 +158,7 @@ impl LdkEventHandler for EventHandler {
                     lightning::util::logger::Level::Debug,
                     format_args!(
                         "EVENT: PaymentReceived received payment from payment hash {} of {} millisatoshis",
-                        hex_str(&payment_hash.0),
+                        payment_hash.0.to_hex(),
                         amount_msat
                     ),
                     "event",
@@ -193,7 +194,7 @@ impl LdkEventHandler for EventHandler {
                     lightning::util::logger::Level::Debug,
                     format_args!(
                         "EVENT: PaymentClaimed claimed payment from payment hash {} of {} millisatoshis",
-                        hex_str(&payment_hash.0),
+                        payment_hash.0.to_hex(),
                         amount_msat
                     ),
                     "node",
@@ -270,7 +271,7 @@ impl LdkEventHandler for EventHandler {
             } => {
                 self.logger.log(&Record::new(
                     lightning::util::logger::Level::Debug,
-                    format_args!("EVENT: PaymentSent: {}", hex_str(&payment_hash.0)),
+                    format_args!("EVENT: PaymentSent: {}", payment_hash.0.to_hex()),
                     "event",
                     "",
                     0,
@@ -359,7 +360,7 @@ impl LdkEventHandler for EventHandler {
             Event::PaymentFailed { payment_hash, .. } => {
                 self.logger.log(&Record::new(
                     lightning::util::logger::Level::Error,
-                    format_args!("EVENT: PaymentFailed: {}", hex_str(&payment_hash.0)),
+                    format_args!("EVENT: PaymentFailed: {}", payment_hash.0.to_hex()),
                     "event",
                     "",
                     0,
@@ -474,7 +475,7 @@ impl LdkEventHandler for EventHandler {
                     lightning::util::logger::Level::Debug,
                     format_args!(
                         "EVENT: Channel {} closed due to: {:?}",
-                        hex_str(channel_id),
+                        channel_id.to_hex(),
                         reason
                     ),
                     "event",

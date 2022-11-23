@@ -3,7 +3,7 @@ use crate::invoice::create_phantom_invoice;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::localstorage::MutinyBrowserStorage;
 use crate::nodemanager::MutinyInvoice;
-use crate::utils::{currency_from_network, hex_str};
+use crate::utils::currency_from_network;
 use crate::wallet::MutinyWallet;
 use bitcoin::hashes::Hash;
 use bitcoin::Network;
@@ -34,6 +34,7 @@ use anyhow::Context;
 use bip39::Mnemonic;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::secp256k1::PublicKey;
+use bitcoin_hashes::hex::ToHex;
 use instant::SystemTime;
 use lightning::chain::keysinterface::{
     InMemorySigner, KeysInterface, PhantomKeysManager, Recipient,
@@ -473,7 +474,7 @@ impl Node {
                     let paid = matches!(i.status, HTLCStatus::Succeeded);
                     let sats: Option<u64> = i.amt_msat.0.map(|s| s / 1_000);
                     let fee_paid_sat = i.fee_paid_msat.map(|f| f / 1_000);
-                    let preimage = i.preimage.map(|p| hex_str(&p));
+                    let preimage = i.preimage.map(|p| p.to_hex());
                     Some(MutinyInvoice::new(
                         None,
                         None,
