@@ -2,8 +2,7 @@ import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
 import ScreenMain from "../components/ScreenMain";
 import { useNavigate } from "react-router";
-import { useContext, useState } from "react";
-import { NodeManagerContext } from "@components/GlobalStateProvider";
+import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import ReceiveLightning from "@components/ReceiveLightning";
 import ReceiveOnchain from "@components/ReceiveOnchain";
@@ -11,8 +10,6 @@ import ReceiveOnchain from "@components/ReceiveOnchain";
 function Receive() {
     let navigate = useNavigate();
     const queryClient = useQueryClient()
-
-    const nodeManager = useContext(NodeManagerContext);
 
     function handleCancel() {
         navigate("/")

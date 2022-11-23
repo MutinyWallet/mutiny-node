@@ -64,6 +64,7 @@ function SendConfirm() {
         } else if (paymentType === PaymentType.invoice) {
           let myNode = await getFirstNode(nodeManager!);
           await nodeManager?.pay_invoice(myNode, destination)
+          setSentInvoice(true);
         }
       }
     } catch (e: unknown) {
@@ -123,10 +124,18 @@ function SendConfirm() {
           <div />
           <p className="text-2xl font-light">How does this look to you?</p>
           <dl>
-            <div className="rounded border p-2 my-2">
-              <dt>Who</dt>
-              <dd className="font-mono break-words">TODO: PAYEE PUBKEY</dd>
-            </div>
+            {invoice.payee_pubkey ?
+              <div className="rounded border p-2 my-2">
+                <dt>Who</dt>
+                <dd className="font-mono break-words">{invoice.payee_pubkey}</dd>
+              </div>
+              :
+              <div className="rounded border p-2 my-2">
+                <dt>Payment Hash</dt>
+                <dd className="font-mono break-words">{invoice.payment_hash}</dd>
+              </div>
+            }
+
             <div className="rounded border p-2 my-2">
               <dt>How Much</dt>
               <dd>{prettyPrintAmount(invoice.amount_sats!)} sats</dd>

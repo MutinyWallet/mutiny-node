@@ -21,7 +21,7 @@ export default function ReceiveLightning() {
         refetchOnWindowFocus: false
     })
 
-    const { data: checkedInvoice } = useQuery({
+    useQuery({
         queryKey: ['checkinvoice'],
         queryFn: async () => {
             console.log("Checking invoice:", invoice?.payment_hash);

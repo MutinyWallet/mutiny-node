@@ -1,23 +1,18 @@
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
 import ScreenMain from "../components/ScreenMain";
-import QRCode from "react-qr-code"
-import Copy from "../components/Copy";
 import { useNavigate } from "react-router";
-import { useContext, useState } from "react";
+import { useContext } from "react";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import takeN from "@util/takeN";
 import prettyPrintTime from "@util/prettyPrintTime";
-import ReceiveLightning from "@components/ReceiveLightning";
-import ReceiveOnchain from "@components/ReceiveOnchain";
 import { useSearchParams } from "react-router-dom";
 import { MutinyInvoice } from "node-manager";
 import prettyPrintAmount from "@util/prettyPrintAmount";
 
 export default function ReceiveFinal() {
     let navigate = useNavigate();
-    const queryClient = useQueryClient()
 
     const nodeManager = useContext(NodeManagerContext);
 

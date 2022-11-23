@@ -24,10 +24,6 @@ function App() {
     navigate("/receive")
   }
 
-  async function handleCheckBalance() {
-    queryClient.invalidateQueries({ queryKey: ['balance'] })
-  }
-
   async function handleSync() {
     console.time("BDK Sync Time")
     console.groupCollapsed("BDK Sync")
