@@ -552,7 +552,7 @@ impl NodeManager {
     #[wasm_bindgen]
     pub async fn create_invoice(
         &self,
-        amount: u64,
+        amount: Option<u64>,
         description: String,
     ) -> Result<MutinyInvoice, MutinyJsError> {
         // go through each node to get the route hints

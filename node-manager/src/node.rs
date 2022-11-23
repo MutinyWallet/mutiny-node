@@ -373,12 +373,13 @@ impl Node {
 
     pub fn create_phantom_invoice(
         &self,
-        amount_sat: u64,
+        amount_sat: Option<u64>,
         description: String,
         route_hints: Vec<PhantomRouteHints>,
     ) -> Result<Invoice, MutinyError> {
+        let amount_msat = amount_sat.map(|s| s * 1_000);
         let invoice = match create_phantom_invoice::<InMemorySigner, Arc<PhantomKeysManager>>(
-            Some(amount_sat * 1_000),
+            amount_msat,
             None,
             description,
             1500,
@@ -389,7 +390,10 @@ impl Node {
             Ok(inv) => {
                 self.logger.log(&Record::new(
                     lightning::util::logger::Level::Info,
-                    format_args!("SUCCESS: generated invoice: {}", inv),
+                    format_args!(
+                        "SUCCESS: generated invoice: {} with amount {:?}",
+                        inv, amount_msat
+                    ),
                     "node",
                     "",
                     0,
@@ -413,7 +417,7 @@ impl Node {
             preimage: None,
             secret: Some(invoice.payment_secret().0),
             status: HTLCStatus::Pending,
-            amt_msat: MillisatAmount(Some(amount_sat * 1000)),
+            amt_msat: MillisatAmount(amount_msat),
             fee_paid_msat: None,
             bolt11: Some(invoice.to_string()),
         };
