@@ -77,6 +77,7 @@ pub struct MutinyInvoice {
     description: Option<String>,
     payment_hash: String,
     preimage: Option<String>,
+    payee_pubkey: Option<String>,
     pub amount_sats: Option<u64>,
     pub expire: u64,
     pub paid: bool,
@@ -90,6 +91,7 @@ impl MutinyInvoice {
         description: Option<String>,
         payment_hash: String,
         preimage: Option<String>,
+        payee_pubkey: Option<String>,
         amount_sats: Option<u64>,
         expire: u64,
         paid: bool,
@@ -101,6 +103,7 @@ impl MutinyInvoice {
             description,
             payment_hash,
             preimage,
+            payee_pubkey,
             amount_sats,
             expire,
             paid,
@@ -131,6 +134,11 @@ impl MutinyInvoice {
     pub fn preimage(&self) -> Option<String> {
         self.preimage.clone()
     }
+
+    #[wasm_bindgen(getter)]
+    pub fn payee_pubkey(&self) -> Option<String> {
+        self.payee_pubkey.clone()
+    }
 }
 
 impl From<Invoice> for MutinyInvoice {
@@ -148,6 +156,7 @@ impl From<Invoice> for MutinyInvoice {
             description,
             payment_hash: value.payment_hash().to_owned().to_hex(),
             preimage: None,
+            payee_pubkey: value.payee_pub_key().map(|p| p.to_hex()),
             amount_sats: value.amount_milli_satoshis().map(|m| m / 1000),
             expire: expiry,
             paid: false,
