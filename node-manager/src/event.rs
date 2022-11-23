@@ -24,6 +24,7 @@ pub(crate) struct PaymentInfo {
     pub amt_msat: MillisatAmount,
     pub fee_paid_msat: Option<u64>,
     pub bolt11: Option<String>,
+    pub last_update: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -217,6 +218,7 @@ impl LdkEventHandler for EventHandler {
                         saved_payment_info.status = HTLCStatus::Succeeded;
                         saved_payment_info.preimage = payment_preimage;
                         saved_payment_info.secret = payment_secret;
+                        saved_payment_info.last_update = crate::utils::now().as_secs();
                         match self.persister.persist_payment_info(
                             *payment_hash,
                             saved_payment_info,
@@ -237,6 +239,8 @@ impl LdkEventHandler for EventHandler {
                     None => {
                         let payment_preimage = payment_preimage.map(|p| p.0);
                         let payment_secret = payment_secret.map(|p| p.0);
+                        let last_update = crate::utils::now().as_secs();
+
                         let payment_info = PaymentInfo {
                             preimage: payment_preimage,
                             secret: payment_secret,
@@ -244,6 +248,7 @@ impl LdkEventHandler for EventHandler {
                             amt_msat: MillisatAmount(Some(*amount_msat)),
                             fee_paid_msat: None,
                             bolt11: None,
+                            last_update,
                         };
                         match self
                             .persister
@@ -282,6 +287,7 @@ impl LdkEventHandler for EventHandler {
                         saved_payment_info.status = HTLCStatus::Succeeded;
                         saved_payment_info.preimage = Some(payment_preimage.0);
                         saved_payment_info.fee_paid_msat = *fee_paid_msat;
+                        saved_payment_info.last_update = crate::utils::now().as_secs();
                         match self.persister.persist_payment_info(
                             *payment_hash,
                             saved_payment_info,
@@ -369,6 +375,7 @@ impl LdkEventHandler for EventHandler {
                 match self.persister.read_payment_info(*payment_hash, false) {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Failed;
+                        saved_payment_info.last_update = crate::utils::now().as_secs();
                         match self.persister.persist_payment_info(
                             *payment_hash,
                             saved_payment_info,

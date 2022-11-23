@@ -18,7 +18,6 @@ use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget,
 use lightning::chain::keysinterface::{KeysInterface, Recipient};
 use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
-use lightning::ln::PaymentPreimage;
 use lightning_invoice::{Invoice, InvoiceDescription};
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
@@ -78,6 +77,7 @@ pub struct MutinyInvoice {
     description: Option<String>,
     payment_hash: String,
     preimage: Option<String>,
+    payee_pubkey: Option<String>,
     pub amount_sats: Option<u64>,
     pub expire: u64,
     pub paid: bool,
@@ -91,6 +91,7 @@ impl MutinyInvoice {
         description: Option<String>,
         payment_hash: String,
         preimage: Option<String>,
+        payee_pubkey: Option<String>,
         amount_sats: Option<u64>,
         expire: u64,
         paid: bool,
@@ -102,6 +103,7 @@ impl MutinyInvoice {
             description,
             payment_hash,
             preimage,
+            payee_pubkey,
             amount_sats,
             expire,
             paid,
@@ -132,6 +134,11 @@ impl MutinyInvoice {
     pub fn preimage(&self) -> Option<String> {
         self.preimage.clone()
     }
+
+    #[wasm_bindgen(getter)]
+    pub fn payee_pubkey(&self) -> Option<String> {
+        self.payee_pubkey.clone()
+    }
 }
 
 impl From<Invoice> for MutinyInvoice {
@@ -149,6 +156,7 @@ impl From<Invoice> for MutinyInvoice {
             description,
             payment_hash: value.payment_hash().to_owned().to_hex(),
             preimage: None,
+            payee_pubkey: value.payee_pub_key().map(|p| p.to_hex()),
             amount_sats: value.amount_milli_satoshis().map(|m| m / 1000),
             expire: expiry,
             paid: false,
@@ -591,13 +599,12 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    // todo change return to MutinyInvoice
     pub async fn keysend(
         &self,
         from_node: String,
         to_node: String,
         amt_sats: u64,
-    ) -> Result<(), MutinyJsError> {
+    ) -> Result<MutinyInvoice, MutinyJsError> {
         let nodes = self.nodes.lock().await;
         debug!("Keysending to {to_node}");
         let node = nodes.get(from_node.as_str()).unwrap();
@@ -607,17 +614,7 @@ impl NodeManager {
             Err(_) => Err(MutinyJsError::PubkeyInvalid),
         }?;
 
-        let mut entropy = [0u8; 32];
-        getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
-        let preimage = PaymentPreimage(entropy);
-
-        let amt_msats = amt_sats * 1000;
-
-        let _ = node
-            .invoice_payer
-            .pay_pubkey(node_id, preimage, amt_msats, 40)?;
-
-        Ok(info!("Keysend successful!"))
+        node.keysend(node_id, amt_sats).map_err(|e| e.into())
     }
 
     #[wasm_bindgen]
@@ -743,11 +740,6 @@ impl NodeManager {
             .collect();
 
         Ok(serde_wasm_bindgen::to_value(&peers)?)
-    }
-
-    #[wasm_bindgen]
-    pub async fn list_ln_txs(&self) -> Result<JsValue /* Vec<MutinyInvoice> */, MutinyJsError> {
-        todo!()
     }
 }
 
