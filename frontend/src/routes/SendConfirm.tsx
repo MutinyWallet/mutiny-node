@@ -10,6 +10,7 @@ import { detectPaymentType, getFirstNode, PaymentType, toastAnything } from "@ut
 import MutinyToaster from "@components/MutinyToaster";
 import { useQuery } from "@tanstack/react-query";
 import prettyPrintAmount from "@util/prettyPrintAmount";
+import { timeout } from "workbox-core/_private";
 
 function SendConfirm() {
   const nodeManager = useContext(NodeManagerContext);
@@ -69,13 +70,14 @@ function SendConfirm() {
           } else {
             await nodeManager?.pay_invoice(myNode, destination, BigInt(amount))
           }
-
           setSentInvoice(true);
         }
       }
     } catch (e: unknown) {
       console.error(e);
       toastAnything(e);
+      await timeout(5000)
+      navigate("/")
       return
     }
 
@@ -97,6 +99,7 @@ function SendConfirm() {
       {loading && <ScreenMain>
         <div />
         <p className="text-2xl font-light">Sending...</p>
+        <div />
       </ScreenMain>
       }
       {!loading && (sentKeysend || sentInvoice) &&
@@ -160,7 +163,6 @@ function SendConfirm() {
           <div className='flex justify-start'>
             <button onClick={handleSend}>Send</button>
           </div>
-          <MutinyToaster />
         </ScreenMain>
       }
       {!loading && !sentOnchain && !sentKeysend && !invoice &&
@@ -185,9 +187,9 @@ function SendConfirm() {
           <div className='flex justify-start'>
             <button onClick={handleSend}>Send</button>
           </div>
-          <MutinyToaster />
         </ScreenMain>
       }
+      <MutinyToaster />
     </>
 
   );
