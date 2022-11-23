@@ -132,28 +132,29 @@ impl MutinyNodePersister {
     where
         K::Target: KeysInterface<Signer = Signer> + Sized,
     {
-        let mut res = Vec::new();
-
         // Get all the channel monitor buffers that exist for this node
         let suffix = self.node_id.as_str();
         let channel_monitor_list: HashMap<String, Vec<u8>> =
             self.storage.scan(MONITORS_PREFIX_KEY, Some(suffix));
 
-        // TODO probably could use a fold here instead
-        for (_, data) in channel_monitor_list {
-            let mut buffer = Cursor::new(data);
-            match <(BlockHash, ChannelMonitor<Signer>)>::read(&mut buffer, &*keys_manager) {
-                Ok((blockhash, channel_monitor)) => {
-                    res.push((blockhash, channel_monitor));
+        let res = channel_monitor_list
+            .iter()
+            .fold(Ok(Vec::new()), |current_res, (_, data)| match current_res {
+                Err(e) => Err(e),
+                Ok(mut accum) => {
+                    let mut buffer = Cursor::new(data);
+                    match <(BlockHash, ChannelMonitor<Signer>)>::read(&mut buffer, &*keys_manager) {
+                        Ok((blockhash, channel_monitor)) => {
+                            accum.push((blockhash, channel_monitor));
+                            Ok(accum)
+                        }
+                        Err(e) => Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("Failed to deserialize ChannelMonitor: {}", e),
+                        )),
+                    }
                 }
-                Err(e) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("Failed to deserialize ChannelMonitor: {}", e),
-                    ));
-                }
-            }
-        }
+            })?;
 
         Ok(res)
     }
