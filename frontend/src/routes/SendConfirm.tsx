@@ -5,11 +5,15 @@ import PageTitle from "../components/PageTitle";
 import ScreenMain from "../components/ScreenMain";
 import { useSearchParams } from "react-router-dom";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
+import toast from "react-hot-toast";
+import { detectPaymentType, getFirstNode, PaymentType, toastAnything } from "@util/dumb";
+import MutinyToaster from "@components/MutinyToaster";
 
 function SendConfirm() {
   const nodeManager = useContext(NodeManagerContext);
 
-  const [sent, setSent] = useState(false)
+  const [sentOnchain, setSentOnchain] = useState(false)
+  const [sentKeysend, setSentKeysend] = useState(false)
   const [description, setDescription] = useState("")
   const [searchParams] = useSearchParams();
   const [txid, setTxid] = useState<string>();
@@ -28,15 +32,27 @@ function SendConfirm() {
     try {
       if (destination && amount) {
         let amountInt = BigInt(amount);
-        if (typeof amountInt === "bigint") {
+        if (typeof amountInt !== "bigint") {
+          toast("Couldn't parse amount")
+          throw new Error("Invalid amount")
+        }
+
+        const paymentType = detectPaymentType(destination);
+
+        if (paymentType === PaymentType.onchain) {
           const txid = await nodeManager?.send_to_address(destination, amountInt);
+          await nodeManager?.sync();
           setTxid(txid)
-          setSent(true);
+          setSentOnchain(true);
+        } else if (paymentType === PaymentType.keysend) {
+          let myNode = await getFirstNode(nodeManager!);
+          await nodeManager?.keysend(myNode, destination, amountInt)
+          setSentKeysend(true);
         }
       }
-
-    } catch (e) {
+    } catch (e: unknown) {
       console.error(e);
+      toastAnything(e);
     }
 
     setLoading(false);
@@ -58,7 +74,16 @@ function SendConfirm() {
         <p className="text-2xl font-light">Sending...</p>
       </ScreenMain>
       }
-      {!loading && sent &&
+      {!loading && sentKeysend &&
+        <ScreenMain>
+          <div />
+          <p className="text-2xl font-light">Sent!</p>
+          <div className='flex justify-start'>
+            <button onClick={handleNice}>Nice</button>
+          </div>
+        </ScreenMain>
+      }
+      {!loading && sentOnchain &&
         <ScreenMain>
           <div />
           <p className="text-2xl font-light">Sent!</p>
@@ -75,7 +100,7 @@ function SendConfirm() {
           </div>
         </ScreenMain>
       }
-      {!loading && !sent &&
+      {!loading && !sentOnchain && !sentKeysend &&
         <ScreenMain>
           <div />
           <p className="text-2xl font-light">How does this look to you?</p>
@@ -97,6 +122,7 @@ function SendConfirm() {
           <div className='flex justify-start'>
             <button onClick={handleSend}>Send</button>
           </div>
+          <MutinyToaster />
         </ScreenMain>
       }
     </>

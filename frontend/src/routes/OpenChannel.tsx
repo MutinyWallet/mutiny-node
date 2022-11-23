@@ -1,5 +1,6 @@
 import { NodeManagerContext } from "@components/GlobalStateProvider";
-import { getFirstNode } from "@util/dumb";
+import MutinyToaster from "@components/MutinyToaster";
+import { getFirstNode, toastAnything } from "@util/dumb";
 import { useContext, useState } from "react";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
@@ -31,6 +32,7 @@ export default function OpenChannel() {
 			// navigate("/manager/channels")
 		} catch (e) {
 			console.error(e)
+			toastAnything(e)
 		}
 	}
 
@@ -51,6 +53,7 @@ export default function OpenChannel() {
 				<div className="flex justify-start">
 					<button onClick={handleOpenChannel}>Create</button>
 				</div>
+				<MutinyToaster />
 			</ScreenMain>
 
 		</>

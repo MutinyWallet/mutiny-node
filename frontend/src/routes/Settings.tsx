@@ -1,6 +1,8 @@
 import Copy from "@components/Copy";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
+import MutinyToaster from "@components/MutinyToaster";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { toastAnything } from "@util/dumb";
 import takeN from "@util/takeN";
 import { useContext } from "react";
 import Close from "../components/Close"
@@ -96,6 +98,7 @@ function Settings() {
             queryClient.invalidateQueries({ queryKey: ['nodes'] })
         } catch (e) {
             console.error(e)
+            toastAnything(e);
         }
     }
 
@@ -137,6 +140,7 @@ function Settings() {
 
                     <input type="file" onChange={handleFileChoose} />
                 </div>
+                <MutinyToaster />
             </ScreenMain>
         </>
     )
