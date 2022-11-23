@@ -172,6 +172,7 @@ impl From<Invoice> for MutinyInvoice {
 pub struct MutinyChannel {
     pub balance: u64,
     pub size: u64,
+    pub reserve: u64,
     outpoint: Option<String>,
     peer: String,
     pub confirmed: bool,
@@ -193,8 +194,9 @@ impl MutinyChannel {
 impl From<&ChannelDetails> for MutinyChannel {
     fn from(c: &ChannelDetails) -> Self {
         MutinyChannel {
-            balance: c.balance_msat / 1_000,
+            balance: c.outbound_capacity_msat / 1_000,
             size: c.channel_value_satoshis,
+            reserve: c.unspendable_punishment_reserve.unwrap_or(0),
             outpoint: c.funding_txo.map(|f| f.into_bitcoin_outpoint().to_string()),
             peer: c.counterparty.node_id.to_hex(),
             confirmed: c.is_channel_ready, // fixme not exactly correct
@@ -429,8 +431,8 @@ impl NodeManager {
                 let nodes = self.nodes.lock().await;
                 let lightning_msats: u64 = nodes
                     .iter()
-                    .flat_map(|(_, n)| n.channel_manager.list_channels())
-                    .map(|c| c.balance_msat)
+                    .flat_map(|(_, n)| n.channel_manager.list_usable_channels())
+                    .map(|c| c.outbound_capacity_msat)
                     .sum();
 
                 let balance = MutinyBalance {
