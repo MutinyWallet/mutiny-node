@@ -409,6 +409,7 @@ impl Node {
             }
         };
 
+        let last_update = crate::utils::now().as_secs();
         let payment_hash = PaymentHash(invoice.payment_hash().into_inner());
         let payment_info = PaymentInfo {
             preimage: None,
@@ -417,6 +418,7 @@ impl Node {
             amt_msat: MillisatAmount(Some(amount_sat * 1000)),
             fee_paid_msat: None,
             bolt11: Some(invoice.to_string()),
+            last_update,
         };
         match self
             .persister
@@ -482,7 +484,7 @@ impl Node {
                         h,
                         preimage,
                         sats,
-                        0,
+                        i.last_update,
                         paid,
                         fee_paid_sat,
                         !inbound,
@@ -518,6 +520,7 @@ impl Node {
     pub fn pay_invoice(&self, invoice: Invoice) -> Result<MutinyInvoice, MutinyError> {
         let pay_result = self.invoice_payer.pay_invoice(&invoice);
 
+        let last_update = crate::utils::now().as_secs();
         let mut payment_info = PaymentInfo {
             preimage: None,
             secret: None,
@@ -525,6 +528,7 @@ impl Node {
             amt_msat: MillisatAmount(invoice.amount_milli_satoshis()),
             fee_paid_msat: None,
             bolt11: Some(invoice.to_string()),
+            last_update,
         };
         self.persister.persist_payment_info(
             PaymentHash(invoice.payment_hash().into_inner()),
@@ -565,6 +569,7 @@ impl Node {
 
         let payment_hash = PaymentHash(Sha256::hash(&preimage.0).into_inner());
 
+        let last_update = crate::utils::now().as_secs();
         let mut payment_info = PaymentInfo {
             preimage: Some(preimage.0),
             secret: None,
@@ -572,6 +577,7 @@ impl Node {
             amt_msat: MillisatAmount(Some(amt_msats)),
             fee_paid_msat: None,
             bolt11: None,
+            last_update,
         };
 
         self.persister

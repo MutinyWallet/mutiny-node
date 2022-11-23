@@ -1,5 +1,7 @@
 use bitcoin::Network;
+use instant::SystemTime;
 use lightning_invoice::Currency;
+use std::time::Duration;
 
 pub fn set_panic_hook() {
     // When the `console_error_panic_hook` feature is enabled, we can call the
@@ -39,4 +41,10 @@ pub fn currency_from_network(network: Network) -> Currency {
         Network::Signet => Currency::Signet,
         Network::Regtest => Currency::Regtest,
     }
+}
+
+pub fn now() -> Duration {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
 }

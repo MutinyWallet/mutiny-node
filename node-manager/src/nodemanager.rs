@@ -732,11 +732,6 @@ impl NodeManager {
 
         Ok(serde_wasm_bindgen::to_value(&peers)?)
     }
-
-    #[wasm_bindgen]
-    pub async fn list_ln_txs(&self) -> Result<JsValue /* Vec<MutinyInvoice> */, MutinyJsError> {
-        todo!()
-    }
 }
 
 // This will create a new node with a node manager and return the PublicKey of the node created.
