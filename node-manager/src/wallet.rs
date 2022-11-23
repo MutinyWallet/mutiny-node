@@ -157,5 +157,5 @@ pub fn esplora_from_network(network: Network) -> EsploraBlockchain {
         Network::Signet => "https://mempool.space/signet/api",
         Network::Regtest => "http://localhost:3003",
     };
-    EsploraBlockchain::new(url, 20)
+    EsploraBlockchain::new(url, 5)
 }

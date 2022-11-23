@@ -9,7 +9,6 @@ use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::{OutPoint, Script, Transaction};
 use gloo_storage::{LocalStorage, Storage};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::localstorage::MutinyBrowserStorage;
 
@@ -241,48 +240,33 @@ impl Database for MutinyBrowserStorage {
         keychain: Option<KeychainKind>,
     ) -> Result<Vec<Script>, bdk::Error> {
         let key = MapKey::Path((keychain, None)).as_map_key();
-        self.scan::<Value>(key.as_str(), None)
+        Ok(self
+            .scan::<Script>(key.as_str(), None)
             .into_values()
-            .map(|value| {
-                let str_opt = value.as_str();
-
-                match str_opt {
-                    Some(str) => Script::from_hex(str)
-                        .map_err(|_| bdk::Error::Generic(String::from("Error decoding json"))),
-                    None => Err(bdk::Error::Generic(String::from("Error decoding json"))),
-                }
-            })
-            .collect()
+            .collect())
     }
 
     fn iter_utxos(&self) -> Result<Vec<LocalUtxo>, bdk::Error> {
         let key = MapKey::Utxo(None).as_map_key();
-        self.scan::<Value>(key.as_str(), None)
+        Ok(self
+            .scan::<LocalUtxo>(key.as_str(), None)
             .into_values()
-            .map(|value| {
-                let utxo: LocalUtxo = Deserialize::deserialize(value)?;
-                Ok(utxo)
-            })
-            .collect()
+            .collect())
     }
 
     fn iter_raw_txs(&self) -> Result<Vec<Transaction>, bdk::Error> {
         let key = MapKey::RawTx(None).as_map_key();
-        self.scan::<Value>(key.as_str(), None)
+        Ok(self
+            .scan::<Transaction>(key.as_str(), None)
             .into_values()
-            .map(|value| {
-                let tx: Transaction = Deserialize::deserialize(value)?;
-                Ok(tx)
-            })
-            .collect()
+            .collect())
     }
 
     fn iter_txs(&self, include_raw: bool) -> Result<Vec<TransactionDetails>, bdk::Error> {
         let key = MapKey::Transaction(None).as_map_key();
-        self.scan::<Value>(key.as_str(), None)
+        self.scan::<TransactionDetails>(key.as_str(), None)
             .into_iter()
-            .map(|(key, value)| -> Result<_, bdk::Error> {
-                let mut tx_details: TransactionDetails = Deserialize::deserialize(value)?;
+            .map(|(key, mut tx_details)| -> Result<_, bdk::Error> {
                 if include_raw {
                     // first byte is prefix for the map, need to drop it
                     let rm_prefix_opt = key.get(2..key.len());
