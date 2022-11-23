@@ -311,6 +311,11 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
+    pub fn get_network(&self) -> String {
+        self.network.to_string()
+    }
+
+    #[wasm_bindgen]
     pub async fn get_new_address(&self) -> Result<String, MutinyJsError> {
         match self
             .wallet
