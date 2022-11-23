@@ -281,6 +281,12 @@ impl From<ParseOrSemanticError> for MutinyJsError {
     }
 }
 
+impl From<bitcoin_hashes::hex::Error> for MutinyJsError {
+    fn from(_e: bitcoin_hashes::hex::Error) -> Self {
+        Self::JsonReadWriteError
+    }
+}
+
 impl From<MutinyJsError> for JsValue {
     fn from(e: MutinyJsError) -> Self {
         JsValue::from(e.to_string())

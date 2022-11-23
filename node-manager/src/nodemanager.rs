@@ -12,7 +12,7 @@ use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
 use bitcoin::consensus::deserialize;
 use bitcoin::hashes::hex::{FromHex, ToHex};
-use bitcoin::{Address, Network, OutPoint, PublicKey, Transaction};
+use bitcoin::{Address, Network, OutPoint, PublicKey, Transaction, Txid};
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::BroadcasterInterface;
 use lightning::chain::keysinterface::{KeysInterface, Recipient};
@@ -391,6 +391,14 @@ impl NodeManager {
     #[wasm_bindgen]
     pub async fn list_onchain(&self) -> Result<JsValue, MutinyJsError> {
         let txs = self.wallet.list_transactions(false).await?;
+
+        Ok(serde_wasm_bindgen::to_value(&txs)?)
+    }
+
+    #[wasm_bindgen]
+    pub async fn get_transaction(&self, txid: String) -> Result<JsValue, MutinyJsError> {
+        let txid = Txid::from_str(txid.as_str())?;
+        let txs = self.wallet.get_transaction(txid, false).await?;
 
         Ok(serde_wasm_bindgen::to_value(&txs)?)
     }
