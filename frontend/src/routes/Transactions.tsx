@@ -17,10 +17,10 @@ function SingleTransaction({ invoice }: { invoice: MutinyInvoice }) {
                 </h3>
             }
             {!invoice.is_send &&
-                <h3 className="text-lg font-light"><span className="text-green">Received</span> {prettyPrintAmount(invoice.amount_sats!)} sats</h3>
+                <h3 className="text-lg font-light"><span className="text-green">Received</span> {prettyPrintAmount(invoice.amount_sats)} sats</h3>
             }
             {invoice.is_send &&
-                <h3 className="text-lg font-light"><span className="text-red">Sent</span> {prettyPrintAmount(invoice.amount_sats!)} sats</h3>
+                <h3 className="text-lg font-light"><span className="text-red">Sent</span> {prettyPrintAmount(invoice.amount_sats)} sats</h3>
             }
             <h3 className="text-lg font-light opacity-70">
                 {invoice.paid ? "Paid" : "Not paid"}
@@ -44,6 +44,7 @@ function Transactions() {
             return nodeManager?.list_invoices() as Promise<MutinyInvoice[]>;
         },
         enabled: !!nodeManager,
+        refetchInterval: 1000
     })
     return (
         <>
@@ -51,7 +52,7 @@ function Transactions() {
                 <PageTitle title="Transactions" theme="green" />
                 <Close />
             </header>
-            <ScreenMain padSides={false}>
+            <ScreenMain padSides={false} wontScroll={!invoices || invoices.length < 4}>
                 <ul className="overflow-y-scroll px-8 pb-[12rem] h-full">
                     {invoices?.sort(sortByExpiry).map((invoice, i) => (
                         <SingleTransaction invoice={invoice} key={i} />

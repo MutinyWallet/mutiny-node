@@ -54,6 +54,7 @@ function Peers() {
             return txs
         },
         enabled: !!nodeManager,
+        refetchInterval: 1000,
     })
 
     return (
