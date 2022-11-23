@@ -13,7 +13,7 @@ export type OnChainTx = {
     txid: string
     received: number
     sent: number
-    fee: number
+    fee?: number
     confirmation_time?: {
         height: number
         timestamp: number
