@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import prettyPrintAmount from "@util/prettyPrintAmount";
 import { MutinyBalance } from "node-manager";
-import { useContext, useState } from "react";
+import { useContext } from "react";
 import { NodeManagerContext } from "./GlobalStateProvider";
 
 function prettyPrintBalance(b: MutinyBalance): string {
