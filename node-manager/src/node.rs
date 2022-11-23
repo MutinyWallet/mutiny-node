@@ -468,9 +468,19 @@ impl Node {
                     let invoice_res = Invoice::from_str(&bolt11).map_err(Into::<MutinyError>::into);
                     match invoice_res {
                         Ok(invoice) => {
-                            let mut mutiny_invoice: MutinyInvoice = invoice.into();
+                            let mut mutiny_invoice: MutinyInvoice = invoice.clone().into();
                             mutiny_invoice.is_send = !inbound;
                             mutiny_invoice.paid = matches!(i.status, HTLCStatus::Succeeded);
+                            mutiny_invoice.amount_sats =
+                                if let Some(inv_amt) = invoice.amount_milli_satoshis() {
+                                    if inv_amt == 0 {
+                                        i.amt_msat.0.map(|a| a / 1_000)
+                                    } else {
+                                        Some(inv_amt / 1_000)
+                                    }
+                                } else {
+                                    i.amt_msat.0.map(|a| a / 1_000)
+                                };
                             Some(mutiny_invoice)
                         }
                         Err(_) => None,
@@ -504,18 +514,20 @@ impl Node {
         payment_hash: &bitcoin_hashes::sha256::Hash,
     ) -> Result<(PaymentInfo, bool), MutinyError> {
         // try inbound first
-        if let Some(payment_info) = self
-            .persister
-            .read_payment_info(PaymentHash(payment_hash.into_inner()), true)
-        {
+        if let Some(payment_info) = self.persister.read_payment_info(
+            PaymentHash(payment_hash.into_inner()),
+            true,
+            self.logger.clone(),
+        ) {
             return Ok((payment_info, true));
         }
 
         // if no inbound check outbound
-        match self
-            .persister
-            .read_payment_info(PaymentHash(payment_hash.into_inner()), false)
-        {
+        match self.persister.read_payment_info(
+            PaymentHash(payment_hash.into_inner()),
+            false,
+            self.logger.clone(),
+        ) {
             Some(payment_info) => Ok((payment_info, false)),
             None => Err(MutinyError::InvoiceInvalid),
         }
@@ -527,17 +539,23 @@ impl Node {
         invoice: Invoice,
         amt_sats: Option<u64>,
     ) -> Result<MutinyInvoice, MutinyError> {
-        let pay_result = if invoice.amount_milli_satoshis().is_none() {
+        let (pay_result, amt_msat) = if invoice.amount_milli_satoshis().is_none() {
             if amt_sats.is_none() {
                 return Err(MutinyError::InvoiceInvalid);
             }
-            self.invoice_payer
-                .pay_zero_value_invoice(&invoice, amt_sats.unwrap())
+            (
+                self.invoice_payer
+                    .pay_zero_value_invoice(&invoice, amt_sats.unwrap()),
+                amt_sats.unwrap() * 1_000,
+            )
         } else {
             if amt_sats.is_some() {
                 return Err(MutinyError::InvoiceInvalid);
             }
-            self.invoice_payer.pay_invoice(&invoice)
+            (
+                self.invoice_payer.pay_invoice(&invoice),
+                invoice.amount_milli_satoshis().unwrap(),
+            )
         };
 
         let last_update = crate::utils::now().as_secs();
@@ -545,7 +563,7 @@ impl Node {
             preimage: None,
             secret: None,
             status: HTLCStatus::Pending,
-            amt_msat: MillisatAmount(invoice.amount_milli_satoshis()),
+            amt_msat: MillisatAmount(Some(amt_msat)),
             fee_paid_msat: None,
             bolt11: Some(invoice.to_string()),
             last_update,

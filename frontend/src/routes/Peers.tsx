@@ -54,6 +54,7 @@ function Peers() {
             return txs
         },
         enabled: !!nodeManager,
+        refetchInterval: 1000,
     })
 
     return (
@@ -64,7 +65,7 @@ function Peers() {
             </header>
             <ScreenMain padSides={false} wontScroll={!peers || peers.length < 4}>
                 <button className="mx-8" onClick={handleNavConnect}>Add Peer</button>
-                <ul className="overflow-y-scroll px-8 pb-[12rem]">
+                <ul className="overflow-y-scroll px-8 pb-[12rem] h-full">
                     {peers?.map((peer, i) => (
                         <SinglePeer peer={peer} key={i} />
                     ))}

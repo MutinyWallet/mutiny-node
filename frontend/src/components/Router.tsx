@@ -18,6 +18,7 @@ import OpenChannel from '@routes/OpenChannel';
 import Utxos from "@routes/Utxos";
 import ConnectPeer from "@routes/ConnectPeer";
 import SendAmount from "@routes/SendAmount";
+import ReceiveFinal from "@routes/ReceiveFinal";
 
 const router = createBrowserRouter([
     {
@@ -43,6 +44,10 @@ const router = createBrowserRouter([
     {
         path: "/receive",
         element: <Receive />,
+    },
+    {
+        path: "/receive/final",
+        element: <ReceiveFinal />,
     },
     {
         path: "/openchannel",
@@ -87,7 +92,6 @@ const router = createBrowserRouter([
         ]
     }
 ]);
-
 
 export default function Router() {
     return <RouterProvider router={router} />

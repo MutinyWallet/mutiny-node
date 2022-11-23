@@ -22,6 +22,8 @@ use lightning::ln::channelmanager::{
 };
 use lightning::ln::PaymentHash;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
+use lightning::util::logger::Logger;
+use lightning::util::logger::Record;
 use lightning::util::persist::KVStorePersister;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use log::error;
@@ -223,8 +225,9 @@ impl MutinyNodePersister {
         payment_info: PaymentInfo,
         inbound: bool,
     ) -> io::Result<()> {
+        let key = self.get_key(payment_key(inbound, payment_hash).as_str());
         self.storage
-            .set(payment_key(inbound, payment_hash), payment_info)
+            .set(key, payment_info)
             .map_err(io::Error::other)
     }
 
@@ -232,8 +235,16 @@ impl MutinyNodePersister {
         &self,
         payment_hash: PaymentHash,
         inbound: bool,
+        logger: Arc<MutinyLogger>,
     ) -> Option<PaymentInfo> {
         let key = self.get_key(payment_key(inbound, payment_hash).as_str());
+        logger.log(&Record::new(
+            lightning::util::logger::Level::Trace,
+            format_args!("Trace: checking payment key: {}", key),
+            "node",
+            "",
+            0,
+        ));
         let deserialized_value: Result<PaymentInfo, MutinyError> =
             self.storage.get(key).map_err(MutinyError::read_err);
         deserialized_value.ok()

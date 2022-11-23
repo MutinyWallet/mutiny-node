@@ -653,10 +653,7 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub async fn list_invoices(
-        &self,
-        _invoice: String,
-    ) -> Result<JsValue /* Vec<MutinyInvoice> */, MutinyJsError> {
+    pub async fn list_invoices(&self) -> Result<JsValue /* Vec<MutinyInvoice> */, MutinyJsError> {
         let mut invoices: Vec<MutinyInvoice> = vec![];
         let nodes = self.nodes.lock().await;
         for (_, node) in nodes.iter() {

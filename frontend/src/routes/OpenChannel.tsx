@@ -2,6 +2,7 @@ import { NodeManagerContext } from "@components/GlobalStateProvider";
 import MutinyToaster from "@components/MutinyToaster";
 import { getFirstNode, toastAnything } from "@util/dumb";
 import { useContext, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
 import ScreenMain from "../components/ScreenMain";
@@ -10,6 +11,7 @@ import { inputStyle } from "../styles";
 
 export default function OpenChannel() {
 	const nodeManager = useContext(NodeManagerContext);
+	let navigate = useNavigate();
 
 	const [peerPubkey, setPeerPubkey] = useState("");
 	const [amount, setAmount] = useState("")
@@ -29,7 +31,7 @@ export default function OpenChannel() {
 			console.log("MUTINY CHANNEL")
 			console.table(mutinyChannel)
 
-			// navigate("/manager/channels")
+			navigate("/manager/channels")
 		} catch (e) {
 			console.error(e)
 			toastAnything(e)

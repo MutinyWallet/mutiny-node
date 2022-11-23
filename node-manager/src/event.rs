@@ -211,7 +211,10 @@ impl LdkEventHandler for EventHandler {
                     } => (*payment_preimage, Some(*payment_secret)),
                     PaymentPurpose::SpontaneousPayment(preimage) => (Some(*preimage), None),
                 };
-                match self.persister.read_payment_info(*payment_hash, true) {
+                match self
+                    .persister
+                    .read_payment_info(*payment_hash, true, self.logger.clone())
+                {
                     Some(mut saved_payment_info) => {
                         let payment_preimage = payment_preimage.map(|p| p.0);
                         let payment_secret = payment_secret.map(|p| p.0);
@@ -282,7 +285,10 @@ impl LdkEventHandler for EventHandler {
                     0,
                 ));
 
-                match self.persister.read_payment_info(*payment_hash, false) {
+                match self
+                    .persister
+                    .read_payment_info(*payment_hash, false, self.logger.clone())
+                {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Succeeded;
                         saved_payment_info.preimage = Some(payment_preimage.0);
@@ -372,7 +378,10 @@ impl LdkEventHandler for EventHandler {
                     0,
                 ));
 
-                match self.persister.read_payment_info(*payment_hash, false) {
+                match self
+                    .persister
+                    .read_payment_info(*payment_hash, false, self.logger.clone())
+                {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Failed;
                         saved_payment_info.last_update = crate::utils::now().as_secs();
