@@ -18,7 +18,6 @@ use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget,
 use lightning::chain::keysinterface::{KeysInterface, Recipient};
 use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
-use lightning::ln::PaymentPreimage;
 use lightning_invoice::{Invoice, InvoiceDescription};
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
@@ -591,13 +590,12 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    // todo change return to MutinyInvoice
     pub async fn keysend(
         &self,
         from_node: String,
         to_node: String,
         amt_sats: u64,
-    ) -> Result<(), MutinyJsError> {
+    ) -> Result<MutinyInvoice, MutinyJsError> {
         let nodes = self.nodes.lock().await;
         debug!("Keysending to {to_node}");
         let node = nodes.get(from_node.as_str()).unwrap();
@@ -607,17 +605,7 @@ impl NodeManager {
             Err(_) => Err(MutinyJsError::PubkeyInvalid),
         }?;
 
-        let mut entropy = [0u8; 32];
-        getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
-        let preimage = PaymentPreimage(entropy);
-
-        let amt_msats = amt_sats * 1000;
-
-        let _ = node
-            .invoice_payer
-            .pay_pubkey(node_id, preimage, amt_msats, 40)?;
-
-        Ok(info!("Keysend successful!"))
+        node.keysend(node_id, amt_sats).map_err(|e| e.into())
     }
 
     #[wasm_bindgen]

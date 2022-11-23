@@ -5,6 +5,7 @@ use crate::localstorage::MutinyBrowserStorage;
 use crate::nodemanager::MutinyInvoice;
 use crate::utils::{currency_from_network, hex_str};
 use crate::wallet::MutinyWallet;
+use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
 use bitcoin::Network;
 use futures::StreamExt;
@@ -12,7 +13,7 @@ use gloo_net::websocket::Message;
 use lightning::chain::{chainmonitor, Filter, Watch};
 use lightning::ln::channelmanager::PhantomRouteHints;
 use lightning::ln::msgs::NetAddress;
-use lightning::ln::PaymentHash;
+use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::util::logger::{Logger, Record};
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -34,6 +35,7 @@ use anyhow::Context;
 use bip39::Mnemonic;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::secp256k1::PublicKey;
+use bitcoin_hashes::hex::ToHex;
 use instant::SystemTime;
 use lightning::chain::keysinterface::{
     InMemorySigner, KeysInterface, PhantomKeysManager, Recipient,
@@ -544,6 +546,56 @@ impl Node {
                     payment_info,
                     false,
                 )?;
+                Err(MutinyError::RoutingFailed)
+            }
+        }
+    }
+
+    /// keysend sends off the payment but does not wait for results
+    pub fn keysend(&self, to_node: PublicKey, amt_sats: u64) -> Result<MutinyInvoice, MutinyError> {
+        let mut entropy = [0u8; 32];
+        getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
+        let preimage = PaymentPreimage(entropy);
+
+        let amt_msats = amt_sats * 1000;
+
+        let pay_result = self
+            .invoice_payer
+            .pay_pubkey(to_node, preimage, amt_msats, 40);
+
+        let payment_hash = PaymentHash(Sha256::hash(&preimage.0).into_inner());
+
+        let mut payment_info = PaymentInfo {
+            preimage: Some(preimage.0),
+            secret: None,
+            status: HTLCStatus::Pending,
+            amt_msat: MillisatAmount(Some(amt_msats)),
+            fee_paid_msat: None,
+            bolt11: None,
+        };
+
+        self.persister
+            .persist_payment_info(payment_hash, payment_info.clone(), false)?;
+
+        match pay_result {
+            Ok(_) => {
+                let mutiny_invoice: MutinyInvoice = MutinyInvoice::new(
+                    None,
+                    None,
+                    payment_hash.0.to_hex(),
+                    Some(preimage.0.to_hex()),
+                    Some(amt_sats),
+                    0,
+                    false,
+                    None,
+                    true,
+                );
+                Ok(mutiny_invoice)
+            }
+            Err(_) => {
+                payment_info.status = HTLCStatus::Failed;
+                self.persister
+                    .persist_payment_info(payment_hash, payment_info, false)?;
                 Err(MutinyError::RoutingFailed)
             }
         }
