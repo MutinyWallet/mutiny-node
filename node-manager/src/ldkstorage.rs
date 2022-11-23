@@ -4,8 +4,8 @@ use crate::error::MutinyError;
 use crate::event::PaymentInfo;
 use crate::localstorage::MutinyBrowserStorage;
 use crate::logging::MutinyLogger;
-use crate::node::ChainMonitor;
 use crate::node::NetworkGraph;
+use crate::node::{default_user_config, ChainMonitor};
 use crate::utils::hex_str;
 use crate::wallet::esplora_from_network;
 use anyhow::anyhow;
@@ -22,7 +22,6 @@ use lightning::ln::channelmanager::{
 };
 use lightning::ln::PaymentHash;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
-use lightning::util::config::UserConfig;
 use lightning::util::persist::KVStorePersister;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use log::error;
@@ -178,7 +177,7 @@ impl MutinyNodePersister {
                     chain_monitor,
                     mutiny_chain,
                     mutiny_logger,
-                    UserConfig::default(),
+                    default_user_config(),
                     channel_monitor_mut_references,
                 );
                 let mut readable_kv_value = Cursor::new(kv_value);
@@ -209,7 +208,7 @@ impl MutinyNodePersister {
                     mutiny_chain,
                     mutiny_logger,
                     keys_manager,
-                    UserConfig::default(),
+                    default_user_config(),
                     chain_params,
                 );
 

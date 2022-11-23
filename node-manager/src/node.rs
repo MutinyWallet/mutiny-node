@@ -554,21 +554,7 @@ impl Node {
         pubkey: PublicKey,
         amount_sat: u64,
     ) -> Result<[u8; 32], MutinyError> {
-        let config = UserConfig {
-            channel_handshake_limits: ChannelHandshakeLimits {
-                // lnd's max to_self_delay is 2016, so we want to be compatible.
-                their_to_self_delay: 2016,
-                ..Default::default()
-            },
-            channel_handshake_config: ChannelHandshakeConfig {
-                minimum_depth: 1,
-                announced_channel: false,
-                negotiate_scid_privacy: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let config = default_user_config();
         match self
             .channel_manager
             .create_channel(pubkey, amount_sat, 0, 0, Some(config))
@@ -749,6 +735,23 @@ pub(crate) fn parse_peer_info(
     }
 
     Ok((pubkey.unwrap(), peer_addr.unwrap().unwrap()))
+}
+
+pub(crate) fn default_user_config() -> UserConfig {
+    UserConfig {
+        channel_handshake_limits: ChannelHandshakeLimits {
+            // lnd's max to_self_delay is 2016, so we want to be compatible.
+            their_to_self_delay: 2016,
+            ..Default::default()
+        },
+        channel_handshake_config: ChannelHandshakeConfig {
+            minimum_depth: 1,
+            announced_channel: false,
+            negotiate_scid_privacy: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
 }
 
 #[cfg(test)]
