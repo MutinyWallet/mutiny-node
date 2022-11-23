@@ -70,7 +70,7 @@ export default function ReceiveFinal() {
                                 </h3>
                             </a>
                             {onchain?.received !== 0 &&
-                                <h3 className="text-lg font-light"><span className="text-green">Received</span> {onchain.received} sats</h3>
+                                <h3 className="text-lg font-light"><span className="text-green">Received</span> {prettyPrintAmount(onchain.received)} sats</h3>
                             }
                             {onchain?.confirmation_time ?
                                 <h4 className="text-sm font-light opacity-50">{prettyPrintTime(onchain.confirmation_time.timestamp)}</h4> :
