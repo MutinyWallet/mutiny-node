@@ -38,6 +38,7 @@ const CHANNEL_MANAGER_KEY: &str = "manager";
 const MONITORS_PREFIX_KEY: &str = "monitors/";
 const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
 const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
+const PEER_PREFIX_KEY: &str = "peer/";
 
 pub(crate) type PhantomChannelManager = LdkChannelManager<
     InMemorySigner,
@@ -248,6 +249,45 @@ impl MutinyNodePersister {
 
         map.into_iter().collect()
     }
+
+    pub(crate) fn read_peer_connection_info(&self, peer_pubkey: String) -> Option<String> {
+        let key = self.get_key(peer_key(peer_pubkey).as_str());
+        let deserialized_value: Result<String, MutinyError> =
+            self.storage.get(key).map_err(MutinyError::read_err);
+        deserialized_value.ok()
+    }
+
+    pub(crate) fn persist_peer_connection_info(
+        &self,
+        peer_pubkey: String,
+        connection_string: String,
+    ) -> io::Result<()> {
+        let key = self.get_key(peer_key(peer_pubkey).as_str());
+        self.storage
+            .set(key, connection_string)
+            .map_err(io::Error::other)
+    }
+
+    pub(crate) fn delete_peer_connection_info(&self, peer_pubkey: String) {
+        let key = self.get_key(peer_key(peer_pubkey).as_str());
+        MutinyBrowserStorage::delete(key)
+    }
+
+    pub(crate) fn list_peer_connection_info(&self) -> Vec<(String, String)> {
+        let suffix = self.node_id.as_str();
+        let map: HashMap<String, String> = self.storage.scan(PEER_PREFIX_KEY, Some(suffix));
+        map.into_iter()
+            .map(|(k, v)| {
+                let k = String::from(k.strip_prefix(PEER_PREFIX_KEY).unwrap());
+                let k = String::from(k.strip_suffix(suffix).unwrap().strip_suffix('_').unwrap());
+                (k, v)
+            })
+            .collect()
+    }
+}
+
+fn peer_key(pubkey: String) -> String {
+    format!("{}{}", PEER_PREFIX_KEY, pubkey)
 }
 
 fn payment_key(inbound: bool, payment_hash: PaymentHash) -> String {

@@ -8,8 +8,6 @@ import PageTitle from "../components/PageTitle";
 import ScreenMain from "../components/ScreenMain";
 import { inputStyle } from "../styles";
 
-const WS_PROXY_ADDRESS = "wss://websocket-tcp-proxy-fywbx.ondigitalocean.app"
-
 export default function ConnectPeer() {
 	const nodeManager = useContext(NodeManagerContext);
 	const navigate = useNavigate();
@@ -23,7 +21,7 @@ export default function ConnectPeer() {
 		try {
 			const myNode = await getFirstNode(nodeManager!);
 
-			await nodeManager?.connect_to_peer(myNode, WS_PROXY_ADDRESS, peerConnectString)
+			await nodeManager?.connect_to_peer(myNode, peerConnectString)
 
 			navigate("/manager/peers")
 		} catch (e) {

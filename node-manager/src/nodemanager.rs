@@ -29,6 +29,7 @@ use wasm_bindgen::prelude::*;
 pub struct NodeManager {
     mnemonic: Mnemonic,
     network: Network,
+    websocket_proxy_addr: String,
     wallet: Arc<MutinyWallet>,
     chain: Arc<MutinyChain>,
     storage: MutinyBrowserStorage,
@@ -210,12 +211,19 @@ impl NodeManager {
     pub async fn new(
         password: String,
         mnemonic: Option<String>,
+        websocket_proxy_addr: Option<String>,
+        network_str: Option<String>,
     ) -> Result<NodeManager, MutinyJsError> {
         set_panic_hook();
 
-        // TODO get network from frontend
-        let network = Network::Testnet;
-        //let network = Network::Regtest;
+        let websocket_proxy_addr = websocket_proxy_addr.unwrap_or(String::from(
+            "wss://websocket-tcp-proxy-fywbx.ondigitalocean.app",
+        ));
+
+        let network: Network = network_str
+            .unwrap_or(String::from("testnet"))
+            .parse()
+            .expect("invalid network");
 
         let storage = MutinyBrowserStorage::new(password);
 
@@ -268,6 +276,7 @@ impl NodeManager {
                 chain.clone(),
                 wallet.clone(),
                 network,
+                websocket_proxy_addr.clone(),
             )
             .await?;
 
@@ -287,6 +296,7 @@ impl NodeManager {
             storage,
             node_storage: Mutex::new(node_storage),
             nodes: Arc::new(Mutex::new(nodes_map)),
+            websocket_proxy_addr,
         })
     }
 
@@ -471,13 +481,10 @@ impl NodeManager {
     pub async fn connect_to_peer(
         &self,
         self_node_pubkey: String,
-        websocket_proxy_addr: String,
         connection_string: String,
     ) -> Result<(), MutinyJsError> {
         if let Some(node) = self.nodes.lock().await.get(&self_node_pubkey) {
-            let res = node
-                .connect_peer(websocket_proxy_addr, connection_string.clone())
-                .await;
+            let res = node.connect_peer(connection_string.clone()).await;
             match res {
                 Ok(_) => {
                     info!("connected to peer: {connection_string}");
@@ -767,6 +774,7 @@ pub(crate) async fn create_new_node_from_node_manager(
         node_manager.chain.clone(),
         node_manager.wallet.clone(),
         node_manager.network,
+        node_manager.websocket_proxy_addr.clone(),
     )
     .await
     {
@@ -804,9 +812,14 @@ mod tests {
         log!("creating node manager!");
 
         assert!(!NodeManager::has_node_manager());
-        NodeManager::new("password".to_string(), None)
-            .await
-            .expect("node manager should initialize");
+        NodeManager::new(
+            "password".to_string(),
+            None,
+            None,
+            Some("testnet".to_owned()),
+        )
+        .await
+        .expect("node manager should initialize");
         assert!(NodeManager::has_node_manager());
 
         cleanup_test();
@@ -817,9 +830,14 @@ mod tests {
         log!("showing seed");
 
         let seed = generate_seed(12).expect("Failed to gen seed");
-        let nm = NodeManager::new("password".to_string(), Some(seed.to_string()))
-            .await
-            .unwrap();
+        let nm = NodeManager::new(
+            "password".to_string(),
+            Some(seed.to_string()),
+            None,
+            Some("testnet".to_owned()),
+        )
+        .await
+        .unwrap();
 
         assert!(NodeManager::has_node_manager());
         assert_eq!(seed.to_string(), nm.show_seed());
@@ -832,9 +850,14 @@ mod tests {
         log!("creating new nodes");
 
         let seed = generate_seed(12).expect("Failed to gen seed");
-        let nm = NodeManager::new("password".to_string(), Some(seed.to_string()))
-            .await
-            .expect("node manager should initialize");
+        let nm = NodeManager::new(
+            "password".to_string(),
+            Some(seed.to_string()),
+            None,
+            Some("testnet".to_owned()),
+        )
+        .await
+        .expect("node manager should initialize");
 
         {
             let node_identity = nm.new_node().await.expect("should create new node");

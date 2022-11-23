@@ -55,6 +55,10 @@ impl MutinyBrowserStorage {
         }
     }
 
+    pub(crate) fn delete(key: impl AsRef<str>) {
+        LocalStorage::delete(key);
+    }
+
     pub(crate) fn scan<T>(&self, prefix: &str, suffix: Option<&str>) -> HashMap<String, T>
     where
         T: for<'de> Deserialize<'de>,

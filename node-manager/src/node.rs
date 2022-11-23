@@ -14,6 +14,7 @@ use lightning::ln::channelmanager::PhantomRouteHints;
 use lightning::ln::msgs::NetAddress;
 use lightning::ln::PaymentHash;
 use lightning::util::logger::{Logger, Record};
+use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -96,6 +97,8 @@ pub struct Node {
     pub persister: Arc<MutinyNodePersister>,
     _background_processor: BackgroundProcessor,
     logger: Arc<MutinyLogger>,
+    websocket_proxy_addr: String,
+    temp_peer_connection_map: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl Node {
@@ -106,6 +109,7 @@ impl Node {
         chain: Arc<MutinyChain>,
         wallet: Arc<MutinyWallet>,
         network: Network,
+        websocket_proxy_addr: String,
     ) -> Result<Self, MutinyError> {
         info!("initialized a new node: {}", node_index.uuid);
 
@@ -250,6 +254,66 @@ impl Node {
             Some(scorer),
         );
 
+        // try to connect to peers we already have a channel with
+        let connect_peer_man = peer_man.clone();
+        let connect_persister = persister.clone();
+        let connect_proxy = websocket_proxy_addr.clone();
+        let connect_logger = logger.clone();
+        spawn_local(async move {
+            connect_logger.log(&Record::new(
+                lightning::util::logger::Level::Debug,
+                format_args!("DEBUG: about to list peer connections"),
+                "node",
+                "",
+                0,
+            ));
+            let peer_connections = connect_persister.list_peer_connection_info();
+            for (peer_pubkey, conn_str) in peer_connections.iter() {
+                connect_logger.log(&Record::new(
+                    lightning::util::logger::Level::Debug,
+                    format_args!("DEBUG: going to auto connect to peer: {}", peer_pubkey),
+                    "node",
+                    "",
+                    0,
+                ));
+                let conn = conn_str.parse::<SocketAddr>();
+                if conn.is_err() {
+                    continue;
+                }
+                let pubkey = PublicKey::from_str(peer_pubkey);
+                if pubkey.is_err() {
+                    continue;
+                }
+                match connect_peer_if_necessary(
+                    connect_proxy.clone(),
+                    pubkey.unwrap(),
+                    conn.unwrap(),
+                    connect_peer_man.clone(),
+                )
+                .await
+                {
+                    Ok(_) => {
+                        connect_logger.log(&Record::new(
+                            lightning::util::logger::Level::Debug,
+                            format_args!("DEBUG: auto connected peer: {}", peer_pubkey),
+                            "node",
+                            "",
+                            0,
+                        ));
+                    }
+                    Err(e) => {
+                        connect_logger.log(&Record::new(
+                            lightning::util::logger::Level::Warn,
+                            format_args!("WARN: could not auto connect peer: {}", e),
+                            "node",
+                            "",
+                            0,
+                        ));
+                    }
+                }
+            }
+        });
+
         Ok(Node {
             uuid: node_index.uuid,
             pubkey,
@@ -263,14 +327,12 @@ impl Node {
             persister,
             _background_processor: background_processor,
             logger,
+            websocket_proxy_addr,
+            temp_peer_connection_map: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
-    pub async fn connect_peer(
-        &self,
-        websocket_proxy_addr: String,
-        peer_pubkey_and_ip_addr: String,
-    ) -> Result<(), MutinyError> {
+    pub async fn connect_peer(&self, peer_pubkey_and_ip_addr: String) -> Result<(), MutinyError> {
         if peer_pubkey_and_ip_addr.is_empty() {
             return Err(MutinyError::PeerInfoParseFailed)
                 .context("connect_peer requires peer connection info")?;
@@ -284,7 +346,7 @@ impl Node {
         };
 
         if connect_peer_if_necessary(
-            websocket_proxy_addr,
+            self.websocket_proxy_addr.clone(),
             pubkey,
             peer_addr,
             self.peer_manager.clone(),
@@ -295,6 +357,11 @@ impl Node {
             Err(MutinyError::PeerInfoParseFailed)
                 .with_context(|| format!("could not connect to peer: {pubkey}"))?
         } else {
+            // store this so we can save later if needed
+            self.temp_peer_connection_map
+                .lock()
+                .unwrap()
+                .insert(pubkey.to_string(), peer_addr.to_string());
             Ok(())
         }
     }
@@ -514,6 +581,28 @@ impl Node {
                     "",
                     0,
                 ));
+
+                // persist the peer channel info so we can connect later
+                if let Some(conn_str) = self
+                    .temp_peer_connection_map
+                    .lock()
+                    .unwrap()
+                    .get(&pubkey.to_string())
+                {
+                    if self
+                        .persister
+                        .persist_peer_connection_info(pubkey.to_string(), conn_str.clone())
+                        .is_err()
+                    {
+                        self.logger.log(&Record::new(
+                            lightning::util::logger::Level::Warn,
+                            format_args!("WARN: could not store peer connection info",),
+                            "node",
+                            "",
+                            0,
+                        ));
+                    }
+                }
 
                 Ok(res)
             }

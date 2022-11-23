@@ -164,7 +164,7 @@ function App() {
     async function connect_peer(e: React.SyntheticEvent) {
         e.preventDefault()
         try {
-            await nodeManager?.connect_to_peer(currentNode, proxyAddress, connectPeer)
+            await nodeManager?.connect_to_peer(currentNode, connectPeer)
         } catch (e) {
             console.error(e);
         }
