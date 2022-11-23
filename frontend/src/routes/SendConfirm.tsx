@@ -63,7 +63,13 @@ function SendConfirm() {
           setSentKeysend(true);
         } else if (paymentType === PaymentType.invoice) {
           let myNode = await getFirstNode(nodeManager!);
-          await nodeManager?.pay_invoice(myNode, destination)
+          let invoice = await nodeManager?.decode_invoice(destination);
+          if (invoice?.amount_sats && Number(invoice?.amount_sats) > 0) {
+            await nodeManager?.pay_invoice(myNode, destination)
+          } else {
+            await nodeManager?.pay_invoice(myNode, destination, BigInt(amount))
+          }
+
           setSentInvoice(true);
         }
       }
@@ -119,7 +125,7 @@ function SendConfirm() {
           </div>
         </ScreenMain>
       }
-      {!loading && invoice &&
+      {!loading && invoice && !sentInvoice &&
         <ScreenMain>
           <div />
           <p className="text-2xl font-light">How does this look to you?</p>
@@ -138,7 +144,11 @@ function SendConfirm() {
 
             <div className="rounded border p-2 my-2">
               <dt>How Much</dt>
-              <dd>{prettyPrintAmount(invoice.amount_sats!)} sats</dd>
+              {invoice.amount_sats ?
+                <dd>{prettyPrintAmount(invoice.amount_sats)} sats</dd>
+                :
+                <dd>{prettyPrintAmount(parseInt(amount!))} sats</dd>
+              }
             </div>
 
             <div className="rounded border p-2 my-2 flex flex-col">

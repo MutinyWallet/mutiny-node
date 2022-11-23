@@ -27,7 +27,7 @@ function Send() {
       try {
         let invoice = await nodeManager?.decode_invoice(destination);
         console.table(invoice);
-        if (invoice?.amount_sats) {
+        if (invoice?.amount_sats && Number(invoice?.amount_sats) > 0) {
           navigate(`/send/confirm?destination=${destination}&amount=${invoice?.amount_sats}`)
           return
         }
