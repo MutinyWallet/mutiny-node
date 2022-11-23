@@ -6,20 +6,9 @@ import { useQuery } from "@tanstack/react-query";
 import takeN from "@util/takeN";
 import { useNavigate } from "react-router-dom";
 
-export default function ReceiveOnchain() {
+export default function ReceiveOnchain({onchainAddress}:{onchainAddress: string | undefined}) {
     const nodeManager = useContext(NodeManagerContext);
     let navigate = useNavigate();
-
-    const { data: onchainAddress } = useQuery({
-        queryKey: ['onchainAddress'],
-        queryFn: () => {
-            console.log("Getting new address...")
-            return nodeManager?.get_new_address();
-        },
-        enabled: !!nodeManager,
-        // Don't want a new address each time they focus the window
-        refetchOnWindowFocus: false
-    })
 
     const { isLoading: isCheckingAddress } = useQuery({
         queryKey: ['checktransaction'],

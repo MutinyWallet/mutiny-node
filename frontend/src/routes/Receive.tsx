@@ -2,18 +2,42 @@ import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
 import ScreenMain from "../components/ScreenMain";
 import { useNavigate } from "react-router";
-import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import {useContext, useState} from "react";
+import {useQuery, useQueryClient} from "@tanstack/react-query";
 import ReceiveLightning from "@components/ReceiveLightning";
 import ReceiveOnchain from "@components/ReceiveOnchain";
+import {NodeManagerContext} from "@components/GlobalStateProvider";
 
 function Receive() {
     let navigate = useNavigate();
+    const nodeManager = useContext(NodeManagerContext);
     const queryClient = useQueryClient()
 
     function handleCancel() {
         navigate("/")
     }
+
+    const { data: invoice } = useQuery({
+        queryKey: ['lightninginvoice'],
+        queryFn: () => {
+            console.log("Getting new invoice...")
+            return nodeManager?.create_invoice(BigInt(1000), "testing 123");
+        },
+        enabled: !!nodeManager,
+        // Don't want a new address each time they focus the window
+        refetchOnWindowFocus: false
+    })
+
+    const { data: onchainAddress } = useQuery({
+        queryKey: ['onchainAddress'],
+        queryFn: () => {
+            console.log("Getting new address...")
+            return nodeManager?.get_new_address();
+        },
+        enabled: !!nodeManager,
+        // Don't want a new address each time they focus the window
+        refetchOnWindowFocus: false
+    })
 
     const [isLightning, setIsLightning] = useState(true);
 
@@ -36,7 +60,7 @@ function Receive() {
                 </div>
 
                 <div className="flex flex-col items-start gap-4">
-                    {isLightning ? <ReceiveLightning /> : <ReceiveOnchain />}
+                    {isLightning ? <ReceiveLightning invoice={invoice} /> : <ReceiveOnchain onchainAddress={onchainAddress} />}
                 </div>
 
                 <div className='flex justify-start gap-2'>
