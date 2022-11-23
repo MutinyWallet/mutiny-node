@@ -25,7 +25,8 @@ export default function ReceiveLightning() {
         queryKey: ['checkinvoice'],
         queryFn: async () => {
             console.log("Checking invoice:", invoice?.payment_hash);
-            let checked = await nodeManager?.get_invoice_by_hash(invoice?.payment_hash!);
+            // let checked = await nodeManager?.get_invoice_by_hash(invoice?.payment_hash!);
+            let checked = await nodeManager?.get_invoice(invoice?.bolt11!);
 
             if (!checked) {
                 return false
