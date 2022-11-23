@@ -14,6 +14,7 @@ use crate::nodemanager::NodeStorage;
 
 const mnemonic_key: &str = "mnemonic";
 const nodes_key: &str = "nodes";
+const fee_estimates_key: &str = "fee_estimates";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MutinyBrowserStorage {
@@ -127,5 +128,15 @@ impl MutinyBrowserStorage {
 
     pub(crate) fn insert_nodes(nodes: NodeStorage) -> Result<(), MutinyStorageError> {
         Ok(LocalStorage::set(nodes_key, nodes)?)
+    }
+
+    pub(crate) fn get_fee_estimates() -> Result<HashMap<String, f64>, MutinyStorageError> {
+        Ok(LocalStorage::get(fee_estimates_key)?)
+    }
+
+    pub(crate) fn insert_fee_estimates(
+        fees: HashMap<String, f64>,
+    ) -> Result<(), MutinyStorageError> {
+        Ok(LocalStorage::set(fee_estimates_key, fees)?)
     }
 }

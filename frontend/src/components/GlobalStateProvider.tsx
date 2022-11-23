@@ -62,7 +62,7 @@ export const GlobalStateProvider = ({ children }: Props) => {
         console.log("Starting setup...")
         try {
             console.log("Initializing Node Manager")
-            let nodeManager = await new NodeManager("", undefined, undefined, "mainnet")
+            let nodeManager = await new NodeManager("", undefined, undefined, "bitcoin")
             // TODO this is some extra delay because the node manager isn't really "ready" the moment it's set
             await timeout(100)
             setNodeManager(nodeManager)

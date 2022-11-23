@@ -5,6 +5,8 @@ import {NodeManagerContext} from "@components/GlobalStateProvider";
 function App() {
     const [mnemonic, setMnemonic] = useState("...")
 
+    const [feeEstimate, setFeeEstimate] = useState("...")
+
     const [balance, setBalance] = useState("0")
 
     const [tx, setTx] = useState("")
@@ -77,6 +79,8 @@ function App() {
             try {
                 await nodeManager.sync()
                 await updateBalance()
+                const fee = nodeManager.estimate_fee_normal()
+                setFeeEstimate(fee.toLocaleString())
             } catch (e) {
                 console.error(e);
             }
@@ -224,6 +228,9 @@ function App() {
                         </p>
                         <form onSubmit={send} className="flex flex-col items-start gap-4 my-4">
                             <h2>Goodbye 2 Ur Sats:</h2>
+                            <pre>
+                                Fee Estimate: <code>{feeEstimate}</code> sats/KW
+                            </pre>
                             <input type="text" placeholder='Destination address' onChange={handleDestinationAddressChange}></input>
                             <input type="text" placeholder='Amount (sats)' onChange={handleAmountChange}></input>
                             <input type="submit" value="Send" />

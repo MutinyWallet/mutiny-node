@@ -14,7 +14,7 @@ use bitcoin::consensus::deserialize;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::{Address, Network, OutPoint, PublicKey, Transaction, Txid};
 use futures::lock::Mutex;
-use lightning::chain::chaininterface::BroadcasterInterface;
+use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
 use lightning::chain::keysinterface::{KeysInterface, Recipient};
 use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
@@ -472,6 +472,18 @@ impl NodeManager {
             Ok(()) => Ok(info!("We are synced!")),
             Err(e) => Err(e.into()),
         }
+    }
+
+    #[wasm_bindgen]
+    pub fn estimate_fee_normal(&self) -> u32 {
+        self.chain
+            .get_est_sat_per_1000_weight(ConfirmationTarget::Normal)
+    }
+
+    #[wasm_bindgen]
+    pub fn estimate_fee_high(&self) -> u32 {
+        self.chain
+            .get_est_sat_per_1000_weight(ConfirmationTarget::HighPriority)
     }
 
     #[wasm_bindgen]

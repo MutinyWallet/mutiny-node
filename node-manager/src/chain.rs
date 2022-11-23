@@ -1,8 +1,10 @@
 use bitcoin::{BlockHash, BlockHeader, Script, Transaction, Txid};
 
 use crate::error::MutinyError;
+use crate::localstorage::MutinyBrowserStorage;
 use crate::wallet::MutinyWallet;
 use bdk::blockchain::Blockchain;
+use bdk::FeeRate;
 use bdk_macros::maybe_await;
 use lightning::chain::chaininterface::{
     BroadcasterInterface, ConfirmationTarget, FeeEstimator, FEERATE_FLOOR_SATS_PER_KW,
@@ -377,8 +379,32 @@ impl BroadcasterInterface for MutinyChain {
 
 impl FeeEstimator for MutinyChain {
     fn get_est_sat_per_1000_weight(&self, confirmation_target: ConfirmationTarget) -> u32 {
-        // todo get from esplora
-        fallback_fee_from_conf_target(confirmation_target)
+        let num_blocks = num_blocks_from_conf_target(confirmation_target);
+        let fallback_fee = fallback_fee_from_conf_target(confirmation_target);
+
+        match MutinyBrowserStorage::get_fee_estimates() {
+            Err(_) => fallback_fee,
+            Ok(estimates) => {
+                let found = estimates.get(num_blocks.to_string().as_str());
+                match found {
+                    Some(num) => {
+                        info!("Got fee rate from saved cache!");
+                        let satsVbyte = num.to_owned() as f32;
+                        let fee_rate = FeeRate::from_sat_per_vb(satsVbyte);
+                        (fee_rate.fee_wu(1000) as u32).max(FEERATE_FLOOR_SATS_PER_KW)
+                    }
+                    None => fallback_fee,
+                }
+            }
+        }
+    }
+}
+
+fn num_blocks_from_conf_target(confirmation_target: ConfirmationTarget) -> usize {
+    match confirmation_target {
+        ConfirmationTarget::Background => 12,
+        ConfirmationTarget::Normal => 6,
+        ConfirmationTarget::HighPriority => 3,
     }
 }
 
