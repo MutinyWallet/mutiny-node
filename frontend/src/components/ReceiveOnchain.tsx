@@ -4,9 +4,11 @@ import { useContext } from "react";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import { useQuery } from "@tanstack/react-query";
 import takeN from "@util/takeN";
+import { useNavigate } from "react-router-dom";
 
 export default function ReceiveOnchain() {
     const nodeManager = useContext(NodeManagerContext);
+    let navigate = useNavigate();
 
     const { data: onchainAddress } = useQuery({
         queryKey: ['onchainAddress'],
@@ -19,7 +21,7 @@ export default function ReceiveOnchain() {
         refetchOnWindowFocus: false
     })
 
-    const { isLoading: isCheckingAddress, data: transaction } = useQuery({
+    const { isLoading: isCheckingAddress } = useQuery({
         queryKey: ['checktransaction'],
         queryFn: async () => {
             console.log("Checking address:", onchainAddress);
@@ -28,6 +30,7 @@ export default function ReceiveOnchain() {
                 return false
             } else {
                 console.log(tx)
+                navigate(`/receive/final?address=${onchainAddress}`)
                 return tx
             }
         },

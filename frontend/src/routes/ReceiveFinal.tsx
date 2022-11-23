@@ -12,6 +12,8 @@ import prettyPrintTime from "@util/prettyPrintTime";
 import ReceiveLightning from "@components/ReceiveLightning";
 import ReceiveOnchain from "@components/ReceiveOnchain";
 import { useSearchParams } from "react-router-dom";
+import { MutinyInvoice } from "node-manager";
+import prettyPrintAmount from "@util/prettyPrintAmount";
 
 export default function ReceiveFinal() {
     let navigate = useNavigate();
@@ -21,11 +23,35 @@ export default function ReceiveFinal() {
 
     const [searchParams] = useSearchParams();
 
-    const txid = searchParams.get("txid")
+    const address = searchParams.get("address")
     const paymentHash = searchParams.get("payment_hash")
 
-    const onchain: any = {};
-    const lightning: any = {};
+    const { data: onchain } = useQuery({
+        queryKey: ['checktransaction_final'],
+        queryFn: async () => {
+            console.log("Checking address:", address);
+            const tx = await nodeManager?.check_address(address!);
+            if (!tx) {
+                return false
+            } else {
+                console.log(tx)
+                // navigate(`/receive/final?address=${onchainAddress}`)
+                return tx
+            }
+        },
+        enabled: !!(nodeManager && address),
+        refetchOnWindowFocus: false,
+        refetchInterval: 1000
+    })
+
+    const { data: lightning } = useQuery({
+        queryKey: ['transaction'],
+        queryFn: () => {
+            console.log("Looking up invoice by hash:", paymentHash);
+            return nodeManager?.get_invoice_by_hash(paymentHash!) as Promise<MutinyInvoice>;
+        },
+        enabled: !!(nodeManager && paymentHash),
+    })
 
     function handleGoHome() {
         navigate("/")
@@ -38,47 +64,43 @@ export default function ReceiveFinal() {
                 <Close />
             </header>
             <ScreenMain>
-                <div />
-                <p className="text-2xl font-light">Got it!</p>
-                {onchain &&
-                    <>
+                <>
+                    <div />
+                    <p className="text-2xl font-light">Got it!</p>
+                    {onchain && onchain.txid &&
                         <div className="text-off-white">
                             <a href={`https://mempool.space/testnet/tx/${onchain.txid}`} target="_blank" rel="noreferrer">
                                 <h3 className="text-lg font-mono">
                                     {takeN(onchain.txid, 25)}
                                 </h3>
                             </a>
-                            {onchain.received !== 0 &&
+                            {onchain?.received !== 0 &&
                                 <h3 className="text-lg font-light"><span className="text-green">Received</span> {onchain.received} sats</h3>
                             }
-                            {onchain.confirmation_time ?
+                            {onchain?.confirmation_time ?
                                 <h4 className="text-sm font-light opacity-50">{prettyPrintTime(onchain.confirmation_time.timestamp)}</h4> :
                                 <h4 className="text-sm font-light opacity-50">Unconfirmed</h4>
                             }
                         </div>
-                    </>
-                }
-                {lightning &&
-                    <>
-                        <div className="text-off-white">
-                            <a href={`https://mempool.space/testnet/tx/${onchain.txid}`} target="_blank" rel="noreferrer">
+                    }
+                    {lightning &&
+                        <>
+                            <div className="text-off-white">
                                 <h3 className="text-lg font-mono">
-                                    {takeN(onchain.txid, 25)}
+                                    {takeN(lightning.payment_hash, 25)}
                                 </h3>
-                            </a>
-                            {onchain.received !== 0 &&
-                                <h3 className="text-lg font-light"><span className="text-green">Received</span> {onchain.received} sats</h3>
-                            }
-                            {onchain.confirmation_time ?
-                                <h4 className="text-sm font-light opacity-50">{prettyPrintTime(onchain.confirmation_time.timestamp)}</h4> :
-                                <h4 className="text-sm font-light opacity-50">Unconfirmed</h4>
-                            }
-                        </div>
-                    </>
-                }
-                <div className='flex justify-start'>
-                    <button onClick={handleGoHome}>Nice</button>
-                </div>
+                                <>
+                                    {lightning.amount_sats?.valueOf() &&
+                                        <h3 className="text-lg font-light"><span className="text-green">Received</span> {prettyPrintAmount(lightning.amount_sats)} sats</h3>
+                                    }
+                                </>
+                            </div>
+                        </>
+                    }
+                    <div className='flex justify-start'>
+                        <button onClick={handleGoHome}>Nice</button>
+                    </div>
+                </>
             </ScreenMain>
         </>
     );

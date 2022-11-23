@@ -14,7 +14,7 @@ export default function ReceiveLightning() {
         queryKey: ['lightninginvoice'],
         queryFn: () => {
             console.log("Getting new invoice...")
-            return nodeManager?.create_invoice(BigInt(0), "testing 123");
+            return nodeManager?.create_invoice(BigInt(10000), "testing 123");
         },
         enabled: !!nodeManager,
         // Don't want a new address each time they focus the window
