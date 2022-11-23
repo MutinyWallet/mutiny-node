@@ -591,11 +591,12 @@ impl NodeManager {
         &self,
         from_node: String,
         invoice_str: String,
+        amt_sats: Option<u64>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let invoice = Invoice::from_str(&invoice_str)?;
         let nodes = self.nodes.lock().await;
         let node = nodes.get(from_node.as_str()).unwrap();
-        node.pay_invoice(invoice).map_err(|e| e.into())
+        node.pay_invoice(invoice, amt_sats).map_err(|e| e.into())
     }
 
     #[wasm_bindgen]
