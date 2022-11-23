@@ -11,7 +11,7 @@ use bdk::{FeeRate, LocalUtxo, SignOptions, SyncOptions, TransactionDetails, Wall
 use bdk_macros::maybe_await;
 use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
-use bitcoin::{Address, Network};
+use bitcoin::{Address, Network, Txid};
 
 use crate::error::MutinyError;
 use crate::localstorage::MutinyBrowserStorage;
@@ -66,6 +66,20 @@ impl MutinyWallet {
         include_raw: bool,
     ) -> Result<Vec<TransactionDetails>, MutinyError> {
         Ok(self.wallet.lock().await.list_transactions(include_raw)?)
+    }
+
+    pub async fn get_transaction(
+        &self,
+        txid: Txid,
+        include_raw: bool,
+    ) -> Result<Option<TransactionDetails>, MutinyError> {
+        Ok(self
+            .wallet
+            .lock()
+            .await
+            .list_transactions(include_raw)?
+            .into_iter()
+            .find(|tx| tx.txid == txid))
     }
 
     pub async fn create_signed_psbt(
@@ -157,5 +171,5 @@ pub fn esplora_from_network(network: Network) -> EsploraBlockchain {
         Network::Signet => "https://mempool.space/signet/api",
         Network::Regtest => "http://localhost:3003",
     };
-    EsploraBlockchain::new(url, 20)
+    EsploraBlockchain::new(url, 5)
 }
