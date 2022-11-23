@@ -1,6 +1,6 @@
 use anyhow::Context;
 use futures::lock::Mutex;
-use log::debug;
+use log::{debug, info};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -12,6 +12,7 @@ use bdk_macros::maybe_await;
 use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, Txid};
+use wasm_bindgen_futures::spawn_local;
 
 use crate::error::MutinyError;
 use crate::localstorage::MutinyBrowserStorage;
@@ -51,6 +52,19 @@ impl MutinyWallet {
 
     pub async fn sync(&self) -> Result<(), MutinyError> {
         let wallet = self.wallet.lock().await;
+
+        let blockchain_clone = self.blockchain.clone();
+        spawn_local(async move {
+            let estimates = blockchain_clone
+                .get_fee_estimates()
+                .await
+                .expect("Failed to get fee estimates from esplora");
+
+            MutinyBrowserStorage::insert_fee_estimates(estimates)
+                .expect("Failed to set fee estimates in local storage");
+
+            info!("Updated cached fees!");
+        });
 
         maybe_await!(wallet.sync(&self.blockchain, SyncOptions::default()))?;
 
