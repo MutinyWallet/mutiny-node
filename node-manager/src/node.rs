@@ -3,7 +3,7 @@ use crate::invoice::create_phantom_invoice;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::localstorage::MutinyBrowserStorage;
 use crate::nodemanager::MutinyInvoice;
-use crate::utils::currency_from_network;
+use crate::utils::{currency_from_network, sleep};
 use crate::wallet::MutinyWallet;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
@@ -262,57 +262,60 @@ impl Node {
         let connect_proxy = websocket_proxy_addr.clone();
         let connect_logger = logger.clone();
         spawn_local(async move {
-            connect_logger.log(&Record::new(
-                lightning::util::logger::Level::Debug,
-                format_args!("DEBUG: about to list peer connections"),
-                "node",
-                "",
-                0,
-            ));
-            let peer_connections = connect_persister.list_peer_connection_info();
-            for (peer_pubkey, conn_str) in peer_connections.iter() {
+            loop {
                 connect_logger.log(&Record::new(
                     lightning::util::logger::Level::Debug,
-                    format_args!("DEBUG: going to auto connect to peer: {}", peer_pubkey),
+                    format_args!("DEBUG: about to list peer connections"),
                     "node",
                     "",
                     0,
                 ));
-                let conn = conn_str.parse::<SocketAddr>();
-                if conn.is_err() {
-                    continue;
-                }
-                let pubkey = PublicKey::from_str(peer_pubkey);
-                if pubkey.is_err() {
-                    continue;
-                }
-                match connect_peer_if_necessary(
-                    connect_proxy.clone(),
-                    pubkey.unwrap(),
-                    conn.unwrap(),
-                    connect_peer_man.clone(),
-                )
-                .await
-                {
-                    Ok(_) => {
-                        connect_logger.log(&Record::new(
-                            lightning::util::logger::Level::Debug,
-                            format_args!("DEBUG: auto connected peer: {}", peer_pubkey),
-                            "node",
-                            "",
-                            0,
-                        ));
+                let peer_connections = connect_persister.list_peer_connection_info();
+                for (peer_pubkey, conn_str) in peer_connections.iter() {
+                    connect_logger.log(&Record::new(
+                        lightning::util::logger::Level::Debug,
+                        format_args!("DEBUG: going to auto connect to peer: {}", peer_pubkey),
+                        "node",
+                        "",
+                        0,
+                    ));
+                    let conn = conn_str.parse::<SocketAddr>();
+                    if conn.is_err() {
+                        continue;
                     }
-                    Err(e) => {
-                        connect_logger.log(&Record::new(
-                            lightning::util::logger::Level::Warn,
-                            format_args!("WARN: could not auto connect peer: {}", e),
-                            "node",
-                            "",
-                            0,
-                        ));
+                    let pubkey = PublicKey::from_str(peer_pubkey);
+                    if pubkey.is_err() {
+                        continue;
+                    }
+                    match connect_peer_if_necessary(
+                        connect_proxy.clone(),
+                        pubkey.unwrap(),
+                        conn.unwrap(),
+                        connect_peer_man.clone(),
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            connect_logger.log(&Record::new(
+                                lightning::util::logger::Level::Debug,
+                                format_args!("DEBUG: auto connected peer: {}", peer_pubkey),
+                                "node",
+                                "",
+                                0,
+                            ));
+                        }
+                        Err(e) => {
+                            connect_logger.log(&Record::new(
+                                lightning::util::logger::Level::Warn,
+                                format_args!("WARN: could not auto connect peer: {}", e),
+                                "node",
+                                "",
+                                0,
+                            ));
+                        }
                     }
                 }
+                sleep(5 * 1000).await;
             }
         });
 
