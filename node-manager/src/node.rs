@@ -504,18 +504,20 @@ impl Node {
         payment_hash: &bitcoin_hashes::sha256::Hash,
     ) -> Result<(PaymentInfo, bool), MutinyError> {
         // try inbound first
-        if let Some(payment_info) = self
-            .persister
-            .read_payment_info(PaymentHash(payment_hash.into_inner()), true)
-        {
+        if let Some(payment_info) = self.persister.read_payment_info(
+            PaymentHash(payment_hash.into_inner()),
+            true,
+            self.logger.clone(),
+        ) {
             return Ok((payment_info, true));
         }
 
         // if no inbound check outbound
-        match self
-            .persister
-            .read_payment_info(PaymentHash(payment_hash.into_inner()), false)
-        {
+        match self.persister.read_payment_info(
+            PaymentHash(payment_hash.into_inner()),
+            false,
+            self.logger.clone(),
+        ) {
             Some(payment_info) => Ok((payment_info, false)),
             None => Err(MutinyError::InvoiceInvalid),
         }
