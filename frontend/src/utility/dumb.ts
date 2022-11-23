@@ -18,6 +18,7 @@ export enum PaymentType {
     "invoice",
     "keysend",
     "onchain",
+    "bip21",
     "unknown"
 }
 
@@ -25,12 +26,15 @@ export enum PaymentType {
 // https://github.com/lightning/bolts/blob/master/11-payment-encoding.md
 // https://en.bitcoin.it/wiki/List_of_address_prefixes
 export function detectPaymentType(p: string): PaymentType {
-    if (p.startsWith("lntb") || p.startsWith("lnbcrt") || p.startsWith("lnbc")) {
+    const lower = p.toLowerCase();
+    if (lower.startsWith("lntb") || lower.startsWith("lnbcrt") || lower.startsWith("lnbc")) {
         return PaymentType.invoice
-    } else if (p.startsWith("03") || p.startsWith("02")) {
+    } else if (lower.startsWith("03") || lower.startsWith("02")) {
         return PaymentType.keysend
-    } else if (p.startsWith("tb1") || p.startsWith("bc1") || p.startsWith("bcrt1") || p.startsWith("1") || p.startsWith("3") || p.startsWith("2") || p.startsWith("m") || p.startsWith("n")) {
+    } else if (lower.startsWith("tb1") || lower.startsWith("bc1") || lower.startsWith("bcrt1") || lower.startsWith("1") || lower.startsWith("3") || lower.startsWith("2") || p.startsWith("m") || p.startsWith("n")) {
         return PaymentType.onchain
+    } else if (lower.startsWith("bitcoin:")) {
+        return PaymentType.bip21
     } else {
         return PaymentType.unknown
     }
