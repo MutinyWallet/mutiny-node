@@ -1,22 +1,50 @@
+import { NodeManagerContext } from "@components/GlobalStateProvider";
+import { useQuery } from "@tanstack/react-query";
+import prettyPrintAmount from "@util/prettyPrintAmount";
+import prettyPrintTime from "@util/prettyPrintTime";
+import { MutinyInvoice } from "node-manager";
+import { useContext } from "react";
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
 import ScreenMain from "../components/ScreenMain"
 
-function SingleTransaction() {
+function SingleTransaction({ invoice }: { invoice: MutinyInvoice }) {
     return (
         <li className="text-off-white border-b border-green py-2 mb-2">
-            <h3 className="text-lg">
-                Bitcoin Beefsteak
+            {invoice.description &&
+                <h3 className="text-lg font-light">
+                    {invoice.description}
+                </h3>
+            }
+            {!invoice.is_send &&
+                <h3 className="text-lg font-light"><span className="text-green">Received</span> {prettyPrintAmount(invoice.amount_sats!)} sats</h3>
+            }
+            {invoice.is_send &&
+                <h3 className="text-lg font-light"><span className="text-red">Sent</span> {prettyPrintAmount(invoice.amount_sats!)} sats</h3>
+            }
+            <h3 className="text-lg font-light opacity-70">
+                {invoice.paid ? "Paid" : "Not paid"}
             </h3>
-            <h3 className="text-lg">1,440,123 sats</h3>
-            <h4 className="text-sm font-light opacity-50">July 4, 2022</h4>
+            <h4 className="text-sm font-light opacity-50">{prettyPrintTime(Number(invoice.expire))}</h4>
         </li>
     )
 }
 
+function sortByExpiry(a: MutinyInvoice, b: MutinyInvoice): number {
+    return Number(b.expire - a.expire)
+}
+
 function Transactions() {
+    const nodeManager = useContext(NodeManagerContext);
 
-
+    const { data: invoices } = useQuery({
+        queryKey: ['ln_txs'],
+        queryFn: () => {
+            console.log("Getting lightning transactions...")
+            return nodeManager?.list_invoices() as Promise<MutinyInvoice[]>;
+        },
+        enabled: !!nodeManager,
+    })
     return (
         <>
             <header className='px-8 pt-8 flex justify-between items-center'>
@@ -24,15 +52,10 @@ function Transactions() {
                 <Close />
             </header>
             <ScreenMain padSides={false}>
-                <ul className="overflow-y-scroll px-8 pb-[12rem]">
-                    <SingleTransaction />
-                    <SingleTransaction />
-                    <SingleTransaction />
-                    <SingleTransaction />
-                    <SingleTransaction />
-                    <SingleTransaction />
-                    <SingleTransaction />
-                    <SingleTransaction />
+                <ul className="overflow-y-scroll px-8 pb-[12rem] h-full">
+                    {invoices?.sort(sortByExpiry).map((invoice, i) => (
+                        <SingleTransaction invoice={invoice} key={i} />
+                    ))}
                 </ul>
             </ScreenMain>
         </>

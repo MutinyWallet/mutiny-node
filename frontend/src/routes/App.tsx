@@ -40,9 +40,7 @@ function App() {
   return (
     <>
       <header className='p-8'>
-        <img src={logo} className="App-logo" alt="logo" />
-        <h2>You're probably looking for <a href="/tests">the tests</a></h2>
-
+        <img src={logo} className="App-logo" alt="logo" onClick={handleSync} />
       </header>
       <ScreenMain>
         {nodeManager ?
@@ -51,8 +49,6 @@ function App() {
             <MainBalance />
             <div />
             <div className='flex flex-col gap-2 items-start'>
-              <button onClick={handleSync}>Sync</button>
-              <button onClick={handleCheckBalance}>Check balance</button>
               <button className='green-button' onClick={handleNavSend}>Send</button>
               {/* TODO if no funds can do deposit instead of receive */}
               {/* <button className='blue-button' onClick={handleNavDeposit}>Deposit</button> */}

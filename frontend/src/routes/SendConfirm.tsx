@@ -8,12 +8,15 @@ import { NodeManagerContext } from "@components/GlobalStateProvider";
 import toast from "react-hot-toast";
 import { detectPaymentType, getFirstNode, PaymentType, toastAnything } from "@util/dumb";
 import MutinyToaster from "@components/MutinyToaster";
+import { useQuery } from "@tanstack/react-query";
+import prettyPrintAmount from "@util/prettyPrintAmount";
 
 function SendConfirm() {
   const nodeManager = useContext(NodeManagerContext);
 
   const [sentOnchain, setSentOnchain] = useState(false)
   const [sentKeysend, setSentKeysend] = useState(false)
+  const [sentInvoice, setSentInvoice] = useState(false)
   const [description, setDescription] = useState("")
   const [searchParams] = useSearchParams();
   const [txid, setTxid] = useState<string>();
@@ -26,6 +29,16 @@ function SendConfirm() {
   searchParams.forEach((value, key) => {
     console.log(key, value);
   });
+
+  const { data: invoice } = useQuery({
+    queryKey: ['lightninginvoice'],
+    queryFn: () => {
+      console.log("Decoding invoice...")
+      return nodeManager?.decode_invoice(destination!);
+    },
+    enabled: !!(destination && nodeManager && detectPaymentType(destination) === PaymentType.invoice),
+    refetchOnWindowFocus: false
+  })
 
   async function handleSend() {
     setLoading(true);
@@ -48,11 +61,15 @@ function SendConfirm() {
           let myNode = await getFirstNode(nodeManager!);
           await nodeManager?.keysend(myNode, destination, amountInt)
           setSentKeysend(true);
+        } else if (paymentType === PaymentType.invoice) {
+          let myNode = await getFirstNode(nodeManager!);
+          await nodeManager?.pay_invoice(myNode, destination)
         }
       }
     } catch (e: unknown) {
       console.error(e);
       toastAnything(e);
+      return
     }
 
     setLoading(false);
@@ -71,10 +88,11 @@ function SendConfirm() {
         <Close />
       </header>
       {loading && <ScreenMain>
+        <div />
         <p className="text-2xl font-light">Sending...</p>
       </ScreenMain>
       }
-      {!loading && sentKeysend &&
+      {!loading && (sentKeysend || sentInvoice) &&
         <ScreenMain>
           <div />
           <p className="text-2xl font-light">Sent!</p>
@@ -100,7 +118,33 @@ function SendConfirm() {
           </div>
         </ScreenMain>
       }
-      {!loading && !sentOnchain && !sentKeysend &&
+      {!loading && invoice &&
+        <ScreenMain>
+          <div />
+          <p className="text-2xl font-light">How does this look to you?</p>
+          <dl>
+            <div className="rounded border p-2 my-2">
+              <dt>Who</dt>
+              <dd className="font-mono break-words">TODO: PAYEE PUBKEY</dd>
+            </div>
+            <div className="rounded border p-2 my-2">
+              <dt>How Much</dt>
+              <dd>{prettyPrintAmount(invoice.amount_sats!)} sats</dd>
+            </div>
+
+            <div className="rounded border p-2 my-2 flex flex-col">
+              <dt>What For</dt>
+              <dd>{invoice.description}</dd>
+              <button className="self-end" onClick={() => setDescription("for farts")}>Edit</button>
+            </div>
+          </dl>
+          <div className='flex justify-start'>
+            <button onClick={handleSend}>Send</button>
+          </div>
+          <MutinyToaster />
+        </ScreenMain>
+      }
+      {!loading && !sentOnchain && !sentKeysend && !invoice &&
         <ScreenMain>
           <div />
           <p className="text-2xl font-light">How does this look to you?</p>
@@ -111,7 +155,7 @@ function SendConfirm() {
             </div>
             <div className="rounded border p-2 my-2">
               <dt>How Much</dt>
-              <dd>{amount} sat</dd>
+              <dd>{prettyPrintAmount(parseInt(amount!))} sats</dd>
             </div>
             <div className="rounded border p-2 my-2 flex flex-col">
               <dt>What For</dt>

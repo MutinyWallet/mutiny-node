@@ -33,7 +33,7 @@ export default function ReceiveLightning() {
             } else {
                 console.log("is paid", checked.paid)
                 if (checked.paid) {
-                    navigate(`receive/final?payment_hash=${checked.payment_hash}`)
+                    navigate(`/receive/final?payment_hash=${checked.payment_hash}`)
                 }
                 return checked
             }
