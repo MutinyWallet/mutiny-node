@@ -21,12 +21,15 @@ export enum PaymentType {
     "unknown"
 }
 
+// TODO: use a real library for this or at least try harder
+// https://github.com/lightning/bolts/blob/master/11-payment-encoding.md
+// https://en.bitcoin.it/wiki/List_of_address_prefixes
 export function detectPaymentType(p: string): PaymentType {
-    if (p.startsWith("lnt")) {
+    if (p.startsWith("lntb") || p.startsWith("lnbcrt") || p.startsWith("lnbc")) {
         return PaymentType.invoice
     } else if (p.startsWith("03") || p.startsWith("02")) {
         return PaymentType.keysend
-    } else if (p.startsWith("tb1")) {
+    } else if (p.startsWith("tb1") || p.startsWith("bc1") || p.startsWith("bcrt1") || p.startsWith("1") || p.startsWith("3") || p.startsWith("2") || p.startsWith("m") || p.startsWith("n")) {
         return PaymentType.onchain
     } else {
         return PaymentType.unknown

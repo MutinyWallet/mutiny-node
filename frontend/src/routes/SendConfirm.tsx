@@ -41,6 +41,7 @@ function SendConfirm() {
 
         if (paymentType === PaymentType.onchain) {
           const txid = await nodeManager?.send_to_address(destination, amountInt);
+          await nodeManager?.sync();
           setTxid(txid)
           setSentOnchain(true);
         } else if (paymentType === PaymentType.keysend) {
