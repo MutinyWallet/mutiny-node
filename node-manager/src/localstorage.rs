@@ -18,7 +18,7 @@ const fee_estimates_key: &str = "fee_estimates";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MutinyBrowserStorage {
-    password: String,
+    pub(crate) password: String,
 }
 
 impl MutinyBrowserStorage {

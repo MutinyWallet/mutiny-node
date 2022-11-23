@@ -363,7 +363,7 @@ impl BatchDatabase for MutinyBrowserStorage {
     type Batch = Self;
 
     fn begin_batch(&self) -> Self::Batch {
-        MutinyBrowserStorage::new("".to_string())
+        MutinyBrowserStorage::new(self.clone().password)
     }
 
     fn commit_batch(&mut self, mut _batch: Self::Batch) -> Result<(), bdk::Error> {
