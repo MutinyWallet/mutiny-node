@@ -593,7 +593,7 @@ impl Node {
                     Some(preimage.0.to_hex()),
                     Some(to_node.to_hex()),
                     Some(amt_sats),
-                    0,
+                    payment_info.last_update,
                     false,
                     None,
                     true,
