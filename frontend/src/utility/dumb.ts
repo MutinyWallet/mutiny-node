@@ -45,3 +45,12 @@ export function toastAnything(e: unknown) {
         toast(`Weird error! ${e}`)
     }
 }
+
+export function mempoolTxUrl(txid?: string, network?: string) {
+    if (!txid || !network) {
+        console.error("Problem creating the mempool url")
+        return "#"
+    }
+
+    return `https://mempool.space/${network === "testnet" ? "testnet" : ""}/tx/${txid}`
+}

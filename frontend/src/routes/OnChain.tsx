@@ -1,5 +1,6 @@
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import { useQuery } from "@tanstack/react-query";
+import { mempoolTxUrl } from "@util/dumb";
 import prettyPrintTime from "@util/prettyPrintTime";
 import takeN from "@util/takeN";
 import { useContext } from "react";
@@ -19,10 +20,10 @@ export type OnChainTx = {
     }
 }
 
-const SingleTransaction = ({ tx }: { tx: OnChainTx }) => {
+const SingleTransaction = ({ tx, network }: { tx: OnChainTx, network?: string }) => {
     return (
         <li className="text-off-white border-b border-red py-2 mb-2">
-            <a href={`https://mempool.space/testnet/tx/${tx.txid}`} target="_blank" rel="noreferrer">
+            <a href={mempoolTxUrl(tx.txid, network)} target="_blank" rel="noreferrer">
                 <h3 className="text-lg font-mono">
                     {takeN(tx.txid, 25)}
                 </h3>
@@ -68,6 +69,7 @@ function OnChain() {
             return txs
         },
         enabled: !!nodeManager,
+        refetchInterval: 1000
     })
 
     return (
@@ -79,7 +81,7 @@ function OnChain() {
             <ScreenMain padSides={false} wontScroll={!transactions || transactions.length < 4}>
                 <ul className="overflow-y-scroll h-full px-8 pb-[12rem]">
                     {transactions?.sort(sortTx).map(tx => (
-                        <SingleTransaction key={tx.txid} tx={tx} />
+                        <SingleTransaction key={tx.txid} tx={tx} network={nodeManager?.get_network()} />
                     ))}
                 </ul>
             </ScreenMain>

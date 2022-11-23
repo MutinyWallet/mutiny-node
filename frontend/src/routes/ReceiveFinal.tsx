@@ -10,6 +10,7 @@ import prettyPrintTime from "@util/prettyPrintTime";
 import { useSearchParams } from "react-router-dom";
 import { MutinyInvoice } from "node-manager";
 import prettyPrintAmount from "@util/prettyPrintAmount";
+import { mempoolTxUrl } from "@util/dumb";
 
 export default function ReceiveFinal() {
     let navigate = useNavigate();
@@ -64,7 +65,7 @@ export default function ReceiveFinal() {
                     <p className="text-2xl font-light">Got it!</p>
                     {onchain && onchain.txid &&
                         <div className="text-off-white">
-                            <a href={`https://mempool.space/testnet/tx/${onchain.txid}`} target="_blank" rel="noreferrer">
+                            <a href={mempoolTxUrl(onchain.txid, nodeManager?.get_network())} target="_blank" rel="noreferrer">
                                 <h3 className="text-lg font-mono">
                                     {takeN(onchain.txid, 25)}
                                 </h3>
