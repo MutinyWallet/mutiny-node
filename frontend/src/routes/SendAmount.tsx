@@ -6,32 +6,25 @@ import ScreenMain from "../components/ScreenMain";
 import { inputStyle } from "../styles";
 import toast from "react-hot-toast"
 import MutinyToaster from "../components/MutinyToaster";
-import { detectPaymentType, PaymentType } from "@util/dumb";
+import { useSearchParams } from "react-router-dom";
 
-function Send() {
+export default function SendAmount() {
   let navigate = useNavigate();
 
-  const [destination, setDestination] = useState("")
+  const [searchParams] = useSearchParams();
+  const destination = searchParams.get("destination")
+
+  const [amount, setAmount] = useState("")
 
   function handleContinue() {
-    if (!destination) {
-      toast("You didn't paste anything!");
+    if (!amount || typeof parseInt(amount) !== "number") {
+      toast("That doesn't look right")
       return
     }
 
-    let paymentType = detectPaymentType(destination)
-
-    if (paymentType === PaymentType.invoice) {
-      toast("We don't support invoices yet")
-      return
+    if (destination && amount) {
+      navigate(`/send/confirm?destination=${destination}&amount=${amount}`)
     }
-
-    if (paymentType === PaymentType.unknown) {
-      toast("Couldn't parse that one, buddy")
-      return
-    }
-
-    navigate(`/send/amount?destination=${destination}`);
   }
   return (
     <>
@@ -41,7 +34,10 @@ function Send() {
       </header>
       <ScreenMain>
         <div />
-        <input onChange={e => setDestination(e.target.value)} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste pubkey or address' />
+        <div className="flex flex-col gap-4">
+          <p className="text-2xl font-light">How much would you like to send?</p>
+          <input onChange={e => setAmount(e.target.value)} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='sats' />
+        </div>
         <div className='flex justify-start'>
           <button onClick={handleContinue}>Continue</button>
         </div>
@@ -50,5 +46,3 @@ function Send() {
     </>
   );
 }
-
-export default Send;

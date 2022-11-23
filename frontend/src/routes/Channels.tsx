@@ -10,7 +10,7 @@ import ScreenMain from "../components/ScreenMain"
 import { ReactComponent as EjectIcon } from "../images/icons/eject.svg"
 
 function SingleChannel({ channel }: { channel: MutinyChannel }) {
-    console.log(channel);
+    console.table(channel);
 
     const queryClient = useQueryClient()
     const nodeManager = useContext(NodeManagerContext);

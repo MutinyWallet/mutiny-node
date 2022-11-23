@@ -1,5 +1,6 @@
 import { NodeManagerContext } from "@components/GlobalStateProvider";
-import { getFirstNode } from "@util/dumb";
+import MutinyToaster from "@components/MutinyToaster";
+import { getFirstNode, toastAnything } from "@util/dumb";
 import { useContext, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Close from "../components/Close";
@@ -27,6 +28,7 @@ export default function ConnectPeer() {
 			navigate("/manager/peers")
 		} catch (e) {
 			console.error(e)
+			toastAnything(e);
 		}
 	}
 	return (
@@ -45,6 +47,7 @@ export default function ConnectPeer() {
 				<div className="flex justify-start">
 					<button onClick={handleConnectPeer} disabled={!peerConnectString}>Connect</button>
 				</div>
+				<MutinyToaster />
 			</ScreenMain>
 		</>
 	)

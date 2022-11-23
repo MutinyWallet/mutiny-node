@@ -17,6 +17,7 @@ import OnChain from '@routes/OnChain';
 import OpenChannel from '@routes/OpenChannel';
 import Utxos from "@routes/Utxos";
 import ConnectPeer from "@routes/ConnectPeer";
+import SendAmount from "@routes/SendAmount";
 
 const router = createBrowserRouter([
     {
@@ -26,6 +27,10 @@ const router = createBrowserRouter([
     {
         path: "/send",
         element: <Send />,
+    },
+    {
+        path: "/send/amount",
+        element: <SendAmount />,
     },
     {
         path: "/send/confirm",
