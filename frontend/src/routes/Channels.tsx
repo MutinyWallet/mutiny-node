@@ -37,7 +37,9 @@ function SingleChannel({ channel }: { channel: MutinyChannel }) {
                 </div>
                 <button onClick={handleCloseChannel} className="h-[3rem] w-[3rem] p-1 flex items-center justify-center flex-0"><EjectIcon /></button>
             </div>
-            <small className="text-sm font-light opacity-50 mt-2">{channel.outpoint}</small>
+            <a className="text-sm font-light opacity-50 mt-2" href={`https://mempool.space/testnet/tx/${channel.outpoint?.split(":")[0]}`} target="_blank" rel="noreferrer">
+                {channel.outpoint}
+            </a>
         </li>
     )
 }
