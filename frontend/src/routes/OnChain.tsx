@@ -6,6 +6,7 @@ import { useContext } from "react";
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
 import ScreenMain from "../components/ScreenMain"
+import prettyPrintAmount from "@util/prettyPrintAmount";
 
 export type OnChainTx = {
     txid: string
@@ -27,13 +28,13 @@ const SingleTransaction = ({ tx }: { tx: OnChainTx }) => {
                 </h3>
             </a>
             {tx.sent !== 0 &&
-                <h3 className="text-lg font-light"><span className="text-red">Sent</span> {tx.sent} sats</h3>
+                <h3 className="text-lg font-light"><span className="text-red">Sent</span> {prettyPrintAmount(tx.sent)} sats</h3>
             }
             {tx.received !== 0 &&
-                <h3 className="text-lg font-light"><span className="text-green">Received</span> {tx.received} sats</h3>
+                <h3 className="text-lg font-light"><span className="text-green">Received</span> {prettyPrintAmount(tx.received)} sats</h3>
             }
             {tx.fee &&
-                <h3 className="text-lg font-light"><span className="opacity-70">Fee</span> {tx.fee} sats</h3>
+                <h3 className="text-lg font-light"><span className="opacity-70">Fee</span> {prettyPrintAmount(tx.fee)} sats</h3>
             }
             {tx.confirmation_time ?
                 <h4 className="text-sm font-light opacity-50">{prettyPrintTime(tx.confirmation_time.timestamp)}</h4> :
