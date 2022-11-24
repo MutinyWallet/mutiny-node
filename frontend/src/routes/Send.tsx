@@ -55,7 +55,7 @@ function Send() {
         <div />
         <input onChange={e => setDestination(e.target.value)} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice, pubkey, or address' />
         <div className='flex justify-start'>
-          <button onClick={handleContinue}>Continue</button>
+          <button onClick={handleContinue}>Continue?</button>
         </div>
       </ScreenMain>
       <MutinyToaster />
