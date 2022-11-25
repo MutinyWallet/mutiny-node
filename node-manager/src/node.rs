@@ -823,15 +823,22 @@ pub(crate) fn parse_peer_info(
 ) -> Result<(PublicKey, SocketAddr), MutinyError> {
     let mut pubkey_and_addr = peer_pubkey_and_ip_addr.split('@');
     let pubkey = pubkey_and_addr.next();
-    let peer_addr_str = pubkey_and_addr.next();
-    if peer_addr_str.is_none() {
-        return Err(MutinyError::PeerInfoParseFailed).context(
-            "incorrectly formatted peer info. Should be formatted as: `pubkey@host:port`",
-        )?;
-    }
+    let peer_addr_str = match pubkey_and_addr.next() {
+        None => {
+            return Err(MutinyError::PeerInfoParseFailed).context(
+                "incorrectly formatted peer info. Should be formatted as: `pubkey@host:port`",
+            )?
+        }
+        Some(str) => str,
+    };
 
-    let peer_addr = peer_addr_str
-        .unwrap()
+    let peer_addr_str_with_port = if peer_addr_str.contains(":") {
+        peer_addr_str.to_string()
+    } else {
+        format!("{peer_addr_str}:9735")
+    };
+
+    let peer_addr = peer_addr_str_with_port
         .to_socket_addrs()
         .map(|mut r| r.next());
     if peer_addr.is_err() || peer_addr.as_ref().unwrap().is_none() {
@@ -891,5 +898,25 @@ mod tests {
 
         assert_eq!(pub_key, peer_pubkey);
         assert_eq!(addr.parse::<SocketAddr>().unwrap(), peer_addr);
+    }
+
+    #[test]
+    async fn test_parse_peer_info_no_port() {
+        log!("test parse peer info with no port");
+
+        let pub_key = PublicKey::from_str(
+            "0218845781f631c48f1c9709e23092067d06837f30aa0cd0544ac887fe91ddd166",
+        )
+        .unwrap();
+        let addr = "127.0.0.1";
+        let port = "9735";
+
+        let (peer_pubkey, peer_addr) = parse_peer_info(format!("{pub_key}@{addr}")).unwrap();
+
+        assert_eq!(pub_key, peer_pubkey);
+        assert_eq!(
+            format!("{addr}:{port}").parse::<SocketAddr>().unwrap(),
+            peer_addr
+        );
     }
 }
