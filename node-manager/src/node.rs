@@ -49,7 +49,7 @@ use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParam
 use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
 use lightning_invoice::utils::DefaultRouter;
 use lightning_invoice::{payment, Invoice};
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
@@ -744,7 +744,7 @@ pub(crate) async fn connect_peer(
     )?;
 
     let sent_bytes = descriptor.send_data(&initial_bytes, true);
-    debug!("sent {sent_bytes} to node: {pubkey}");
+    trace!("sent {sent_bytes} to node: {pubkey}");
 
     // schedule a reader on the connection
     let mut new_descriptor = descriptor.clone();
@@ -759,13 +759,13 @@ pub(crate) async fn connect_peer(
                         )
                     }
                     Message::Bytes(b) => {
-                        debug!("received binary data from websocket");
+                        trace!("received binary data from websocket");
 
                         let read_res = peer_manager.read_event(&mut new_descriptor, &b);
                         match read_res {
                             // TODO handle read boolean event
                             Ok(_read_bool) => {
-                                debug!("read event from the node");
+                                trace!("read event from the node");
                                 peer_manager.process_events();
                             }
                             Err(e) => error!("got an error reading event: {}", e),
@@ -776,7 +776,7 @@ pub(crate) async fn connect_peer(
         }
 
         // TODO when we detect an error, lock the writes and close connection.
-        debug!("WebSocket Closed")
+        info!("WebSocket Closed")
     });
 
     Ok(())
