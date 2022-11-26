@@ -13,7 +13,7 @@ export type OnChainTx = {
     txid: string
     received: number
     sent: number
-    fee: number
+    fee?: number
     confirmation_time?: {
         height: number
         timestamp: number
@@ -54,7 +54,7 @@ function sortTx(a: OnChainTx, b: OnChainTx) {
     } else if (b.confirmation_time) {
         return -1
     } else {
-        return 0
+        return a.txid.localeCompare(b.txid)
     }
 }
 
