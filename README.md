@@ -120,11 +120,13 @@ DOCKER_BUILDKIT=1 docker build -f Dockerfile-Proxy -t bitcoindevshop/websocket-t
 ```
 
 Run the docker image locally
+
 ```
 docker run -d -p 3001:3001 bitcoindevshop/websocket-tcp-proxy
 ```
 
 Deploy the docker image:
+
 ```
 docker tag bitcoindevshop/websocket-tcp-proxy registry.digitalocean.com/bitcoindevshop-do/websocket-tcp-proxy
 docker push registry.digitalocean.com/bitcoindevshop-do/websocket-tcp-proxy
@@ -134,24 +136,26 @@ docker push registry.digitalocean.com/bitcoindevshop-do/websocket-tcp-proxy
 
 You'll need a regtest bitcoin node, electrs, and an exposed port to whatever regtest node you are connecting to.
 
-#### For Regtest mutiny
+#### For Testnet / Mainnet mutiny
 
-For the time being, this is hardcoded. Change the line in `nodemanager.rs` that sets regtest:
+Mutiny defaults to regtest, but the network can be set by environment variable (it's set to "bitcoin" in the production deployment).
+
+Create a `.env.local` file in the frontend dir and add this:
 
 ```
-    #[wasm_bindgen(constructor)]
-    pub async fn new(
-        password: String,
-        mnemonic: Option<String>,
-    ) -> Result<NodeManager, MutinyJsError> {
-        set_panic_hook();
-
-        // TODO get network from frontend
-        let network = Network::Testnet;
-        //let network = Network::Regtest;
+REACT_APP_NETWORK="testnet"
 ```
+
+Or
+
+```
+REACT_APP_NETWORK="bitcoin"
+```
+
+Then restart your dev server.
 
 #### For [electrs](https://github.com/Blockstream/electrs)
+
 First build it, then run this script for regtest, replacing paths and passwords where necessary. YMMV. One special note is that this is for cookie password based auth.
 
 ```
@@ -161,6 +165,7 @@ First build it, then run this script for regtest, replacing paths and passwords 
 #### Expose lightning node regtest
 
 I use bore for this. Swap out 9735 with whatever your OTHER node's port is running on. Typically 9735.
+
 ```
 bore local 9735 --to bore.pub
 ```
