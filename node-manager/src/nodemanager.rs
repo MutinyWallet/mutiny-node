@@ -756,6 +756,21 @@ impl NodeManager {
 
         Ok(response.bitcoin.usd)
     }
+
+    #[wasm_bindgen]
+    pub fn convert_btc_to_sats(btc: f64) -> Result<u64, MutinyJsError> {
+        if let Ok(amount) = bitcoin::Amount::from_btc(btc) {
+            Ok(amount.to_sat())
+        } else {
+            Err(MutinyJsError::BadAmountError)
+        }
+    }
+
+    #[wasm_bindgen]
+    // Hopefully we only use this when preparing bip21 strings
+    pub fn convert_sats_to_btc(sats: u64) -> f64 {
+        bitcoin::Amount::from_sat(sats).to_btc()
+    }
 }
 
 #[derive(Deserialize, Clone, Copy, Debug)]

@@ -8,12 +8,38 @@ import toast from "react-hot-toast"
 import MutinyToaster from "../components/MutinyToaster";
 import { detectPaymentType, PaymentType, toastAnything } from "@util/dumb";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
+import bip21 from "bip21"
+import { NodeManager } from "node-manager";
+
+type UnifiedQrOptions =
+  {
+    amount?: number;
+    lightning?: string;
+    label?: string;
+    message?: string;
+  };
+
+type Bip21 = { address: string, options: UnifiedQrOptions };
 
 function Send() {
   const nodeManager = useContext(NodeManagerContext);
   let navigate = useNavigate();
 
   const [destination, setDestination] = useState("")
+
+  async function navigateForInvoice(invoiceStr: string) {
+    try {
+      let invoice = await nodeManager?.decode_invoice(invoiceStr);
+      console.table(invoice);
+      if (invoice?.amount_sats && Number(invoice?.amount_sats) > 0) {
+        navigate(`/send/confirm?destination=${invoiceStr}&amount=${invoice?.amount_sats}`)
+        return
+      }
+    } catch (e) {
+      console.error(e);
+      toastAnything(e);
+    }
+  }
 
   async function handleContinue() {
     if (!destination) {
@@ -24,16 +50,32 @@ function Send() {
     let paymentType = detectPaymentType(destination)
 
     if (paymentType === PaymentType.invoice) {
-      try {
-        let invoice = await nodeManager?.decode_invoice(destination);
-        console.table(invoice);
-        if (invoice?.amount_sats && Number(invoice?.amount_sats) > 0) {
-          navigate(`/send/confirm?destination=${destination}&amount=${invoice?.amount_sats}`)
+      await navigateForInvoice(destination)
+      return
+    } else if (paymentType === PaymentType.bip21) {
+      const { address, options } = bip21.decode(destination) as Bip21;
+      if (options?.lightning) {
+        await navigateForInvoice(options.lightning)
+        return
+      } else if (options?.amount) {
+        try {
+          const amount = NodeManager.convert_btc_to_sats(options.amount ?? 0.0);
+          if (!amount) {
+            throw new Error("Failed to convert BTC to sats")
+          }
+          if (options.label) {
+            navigate(`/send/confirm?destination=${address}&amount=${amount}&description=${options.label}`)
+          } else {
+            navigate(`/send/confirm?destination=${address}&amount=${amount}`)
+          }
+          return
+        } catch (e) {
+          console.error(e)
+          toastAnything(e);
           return
         }
-      } catch (e) {
-        console.error(e);
-        toastAnything(e);
+      } else {
+        navigate(`/send/amount?destination=${address}`)
         return
       }
     }
