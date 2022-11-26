@@ -8,7 +8,18 @@ import toast from "react-hot-toast"
 import MutinyToaster from "../components/MutinyToaster";
 import { detectPaymentType, PaymentType, toastAnything } from "@util/dumb";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
-const bip21 = require('bip21');
+import bip21 from "bip21"
+import { NodeManager } from "node-manager";
+
+type UnifiedQrOptions =
+  {
+    amount?: number;
+    lightning?: string;
+    label?: string;
+    message?: string;
+  };
+
+type Bip21 = { address: string, options: UnifiedQrOptions };
 
 function Send() {
   const nodeManager = useContext(NodeManagerContext);
@@ -42,16 +53,29 @@ function Send() {
       await navigateForInvoice(destination)
       return
     } else if (paymentType === PaymentType.bip21) {
-      const decoded = bip21.decode(destination)
-      if (decoded.options?.lightning) {
-        await navigateForInvoice(decoded.options?.lightning)
+      const { address, options } = bip21.decode(destination) as Bip21;
+      if (options?.lightning) {
+        await navigateForInvoice(options.lightning)
         return
-      } else if (decoded.options?.amount){
-        const amount = Math.round(decoded.options.amount * 100000000);
-        navigate(`/send/confirm?destination=${decoded.address}&amount=${amount}`)
-        return
+      } else if (options?.amount) {
+        try {
+          const amount = NodeManager.convert_btc_to_sats(options.amount ?? 0.0);
+          if (!amount) {
+            throw new Error("Failed to convert BTC to sats")
+          }
+          if (options.label) {
+            navigate(`/send/confirm?destination=${address}&amount=${amount}&description=${options.label}`)
+          } else {
+            navigate(`/send/confirm?destination=${address}&amount=${amount}`)
+          }
+          return
+        } catch (e) {
+          console.error(e)
+          toastAnything(e);
+          return
+        }
       } else {
-        navigate(`/send/amount?destination=${decoded.address}`)
+        navigate(`/send/amount?destination=${address}`)
         return
       }
     }

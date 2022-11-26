@@ -18,7 +18,6 @@ function SendConfirm() {
   const [sentOnchain, setSentOnchain] = useState(false)
   const [sentKeysend, setSentKeysend] = useState(false)
   const [sentInvoice, setSentInvoice] = useState(false)
-  const [description, setDescription] = useState("")
   const [searchParams] = useSearchParams();
   const [txid, setTxid] = useState<string>();
 
@@ -26,6 +25,7 @@ function SendConfirm() {
 
   const amount = searchParams.get("amount")
   const destination = searchParams.get("destination")
+  const description = searchParams.get("description")
 
   searchParams.forEach((value, key) => {
     console.log(key, value);
@@ -146,19 +146,23 @@ function SendConfirm() {
             }
 
             <div className="rounded border p-2 my-2">
-              <dt>How Much</dt>
-              {invoice.amount_sats ?
-                <dd>{prettyPrintAmount(invoice.amount_sats)} sats</dd>
-                :
-                <dd>{prettyPrintAmount(parseInt(amount!))} sats</dd>
-              }
+              <>
+                <dt>How Much</dt>
+                {amount &&
+                  <dd>{prettyPrintAmount(parseInt(amount!))} sats</dd>
+                }
+                {(!amount && invoice.amount_sats) &&
+                  <dd>{prettyPrintAmount(invoice.amount_sats)} sats</dd>
+                }
+              </>
             </div>
-
-            <div className="rounded border p-2 my-2 flex flex-col">
-              <dt>What For</dt>
-              <dd>{invoice.description}</dd>
-              <button className="self-end" onClick={() => setDescription("for farts")}>Edit</button>
-            </div>
+            {invoice.description &&
+              <div className="rounded border p-2 my-2 flex flex-col">
+                <dt>What For</dt>
+                <dd>{invoice.description}</dd>
+                <button className="self-end" onClick={() => console.log("Unimplemented")}>Edit</button>
+              </div>
+            }
           </dl>
           <div className='flex justify-start'>
             <button onClick={handleSend}>Send</button>
@@ -174,15 +178,19 @@ function SendConfirm() {
               <dt>Who</dt>
               <dd className="font-mono break-words">{destination}</dd>
             </div>
-            <div className="rounded border p-2 my-2">
-              <dt>How Much</dt>
-              <dd>{prettyPrintAmount(parseInt(amount!))} sats</dd>
-            </div>
-            <div className="rounded border p-2 my-2 flex flex-col">
-              <dt>What For</dt>
-              <dd>{description}</dd>
-              <button className="self-end" onClick={() => setDescription("for farts")}>Edit</button>
-            </div>
+            {amount &&
+              <div className="rounded border p-2 my-2">
+                <dt>How Much</dt>
+                <dd>{prettyPrintAmount(parseInt(amount))} sats</dd>
+              </div>
+            }
+            {description &&
+              <div className="rounded border p-2 my-2 flex flex-col">
+                <dt>What For</dt>
+                <dd>{description}</dd>
+                <button className="self-end" onClick={() => console.log("Unimplemented")}>Edit</button>
+              </div>
+            }
           </dl>
           <div className='flex justify-start'>
             <button onClick={handleSend}>Send</button>
