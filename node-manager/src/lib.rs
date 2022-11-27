@@ -6,6 +6,7 @@
 mod background;
 mod bdkstorage;
 mod chain;
+mod dlc;
 mod encrypt;
 mod error;
 mod event;
