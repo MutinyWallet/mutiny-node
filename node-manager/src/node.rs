@@ -49,7 +49,7 @@ use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParam
 use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
 use lightning_invoice::utils::DefaultRouter;
 use lightning_invoice::{payment, Invoice};
-use log::{debug, error, info, trace, warn};
+use log::{error, info, trace, warn};
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
