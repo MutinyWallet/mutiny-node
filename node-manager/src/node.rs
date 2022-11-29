@@ -718,13 +718,11 @@ pub(crate) async fn connect_peer_if_necessary(
     peer_addr: SocketAddr,
     peer_manager: Arc<PeerManager>,
 ) -> Result<(), MutinyError> {
-    for node_pubkey in peer_manager.get_peer_node_ids() {
-        if node_pubkey == pubkey {
-            return Ok(());
-        }
+    if peer_manager.get_peer_node_ids().contains(&pubkey) {
+        Ok(())
+    } else {
+        connect_peer(websocket_proxy_addr, pubkey, peer_addr, peer_manager).await
     }
-
-    connect_peer(websocket_proxy_addr, pubkey, peer_addr, peer_manager).await
 }
 pub(crate) async fn connect_peer(
     websocket_proxy_addr: String,
