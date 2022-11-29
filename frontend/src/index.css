@@ -7,7 +7,9 @@
   font-family: "Yantramanav";
   font-style: normal;
   font-weight: 300;
-  src: local(""), url("./fonts/yantramanav-v11-latin-300.woff2") format("woff2"),
+  font-display: swap;
+  src: local("Yantramanav"),
+    url("./fonts/yantramanav-v11-latin-300.woff2") format("woff2"),
     url("./fonts/yantramanav-v11-latin-300.woff") format("woff");
 }
 
@@ -16,13 +18,18 @@
   font-family: "Yantramanav";
   font-style: normal;
   font-weight: 400;
-  src: local(""),
+  font-display: swap;
+  src: local("Yantramanav"),
     url("./fonts/yantramanav-v11-latin-regular.woff2") format("woff2"),
     url("./fonts/yantramanav-v11-latin-regular.woff") format("woff");
 }
 
+::root {
+  @apply bg-black;
+}
+
 html {
-  @apply h-full overscroll-y-none bg-red;
+  @apply h-full overscroll-y-none;
   display: grid;
   grid-template-rows: 1fr;
 }
