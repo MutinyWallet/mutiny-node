@@ -227,9 +227,8 @@ impl NodeManager {
     ) -> Result<NodeManager, MutinyJsError> {
         set_panic_hook();
 
-        let websocket_proxy_addr = websocket_proxy_addr.unwrap_or(String::from(
-            "wss://websocket-tcp-proxy-fywbx.ondigitalocean.app",
-        ));
+        let websocket_proxy_addr =
+            websocket_proxy_addr.unwrap_or(String::from("wss://p.mutinywallet.com"));
 
         let network: Network = network_str
             .unwrap_or(String::from("testnet"))
