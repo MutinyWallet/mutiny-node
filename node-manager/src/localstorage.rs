@@ -6,6 +6,7 @@ use bip39::Mnemonic;
 
 use gloo_storage::errors::StorageError;
 use gloo_storage::{LocalStorage, Storage};
+use secp256k1::PublicKey;
 use serde::{Deserialize, Serialize};
 
 use crate::encrypt::*;
@@ -15,6 +16,7 @@ use crate::nodemanager::NodeStorage;
 const mnemonic_key: &str = "mnemonic";
 const nodes_key: &str = "nodes";
 const fee_estimates_key: &str = "fee_estimates";
+const last_dlc_key_index: &str = "dlc_key_index";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MutinyBrowserStorage {
@@ -138,5 +140,26 @@ impl MutinyBrowserStorage {
         fees: HashMap<String, f64>,
     ) -> Result<(), MutinyStorageError> {
         Ok(LocalStorage::set(fee_estimates_key, fees)?)
+    }
+
+    // inserts 0 if not present
+    pub(crate) fn increment_last_dlc_key_index(&self) -> Result<u32, bdk::Error> {
+        let current_opt = self.get::<u32>(last_dlc_key_index).ok();
+        let value = current_opt.map(|s| s + 1).unwrap_or_else(|| 0);
+        self.set(last_dlc_key_index, value)?;
+
+        Ok(value)
+    }
+
+    pub(crate) fn save_dlc_key_index(&self, index: u32, p: PublicKey) -> Result<(), bdk::Error> {
+        let key = format!("dlc_key_{p}");
+        Ok(self.set(key, index)?)
+    }
+
+    pub(crate) fn get_dlc_key_index(&self, p: &PublicKey) -> Result<u32, bdk::Error> {
+        let key = format!("dlc_key_{p}");
+        let result: u32 = self.get(key)?;
+
+        Ok(result)
     }
 }

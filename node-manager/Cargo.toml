@@ -19,7 +19,7 @@ bitcoin-bech32 = "0.12"
 js-sys = "0.3.60"
 secp256k1 = "0.24.0"
 bitcoin_hashes = { version = "0.11", default-features = false }
-bitcoin = {version = "0.29.2", features = ["serde"] }
+bitcoin = { version = "0.29.2", features = ["serde"] }
 bdk = { version = "0.24.0", default-features = false, features = ["keys-bip39", "esplora", "use-esplora-reqwest"] }
 bdk-macros = "0.6.0"
 getrandom = { version = "0.2", features = ["js"] }
@@ -27,6 +27,8 @@ serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
 gloo-storage = "0.2.2"
 uuid = { version = "1.1.2", features = ["v4"] }
+dlc = { git = "https://github.com/benthecarman/rust-dlc", branch = "build-fix", features = ["use-serde"] }
+dlc-manager = { git = "https://github.com/benthecarman/rust-dlc", branch = "build-fix", features = ["use-serde"] }
 lightning = { version = "0.0.112", features = ["max_level_trace", "no-std"] }
 lightning-invoice = { version = "0.20.0", default-features = false, features = ["no-std"] }
 lightning-rapid-gossip-sync = { version = "0.0.112", features = ["no-std"] }
