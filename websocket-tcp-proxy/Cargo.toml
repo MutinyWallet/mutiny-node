@@ -6,9 +6,13 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-axum = { git="https://github.com/tokio-rs/axum", features = ["ws", "headers"] }
+axum = { version ="0.6.1", features = ["ws", "headers"] }
 headers = "0.3"
 tokio = { version = "1.0", features = ["full"] }
 tower-http = { version = "0.3.0", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "^1.0", features = ["derive"] }
+bytes = "1.3.0"
+bitcoin_hashes = { version = "0.11", default-features = true }
+futures = "0.3.25"
