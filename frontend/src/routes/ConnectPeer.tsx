@@ -32,15 +32,15 @@ export default function ConnectPeer() {
 	return (
 		<>
 			<header className='p-8 flex justify-between items-center'>
-				<PageTitle title="Connect to peer" theme="red"></PageTitle>
-				<Close />
+				<PageTitle title="Connect to peer" theme="white"></PageTitle>
+				<Close route="/manager/peers" />
 			</header>
 
 			<ScreenMain>
 				<div />
 				<p className="text-2xl font-light">Let's do this!</p>
 				<div className="flex flex-col gap-4">
-					<input onChange={handlePeerChange} className={`w-full ${inputStyle({ accent: "red" })}`} type="text" placeholder='Target peer' />
+					<input onChange={handlePeerChange} className={`w-full ${inputStyle({ accent: "white" })}`} type="text" placeholder='Target peer' />
 				</div>
 				<div className="flex justify-start">
 					<button onClick={handleConnectPeer} disabled={!peerConnectString}>Connect</button>

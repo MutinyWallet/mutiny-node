@@ -19,6 +19,13 @@ import Utxos from "@routes/Utxos";
 import ConnectPeer from "@routes/ConnectPeer";
 import SendAmount from "@routes/SendAmount";
 import ReceiveFinal from "@routes/ReceiveFinal";
+import DLCs from "@routes/DLCs";
+import NewDLC from "@routes/NewDLC";
+import ConfirmNewDLC from "@routes/ConfirmNewDLC";
+import FinalNewDLC from "@routes/FinalNewDLC";
+import JoinDLC from "@routes/JoinDLC";
+import ConfirmJoinDLC from "@routes/ConfirmJoinDLC";
+import FinalJoinDLC from "@routes/FinalJoinDLC";
 
 const router = createBrowserRouter([
     {
@@ -58,6 +65,30 @@ const router = createBrowserRouter([
         element: <ConnectPeer />,
     },
     {
+        path: "/new-dlc",
+        element: <NewDLC />,
+    },
+    {
+        path: "/new-dlc/confirm",
+        element: <ConfirmNewDLC />,
+    },
+    {
+        path: "/new-dlc/final",
+        element: <FinalNewDLC />,
+    },
+    {
+        path: "/join-dlc",
+        element: <JoinDLC />,
+    },
+    {
+        path: "/join-dlc/confirm",
+        element: <ConfirmJoinDLC />,
+    },
+    {
+        path: "/join-dlc/final",
+        element: <FinalJoinDLC />,
+    },
+    {
         path: "/tests",
         element: <KitchenSink />,
     },
@@ -72,6 +103,10 @@ const router = createBrowserRouter([
             {
                 path: "onchain",
                 element: <OnChain />
+            },
+            {
+                path: "dlcs",
+                element: <DLCs />
             },
             {
                 path: "peers",

@@ -5,6 +5,7 @@ import SettingsIcon from "../images/settings-icon.png"
 import OnChainIcon from "../images/world-in-box-icon.png"
 import PeersIcon from "../images/peers-icon.png"
 import UtxosIcon from "@images/utxos-icon.png"
+import DLCsIcon from "@images/dlcs-icon.png"
 import { useContext } from "react";
 import { ManagerRouteContext } from "@components/ManagerRouteProvider";
 
@@ -44,6 +45,12 @@ function ManagerRoot() {
                         <button onClick={() => navigateAndSet("onchain")} className={shouldBeActive("onchain")}>
                             <img src={OnChainIcon} alt="onchain icon" />
                             On-chain
+                        </button>
+                    </li>
+                    <li>
+                        <button onClick={() => navigateAndSet("dlcs")} className={shouldBeActive("dlcs")}>
+                            <img src={DLCsIcon} alt="dlc icon" />
+                            DLCs
                         </button>
                     </li>
                     <li>

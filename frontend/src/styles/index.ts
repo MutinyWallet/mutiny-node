@@ -7,6 +7,7 @@ const inputStyle = cva("", {
             green: "border-green focus:ring-green",
             blue: "border-blue focus:ring-blue",
             red: "border-red focus:ring-red",
+            white: 'border-white focus:ring-white'
         },
         width: {
             normal: "",
