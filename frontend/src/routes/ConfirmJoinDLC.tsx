@@ -1,6 +1,4 @@
-import { NodeManagerContext } from "@components/GlobalStateProvider";
 import MutinyToaster from "@components/MutinyToaster";
-import { useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
@@ -10,7 +8,6 @@ import DLItem from "@components/DLItem";
 import prettyPrintTime from "@util/prettyPrintTime";
 
 export default function ConfirmJoinDLC() {
-	const nodeManager = useContext(NodeManagerContext);
 	const navigate = useNavigate();
 
 	function handleNavFinal() {
