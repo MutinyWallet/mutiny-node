@@ -19,11 +19,13 @@ function SeedWords({ words }: { words: string }) {
         setShouldShow(!shouldShow)
     }
 
-    if (shouldShow) {
-        return (<pre onClick={toggleShow}><code>{words}</code></pre>)
-    } else {
-        return <pre onClick={toggleShow} className="flex items-center gap-4"><Eye /><code className="text-red">TAP TO REVEAL SEED WORDS</code><EyeClosed /></pre>
-    }
+    return (<pre className="flex items-center gap-4">
+        {shouldShow ?
+            <><div onClick={toggleShow} className="cursor-pointer"><Eye /></div><code>{words}</code></>
+            : <><div onClick={toggleShow} className="cursor-pointer"><EyeClosed /></div><code className="text-red">TAP TO REVEAL SEED WORDS</code></>
+        }
+    </pre>)
+
 }
 
 function Settings() {
