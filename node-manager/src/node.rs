@@ -3,6 +3,7 @@ use crate::invoice::create_phantom_invoice;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::localstorage::MutinyBrowserStorage;
 use crate::nodemanager::{MutinyInvoice, MutinyInvoiceParams};
+use crate::socket::WsSocketDescriptor;
 use crate::utils::{currency_from_network, sleep};
 use crate::wallet::MutinyWallet;
 use bitcoin::hashes::sha256::Hash as Sha256;
@@ -22,7 +23,8 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::chain::MutinyChain;
 use crate::error::MutinyStorageError;
-use crate::tcpproxy::{SocketDescriptor, TcpProxy};
+use crate::proxy::Proxy;
+use crate::socket::{ReadDescriptor, WsTcpSocketDescriptor};
 use crate::{
     background::{BackgroundProcessor, GossipSync},
     error::MutinyError,
@@ -60,7 +62,7 @@ pub(crate) type MessageHandler = LdkMessageHandler<
 >;
 
 pub(crate) type PeerManager = LdkPeerManager<
-    SocketDescriptor,
+    WsSocketDescriptor,
     Arc<PhantomChannelManager>,
     Arc<IgnoringMessageHandler>,
     Arc<IgnoringMessageHandler>,
@@ -86,12 +88,11 @@ type Router = DefaultRouter<
     Arc<Mutex<ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>>>,
 >;
 
-pub struct Node {
-    pub uuid: String,
+pub(crate) struct Node {
+    pub _uuid: String,
     pub pubkey: PublicKey,
     pub peer_manager: Arc<PeerManager>,
     pub keys_manager: Arc<PhantomKeysManager>,
-    pub chain: Arc<MutinyChain>,
     pub channel_manager: Arc<PhantomChannelManager>,
     pub chain_monitor: Arc<ChainMonitor>,
     pub invoice_payer: Arc<InvoicePayer<EventHandler>>,
@@ -325,11 +326,10 @@ impl Node {
         });
 
         Ok(Node {
-            uuid: node_index.uuid,
+            _uuid: node_index.uuid,
             pubkey,
             peer_manager: peer_man,
             keys_manager,
-            chain,
             channel_manager,
             chain_monitor,
             invoice_payer,
@@ -735,8 +735,8 @@ pub(crate) async fn connect_peer(
     peer_manager: Arc<PeerManager>,
 ) -> Result<(), MutinyError> {
     // first make a connection to the node
-    let tcp_proxy = Arc::new(TcpProxy::new(websocket_proxy_addr, peer_addr).await);
-    let mut descriptor = SocketDescriptor::new(tcp_proxy);
+    let tcp_proxy = Arc::new(Proxy::from_tcp_addr(websocket_proxy_addr, peer_addr).await);
+    let mut descriptor = WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(tcp_proxy));
 
     // then give that connection to the peer manager
     let initial_bytes = peer_manager.new_outbound_connection(

@@ -1,27 +1,24 @@
-use std::hash::Hash;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::{net::SocketAddr, sync::Arc};
 
 use futures::stream::SplitStream;
 use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
-use lightning::ln::peer_handler;
 use log::debug;
 use wasm_bindgen_futures::spawn_local;
 
-pub struct TcpProxy {
-    write: WsSplit,
-    read: ReadSplit,
+pub(crate) struct Proxy {
+    pub write: WsSplit,
+    pub read: ReadSplit,
 }
 
 type WsSplit = Arc<Mutex<SplitSink<WebSocket, Message>>>;
 type ReadSplit = Arc<Mutex<SplitStream<WebSocket>>>;
 
-impl TcpProxy {
-    pub async fn new(proxy_url: String, peer_addr: SocketAddr) -> Self {
+impl Proxy {
+    pub async fn from_tcp_addr(proxy_url: String, peer_addr: SocketAddr) -> Self {
         let ws = WebSocket::open(String::as_str(&proxy_to_url(proxy_url, peer_addr))).unwrap();
         let (write, read) = ws.split();
-        TcpProxy {
+        Self {
             write: Arc::new(Mutex::new(write)),
             read: Arc::new(Mutex::new(read)),
         }
@@ -42,7 +39,7 @@ impl TcpProxy {
     }
 }
 
-fn proxy_to_url(proxy_url: String, peer_addr: SocketAddr) -> String {
+pub fn proxy_to_url(proxy_url: String, peer_addr: SocketAddr) -> String {
     format!(
         "{proxy_url}/v1/{}/{}",
         peer_addr.ip().to_string().replace('.', "_"),
@@ -50,66 +47,11 @@ fn proxy_to_url(proxy_url: String, peer_addr: SocketAddr) -> String {
     )
 }
 
-static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-pub struct SocketDescriptor {
-    pub conn: Arc<TcpProxy>,
-    id: u64,
-}
-impl SocketDescriptor {
-    pub fn new(conn: Arc<TcpProxy>) -> Self {
-        let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
-        Self { conn, id }
-    }
-
-    pub async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>> {
-        self.conn.read.lock().await.next().await
-    }
-}
-unsafe impl Send for SocketDescriptor {}
-unsafe impl Sync for SocketDescriptor {}
-
-impl peer_handler::SocketDescriptor for SocketDescriptor {
-    fn send_data(&mut self, data: &[u8], _resume_read: bool) -> usize {
-        let vec = Vec::from(data);
-        self.conn.send(vec);
-        data.len()
-    }
-
-    fn disconnect_socket(&mut self) {
-        let cloned = self.conn.write.clone();
-        spawn_local(async move {
-            let mut conn = cloned.lock().await;
-            let _ = conn.close();
-            debug!("closed websocket");
-        });
-    }
-}
-impl Clone for SocketDescriptor {
-    fn clone(&self) -> Self {
-        Self {
-            conn: Arc::clone(&self.conn),
-            id: self.id,
-        }
-    }
-}
-impl Eq for SocketDescriptor {}
-impl PartialEq for SocketDescriptor {
-    fn eq(&self, o: &Self) -> bool {
-        self.id == o.id
-    }
-}
-impl Hash for SocketDescriptor {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::test::*;
 
-    use crate::tcpproxy::{proxy_to_url, TcpProxy};
+    use crate::proxy::{proxy_to_url, Proxy};
 
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
@@ -120,7 +62,7 @@ mod tests {
         log!("test websocket proxy");
 
         // TODO do something useful
-        let _proxy = TcpProxy::new(
+        let _proxy = Proxy::from_tcp_addr(
             "ws://127.0.0.1:3001".to_string(),
             "127.0.0.1:4000".parse().unwrap(),
         )
