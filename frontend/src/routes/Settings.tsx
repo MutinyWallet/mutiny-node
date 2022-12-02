@@ -4,10 +4,27 @@ import MutinyToaster from "@components/MutinyToaster";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toastAnything } from "@util/dumb";
 import takeN from "@util/takeN";
-import { useContext } from "react";
+import { useContext, useState } from "react";
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
 import ScreenMain from "../components/ScreenMain"
+
+import { ReactComponent as Eye } from "../images/icons/eye.svg"
+import { ReactComponent as EyeClosed } from "../images/icons/eye-closed.svg"
+
+function SeedWords({ words }: { words: string }) {
+    const [shouldShow, setShouldShow] = useState(false)
+
+    function toggleShow() {
+        setShouldShow(!shouldShow)
+    }
+
+    if (shouldShow) {
+        return (<pre onClick={toggleShow}><code>{words}</code></pre>)
+    } else {
+        return <pre onClick={toggleShow} className="flex items-center gap-4"><Eye /><code className="text-red">TAP TO REVEAL SEED WORDS</code><EyeClosed /></pre>
+    }
+}
 
 function Settings() {
     const nodeManager = useContext(NodeManagerContext);
@@ -112,9 +129,7 @@ function Settings() {
                 <div className="flex flex-col gap-4 flex-1 overflow-y-scroll px-8 pb-[12rem] items-start">
                     <div>
                         <p className="text-2xl font-light">Write down these words or you'll die!</p>
-                        <pre>
-                            <code>{words}</code>
-                        </pre>
+                        <SeedWords words={words ?? ""} />
                     </div>
                     <div>
                         {nodes && nodes[0] ?
