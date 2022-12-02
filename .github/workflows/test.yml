@@ -117,7 +117,7 @@ jobs:
 
       - name: Check clippy
         working-directory: .
-        run: cargo clippy 
+        run: cargo clippy -- -Aclippy::drop_non_drop #wasm-bindgen pr #3089
 
       - name: Run all cargo tests besides node-manager
         working-directory: .

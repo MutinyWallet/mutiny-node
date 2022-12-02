@@ -73,6 +73,8 @@ impl MutinyNodePersister {
         self.storage.get(key).map_err(MutinyError::read_err)
     }
 
+    // FIXME: Useful to use soon when we implement paying network nodes
+    #[allow(dead_code)]
     pub fn persist_network_graph(&self, network_graph: &NetworkGraph) -> io::Result<()> {
         self.persist(NETWORK_KEY, network_graph)
     }
@@ -97,6 +99,8 @@ impl MutinyNodePersister {
         }
     }
 
+    // FIXME: Useful to use soon when we implement paying network nodes
+    #[allow(dead_code)]
     pub fn persist_scorer(
         &self,
         scorer: &ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>,
@@ -104,6 +108,8 @@ impl MutinyNodePersister {
         self.persist(PROB_SCORER_KEY, scorer)
     }
 
+    // FIXME: Useful to use soon when we implement paying network nodes
+    #[allow(dead_code)]
     pub fn read_scorer(
         &self,
         graph: Arc<NetworkGraph>,
@@ -263,6 +269,9 @@ impl MutinyNodePersister {
         map.into_iter().collect()
     }
 
+    // FIXME: Useful to keep around until we use it
+    // Will need to use it soon for #118
+    #[allow(dead_code)]
     pub(crate) fn read_peer_connection_info(&self, peer_pubkey: String) -> Option<String> {
         let key = self.get_key(peer_key(peer_pubkey).as_str());
         let deserialized_value: Result<String, MutinyError> =
@@ -281,6 +290,8 @@ impl MutinyNodePersister {
             .map_err(io::Error::other)
     }
 
+    // FIXME: Useful to keep around until we use it
+    #[allow(dead_code)]
     pub(crate) fn delete_peer_connection_info(&self, peer_pubkey: String) {
         let key = self.get_key(peer_key(peer_pubkey).as_str());
         MutinyBrowserStorage::delete(key)
