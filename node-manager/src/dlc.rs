@@ -134,7 +134,7 @@ impl dlc_manager::Wallet for MutinyDLCWallet {
     fn get_new_address(&self) -> Result<Address, ManagerError> {
         self.wallet
             .get_address(AddressIndex::New)
-            .map(|a| Address::from(a.address))
+            .map(|a| a.address)
             .map_err(bdk_err_to_manager_err)
     }
 

@@ -2,7 +2,7 @@ use crate::event::{EventHandler, HTLCStatus, MillisatAmount, PaymentInfo};
 use crate::invoice::create_phantom_invoice;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::localstorage::MutinyBrowserStorage;
-use crate::nodemanager::MutinyInvoice;
+use crate::nodemanager::{MutinyInvoice, MutinyInvoiceParams};
 use crate::utils::{currency_from_network, sleep};
 use crate::wallet::MutinyWallet;
 use bitcoin::hashes::sha256::Hash as Sha256;
@@ -495,21 +495,22 @@ impl Node {
                 None => {
                     // Constructing MutinyInvoice from no invoice, harder
                     let paid = matches!(i.status, HTLCStatus::Succeeded);
-                    let sats: Option<u64> = i.amt_msat.0.map(|s| s / 1_000);
-                    let fee_paid_sat = i.fee_paid_msat.map(|f| f / 1_000);
+                    let amount_sats: Option<u64> = i.amt_msat.0.map(|s| s / 1_000);
+                    let fees_paid = i.fee_paid_msat.map(|f| f / 1_000);
                     let preimage = i.preimage.map(|p| p.to_hex());
-                    Some(MutinyInvoice::new(
-                        None,
-                        None,
-                        h,
+                    let params = MutinyInvoiceParams {
+                        bolt11: None,
+                        description: None,
+                        payment_hash: h,
                         preimage,
-                        None,
-                        sats,
-                        i.last_update,
+                        payee_pubkey: None,
+                        amount_sats,
+                        expire: i.last_update,
                         paid,
-                        fee_paid_sat,
-                        !inbound,
-                    ))
+                        fees_paid,
+                        is_send: !inbound,
+                    };
+                    Some(MutinyInvoice::new(params))
                 }
             })
             .collect()
@@ -629,18 +630,19 @@ impl Node {
 
         match pay_result {
             Ok(_) => {
-                let mutiny_invoice: MutinyInvoice = MutinyInvoice::new(
-                    None,
-                    None,
-                    payment_hash.0.to_hex(),
-                    Some(preimage.0.to_hex()),
-                    Some(to_node.to_hex()),
-                    Some(amt_sats),
-                    payment_info.last_update,
-                    false,
-                    None,
-                    true,
-                );
+                let params = MutinyInvoiceParams {
+                    bolt11: None,
+                    description: None,
+                    payment_hash: payment_hash.0.to_hex(),
+                    preimage: Some(preimage.0.to_hex()),
+                    payee_pubkey: Some(to_node.to_hex()),
+                    amount_sats: Some(amt_sats),
+                    expire: payment_info.last_update,
+                    paid: false,
+                    fees_paid: None,
+                    is_send: true,
+                };
+                let mutiny_invoice: MutinyInvoice = MutinyInvoice::new(params);
                 Ok(mutiny_invoice)
             }
             Err(_) => {
@@ -830,7 +832,7 @@ pub(crate) fn parse_peer_info(
         Some(str) => str,
     };
 
-    let peer_addr_str_with_port = if peer_addr_str.contains(":") {
+    let peer_addr_str_with_port = if peer_addr_str.contains(':') {
         peer_addr_str.to_string()
     } else {
         format!("{peer_addr_str}:9735")

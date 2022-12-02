@@ -75,6 +75,8 @@ const SCORER_PERSIST_TIMER: u64 = 30;
 const FIRST_NETWORK_PRUNE_TIMER: u64 = 60;
 
 /// Either [`P2PGossipSync`] or [`RapidGossipSync`].
+// FIXME: Use for routing soon
+#[allow(dead_code)]
 pub enum GossipSync<
     P: Deref<Target = P2PGossipSync<G, A, L>>,
     R: Deref<Target = RapidGossipSync<G, L>>,
@@ -139,6 +141,8 @@ where
     L::Target: Logger,
 {
     /// Initializes a new [`GossipSync::P2P`] variant.
+    // FIXME: Use for routing soon
+    #[allow(dead_code)]
     pub fn p2p(gossip_sync: P) -> Self {
         GossipSync::P2P(gossip_sync)
     }
@@ -162,6 +166,8 @@ where
     L::Target: Logger,
 {
     /// Initializes a new [`GossipSync::Rapid`] variant.
+    // FIXME: Use for routing soon
+    #[allow(dead_code)]
     pub fn rapid(gossip_sync: R) -> Self {
         GossipSync::Rapid(gossip_sync)
     }
@@ -398,6 +404,7 @@ impl BackgroundProcessor {
     /// [`Persister::persist_graph`]: lightning::util::persist::Persister::persist_graph
     /// [`NetworkGraph`]: lightning::routing::gossip::NetworkGraph
     /// [`NetworkGraph::write`]: lightning::routing::gossip::NetworkGraph#impl-Writeable
+    #[allow(clippy::too_many_arguments)]
     pub fn start<
         'a,
         Signer: 'static + Sign,
@@ -480,6 +487,7 @@ impl BackgroundProcessor {
     /// handling events.
     ///
     /// [`ChannelManager`]: lightning::ln::channelmanager::ChannelManager
+    #[allow(dead_code)]
     pub fn join(mut self) -> Result<(), std::io::Error> {
         assert!(self.thread_handle.is_some());
         self.join_thread()
@@ -494,6 +502,7 @@ impl BackgroundProcessor {
     /// handling events.
     ///
     /// [`ChannelManager`]: lightning::ln::channelmanager::ChannelManager
+    #[allow(dead_code)]
     pub fn stop(mut self) -> Result<(), std::io::Error> {
         assert!(self.thread_handle.is_some());
         self.stop_and_join_thread()

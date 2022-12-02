@@ -58,6 +58,8 @@ impl MutinyBrowserStorage {
         }
     }
 
+    // FIXME: Useful to keep around until we use it
+    #[allow(dead_code)]
     pub(crate) fn delete(key: impl AsRef<str>) {
         LocalStorage::delete(key);
     }

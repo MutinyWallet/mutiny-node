@@ -86,30 +86,32 @@ pub struct MutinyInvoice {
     pub is_send: bool,
 }
 
+pub(crate) struct MutinyInvoiceParams {
+    pub bolt11: Option<String>,
+    pub description: Option<String>,
+    pub payment_hash: String,
+    pub preimage: Option<String>,
+    pub payee_pubkey: Option<String>,
+    pub amount_sats: Option<u64>,
+    pub expire: u64,
+    pub paid: bool,
+    pub fees_paid: Option<u64>,
+    pub is_send: bool,
+}
+
 impl MutinyInvoice {
-    pub fn new(
-        bolt11: Option<String>,
-        description: Option<String>,
-        payment_hash: String,
-        preimage: Option<String>,
-        payee_pubkey: Option<String>,
-        amount_sats: Option<u64>,
-        expire: u64,
-        paid: bool,
-        fees_paid: Option<u64>,
-        is_send: bool,
-    ) -> Self {
+    pub(crate) fn new(p: MutinyInvoiceParams) -> Self {
         MutinyInvoice {
-            bolt11,
-            description,
-            payment_hash,
-            preimage,
-            payee_pubkey,
-            amount_sats,
-            expire,
-            paid,
-            fees_paid,
-            is_send,
+            bolt11: p.bolt11,
+            description: p.description,
+            payment_hash: p.payment_hash,
+            preimage: p.preimage,
+            payee_pubkey: p.payee_pubkey,
+            amount_sats: p.amount_sats,
+            expire: p.expire,
+            paid: p.paid,
+            fees_paid: p.fees_paid,
+            is_send: p.is_send,
         }
     }
 }
@@ -228,10 +230,10 @@ impl NodeManager {
         set_panic_hook();
 
         let websocket_proxy_addr =
-            websocket_proxy_addr.unwrap_or(String::from("wss://p.mutinywallet.com"));
+            websocket_proxy_addr.unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
 
         let network: Network = network_str
-            .unwrap_or(String::from("testnet"))
+            .unwrap_or_else(|| String::from("testnet"))
             .parse()
             .expect("invalid network");
 
@@ -428,12 +430,11 @@ impl NodeManager {
                     .map(|c| c.outbound_capacity_msat)
                     .sum();
 
-                let balance = MutinyBalance {
+                Ok(MutinyBalance {
                     confirmed: onchain.confirmed,
                     unconfirmed: onchain.untrusted_pending + onchain.trusted_pending,
                     lightning: lightning_msats / 1000,
-                };
-                Ok(balance)
+                })
             }
             Err(_) => Err(MutinyJsError::WalletOperationFailed),
         }
