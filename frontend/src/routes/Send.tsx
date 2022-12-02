@@ -29,16 +29,13 @@ function Send() {
   const [textFieldDestination, setDestination] = useState("")
 
   async function navigateForInvoice(invoiceStr: string) {
-    console.log("inside navigate for invoice")
     try {
       let invoice = await nodeManager?.decode_invoice(invoiceStr);
       console.table(invoice);
       if (invoice?.amount_sats && Number(invoice?.amount_sats) > 0) {
-        console.log("navigating to confirm")
         navigate(`/send/confirm?destination=${invoiceStr}&amount=${invoice?.amount_sats}`)
         return
       } else {
-        console.log("navigating to amount")
         navigate(`/send/amount?destination=${invoiceStr}`)
         return
       }
@@ -51,7 +48,6 @@ function Send() {
   async function handleContinue(qrRead?: string) {
     let destination: string = qrRead || textFieldDestination;
     if (!destination) {
-      console.log("no destination")
       toast("You didn't paste anything!");
       return
     }
