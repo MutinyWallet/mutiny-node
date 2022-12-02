@@ -51,10 +51,12 @@ pub enum MutinyError {
     },
     #[error("Failed to read data from storage.")]
     ReadError { source: MutinyStorageError },
+    #[error("Failed to decode lightning data.")]
+    LnDecodeError,
     /// A failure to generate a mnemonic seed.
     #[error("Failed to generate seed")]
     SeedGenerationFailed,
-    /// User provided invalid menmonic.
+    /// User provided invalid mnemonic.
     #[error("Invalid mnemonic")]
     InvalidMnemonic,
     /// A wallet operation failed.
@@ -66,6 +68,9 @@ pub enum MutinyError {
     /// A chain access operation failed.
     #[error("Failed to conduct chain access operation.")]
     ChainAccessFailed,
+    /// A error with DLCs
+    #[error("Failed to execute a dlc function")]
+    DLCManagerError,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -98,6 +103,24 @@ impl From<bdk::Error> for MutinyError {
             bdk::Error::Signer(_) => Self::WalletSigningFailed,
             _ => Self::WalletOperationFailed,
         }
+    }
+}
+
+impl From<MutinyStorageError> for dlc_manager::error::Error {
+    fn from(e: MutinyStorageError) -> Self {
+        dlc_manager::error::Error::StorageError(format!("Storage error: {e}"))
+    }
+}
+
+impl From<lightning::ln::msgs::DecodeError> for MutinyError {
+    fn from(_e: lightning::ln::msgs::DecodeError) -> Self {
+        MutinyError::LnDecodeError
+    }
+}
+
+impl From<dlc_manager::error::Error> for MutinyError {
+    fn from(_e: dlc_manager::error::Error) -> Self {
+        MutinyError::DLCManagerError
     }
 }
 
@@ -194,6 +217,8 @@ pub enum MutinyJsError {
     PersistenceFailed,
     #[error("Failed to read data from storage.")]
     ReadError,
+    #[error("Failed to decode lightning data.")]
+    LnDecodeError,
     /// A failure to generate a mnemonic seed.
     #[error("Failed to generate seed")]
     SeedGenerationFailed,
@@ -221,6 +246,9 @@ pub enum MutinyJsError {
     /// Error converting JS f64 value to Amount
     #[error("Failed to convert to satoshis")]
     BadAmountError,
+    /// A error with DLCs
+    #[error("Failed to execute a dlc function")]
+    DLCManagerError,
     /// Unknown error.
     #[error("Unknown Error")]
     UnknownError,
@@ -242,11 +270,13 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::ChannelClosingFailed => MutinyJsError::ChannelClosingFailed,
             MutinyError::PersistenceFailed { source: _ } => MutinyJsError::PersistenceFailed,
             MutinyError::ReadError { source: _ } => MutinyJsError::ReadError,
+            MutinyError::LnDecodeError => MutinyJsError::LnDecodeError,
             MutinyError::SeedGenerationFailed => MutinyJsError::SeedGenerationFailed,
             MutinyError::WalletOperationFailed => MutinyJsError::WalletOperationFailed,
             MutinyError::InvalidMnemonic => MutinyJsError::InvalidMnemonic,
             MutinyError::WalletSigningFailed => MutinyJsError::WalletSigningFailed,
             MutinyError::ChainAccessFailed => MutinyJsError::ChainAccessFailed,
+            MutinyError::DLCManagerError => MutinyJsError::DLCManagerError,
             MutinyError::Other(_) => MutinyJsError::UnknownError,
         }
     }

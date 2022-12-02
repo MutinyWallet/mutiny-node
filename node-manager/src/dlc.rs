@@ -87,7 +87,7 @@ impl dlc_manager::Signer for MutinyDLCWallet {
                 })
                 .collect();
 
-            bitcoin::Transaction {
+            Transaction {
                 version: tx_clone.version,
                 lock_time: tx_clone.lock_time,
                 input: unsigned_inputs,

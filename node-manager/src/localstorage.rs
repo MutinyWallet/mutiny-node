@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::io::{Cursor, Read};
 use std::str;
 use std::str::FromStr;
 
 use bip39::Mnemonic;
+use dlc_manager::contract::ser::Serializable;
 
 use gloo_storage::errors::StorageError;
 use gloo_storage::{LocalStorage, Storage};
@@ -78,6 +80,36 @@ impl MutinyBrowserStorage {
                 if key.starts_with(prefix) && (suffix.is_none() || key.ends_with(suffix.unwrap())) {
                     let value: T = self.get(&key).unwrap();
                     map.insert(key, value);
+                }
+            }
+        }
+
+        map
+    }
+
+    pub(crate) fn get_data_with_prefix<T: Serializable>(
+        &self,
+        prefix: &[u8],
+        consume: Option<u64>,
+    ) -> HashMap<String, T> {
+        let local_storage = LocalStorage::raw();
+        let length = LocalStorage::length();
+        let mut map = HashMap::with_capacity(length as usize);
+
+        for index in 0..length {
+            let key_opt: Option<String> = local_storage.key(index).unwrap();
+
+            if let Some(key) = key_opt {
+                let value: Vec<u8> = self.get(&key).unwrap();
+                let mut cursor = Cursor::new(&value);
+                let mut pref = vec![0u8; prefix.len()];
+                cursor.read_exact(&mut pref).expect("Error reading prefix");
+                if pref == prefix {
+                    if let Some(c) = consume {
+                        cursor.set_position(cursor.position() + c);
+                    }
+                    let v = T::deserialize(&mut cursor).unwrap();
+                    map.insert(key, v);
                 }
             }
         }
