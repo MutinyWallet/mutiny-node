@@ -88,6 +88,44 @@ type Router = DefaultRouter<
     Arc<Mutex<ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>>>,
 >;
 
+#[derive(Clone)]
+pub(crate) enum ConnectionType {
+    Tcp(SocketAddr),
+    Mutiny(String),
+}
+
+#[derive(Clone)]
+pub(crate) struct PubkeyConnectionInfo {
+    pub pubkey: PublicKey,
+    pub connection_type: ConnectionType,
+    pub original_connection_string: String,
+}
+
+impl PubkeyConnectionInfo {
+    pub fn new(connection: String) -> Result<Self, MutinyError> {
+        if connection.is_empty() {
+            return Err(MutinyError::PeerInfoParseFailed)
+                .context("connect_peer requires peer connection info")?;
+        };
+
+        if connection.starts_with("mutiny:") {
+            let (pubkey, peer_addr_str) = split_peer_connection_string(connection.clone())?;
+            Ok(Self {
+                pubkey,
+                connection_type: ConnectionType::Mutiny(peer_addr_str),
+                original_connection_string: connection,
+            })
+        } else {
+            let (pubkey, peer_addr_str) = parse_peer_info(connection.clone())?;
+            Ok(Self {
+                pubkey,
+                connection_type: ConnectionType::Tcp(peer_addr_str),
+                original_connection_string: connection,
+            })
+        }
+    }
+}
+
 pub(crate) struct Node {
     pub _uuid: String,
     pub pubkey: PublicKey,
@@ -289,14 +327,14 @@ impl Node {
                         "",
                         0,
                     ));
-                    let conn = conn_str.parse::<SocketAddr>();
-                    if conn.is_err() {
-                        continue;
-                    }
+                    let peer_connection_info = match PubkeyConnectionInfo::new(conn_str.to_string())
+                    {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
                     match connect_peer(
                         connect_proxy.clone(),
-                        pubkey.to_owned(),
-                        conn.unwrap(),
+                        peer_connection_info,
                         connect_peer_man.clone(),
                     )
                     .await
@@ -342,36 +380,27 @@ impl Node {
         })
     }
 
-    pub async fn connect_peer(&self, peer_pubkey_and_ip_addr: String) -> Result<(), MutinyError> {
-        if peer_pubkey_and_ip_addr.is_empty() {
-            return Err(MutinyError::PeerInfoParseFailed)
-                .context("connect_peer requires peer connection info")?;
-        };
-        let (pubkey, peer_addr) = match parse_peer_info(peer_pubkey_and_ip_addr) {
-            Ok(info) => info,
-            Err(e) => {
-                return Err(MutinyError::PeerInfoParseFailed)
-                    .with_context(|| format!("could not parse peer info: {}", e))?;
-            }
-        };
-
+    pub async fn connect_peer(
+        &self,
+        peer_connection_info: PubkeyConnectionInfo,
+    ) -> Result<(), MutinyError> {
         if connect_peer_if_necessary(
             self.websocket_proxy_addr.clone(),
-            pubkey,
-            peer_addr,
+            peer_connection_info.clone(),
             self.peer_manager.clone(),
         )
         .await
         .is_err()
         {
-            Err(MutinyError::PeerInfoParseFailed)
-                .with_context(|| format!("could not connect to peer: {pubkey}"))?
+            Err(MutinyError::PeerInfoParseFailed).with_context(|| {
+                format!("could not connect to peer: {}", peer_connection_info.pubkey)
+            })?
         } else {
             // store this so we can save later if needed
-            self.temp_peer_connection_map
-                .lock()
-                .unwrap()
-                .insert(pubkey.to_string(), peer_addr.to_string());
+            self.temp_peer_connection_map.lock().unwrap().insert(
+                peer_connection_info.pubkey.to_string(),
+                peer_connection_info.original_connection_string,
+            );
             Ok(())
         }
     }
@@ -718,35 +747,41 @@ impl Node {
 
 pub(crate) async fn connect_peer_if_necessary(
     websocket_proxy_addr: String,
-    pubkey: PublicKey,
-    peer_addr: SocketAddr,
+    peer_connection_info: PubkeyConnectionInfo,
     peer_manager: Arc<PeerManager>,
 ) -> Result<(), MutinyError> {
-    if peer_manager.get_peer_node_ids().contains(&pubkey) {
+    if peer_manager
+        .get_peer_node_ids()
+        .contains(&peer_connection_info.pubkey)
+    {
         Ok(())
     } else {
-        connect_peer(websocket_proxy_addr, pubkey, peer_addr, peer_manager).await
+        connect_peer(websocket_proxy_addr, peer_connection_info, peer_manager).await
     }
 }
 pub(crate) async fn connect_peer(
     websocket_proxy_addr: String,
-    pubkey: PublicKey,
-    peer_addr: SocketAddr,
+    peer_connection_info: PubkeyConnectionInfo,
     peer_manager: Arc<PeerManager>,
 ) -> Result<(), MutinyError> {
     // first make a connection to the node
-    let tcp_proxy = Arc::new(Proxy::from_tcp_addr(websocket_proxy_addr, peer_addr).await);
-    let mut descriptor = WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(tcp_proxy));
+    let proxy = Proxy::new(websocket_proxy_addr, peer_connection_info.clone()).await?;
+    let mut descriptor = WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy)));
+
+    let socket_addr = match peer_connection_info.connection_type {
+        ConnectionType::Tcp(t) => Some(get_net_addr_from_socket(t)),
+        ConnectionType::Mutiny(_) => None,
+    };
 
     // then give that connection to the peer manager
     let initial_bytes = peer_manager.new_outbound_connection(
-        pubkey,
+        peer_connection_info.pubkey,
         descriptor.clone(),
-        Some(get_net_addr_from_socket(peer_addr)),
+        socket_addr,
     )?;
 
     let sent_bytes = descriptor.send_data(&initial_bytes, true);
-    trace!("sent {sent_bytes} to node: {pubkey}");
+    trace!("sent {sent_bytes} to node: {}", peer_connection_info.pubkey);
 
     // schedule a reader on the connection
     let mut new_descriptor = descriptor.clone();
@@ -823,19 +858,10 @@ pub(crate) fn create_peer_manager(
 pub(crate) fn parse_peer_info(
     peer_pubkey_and_ip_addr: String,
 ) -> Result<(PublicKey, SocketAddr), MutinyError> {
-    let mut pubkey_and_addr = peer_pubkey_and_ip_addr.split('@');
-    let pubkey = pubkey_and_addr.next();
-    let peer_addr_str = match pubkey_and_addr.next() {
-        None => {
-            return Err(MutinyError::PeerInfoParseFailed).context(
-                "incorrectly formatted peer info. Should be formatted as: `pubkey@host:port`",
-            )?
-        }
-        Some(str) => str,
-    };
+    let (pubkey, peer_addr_str) = split_peer_connection_string(peer_pubkey_and_ip_addr)?;
 
     let peer_addr_str_with_port = if peer_addr_str.contains(':') {
-        peer_addr_str.to_string()
+        peer_addr_str
     } else {
         format!("{peer_addr_str}:9735")
     };
@@ -848,13 +874,26 @@ pub(crate) fn parse_peer_info(
             .context("couldn't parse pubkey@host:port into a socket address")?;
     }
 
-    let pubkey = PublicKey::from_str(pubkey.unwrap());
-    if pubkey.is_err() {
-        return Err(MutinyError::PeerInfoParseFailed)
-            .context("unable to parse given pubkey for node")?;
-    }
+    Ok((pubkey, peer_addr.unwrap().unwrap()))
+}
 
-    Ok((pubkey.unwrap(), peer_addr.unwrap().unwrap()))
+pub(crate) fn split_peer_connection_string(
+    peer_pubkey_and_ip_addr: String,
+) -> Result<(PublicKey, String), MutinyError> {
+    let mut pubkey_and_addr = peer_pubkey_and_ip_addr.split('@');
+    let pubkey = pubkey_and_addr
+        .next()
+        .ok_or(MutinyError::PeerInfoParseFailed)?;
+    let peer_addr_str = match pubkey_and_addr.next() {
+        None => {
+            return Err(MutinyError::PeerInfoParseFailed).context(
+                "incorrectly formatted peer info. Should be formatted as: `pubkey@host:port`",
+            )?
+        }
+        Some(str) => str,
+    };
+    let pubkey = PublicKey::from_str(pubkey).map_err(|_| MutinyError::PeerInfoParseFailed)?;
+    Ok((pubkey, peer_addr_str.to_string()))
 }
 
 pub(crate) fn default_user_config() -> UserConfig {

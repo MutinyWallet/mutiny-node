@@ -1,9 +1,11 @@
-use std::{net::SocketAddr, sync::Arc};
-
+use crate::error::MutinyError;
+use crate::node::ConnectionType;
+use crate::node::PubkeyConnectionInfo;
 use futures::stream::SplitStream;
 use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
 use log::debug;
+use std::{net::SocketAddr, sync::Arc};
 use wasm_bindgen_futures::spawn_local;
 
 pub(crate) struct Proxy {
@@ -15,13 +17,26 @@ type WsSplit = Arc<Mutex<SplitSink<WebSocket, Message>>>;
 type ReadSplit = Arc<Mutex<SplitStream<WebSocket>>>;
 
 impl Proxy {
-    pub async fn from_tcp_addr(proxy_url: String, peer_addr: SocketAddr) -> Self {
-        let ws = WebSocket::open(String::as_str(&proxy_to_url(proxy_url, peer_addr))).unwrap();
+    pub async fn new(
+        proxy_url: String,
+        peer_connection_info: PubkeyConnectionInfo,
+    ) -> Result<Self, MutinyError> {
+        let ws = match peer_connection_info.connection_type {
+            ConnectionType::Tcp(s) => {
+                WebSocket::open(String::as_str(&tcp_proxy_to_url(proxy_url, s)))
+                    .map_err(|_| MutinyError::ConnectionFailed)?
+            }
+            ConnectionType::Mutiny(url) => WebSocket::open(String::as_str(
+                &mutiny_conn_proxy_to_url(url, peer_connection_info.pubkey.to_string()),
+            ))
+            .map_err(|_| MutinyError::ConnectionFailed)?,
+        };
+
         let (write, read) = ws.split();
-        Self {
+        Ok(Self {
             write: Arc::new(Mutex::new(write)),
             read: Arc::new(Mutex::new(read)),
-        }
+        })
     }
 
     pub fn send(&self, data: Vec<u8>) {
@@ -39,7 +54,7 @@ impl Proxy {
     }
 }
 
-pub fn proxy_to_url(proxy_url: String, peer_addr: SocketAddr) -> String {
+pub fn tcp_proxy_to_url(proxy_url: String, peer_addr: SocketAddr) -> String {
     format!(
         "{proxy_url}/v1/{}/{}",
         peer_addr.ip().to_string().replace('.', "_"),
@@ -47,24 +62,32 @@ pub fn proxy_to_url(proxy_url: String, peer_addr: SocketAddr) -> String {
     )
 }
 
+pub fn mutiny_conn_proxy_to_url(proxy_url: String, peer_pubkey: String) -> String {
+    format!("{proxy_url}/v1/mutiny/{peer_pubkey}",)
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::proxy::PubkeyConnectionInfo;
     use crate::test::*;
 
-    use crate::proxy::{proxy_to_url, Proxy};
+    use crate::proxy::{mutiny_conn_proxy_to_url, tcp_proxy_to_url, Proxy};
 
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
+
+    const PEER_PUBKEY: &str = "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443";
 
     #[test]
     async fn test_websocket_proxy_init() {
         log!("test websocket proxy");
 
         // TODO do something useful
-        let _proxy = Proxy::from_tcp_addr(
+        let _proxy = Proxy::new(
             "ws://127.0.0.1:3001".to_string(),
-            "127.0.0.1:4000".parse().unwrap(),
+            PubkeyConnectionInfo::new(format!("{}@{}", PEER_PUBKEY.to_string(), "127.0.0.1:4000"))
+                .unwrap(),
         )
         .await;
     }
@@ -75,10 +98,15 @@ mod tests {
 
         assert_eq!(
             "ws://127.0.0.1:3001/v1/127_0_0_1/4000".to_string(),
-            proxy_to_url(
+            tcp_proxy_to_url(
                 "ws://127.0.0.1:3001".to_string(),
                 "127.0.0.1:4000".parse().unwrap(),
             )
+        );
+
+        assert_eq!(
+            ("ws://127.0.0.1:3001/v1/mutiny/".to_owned() + PEER_PUBKEY).to_string(),
+            mutiny_conn_proxy_to_url("ws://127.0.0.1:3001".to_string(), PEER_PUBKEY.to_string(),)
         )
     }
 }

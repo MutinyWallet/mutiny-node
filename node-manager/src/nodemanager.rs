@@ -6,7 +6,7 @@ use std::{str::FromStr, sync::Arc};
 use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyJsError, MutinyStorageError};
 use crate::keymanager;
-use crate::node::Node;
+use crate::node::{Node, PubkeyConnectionInfo};
 use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
@@ -584,7 +584,8 @@ impl NodeManager {
         connection_string: String,
     ) -> Result<(), MutinyJsError> {
         if let Some(node) = self.nodes.lock().await.get(&self_node_pubkey) {
-            let res = node.connect_peer(connection_string.clone()).await;
+            let connect_info = PubkeyConnectionInfo::new(connection_string.clone())?;
+            let res = node.connect_peer(connect_info).await;
             match res {
                 Ok(_) => {
                     info!("connected to peer: {connection_string}");
