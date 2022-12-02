@@ -30,6 +30,7 @@ pub struct NodeManager {
     mnemonic: Mnemonic,
     network: Network,
     websocket_proxy_addr: String,
+    user_esplora_addr: Option<String>,
     wallet: Arc<MutinyWallet>,
     chain: Arc<MutinyChain>,
     storage: MutinyBrowserStorage,
@@ -258,6 +259,7 @@ impl NodeManager {
         mnemonic: Option<String>,
         websocket_proxy_addr: Option<String>,
         network_str: Option<String>,
+        esplora_str: Option<String>,
     ) -> Result<NodeManager, MutinyJsError> {
         set_panic_hook();
 
@@ -296,6 +298,7 @@ impl NodeManager {
             mnemonic.clone(),
             storage.clone(),
             network,
+            esplora_str.clone(),
         ));
 
         let chain = Arc::new(MutinyChain::new(wallet.clone()));
@@ -321,6 +324,7 @@ impl NodeManager {
                 wallet.clone(),
                 network,
                 websocket_proxy_addr.clone(),
+                esplora_str.clone(),
             )
             .await?;
 
@@ -341,6 +345,7 @@ impl NodeManager {
             node_storage: Mutex::new(node_storage),
             nodes: Arc::new(Mutex::new(nodes_map)),
             websocket_proxy_addr,
+            user_esplora_addr: esplora_str,
         })
     }
 
@@ -891,6 +896,7 @@ pub(crate) async fn create_new_node_from_node_manager(
         node_manager.wallet.clone(),
         node_manager.network,
         node_manager.websocket_proxy_addr.clone(),
+        node_manager.user_esplora_addr.clone(),
     )
     .await
     {
@@ -933,6 +939,7 @@ mod tests {
             None,
             None,
             Some("testnet".to_owned()),
+            None,
         )
         .await
         .expect("node manager should initialize");
@@ -951,6 +958,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("testnet".to_owned()),
+            None,
         )
         .await
         .unwrap();
@@ -971,6 +979,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("testnet".to_owned()),
+            None,
         )
         .await
         .expect("node manager should initialize");

@@ -113,6 +113,7 @@ impl Node {
         wallet: Arc<MutinyWallet>,
         network: Network,
         websocket_proxy_addr: String,
+        user_esplora_url: Option<String>,
     ) -> Result<Self, MutinyError> {
         info!("initialized a new node: {}", node_index.uuid);
 
@@ -149,6 +150,7 @@ impl Node {
                 logger.clone(),
                 keys_manager.clone(),
                 channel_monitors,
+                user_esplora_url,
             )
             .await?;
         let channel_manager: Arc<PhantomChannelManager> = Arc::new(channel_manager);

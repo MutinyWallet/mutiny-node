@@ -62,8 +62,14 @@ export const GlobalStateProvider = ({ children }: Props) => {
         console.log("Starting setup...")
         try {
             console.log("Initializing Node Manager")
-            console.log("Using network", process.env.REACT_APP_NETWORK ?? "regtest");
-            let nodeManager = await new NodeManager("", undefined, undefined, process.env.REACT_APP_NETWORK ?? "regtest")
+
+            const network = process.env.REACT_APP_NETWORK ?? "regtest"
+            const proxy = process.env.REACT_APP_PROXY ?? "wss://p.mutinywallet.com"
+            const esplora = process.env.REACT_APP_ESPLORA ?? undefined
+            console.log("Using network", network);
+            console.log("Using esplora address", proxy);
+
+            let nodeManager = await new NodeManager("", undefined, proxy, network, esplora)
             // TODO this is some extra delay because the node manager isn't really "ready" the moment it's set
             await timeout(100)
             setNodeManager(nodeManager)
