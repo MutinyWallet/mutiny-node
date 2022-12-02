@@ -7,6 +7,7 @@ import { inputStyle } from "../styles";
 import toast from "react-hot-toast"
 import MutinyToaster from "../components/MutinyToaster";
 import { useSearchParams } from "react-router-dom";
+import ActionButton from "@components/ActionButton";
 
 export default function SendAmount() {
   let navigate = useNavigate();
@@ -38,9 +39,9 @@ export default function SendAmount() {
           <p className="text-2xl font-light">How much would you like to send?</p>
           <input onChange={e => setAmount(e.target.value)} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='sats' />
         </div>
-        <div className='flex justify-start'>
-          <button onClick={handleContinue}>Continue</button>
-        </div>
+        <ActionButton onClick={handleContinue}>
+          Continue
+        </ActionButton>
       </ScreenMain>
       <MutinyToaster />
     </>

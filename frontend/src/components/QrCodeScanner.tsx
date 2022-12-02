@@ -36,7 +36,10 @@ const QrCodeDetectorComponent = ({
 
           console.debug("Qr code parsed result:", parsedResult)
 
-
+          if (parsedResult) {
+            onValidCode(parsedResult)
+            await qrCodeRef.current?.stop()
+          }
         }
 
         await qrCodeRef.current?.start(

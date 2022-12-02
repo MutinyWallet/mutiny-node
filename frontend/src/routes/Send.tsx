@@ -6,11 +6,13 @@ import ScreenMain from "../components/ScreenMain";
 import { inputStyle } from "../styles";
 import toast from "react-hot-toast"
 import MutinyToaster from "../components/MutinyToaster";
-import { detectPaymentType, PaymentType, toastAnything } from "@util/dumb";
+import { detectPaymentType, objectToSearchParams, PaymentType, toastAnything } from "@util/dumb";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import bip21 from "bip21"
 import { NodeManager } from "node-manager";
 import { QrCodeScanner } from "@components/QrCodeScanner";
+import { SendConfirmParams } from "./SendConfirm";
+import ActionButton from "@components/ActionButton";
 
 type UnifiedQrOptions =
   {
@@ -34,14 +36,36 @@ function Send() {
       console.table(invoice);
       if (invoice?.amount_sats && Number(invoice?.amount_sats) > 0) {
         navigate(`/send/confirm?destination=${invoiceStr}&amount=${invoice?.amount_sats}`)
-        return
       } else {
         navigate(`/send/amount?destination=${invoiceStr}`)
-        return
       }
     } catch (e) {
       console.error(e);
       toastAnything(e);
+    }
+  }
+
+  async function navigateForBip21(bip21String: string) {
+    const { address, options } = bip21.decode(bip21String) as Bip21;
+    if (options?.lightning) {
+      await navigateForInvoice(options.lightning)
+    } else if (options?.amount) {
+      try {
+        const amount = NodeManager.convert_btc_to_sats(options.amount ?? 0.0);
+        if (!amount) {
+          throw new Error("Failed to convert BTC to sats")
+        }
+        if (options.label) {
+          const params = objectToSearchParams<SendConfirmParams>({ destination: address, amount: amount.toString(), description: options.label })
+          navigate(`/send/confirm?${params}`)
+        } else {
+          const params = objectToSearchParams<SendConfirmParams>({ destination: address, amount: amount.toString() })
+          navigate(`/send/confirm?${params}`)
+        }
+      } catch (e) {
+        console.error(e)
+        toastAnything(e);
+      }
     }
   }
 
@@ -54,44 +78,20 @@ function Send() {
 
     let paymentType = detectPaymentType(destination)
 
-    if (paymentType === PaymentType.invoice) {
-      await navigateForInvoice(destination)
-      return
-    } else if (paymentType === PaymentType.bip21) {
-      const { address, options } = bip21.decode(destination) as Bip21;
-      if (options?.lightning) {
-        await navigateForInvoice(options.lightning)
-        return
-      } else if (options?.amount) {
-        try {
-          const amount = NodeManager.convert_btc_to_sats(options.amount ?? 0.0);
-          if (!amount) {
-            throw new Error("Failed to convert BTC to sats")
-          }
-          if (options.label) {
-            navigate(`/send/confirm?destination=${address}&amount=${amount}&description=${options.label}`)
-          } else {
-            navigate(`/send/confirm?destination=${address}&amount=${amount}`)
-          }
-          return
-        } catch (e) {
-          console.error(e)
-          toastAnything(e);
-          return
-        }
-      } else {
-        navigate(`/send/amount?destination=${address}`)
-        return
-      }
-    }
 
     if (paymentType === PaymentType.unknown) {
       toast("Couldn't parse that one, buddy")
       return
     }
 
-
-    navigate(`/send/amount?destination=${destination}`);
+    if (paymentType === PaymentType.invoice) {
+      await navigateForInvoice(destination)
+    } else if (paymentType === PaymentType.bip21) {
+      await navigateForBip21(destination)
+    } else if (paymentType === PaymentType.onchain) {
+      const params = objectToSearchParams<SendConfirmParams>({ destination })
+      navigate(`/send/amount?${params}`)
+    }
   }
 
   function onCodeDetected(barcodeValue: string): string | undefined {
@@ -120,9 +120,9 @@ function Send() {
       <ScreenMain>
         <QrCodeScanner onValidCode={onValidCode} onCodeDetected={onCodeDetected} />
         <input onChange={e => setDestination(e.target.value)} value={textFieldDestination} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice, pubkey, or address' />
-        <div className='flex justify-start'>
-          <button onClick={() => handleContinue(undefined)}>Continue</button>
-        </div>
+        <ActionButton onClick={() => handleContinue(undefined)}>
+          Continue
+        </ActionButton>
       </ScreenMain>
       <MutinyToaster />
     </>

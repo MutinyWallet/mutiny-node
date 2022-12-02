@@ -5,7 +5,6 @@ import {
 import KitchenSink from '@routes/KitchenSink';
 import App from '@routes/App';
 import Send from '@routes/Send';
-import Deposit from '@routes/Deposit';
 import SendConfirm from '@routes/SendConfirm';
 import Receive from '@routes/Receive';
 import ManagerRoot from '@routes/ManagerRoot';
@@ -36,10 +35,6 @@ const router = createBrowserRouter([
     {
         path: "/send/confirm",
         element: <SendConfirm />,
-    },
-    {
-        path: "/deposit",
-        element: <Deposit />,
     },
     {
         path: "/receive",
