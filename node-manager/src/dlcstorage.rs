@@ -60,6 +60,11 @@ impl Storage for MutinyBrowserStorage {
 
     fn update_contract(&mut self, contract: &Contract) -> Result<(), Error> {
         let serialized = serialize_contract(contract)?;
+
+        let key = format! {"{DLC_CONTRACT_KEY_PREFIX}{}", contract.get_id().to_hex()};
+        self.set(key, serialized.clone())?;
+
+        // delete old contract
         match contract {
             a @ Contract::Accepted(_) | a @ Contract::Signed(_) => {
                 let key = format! {"{DLC_CONTRACT_KEY_PREFIX}{}", a.get_temporary_id().to_hex()};
@@ -68,8 +73,6 @@ impl Storage for MutinyBrowserStorage {
             _ => {}
         };
 
-        let key = format! {"{DLC_CONTRACT_KEY_PREFIX}{}", contract.get_id().to_hex()};
-        self.set(key, serialized.clone())?;
         Ok(())
     }
 
@@ -105,6 +108,9 @@ impl Storage for MutinyBrowserStorage {
     ) -> Result<(), Error> {
         let serialized = serialize_channel(&channel)?;
 
+        let chan_key = format!("{DLC_CHANNEL_KEY_PREFIX}{}", channel.get_id().to_hex());
+        self.set(chan_key, serialized.clone())?;
+
         match &channel {
             a @ Channel::Accepted(_) | a @ Channel::Signed(_) => {
                 let key = format! {"{DLC_CHANNEL_KEY_PREFIX}{}", a.get_temporary_id().to_hex()};
@@ -112,9 +118,6 @@ impl Storage for MutinyBrowserStorage {
             }
             _ => {}
         };
-
-        let chan_key = format!("{DLC_CHANNEL_KEY_PREFIX}{}", channel.get_id().to_hex());
-        self.set(chan_key, serialized.clone())?;
 
         if let Some(c) = contract.as_ref() {
             return self.update_contract(c);
@@ -186,7 +189,12 @@ impl Storage for MutinyBrowserStorage {
                 })?;
                 Ok(Some(mon))
             }
-            Err(_) => Ok(None),
+            Err(e) => match e {
+                MutinyStorageError::SerdeError { source: _ } => Err(Error::StorageError(
+                    "Failed to decode ChainMonitor".to_string(),
+                )),
+                _ => Ok(None),
+            },
         }
     }
 }
