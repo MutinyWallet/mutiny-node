@@ -6,11 +6,10 @@ import ScreenMain from "../components/ScreenMain";
 import { useSearchParams } from "react-router-dom";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import toast from "react-hot-toast";
-import { detectPaymentType, getFirstNode, PaymentType, toastAnything } from "@util/dumb";
+import { detectPaymentType, errorAsString, getFirstNode, PaymentType, toastAnything } from "@util/dumb";
 import MutinyToaster from "@components/MutinyToaster";
 import { useQuery } from "@tanstack/react-query";
 import prettyPrintAmount from "@util/prettyPrintAmount";
-import { timeout } from "workbox-core/_private";
 
 function SendConfirm() {
   const nodeManager = useContext(NodeManagerContext);
@@ -20,6 +19,8 @@ function SendConfirm() {
   const [sentInvoice, setSentInvoice] = useState(false)
   const [searchParams] = useSearchParams();
   const [txid, setTxid] = useState<string>();
+  const [failed, setFailed] = useState(false)
+  const [failureReason, setFailureReason] = useState("")
 
   const [loading, setLoading] = useState(false);
 
@@ -76,9 +77,8 @@ function SendConfirm() {
     } catch (e: unknown) {
       console.error(e);
       toastAnything(e);
-      await timeout(5000)
-      navigate("/")
-      return
+      setFailureReason(errorAsString(e));
+      setFailed(true);
     }
 
     setLoading(false);
@@ -102,7 +102,14 @@ function SendConfirm() {
         <div />
       </ScreenMain>
       }
-      {!loading && (sentKeysend || sentInvoice) &&
+      {failed && <ScreenMain>
+        <div />
+        <p className="text-2xl font-light">Payment failed: {failureReason}</p>
+        <div className='flex justify-start'>
+          <button onClick={handleNice}>Dangit</button>
+        </div>
+      </ScreenMain>}
+      {!failed && !loading && (sentKeysend || sentInvoice) &&
         <ScreenMain>
           <div />
           <p className="text-2xl font-light">Sent!</p>
@@ -111,7 +118,7 @@ function SendConfirm() {
           </div>
         </ScreenMain>
       }
-      {!loading && sentOnchain &&
+      {!failed && !loading && sentOnchain &&
         <ScreenMain>
           <div />
           <p className="text-2xl font-light">Sent!</p>
@@ -128,7 +135,7 @@ function SendConfirm() {
           </div>
         </ScreenMain>
       }
-      {!loading && invoice && !sentInvoice &&
+      {!failed && !loading && invoice && !sentInvoice &&
         <ScreenMain>
           <div />
           <p className="text-2xl font-light">How does this look to you?</p>
@@ -169,7 +176,7 @@ function SendConfirm() {
           </div>
         </ScreenMain>
       }
-      {!loading && !sentOnchain && !sentKeysend && !invoice &&
+      {!failed && !loading && !sentOnchain && !sentKeysend && !invoice &&
         <ScreenMain>
           <div />
           <p className="text-2xl font-light">How does this look to you?</p>

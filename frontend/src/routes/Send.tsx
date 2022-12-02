@@ -50,8 +50,6 @@ function Send() {
 
   async function handleContinue(qrRead?: string) {
     let destination: string = qrRead || textFieldDestination;
-    console.log("trying to continue")
-    console.log("qrRead: ", qrRead)
     if (!destination) {
       console.log("no destination")
       toast("You didn't paste anything!");
@@ -61,7 +59,6 @@ function Send() {
     let paymentType = detectPaymentType(destination)
 
     if (paymentType === PaymentType.invoice) {
-      console.log("trying to navigate for invoice")
       await navigateForInvoice(destination)
       return
     } else if (paymentType === PaymentType.bip21) {
@@ -104,21 +101,17 @@ function Send() {
   function onCodeDetected(barcodeValue: string): string | undefined {
     let paymentType = detectPaymentType(barcodeValue)
 
-    console.log(barcodeValue)
-
-    console.log(paymentType)
-
     if (paymentType !== PaymentType.unknown) {
       return barcodeValue
     } else {
-      console.log("wtf")
-      return barcodeValue
+      toastAnything("Sorry I don't know what that is")
     }
   }
 
-  async function onValidCode(data: any) {
-    console.log("VALID CODE")
-    console.log(data)
+  async function onValidCode(data: string | undefined) {
+    if (!data) {
+      return
+    }
     await handleContinue(data)
   }
 
@@ -130,7 +123,9 @@ function Send() {
       </header>
       <ScreenMain>
         <div />
-        <QrCodeScanner startText="abcdefg" onValidCode={onValidCode} stopText={"argh"} onCodeDetected={onCodeDetected} />
+        <div className="border-2 border-green">
+          <QrCodeScanner onValidCode={onValidCode} onCodeDetected={onCodeDetected} />
+        </div>
         <input onChange={e => setDestination(e.target.value)} value={textFieldDestination} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice, pubkey, or address' />
         <div className='flex justify-start'>
           <button onClick={() => handleContinue(undefined)}>Continue</button>

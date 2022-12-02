@@ -3,16 +3,12 @@ import { memo, useEffect, useRef, useState } from "react"
 
 type Props = {
   autoStart?: boolean
-  startText: string
-  stopText: string
   onCodeDetected: (barcodeValue: string) => any
   onValidCode: (data: any) => Promise<void>
 }
 
 const QrCodeDetectorComponent = ({
-  autoStart = false,
-  startText,
-  stopText,
+  autoStart = true,
   onCodeDetected,
   onValidCode,
 }: Props) => {
@@ -38,7 +34,7 @@ const QrCodeDetectorComponent = ({
         const onScanSuccess = async (decodedText: string) => {
           const parsedResult = onCodeDetected(decodedText)
 
-          console.log("parsedResult: ", parsedResult)
+          console.debug("Qr code parsed result:", parsedResult)
 
           if (parsedResult) {
             onValidCode(parsedResult)
@@ -49,7 +45,7 @@ const QrCodeDetectorComponent = ({
 
         await qrCodeRef.current?.start(
           { facingMode: "environment" },
-          { fps: 10, qrbox: 400 },
+          { fps: 10 },
           onScanSuccess,
           () => {
             // Do nothing for invalid scans
@@ -61,33 +57,24 @@ const QrCodeDetectorComponent = ({
     }
   }, [detecting, onCodeDetected, onValidCode])
 
+
   const startDetecting = async () => {
     setDetecting(true)
   }
 
-  const stopDetecting = async () => {
-    await qrCodeRef.current?.stop()
-    setDetecting(false)
-  }
-
   return (
-    <div className="qrcode-detector">
-      {errorMessage && <div className="error">{errorMessage}</div>}
+    <div>
+      {errorMessage && <h1 className="text-2xl font-light">{errorMessage}</h1>}
       {detecting ? (
-        <div className="qrcode-camera">
+        <div>
           <div id="qrCodeCamera" />
-          {cameraReady ? (
-            <div className="scan-stop link" onClick={stopDetecting}>
-              {stopText}
-            </div>
-          ) : (
-            <h1>loading...</h1>
-          )}
+          {!cameraReady &&
+            <h1 className="text-2xl font-light">Loading scanner...</h1>
+          }
         </div>
       ) : (
-        <div className="scan-start link" onClick={startDetecting}>
+        <div onClick={startDetecting}>
           <h1>qr icon</h1>
-          {startText}
         </div>
       )}
     </div>
