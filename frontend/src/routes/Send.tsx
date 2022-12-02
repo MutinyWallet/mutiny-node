@@ -122,10 +122,7 @@ function Send() {
         <Close />
       </header>
       <ScreenMain>
-        <div />
-        <div className="border-2 border-green">
-          <QrCodeScanner onValidCode={onValidCode} onCodeDetected={onCodeDetected} />
-        </div>
+        <QrCodeScanner onValidCode={onValidCode} onCodeDetected={onCodeDetected} />
         <input onChange={e => setDestination(e.target.value)} value={textFieldDestination} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice, pubkey, or address' />
         <div className='flex justify-start'>
           <button onClick={() => handleContinue(undefined)}>Continue</button>

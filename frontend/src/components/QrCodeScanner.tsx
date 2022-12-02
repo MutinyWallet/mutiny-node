@@ -36,11 +36,7 @@ const QrCodeDetectorComponent = ({
 
           console.debug("Qr code parsed result:", parsedResult)
 
-          if (parsedResult) {
-            onValidCode(parsedResult)
-            await qrCodeRef.current?.stop()
-            setDetecting(false)
-          }
+
         }
 
         await qrCodeRef.current?.start(
@@ -57,26 +53,17 @@ const QrCodeDetectorComponent = ({
     }
   }, [detecting, onCodeDetected, onValidCode])
 
-
-  const startDetecting = async () => {
-    setDetecting(true)
-  }
-
   return (
     <div>
       {errorMessage && <h1 className="text-2xl font-light">{errorMessage}</h1>}
-      {detecting ? (
-        <div>
+      <div>
+        <div className={cameraReady ? "border-2 border-green" : ""}>
           <div id="qrCodeCamera" />
-          {!cameraReady &&
-            <h1 className="text-2xl font-light">Loading scanner...</h1>
-          }
         </div>
-      ) : (
-        <div onClick={startDetecting}>
-          <h1>qr icon</h1>
-        </div>
-      )}
+        {!cameraReady &&
+          <h1 className="text-2xl font-light">Loading scanner...</h1>
+        }
+      </div>
     </div>
   )
 }
