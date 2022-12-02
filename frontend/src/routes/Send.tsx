@@ -10,6 +10,7 @@ import { detectPaymentType, PaymentType, toastAnything } from "@util/dumb";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import bip21 from "bip21"
 import { NodeManager } from "node-manager";
+import { QrCodeScanner } from "@components/QrCodeScanner";
 
 type UnifiedQrOptions =
   {
@@ -25,7 +26,7 @@ function Send() {
   const nodeManager = useContext(NodeManagerContext);
   let navigate = useNavigate();
 
-  const [destination, setDestination] = useState("")
+  const [textFieldDestination, setDestination] = useState("")
 
   async function navigateForInvoice(invoiceStr: string) {
     try {
@@ -34,6 +35,9 @@ function Send() {
       if (invoice?.amount_sats && Number(invoice?.amount_sats) > 0) {
         navigate(`/send/confirm?destination=${invoiceStr}&amount=${invoice?.amount_sats}`)
         return
+      } else {
+        navigate(`/send/amount?destination=${invoiceStr}`)
+        return
       }
     } catch (e) {
       console.error(e);
@@ -41,7 +45,8 @@ function Send() {
     }
   }
 
-  async function handleContinue() {
+  async function handleContinue(qrRead?: string) {
+    let destination: string = qrRead || textFieldDestination;
     if (!destination) {
       toast("You didn't paste anything!");
       return
@@ -85,8 +90,27 @@ function Send() {
       return
     }
 
+
     navigate(`/send/amount?destination=${destination}`);
   }
+
+  function onCodeDetected(barcodeValue: string): string | undefined {
+    let paymentType = detectPaymentType(barcodeValue)
+
+    if (paymentType !== PaymentType.unknown) {
+      return barcodeValue
+    } else {
+      toastAnything("Sorry I don't know what that is")
+    }
+  }
+
+  async function onValidCode(data: string | undefined) {
+    if (!data) {
+      return
+    }
+    await handleContinue(data)
+  }
+
   return (
     <>
       <header className='p-8 flex justify-between items-center'>
@@ -94,10 +118,10 @@ function Send() {
         <Close />
       </header>
       <ScreenMain>
-        <div />
-        <input onChange={e => setDestination(e.target.value)} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice, pubkey, or address' />
+        <QrCodeScanner onValidCode={onValidCode} onCodeDetected={onCodeDetected} />
+        <input onChange={e => setDestination(e.target.value)} value={textFieldDestination} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice, pubkey, or address' />
         <div className='flex justify-start'>
-          <button onClick={handleContinue}>Continue</button>
+          <button onClick={() => handleContinue(undefined)}>Continue</button>
         </div>
       </ScreenMain>
       <MutinyToaster />

@@ -50,6 +50,16 @@ export function toastAnything(e: unknown) {
     }
 }
 
+export function errorAsString(e: unknown): string {
+    if (e instanceof Error) {
+        return e.message
+    } else if (typeof e === "string") {
+        return e as string
+    } else {
+        return `Weird error! ${e}`
+    }
+}
+
 export function mempoolTxUrl(txid?: string, network?: string) {
     if (!txid || !network) {
         console.error("Problem creating the mempool url")
