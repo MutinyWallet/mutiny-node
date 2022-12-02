@@ -11,6 +11,7 @@ import { useSearchParams } from "react-router-dom";
 import { MutinyInvoice } from "node-manager";
 import prettyPrintAmount from "@util/prettyPrintAmount";
 import { mempoolTxUrl } from "@util/dumb";
+import ActionButton from "@components/ActionButton";
 
 export default function ReceiveFinal() {
     let navigate = useNavigate();
@@ -93,9 +94,7 @@ export default function ReceiveFinal() {
                             </div>
                         </>
                     }
-                    <div className='flex justify-start'>
-                        <button onClick={handleGoHome}>Nice</button>
-                    </div>
+                    <ActionButton onClick={handleGoHome}>Nice</ActionButton>
                 </>
             </ScreenMain>
         </>

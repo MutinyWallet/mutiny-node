@@ -10,15 +10,19 @@ import { detectPaymentType, errorAsString, getFirstNode, PaymentType, toastAnyth
 import MutinyToaster from "@components/MutinyToaster";
 import { useQuery } from "@tanstack/react-query";
 import prettyPrintAmount from "@util/prettyPrintAmount";
+import ActionButton from "@components/ActionButton";
+import SimpleText from "@components/SimpleText";
+
+export type SendConfirmParams = {
+  amount?: string;
+  destination?: string;
+  description?: string;
+}
 
 function SendConfirm() {
   const nodeManager = useContext(NodeManagerContext);
 
-  const [sentOnchain, setSentOnchain] = useState(false)
-  const [sentKeysend, setSentKeysend] = useState(false)
-  const [sentInvoice, setSentInvoice] = useState(false)
   const [searchParams] = useSearchParams();
-  const [txid, setTxid] = useState<string>();
   const [failed, setFailed] = useState(false)
   const [failureReason, setFailureReason] = useState("")
 
@@ -27,10 +31,6 @@ function SendConfirm() {
   const amount = searchParams.get("amount")
   const destination = searchParams.get("destination")
   const description = searchParams.get("description")
-
-  searchParams.forEach((value, key) => {
-    console.log(key, value);
-  });
 
   const { data: invoice } = useQuery({
     queryKey: ['lightninginvoice'],
@@ -57,12 +57,11 @@ function SendConfirm() {
         if (paymentType === PaymentType.onchain) {
           const txid = await nodeManager?.send_to_address(destination, amountInt);
           await nodeManager?.sync();
-          setTxid(txid)
-          setSentOnchain(true);
+          navigate(`/send/final?txid=${txid}`)
         } else if (paymentType === PaymentType.keysend) {
           let myNode = await getFirstNode(nodeManager!);
           await nodeManager?.keysend(myNode, destination, amountInt)
-          setSentKeysend(true);
+          navigate(`/send/final`)
         } else if (paymentType === PaymentType.invoice) {
           let myNode = await getFirstNode(nodeManager!);
           let invoice = await nodeManager?.decode_invoice(destination);
@@ -71,7 +70,7 @@ function SendConfirm() {
           } else {
             await nodeManager?.pay_invoice(myNode, destination, BigInt(amount))
           }
-          setSentInvoice(true);
+          navigate(`/send/final`)
         }
       }
     } catch (e: unknown) {
@@ -96,114 +95,90 @@ function SendConfirm() {
         <PageTitle title="Confirm" theme="green" />
         <Close />
       </header>
-      {loading && <ScreenMain>
-        <div />
-        <p className="text-2xl font-light">Sending...</p>
-        <div />
-      </ScreenMain>
-      }
-      {failed && <ScreenMain>
-        <div />
-        <p className="text-2xl font-light">Payment failed: {failureReason}</p>
-        <div className='flex justify-start'>
-          <button onClick={handleNice}>Dangit</button>
-        </div>
-      </ScreenMain>}
-      {!failed && !loading && (sentKeysend || sentInvoice) &&
-        <ScreenMain>
+      <ScreenMain>
+        {loading && <>
           <div />
-          <p className="text-2xl font-light">Sent!</p>
-          <div className='flex justify-start'>
-            <button onClick={handleNice}>Nice</button>
-          </div>
-        </ScreenMain>
-      }
-      {!failed && !loading && sentOnchain &&
-        <ScreenMain>
+          <SimpleText>Sending...</SimpleText>
           <div />
-          <p className="text-2xl font-light">Sent!</p>
-          <dl>
-            <div className="rounded border p-2 my-2 font-mono break-words">
-              <dt>TXID</dt>
-              <dd>
-                {txid}
-              </dd>
-            </div>
-          </dl>
-          <div className='flex justify-start'>
-            <button onClick={handleNice}>Nice</button>
-          </div>
-        </ScreenMain>
-      }
-      {!failed && !loading && invoice && !sentInvoice &&
-        <ScreenMain>
+        </>
+        }
+
+        {failed && <>
           <div />
-          <p className="text-2xl font-light">How does this look to you?</p>
-          <dl>
-            {invoice.payee_pubkey ?
+          <SimpleText>Payment failed: {failureReason}</SimpleText>
+          <ActionButton onClick={handleNice}>Dangit</ActionButton>
+        </>}
+
+        {!failed && !loading && invoice &&
+          <>
+            <div />
+            <SimpleText>How does this look to you?</SimpleText>
+            <dl>
+              {invoice.payee_pubkey ?
+                <div className="rounded border p-2 my-2">
+                  <dt>Who</dt>
+                  <dd className="font-mono break-words">{invoice.payee_pubkey}</dd>
+                </div>
+                :
+                <div className="rounded border p-2 my-2">
+                  <dt>Payment Hash</dt>
+                  <dd className="font-mono break-words">{invoice.payment_hash}</dd>
+                </div>
+              }
+
+              <div className="rounded border p-2 my-2">
+                <>
+                  <dt>How Much</dt>
+                  {amount &&
+                    <dd>{prettyPrintAmount(parseInt(amount!))} sats</dd>
+                  }
+                  {(!amount && invoice.amount_sats) &&
+                    <dd>{prettyPrintAmount(invoice.amount_sats)} sats</dd>
+                  }
+                </>
+              </div>
+              {invoice.description &&
+                <div className="rounded border p-2 my-2 flex flex-col">
+                  <dt>What For</dt>
+                  <dd>{invoice.description}</dd>
+                  <button className="self-end" onClick={() => console.log("Unimplemented")}>Edit</button>
+                </div>
+              }
+            </dl>
+            <ActionButton onClick={handleSend}>Send</ActionButton>
+          </>
+        }
+
+        {!failed && !loading && !invoice &&
+          <>
+            <div />
+            <SimpleText>How does this look to you?</SimpleText>
+            <dl>
               <div className="rounded border p-2 my-2">
                 <dt>Who</dt>
-                <dd className="font-mono break-words">{invoice.payee_pubkey}</dd>
+                <dd className="font-mono break-words">{destination}</dd>
               </div>
-              :
-              <div className="rounded border p-2 my-2">
-                <dt>Payment Hash</dt>
-                <dd className="font-mono break-words">{invoice.payment_hash}</dd>
-              </div>
-            }
+              {amount &&
+                <div className="rounded border p-2 my-2">
+                  <dt>How Much</dt>
+                  <dd>{prettyPrintAmount(parseInt(amount))} sats</dd>
+                </div>
+              }
+              {description &&
+                <div className="rounded border p-2 my-2 flex flex-col">
+                  <dt>What For</dt>
+                  <dd>{description}</dd>
+                  <button className="self-end" onClick={() => console.log("Unimplemented")}>Edit</button>
+                </div>
+              }
+            </dl>
+            <ActionButton onClick={handleSend}>
+              Send
+            </ActionButton>
+          </>
+        }
 
-            <div className="rounded border p-2 my-2">
-              <>
-                <dt>How Much</dt>
-                {amount &&
-                  <dd>{prettyPrintAmount(parseInt(amount!))} sats</dd>
-                }
-                {(!amount && invoice.amount_sats) &&
-                  <dd>{prettyPrintAmount(invoice.amount_sats)} sats</dd>
-                }
-              </>
-            </div>
-            {invoice.description &&
-              <div className="rounded border p-2 my-2 flex flex-col">
-                <dt>What For</dt>
-                <dd>{invoice.description}</dd>
-                <button className="self-end" onClick={() => console.log("Unimplemented")}>Edit</button>
-              </div>
-            }
-          </dl>
-          <div className='flex justify-start'>
-            <button onClick={handleSend}>Send</button>
-          </div>
-        </ScreenMain>
-      }
-      {!failed && !loading && !sentOnchain && !sentKeysend && !invoice &&
-        <ScreenMain>
-          <div />
-          <p className="text-2xl font-light">How does this look to you?</p>
-          <dl>
-            <div className="rounded border p-2 my-2">
-              <dt>Who</dt>
-              <dd className="font-mono break-words">{destination}</dd>
-            </div>
-            {amount &&
-              <div className="rounded border p-2 my-2">
-                <dt>How Much</dt>
-                <dd>{prettyPrintAmount(parseInt(amount))} sats</dd>
-              </div>
-            }
-            {description &&
-              <div className="rounded border p-2 my-2 flex flex-col">
-                <dt>What For</dt>
-                <dd>{description}</dd>
-                <button className="self-end" onClick={() => console.log("Unimplemented")}>Edit</button>
-              </div>
-            }
-          </dl>
-          <div className='flex justify-start'>
-            <button onClick={handleSend}>Send</button>
-          </div>
-        </ScreenMain>
-      }
+      </ScreenMain>
       <MutinyToaster />
     </>
 
