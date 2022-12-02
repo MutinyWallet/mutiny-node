@@ -36,6 +36,7 @@ use bip39::Mnemonic;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin_hashes::hex::ToHex;
+use dlc_messages::message_handler::MessageHandler as DlcMessageHandler;
 use instant::SystemTime;
 use lightning::chain::keysinterface::{
     InMemorySigner, KeysInterface, PhantomKeysManager, Recipient,
@@ -65,7 +66,7 @@ pub(crate) type PeerManager = LdkPeerManager<
     Arc<IgnoringMessageHandler>,
     Arc<IgnoringMessageHandler>,
     Arc<MutinyLogger>,
-    Arc<IgnoringMessageHandler>,
+    Arc<DlcMessageHandler>,
 >;
 
 pub(crate) type ChainMonitor = chainmonitor::ChainMonitor<
@@ -814,7 +815,7 @@ pub(crate) fn create_peer_manager(
         now as u32,
         &ephemeral_bytes,
         logger,
-        Arc::new(IgnoringMessageHandler {}),
+        Arc::new(DlcMessageHandler::new()),
     )
 }
 
