@@ -27,7 +27,9 @@ function SinglePeer({ peer }: { peer: string }) {
     return (
         <li className="text-off-white border-b border-off-white py-2 mb-2 flex flex-col w-full">
             <div className="flex items-center space-between gap-4">
-                <Copy copyValue={peer} />
+                <div>
+                    <Copy copyValue={peer} />
+                </div>
                 <h3 className="flex-1 text-lg font-mono overflow-ellipsis">
                     {takeN(peer, 20)}
                 </h3>
