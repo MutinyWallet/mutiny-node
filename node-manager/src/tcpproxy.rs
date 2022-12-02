@@ -10,8 +10,8 @@ use log::debug;
 use wasm_bindgen_futures::spawn_local;
 
 pub struct TcpProxy {
-    pub write: WsSplit,
-    pub read: ReadSplit,
+    write: WsSplit,
+    read: ReadSplit,
 }
 
 type WsSplit = Arc<Mutex<SplitSink<WebSocket, Message>>>;
@@ -60,6 +60,10 @@ impl SocketDescriptor {
     pub fn new(conn: Arc<TcpProxy>) -> Self {
         let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
         Self { conn, id }
+    }
+
+    pub async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>> {
+        self.conn.read.lock().await.next().await
     }
 }
 unsafe impl Send for SocketDescriptor {}

@@ -8,7 +8,6 @@ use crate::wallet::MutinyWallet;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
 use bitcoin::Network;
-use futures::StreamExt;
 use gloo_net::websocket::Message;
 use lightning::chain::{chainmonitor, Filter, Watch};
 use lightning::ln::channelmanager::PhantomRouteHints;
@@ -752,7 +751,7 @@ pub(crate) async fn connect_peer(
     // schedule a reader on the connection
     let mut new_descriptor = descriptor.clone();
     spawn_local(async move {
-        while let Some(msg) = descriptor.conn.read.lock().await.next().await {
+        while let Some(msg) = descriptor.read().await {
             if let Ok(msg_contents) = msg {
                 match msg_contents {
                     Message::Text(t) => {
