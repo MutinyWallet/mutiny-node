@@ -7,6 +7,7 @@ mod background;
 mod bdkstorage;
 mod chain;
 mod dlc;
+mod dlc_oracle;
 mod dlcstorage;
 mod encrypt;
 mod error;
