@@ -108,6 +108,13 @@ export const GlobalStateProvider = ({ children }: Props) => {
 
             const nodeManager = await new NodeManager("", undefined, proxy, network, esplora)
 
+            let nodes = await nodeManager.list_nodes() as any[];
+
+            // If we don't have any nodes yet, create one
+            if (!nodes.length) {
+                await nodeManager?.new_node()
+            }
+
             // TODO this is some extra delay because the node manager isn't really "ready" the moment it's set
             await timeout(100)
             setNodeManager(nodeManager)
