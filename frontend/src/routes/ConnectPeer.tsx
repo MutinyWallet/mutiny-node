@@ -9,7 +9,7 @@ import ScreenMain from "../components/ScreenMain";
 import { inputStyle } from "../styles";
 
 export default function ConnectPeer() {
-	const nodeManager = useContext(NodeManagerContext);
+	const { nodeManager } = useContext(NodeManagerContext);
 	const navigate = useNavigate();
 
 	const [peerConnectString, setPeerConnectString] = useState("")

@@ -1,6 +1,7 @@
 import Copy from "@components/Copy";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import MutinyToaster from "@components/MutinyToaster";
+import SettingStringsEditor from "@components/SettingStringsEditor";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toastAnything } from "@util/dumb";
 import takeN from "@util/takeN";
@@ -29,7 +30,7 @@ function SeedWords({ words }: { words: string }) {
 }
 
 function Settings() {
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
     const queryClient = useQueryClient()
 
     const { data: words } = useQuery({
@@ -146,6 +147,11 @@ function Settings() {
                             </> : <button onClick={handleNewNode}>New Node</button>
                         }
                     </div>
+                    <SettingStringsEditor />
+                    <div />
+                    <div />
+                    <div />
+                    <div />
 
                     <div className="bg-red p-4 rounded w-full">
                         <p className="text-2xl font-light text-white uppercase">Danger Zone</p>

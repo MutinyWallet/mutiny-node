@@ -16,7 +16,7 @@ import ActionButton from "@components/ActionButton";
 export default function ReceiveFinal() {
     let navigate = useNavigate();
 
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
 
     const [searchParams] = useSearchParams();
 

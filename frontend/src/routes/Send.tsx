@@ -25,7 +25,7 @@ type UnifiedQrOptions =
 export type MutinyBip21 = { address: string, options: UnifiedQrOptions };
 
 function Send() {
-  const nodeManager = useContext(NodeManagerContext);
+  const { nodeManager } = useContext(NodeManagerContext);
   let navigate = useNavigate();
 
   const [textFieldDestination, setDestination] = useState("")

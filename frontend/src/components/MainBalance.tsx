@@ -13,7 +13,7 @@ function prettyPrintUnconfirmed(b: MutinyBalance): string {
 }
 
 export default function MainBalance() {
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
 
     const { data: balance } = useQuery({
         queryKey: ['balance'],
