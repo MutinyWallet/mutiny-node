@@ -96,11 +96,12 @@ function Settings() {
 
                 console.log(newStorage)
 
-                handleClearState();
-
-                Object.entries(newStorage).forEach(([key, value]) => {
-                    localStorage.setItem(key, value as string);
-                })
+                if (window.confirm("Are you sure you want to replace your node's state? This can't be undone!")) {
+                    Object.entries(newStorage).forEach(([key, value]) => {
+                        localStorage.setItem(key, value as string);
+                    })
+                    window.location.reload();
+                }
             }
         } catch (e) {
             console.error(e);
@@ -109,7 +110,10 @@ function Settings() {
 
     function handleClearState() {
         console.log("Clearing local storage... So long, state!")
-        localStorage.clear();
+        if (window.confirm("Are you sure you want to delete your node's state? This can't be undone!")) {
+            localStorage.clear();
+            window.location.reload();
+        }
     }
 
     async function handleNewNode() {
