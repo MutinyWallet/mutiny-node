@@ -23,6 +23,7 @@ module.exports = {
       faint: "rgba(255,255,255,0.05)",
       "less-faint": "rgba(255,255,255,0.1)",
       "half-faint": "rgba(255,255,255,0.5)",
+      "faint-black": "rgba(0,0,0,0.1)",
     },
     extend: {
       fontFamily: {

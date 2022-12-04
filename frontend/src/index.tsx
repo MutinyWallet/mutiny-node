@@ -9,6 +9,7 @@ import { GlobalStateProvider } from '@components/GlobalStateProvider';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ManagerRouteProvider from '@components/ManagerRouteProvider';
 import SyncOnInterval from '@components/SyncOnInterval';
+import TerminalProvider from '@components/TerminalProvider';
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
@@ -22,7 +23,9 @@ root.render(
       <QueryClientProvider client={queryClient}>
         <SyncOnInterval>
           <ManagerRouteProvider>
-            <Router />
+            <TerminalProvider>
+              <Router />
+            </TerminalProvider>
           </ManagerRouteProvider>
         </SyncOnInterval>
       </QueryClientProvider>
