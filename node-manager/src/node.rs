@@ -3,18 +3,18 @@ use crate::invoice::create_phantom_invoice;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::localstorage::MutinyBrowserStorage;
 use crate::nodemanager::{MutinyInvoice, MutinyInvoiceParams};
-use crate::socket::WsSocketDescriptor;
+use crate::socket::{schedule_descriptor_read, MultiWsSocketDescriptor, WsSocketDescriptor};
 use crate::utils::{currency_from_network, sleep};
 use crate::wallet::MutinyWallet;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
 use bitcoin::Network;
-use gloo_net::websocket::Message;
 use lightning::chain::{chainmonitor, Filter, Watch};
 use lightning::ln::channelmanager::PhantomRouteHints;
 use lightning::ln::msgs::NetAddress;
 use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::util::logger::{Logger, Record};
+use lightning::util::ser::Writeable;
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
@@ -24,7 +24,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::chain::MutinyChain;
 use crate::error::MutinyStorageError;
 use crate::proxy::Proxy;
-use crate::socket::{ReadDescriptor, WsTcpSocketDescriptor};
+use crate::socket::WsTcpSocketDescriptor;
 use crate::{
     background::{BackgroundProcessor, GossipSync},
     error::MutinyError,
@@ -51,7 +51,7 @@ use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParam
 use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
 use lightning_invoice::utils::DefaultRouter;
 use lightning_invoice::{payment, Invoice};
-use log::{error, info, trace, warn};
+use log::{debug, error, info, trace};
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
@@ -88,13 +88,13 @@ type Router = DefaultRouter<
     Arc<Mutex<ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>>>,
 >;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum ConnectionType {
     Tcp(SocketAddr),
     Mutiny(String),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct PubkeyConnectionInfo {
     pub pubkey: PublicKey,
     pub connection_type: ConnectionType,
@@ -109,11 +109,12 @@ impl PubkeyConnectionInfo {
         };
 
         if connection.starts_with("mutiny:") {
-            let (pubkey, peer_addr_str) = split_peer_connection_string(connection.clone())?;
+            let connection = connection.strip_prefix("mutiny:").expect("should strip");
+            let (pubkey, peer_addr_str) = split_peer_connection_string(connection.to_string())?;
             Ok(Self {
                 pubkey,
                 connection_type: ConnectionType::Mutiny(peer_addr_str),
-                original_connection_string: connection,
+                original_connection_string: connection.to_string(),
             })
         } else {
             let (pubkey, peer_addr_str) = parse_peer_info(connection.clone())?;
@@ -139,6 +140,7 @@ pub(crate) struct Node {
     _background_processor: BackgroundProcessor,
     logger: Arc<MutinyLogger>,
     websocket_proxy_addr: String,
+    multi_socket: MultiWsSocketDescriptor,
     temp_peer_connection_map: Arc<Mutex<HashMap<String, String>>>,
 }
 
@@ -297,20 +299,24 @@ impl Node {
             Some(scorer),
         );
 
+        // create a connection immediately to the user's
+        // specified mutiny websocket proxy provider.
+        let self_connection = PubkeyConnectionInfo {
+            pubkey,
+            connection_type: ConnectionType::Mutiny(websocket_proxy_addr.to_string()),
+            original_connection_string: format!("mutiny:{}@{}", pubkey, websocket_proxy_addr),
+        };
+        let main_proxy = Proxy::new(websocket_proxy_addr.to_string(), self_connection).await?;
+        let multi_socket = MultiWsSocketDescriptor::new(Arc::new(main_proxy), peer_man.clone());
+
         // try to connect to peers we already have a channel with
         let connect_peer_man = peer_man.clone();
         let connect_persister = persister.clone();
         let connect_proxy = websocket_proxy_addr.clone();
         let connect_logger = logger.clone();
+        let connect_multi_socket = multi_socket.clone();
         spawn_local(async move {
             loop {
-                connect_logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!("DEBUG: about to list peer connections"),
-                    "node",
-                    "",
-                    0,
-                ));
                 let peer_connections = connect_persister.list_peer_connection_info();
                 let current_connections = connect_peer_man.get_peer_node_ids();
 
@@ -333,6 +339,7 @@ impl Node {
                         Err(_) => continue,
                     };
                     match connect_peer(
+                        connect_multi_socket.clone(),
                         connect_proxy.clone(),
                         peer_connection_info,
                         connect_peer_man.clone(),
@@ -376,6 +383,7 @@ impl Node {
             _background_processor: background_processor,
             logger,
             websocket_proxy_addr,
+            multi_socket,
             temp_peer_connection_map: Arc::new(Mutex::new(HashMap::new())),
         })
     }
@@ -384,24 +392,23 @@ impl Node {
         &self,
         peer_connection_info: PubkeyConnectionInfo,
     ) -> Result<(), MutinyError> {
-        if connect_peer_if_necessary(
+        match connect_peer_if_necessary(
+            self.multi_socket.clone(),
             self.websocket_proxy_addr.clone(),
             peer_connection_info.clone(),
             self.peer_manager.clone(),
         )
         .await
-        .is_err()
         {
-            Err(MutinyError::PeerInfoParseFailed).with_context(|| {
-                format!("could not connect to peer: {}", peer_connection_info.pubkey)
-            })?
-        } else {
-            // store this so we can save later if needed
-            self.temp_peer_connection_map.lock().unwrap().insert(
-                peer_connection_info.pubkey.to_string(),
-                peer_connection_info.original_connection_string,
-            );
-            Ok(())
+            Ok(_) => {
+                // store this so we can save later if needed
+                self.temp_peer_connection_map.lock().unwrap().insert(
+                    peer_connection_info.pubkey.to_string(),
+                    peer_connection_info.original_connection_string,
+                );
+                Ok(())
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -746,6 +753,7 @@ impl Node {
 }
 
 pub(crate) async fn connect_peer_if_necessary(
+    multi_socket: MultiWsSocketDescriptor,
     websocket_proxy_addr: String,
     peer_connection_info: PubkeyConnectionInfo,
     peer_manager: Arc<PeerManager>,
@@ -756,21 +764,39 @@ pub(crate) async fn connect_peer_if_necessary(
     {
         Ok(())
     } else {
-        connect_peer(websocket_proxy_addr, peer_connection_info, peer_manager).await
+        connect_peer(
+            multi_socket,
+            websocket_proxy_addr,
+            peer_connection_info,
+            peer_manager,
+        )
+        .await
     }
 }
 pub(crate) async fn connect_peer(
+    multi_socket: MultiWsSocketDescriptor,
     websocket_proxy_addr: String,
     peer_connection_info: PubkeyConnectionInfo,
     peer_manager: Arc<PeerManager>,
 ) -> Result<(), MutinyError> {
     // first make a connection to the node
-    let proxy = Proxy::new(websocket_proxy_addr, peer_connection_info.clone()).await?;
-    let mut descriptor = WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy)));
-
-    let socket_addr = match peer_connection_info.connection_type {
-        ConnectionType::Tcp(t) => Some(get_net_addr_from_socket(t)),
-        ConnectionType::Mutiny(_) => None,
+    debug!("making connection to peer: {:?}", peer_connection_info);
+    let (mut descriptor, socket_addr) = match peer_connection_info.connection_type {
+        ConnectionType::Tcp(t) => {
+            let proxy = Proxy::new(websocket_proxy_addr, peer_connection_info.clone()).await?;
+            (
+                WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
+                Some(get_net_addr_from_socket(t)),
+            )
+        }
+        ConnectionType::Mutiny(_) => (
+            WsSocketDescriptor::Mutiny(
+                multi_socket
+                    .create_new_subsocket(peer_connection_info.pubkey.encode())
+                    .await,
+            ),
+            None,
+        ),
     };
 
     // then give that connection to the peer manager
@@ -779,42 +805,13 @@ pub(crate) async fn connect_peer(
         descriptor.clone(),
         socket_addr,
     )?;
+    debug!("connected to peer: {:?}", peer_connection_info);
 
     let sent_bytes = descriptor.send_data(&initial_bytes, true);
     trace!("sent {sent_bytes} to node: {}", peer_connection_info.pubkey);
 
     // schedule a reader on the connection
-    let mut new_descriptor = descriptor.clone();
-    spawn_local(async move {
-        while let Some(msg) = descriptor.read().await {
-            if let Ok(msg_contents) = msg {
-                match msg_contents {
-                    Message::Text(t) => {
-                        warn!(
-                            "received text from websocket when we should only receive binary: {}",
-                            t
-                        )
-                    }
-                    Message::Bytes(b) => {
-                        trace!("received binary data from websocket");
-
-                        let read_res = peer_manager.read_event(&mut new_descriptor, &b);
-                        match read_res {
-                            // TODO handle read boolean event
-                            Ok(_read_bool) => {
-                                trace!("read event from the node");
-                                peer_manager.process_events();
-                            }
-                            Err(e) => error!("got an error reading event: {}", e),
-                        }
-                    }
-                };
-            }
-        }
-
-        // TODO when we detect an error, lock the writes and close connection.
-        info!("WebSocket Closed")
-    });
+    schedule_descriptor_read(descriptor, peer_manager.clone());
 
     Ok(())
 }
@@ -881,18 +878,27 @@ pub(crate) fn split_peer_connection_string(
     peer_pubkey_and_ip_addr: String,
 ) -> Result<(PublicKey, String), MutinyError> {
     let mut pubkey_and_addr = peer_pubkey_and_ip_addr.split('@');
-    let pubkey = pubkey_and_addr
-        .next()
-        .ok_or(MutinyError::PeerInfoParseFailed)?;
-    let peer_addr_str = match pubkey_and_addr.next() {
+    let pubkey = match pubkey_and_addr.next() {
         None => {
-            return Err(MutinyError::PeerInfoParseFailed).context(
-                "incorrectly formatted peer info. Should be formatted as: `pubkey@host:port`",
-            )?
+            error!("incorrectly formatted peer info. Should be formatted as: `pubkey@host:port` but pubkey could not be parsed");
+            return Err(MutinyError::PeerInfoParseFailed);
         }
         Some(str) => str,
     };
-    let pubkey = PublicKey::from_str(pubkey).map_err(|_| MutinyError::PeerInfoParseFailed)?;
+    let peer_addr_str = match pubkey_and_addr.next() {
+        None => {
+            error!("incorrectly formatted peer info. Should be formatted as: `pubkey@host:port` but host:port part could not be parsed");
+            return Err(MutinyError::PeerInfoParseFailed);
+        }
+        Some(str) => str,
+    };
+    let pubkey = match PublicKey::from_str(pubkey) {
+        Ok(p) => p,
+        Err(e) => {
+            error!("{}", format!("could not parse peer pubkey: {:?}", e));
+            return Err(MutinyError::PeerInfoParseFailed);
+        }
+    };
     Ok((pubkey, peer_addr_str.to_string()))
 }
 

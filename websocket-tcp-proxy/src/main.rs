@@ -230,16 +230,16 @@ async fn handle_mutiny_ws(
                     if let Ok(Message::Binary(msg)) = msg {
                         // parse the first 33 bytes to find the ID to send to
                         if msg.len() < PUBKEY_BYTES_LEN{
-                            tracing::error!("msg not long enough to have pubkey, ignoring...");
+                            tracing::error!("msg not long enough to have pubkey (had {}), ignoring...", msg.len());
                             continue
                         }
                         let (id_bytes, message_bytes) = msg.split_at(PUBKEY_BYTES_LEN);
                         let peer_id_bytes = bytes::Bytes::from(id_bytes.to_vec());
-                        tracing::debug!("received a msg from {identifier} to send to {:?}", peer_id_bytes);
+                        tracing::debug!("received a ws msg from {identifier} to send to {:?}", peer_id_bytes);
 
                         // find the producer and send down it
                         if let Some(peer_tx) = state.lock().await.get(&peer_id_bytes) {
-                            match peer_tx.send(MutinyWSCommand::Send { id: peer_id_bytes, val: bytes::Bytes::from(message_bytes.to_vec()) }).await {
+                            match peer_tx.send(MutinyWSCommand::Send { id: owner_id_bytes.clone(), val: bytes::Bytes::from(message_bytes.to_vec()) }).await {
                                 Ok(_) => (),
                                 Err(e) => {
                                     tracing::error!("could not send message to peer identity: {}", e);
@@ -267,7 +267,7 @@ async fn handle_mutiny_ws(
                     Some(message) => {
                         match message {
                             MutinyWSCommand::Send{id, val} => {
-                                tracing::debug!("received a msg from {:?} to send to {identifier}", id);
+                                tracing::debug!("received an channel msg from {:?} to send to {identifier}", id);
                                 // put in first 33 bytes as from ID
                                 let mut concat_bytes = id[..].to_vec();
                                 let mut val_bytes = val[..].to_vec();

@@ -23,7 +23,7 @@ impl Proxy {
     ) -> Result<Self, MutinyError> {
         let ws = match peer_connection_info.connection_type {
             ConnectionType::Tcp(s) => {
-                WebSocket::open(String::as_str(&tcp_proxy_to_url(proxy_url, s)))
+                WebSocket::open(String::as_str(&tcp_proxy_to_url(proxy_url.clone(), s)))
                     .map_err(|_| MutinyError::ConnectionFailed)?
             }
             ConnectionType::Mutiny(url) => WebSocket::open(String::as_str(
@@ -31,6 +31,8 @@ impl Proxy {
             ))
             .map_err(|_| MutinyError::ConnectionFailed)?,
         };
+
+        debug!("connected to ws: {proxy_url}");
 
         let (write, read) = ws.split();
         Ok(Self {

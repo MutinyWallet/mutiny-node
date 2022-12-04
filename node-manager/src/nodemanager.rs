@@ -264,7 +264,7 @@ impl NodeManager {
         set_panic_hook();
 
         let websocket_proxy_addr =
-            websocket_proxy_addr.unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
+            websocket_proxy_addr.unwrap_or_else(|| String::from("ws://127.0.0.1:3001"));
 
         let network: Network = network_str
             .unwrap_or_else(|| String::from("testnet"))
