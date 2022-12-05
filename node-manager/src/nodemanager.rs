@@ -339,7 +339,13 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub async fn get_new_address(&self) -> Result<String, MutinyJsError> {
-        match self.wallet.wallet.get_address(AddressIndex::New) {
+        match self
+            .wallet
+            .wallet
+            .lock()
+            .await
+            .get_address(AddressIndex::New)
+        {
             Ok(addr) => Ok(addr.address.to_string()),
             Err(_) => Err(MutinyError::WalletOperationFailed.into()),
         }
@@ -347,7 +353,7 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub async fn get_wallet_balance(&self) -> Result<u64, MutinyJsError> {
-        match self.wallet.wallet.get_balance() {
+        match self.wallet.wallet.lock().await.get_balance() {
             Ok(balance) => Ok(balance.get_total()),
             Err(_) => Err(MutinyJsError::WalletOperationFailed),
         }
@@ -405,23 +411,23 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub fn list_onchain(&self) -> Result<JsValue, MutinyJsError> {
-        let txs = self.wallet.list_transactions(false)?;
+    pub async fn list_onchain(&self) -> Result<JsValue, MutinyJsError> {
+        let txs = self.wallet.list_transactions(false).await?;
 
         Ok(serde_wasm_bindgen::to_value(&txs)?)
     }
 
     #[wasm_bindgen]
-    pub fn get_transaction(&self, txid: String) -> Result<JsValue, MutinyJsError> {
+    pub async fn get_transaction(&self, txid: String) -> Result<JsValue, MutinyJsError> {
         let txid = Txid::from_str(txid.as_str())?;
-        let txs = self.wallet.get_transaction(txid, false)?;
+        let txs = self.wallet.get_transaction(txid, false).await?;
 
         Ok(serde_wasm_bindgen::to_value(&txs)?)
     }
 
     #[wasm_bindgen]
     pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyJsError> {
-        match self.wallet.wallet.get_balance() {
+        match self.wallet.wallet.lock().await.get_balance() {
             Ok(onchain) => {
                 let nodes = self.nodes.lock().await;
                 let lightning_msats: u64 = nodes
@@ -441,8 +447,8 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub fn list_utxos(&self) -> Result<JsValue, MutinyJsError> {
-        let utxos = self.wallet.list_utxos()?;
+    pub async fn list_utxos(&self) -> Result<JsValue, MutinyJsError> {
+        let utxos = self.wallet.list_utxos().await?;
 
         Ok(serde_wasm_bindgen::to_value(&utxos)?)
     }
