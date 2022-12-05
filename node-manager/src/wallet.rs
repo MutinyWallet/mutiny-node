@@ -1,4 +1,5 @@
 use anyhow::Context;
+use futures::lock::Mutex;
 use log::{debug, info};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -16,14 +17,11 @@ use wasm_bindgen_futures::spawn_local;
 use crate::error::MutinyError;
 use crate::localstorage::MutinyBrowserStorage;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MutinyWallet {
-    pub wallet: Arc<Wallet<MutinyBrowserStorage>>,
+    pub wallet: Mutex<Wallet<MutinyBrowserStorage>>,
     pub blockchain: Arc<EsploraBlockchain>,
 }
-
-unsafe impl Send for MutinyWallet {}
-unsafe impl Sync for MutinyWallet {}
 
 impl MutinyWallet {
     pub fn new(
@@ -47,12 +45,14 @@ impl MutinyWallet {
         .expect("Error creating wallet");
 
         MutinyWallet {
-            wallet: Arc::new(wallet),
+            wallet: Mutex::new(wallet),
             blockchain: Arc::new(esplora_from_network(network)),
         }
     }
 
     pub async fn sync(&self) -> Result<(), MutinyError> {
+        let wallet = self.wallet.lock().await;
+
         let blockchain_clone = self.blockchain.clone();
         spawn_local(async move {
             let estimates = blockchain_clone
@@ -66,29 +66,31 @@ impl MutinyWallet {
             info!("Updated cached fees!");
         });
 
-        maybe_await!(self.wallet.sync(&self.blockchain, SyncOptions::default()))?;
+        maybe_await!(wallet.sync(&self.blockchain, SyncOptions::default()))?;
 
         Ok(())
     }
 
-    pub fn list_utxos(&self) -> Result<Vec<LocalUtxo>, MutinyError> {
-        Ok(self.wallet.list_unspent()?)
+    pub async fn list_utxos(&self) -> Result<Vec<LocalUtxo>, MutinyError> {
+        Ok(self.wallet.lock().await.list_unspent()?)
     }
 
-    pub fn list_transactions(
+    pub async fn list_transactions(
         &self,
         include_raw: bool,
     ) -> Result<Vec<TransactionDetails>, MutinyError> {
-        Ok(self.wallet.list_transactions(include_raw)?)
+        Ok(self.wallet.lock().await.list_transactions(include_raw)?)
     }
 
-    pub fn get_transaction(
+    pub async fn get_transaction(
         &self,
         txid: Txid,
         include_raw: bool,
     ) -> Result<Option<TransactionDetails>, MutinyError> {
         Ok(self
             .wallet
+            .lock()
+            .await
             .list_transactions(include_raw)?
             .into_iter()
             .find(|tx| tx.txid == txid))
@@ -100,6 +102,7 @@ impl MutinyWallet {
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
+        let wallet = self.wallet.lock().await;
         let send_to =
             Address::from_str(&destination_address).with_context(|| "Address parse error")?;
         let fee_rate = if let Some(rate) = fee_rate {
@@ -108,7 +111,7 @@ impl MutinyWallet {
             self.blockchain.estimate_fee(1).await?
         };
         let (mut psbt, details) = {
-            let mut builder = self.wallet.build_tx();
+            let mut builder = wallet.build_tx();
             builder
                 .add_recipient(send_to.script_pubkey(), amount)
                 .enable_rbf()
@@ -117,7 +120,7 @@ impl MutinyWallet {
         };
         debug!("Transaction details: {:#?}", details);
         debug!("Unsigned PSBT: {}", &psbt);
-        let finalized = self.wallet.sign(&mut psbt, SignOptions::default())?;
+        let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
         debug!("{}", finalized);
         Ok(psbt)
     }

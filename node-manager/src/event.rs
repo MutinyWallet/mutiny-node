@@ -462,6 +462,8 @@ impl LdkEventHandler for EventHandler {
                 spawn_local(async move {
                     let destination_address = wallet_thread
                         .wallet
+                        .lock()
+                        .await
                         .get_address(AddressIndex::New)
                         .expect("could not get new address");
 
