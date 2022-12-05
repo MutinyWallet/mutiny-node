@@ -9,7 +9,7 @@ use lightning::ln::peer_handler;
 use log::{debug, error, info, trace, warn};
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use wasm_bindgen_futures::spawn_local;
 
@@ -114,6 +114,8 @@ pub(crate) struct MultiWsSocketDescriptor {
     read_from_sub_socket: Receiver<Message>,
     send_to_multi_socket: Sender<Message>,
     socket_map: Arc<Mutex<HashMap<Vec<u8>, Sender<Message>>>>,
+    peer_manager: Arc<PeerManager>,
+    connected: Arc<AtomicBool>,
 }
 impl MultiWsSocketDescriptor {
     pub fn new(conn: Arc<Proxy>, peer_manager: Arc<PeerManager>) -> Self {
@@ -126,9 +128,52 @@ impl MultiWsSocketDescriptor {
         let socket_map: Arc<Mutex<HashMap<Vec<u8>, Sender<Message>>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
-        let conn_copy = conn.clone();
-        let socket_map_copy = socket_map.clone();
-        let send_to_multi_socket_copy = send_to_multi_socket.clone();
+        Self {
+            conn,
+            id,
+            send_to_multi_socket,
+            read_from_sub_socket,
+            socket_map,
+            peer_manager,
+            connected: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    pub fn connected(&self) -> bool {
+        return self.connected.load(Ordering::Relaxed);
+    }
+
+    pub fn reconnect(&mut self, conn: Arc<Proxy>) {
+        let (send_to_multi_socket, read_from_sub_socket): (Sender<Message>, Receiver<Message>) =
+            unbounded();
+
+        let socket_map: Arc<Mutex<HashMap<Vec<u8>, Sender<Message>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        self.conn = conn;
+        self.send_to_multi_socket = send_to_multi_socket;
+        self.read_from_sub_socket = read_from_sub_socket;
+        self.socket_map = socket_map;
+        self.connected.store(true, Ordering::Relaxed);
+
+        self.listen();
+    }
+
+    pub async fn create_new_subsocket(&self, id: Vec<u8>) -> SubWsSocketDescriptor {
+        create_new_subsocket(
+            self.socket_map.clone(),
+            self.send_to_multi_socket.clone(),
+            id,
+        )
+        .await
+    }
+
+    pub fn listen(&self) {
+        let conn_copy = self.conn.clone();
+        let socket_map_copy = self.socket_map.clone();
+        let send_to_multi_socket_copy = self.send_to_multi_socket.clone();
+        let peer_manager_copy = self.peer_manager.clone();
+        let connected_copy = self.connected.clone();
         debug!("spawning multi socket connection reader");
         spawn_local(async move {
             while let Some(msg) = conn_copy.read.lock().await.next().await {
@@ -167,14 +212,14 @@ impl MultiWsSocketDescriptor {
                                 .await,
                             );
                             debug!("created new subsocket: {:?}", id_bytes);
-                            match peer_manager
+                            match peer_manager_copy
                                 .new_inbound_connection(inbound_subsocket.clone(), None)
                             {
                                 Ok(_) => {
                                     debug!("gave new subsocket to peer manager: {:?}", id_bytes);
                                     schedule_descriptor_read(
                                         inbound_subsocket,
-                                        peer_manager.clone(),
+                                        peer_manager_copy.clone(),
                                     );
 
                                     // now that we have the inbound connection, send the original
@@ -193,9 +238,9 @@ impl MultiWsSocketDescriptor {
                                         None => {
                                             // TODO delete the new subsocket
                                             error!(
-                                                "we can't find our newly created subsocket???: {:?}",
-                                                id_bytes
-                                            );
+                                            "we can't find our newly created subsocket???: {:?}",
+                                            id_bytes
+                                        );
                                         }
                                     }
                                 }
@@ -212,10 +257,12 @@ impl MultiWsSocketDescriptor {
                 }
             }
             debug!("leaving multi socket connection reader");
+            connected_copy.store(false, Ordering::Relaxed)
         });
 
-        let read_channel_copy = read_from_sub_socket.clone();
-        let conn_copy_send = conn.clone();
+        let read_channel_copy = self.read_from_sub_socket.clone();
+        let conn_copy_send = self.conn.clone();
+        let connected_copy_send = self.connected.clone();
         debug!("spawning multi socket channel reader");
         spawn_local(async move {
             loop {
@@ -225,26 +272,12 @@ impl MultiWsSocketDescriptor {
                         Message::Bytes(b) => conn_copy_send.send(b),
                     }
                 }
+                if !connected_copy_send.load(Ordering::Relaxed) {
+                    break;
+                }
                 utils::sleep(50).await;
             }
         });
-
-        Self {
-            conn,
-            id,
-            send_to_multi_socket,
-            read_from_sub_socket,
-            socket_map,
-        }
-    }
-
-    pub async fn create_new_subsocket(&self, id: Vec<u8>) -> SubWsSocketDescriptor {
-        create_new_subsocket(
-            self.socket_map.clone(),
-            self.send_to_multi_socket.clone(),
-            id,
-        )
-        .await
     }
 }
 
@@ -304,17 +337,20 @@ async fn create_new_subsocket(
 pub(crate) struct SubWsSocketDescriptor {
     send_channel: Sender<Message>,
     read_channel: Receiver<Message>,
-    id: Vec<u8>,
+    pubkey_bytes: Vec<u8>,
+    id: u64,
 }
 impl SubWsSocketDescriptor {
     pub fn new(
         send_channel: Sender<Message>,
         read_channel: Receiver<Message>,
-        id: Vec<u8>,
+        pubkey_bytes: Vec<u8>,
     ) -> Self {
+        let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
         Self {
             read_channel,
             send_channel,
+            pubkey_bytes,
             id,
         }
     }
@@ -338,7 +374,7 @@ impl ReadDescriptor for SubWsSocketDescriptor {
 
 impl peer_handler::SocketDescriptor for SubWsSocketDescriptor {
     fn send_data(&mut self, data: &[u8], _resume_read: bool) -> usize {
-        let mut addr_prefix = Vec::from(self.id.to_vec());
+        let mut addr_prefix = Vec::from(self.pubkey_bytes.to_vec());
         let mut vec = Vec::from(data);
         addr_prefix.append(&mut vec);
         let res = self.send_channel.send(Message::Bytes(addr_prefix));
@@ -362,7 +398,8 @@ impl Clone for SubWsSocketDescriptor {
         Self {
             read_channel: self.read_channel.clone(),
             send_channel: self.send_channel.clone(),
-            id: self.id.clone(),
+            pubkey_bytes: self.pubkey_bytes.clone(),
+            id: self.id,
         }
     }
 }

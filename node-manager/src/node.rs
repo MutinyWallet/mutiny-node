@@ -109,8 +109,9 @@ impl PubkeyConnectionInfo {
         };
 
         if connection.starts_with("mutiny:") {
-            let connection = connection.strip_prefix("mutiny:").expect("should strip");
-            let (pubkey, peer_addr_str) = split_peer_connection_string(connection.to_string())?;
+            let stripped_connection = connection.strip_prefix("mutiny:").expect("should strip");
+            let (pubkey, peer_addr_str) =
+                split_peer_connection_string(stripped_connection.to_string())?;
             Ok(Self {
                 pubkey,
                 connection_type: ConnectionType::Mutiny(peer_addr_str),
@@ -306,8 +307,37 @@ impl Node {
             connection_type: ConnectionType::Mutiny(websocket_proxy_addr.to_string()),
             original_connection_string: format!("mutiny:{}@{}", pubkey, websocket_proxy_addr),
         };
-        let main_proxy = Proxy::new(websocket_proxy_addr.to_string(), self_connection).await?;
+        let main_proxy =
+            Proxy::new(websocket_proxy_addr.to_string(), self_connection.clone()).await?;
         let multi_socket = MultiWsSocketDescriptor::new(Arc::new(main_proxy), peer_man.clone());
+        multi_socket.listen();
+
+        // keep trying to reconnect to our multi socket proxy
+        let mut multi_socket_reconnect = multi_socket.clone();
+        let websocket_proxy_addr_copy = websocket_proxy_addr.clone();
+        let self_connection_copy = self_connection.clone();
+        spawn_local(async move {
+            loop {
+                if !multi_socket_reconnect.connected() {
+                    debug!("got disconnected from multi socket proxy, going to reconnect");
+                    match Proxy::new(
+                        websocket_proxy_addr_copy.to_string(),
+                        self_connection_copy.clone(),
+                    )
+                    .await
+                    {
+                        Ok(main_proxy) => {
+                            multi_socket_reconnect.reconnect(Arc::new(main_proxy));
+                        }
+                        Err(_) => {
+                            sleep(5 * 1000).await;
+                            continue;
+                        }
+                    };
+                }
+                sleep(5 * 1000).await;
+            }
+        });
 
         // try to connect to peers we already have a channel with
         let connect_peer_man = peer_man.clone();
@@ -626,7 +656,12 @@ impl Node {
                 mutiny_invoice.is_send = true;
                 Ok(mutiny_invoice)
             }
-            Err(_) => {
+            Err(e) => {
+                error!("failed to make payment: {:?}", e);
+                // call list channels to see what our channels are
+                let current_channels = self.channel_manager.list_channels();
+                debug!("current channel details: {:?}", current_channels);
+
                 payment_info.status = HTLCStatus::Failed;
                 self.persister.persist_payment_info(
                     PaymentHash(invoice.payment_hash().into_inner()),
