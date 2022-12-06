@@ -39,7 +39,8 @@ export default function ReceiveQR() {
     }
 
     const { data: bip21RawMaterial } = useQuery({
-        queryKey: ['lightninginvoice'],
+        // By making amount and description keys, they should automatically redo the query when they change
+        queryKey: ['bip21', amount, description],
         queryFn: () => {
             if (!amount) {
                 return nodeManager?.create_bip21(undefined, description || undefined);
