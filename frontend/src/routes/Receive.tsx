@@ -6,16 +6,20 @@ import { useState } from "react";
 import { inputStyle } from "../styles";
 import { objectToSearchParams } from "@util/dumb";
 import { ReceiveParams } from "../routes/ReceiveQR";
+import { useQueryClient } from "@tanstack/react-query";
 
 function Receive() {
     let navigate = useNavigate();
 
     const [amount, setAmount] = useState("")
     const [description, setDescription] = useState("")
+    const queryClient = useQueryClient()
 
     function handleContinue() {
         navigate("/")
         const params = objectToSearchParams<ReceiveParams>({ amount, description })
+        // Important! Otherwise we might see a stale bip21 code
+        queryClient.invalidateQueries({ queryKey: ['bip21'] })
         navigate(`/receive/qr?${params}`)
     }
 
