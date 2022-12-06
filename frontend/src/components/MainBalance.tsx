@@ -15,7 +15,7 @@ function prettyPrintUnconfirmed(b: MutinyBalance): string {
 export default function MainBalance() {
     const { nodeManager } = useContext(NodeManagerContext);
 
-    const { data: balance } = useQuery({
+    const { isPreviousData, data: balance } = useQuery({
         queryKey: ['balance'],
         queryFn: () => {
             console.log("Checking balance...")
@@ -24,6 +24,9 @@ export default function MainBalance() {
         enabled: !!nodeManager,
     })
     return (<div className="flex flex-col gap-4 cursor-pointer">
+        <p>
+            {isPreviousData && "is previous"}
+        </p>
         <h1 className='text-4xl font-light uppercase'>{balance && prettyPrintBalance(balance).toString()} <span className='text-2xl'>sats</span></h1>
         {(balance && balance.unconfirmed?.valueOf() > 0) &&
             <div>

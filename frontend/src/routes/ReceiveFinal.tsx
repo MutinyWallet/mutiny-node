@@ -4,7 +4,7 @@ import ScreenMain from "../components/ScreenMain";
 import { useNavigate } from "react-router";
 import { useContext } from "react";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import takeN from "@util/takeN";
 import prettyPrintTime from "@util/prettyPrintTime";
 import { useSearchParams } from "react-router-dom";
@@ -15,6 +15,7 @@ import ActionButton from "@components/ActionButton";
 
 export default function ReceiveFinal() {
     let navigate = useNavigate();
+    const queryClient = useQueryClient()
 
     const { nodeManager } = useContext(NodeManagerContext);
 
@@ -38,7 +39,6 @@ export default function ReceiveFinal() {
         },
         enabled: !!(nodeManager && address),
         refetchOnWindowFocus: false,
-        refetchInterval: 1000
     })
 
     const { data: lightning } = useQuery({
@@ -51,6 +51,7 @@ export default function ReceiveFinal() {
     })
 
     function handleGoHome() {
+        queryClient.invalidateQueries({ queryKey: ['balance'] })
         navigate("/")
     }
 

@@ -14,8 +14,8 @@ export default function ReceiveUnified({ bip21String }: { bip21String: string })
 
     const { address, options } = bip21.decode(bip21String) as MutinyBip21;
 
-    const { isLoading: isCheckingAddress } = useQuery({
-        queryKey: ['checktransaction'],
+    useQuery({
+        queryKey: ['checktransaction', address],
         queryFn: async () => {
             console.log("Checking address:", address);
             const tx = await nodeManager?.check_address(address);
@@ -28,11 +28,12 @@ export default function ReceiveUnified({ bip21String }: { bip21String: string })
             }
         },
         enabled: !!address,
+        refetchOnMount: "always",
         refetchInterval: 1000
     })
 
     useQuery({
-        queryKey: ['checkinvoice'],
+        queryKey: ['checkinvoice', options.lightning],
         queryFn: async () => {
             if (options.lightning) {
                 let invoice = await nodeManager?.decode_invoice(options.lightning);
@@ -51,6 +52,7 @@ export default function ReceiveUnified({ bip21String }: { bip21String: string })
             }
         },
         enabled: !!options.lightning,
+        refetchOnMount: "always",
         refetchInterval: 1000
     })
 
@@ -59,20 +61,19 @@ export default function ReceiveUnified({ bip21String }: { bip21String: string })
             {bip21 &&
                 <>
                     <div className="bg-[#ffffff] p-4">
-                        <QRCode level="M" value={bip21String.toUpperCase()} />
+                        <QRCode level="M" value={bip21String ? bip21String.toUpperCase() : ""} />
                     </div>
                     <div className="flex items-center gap-2 w-full">
                         {/* <p className="text-lg font-mono font-light break-all"> */}
                         <pre className="flex-1">
                             <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                {takeN(bip21String, 28)}
+                                {takeN(bip21String ?? "", 28)}
                             </code>
                         </pre>
                         <div className="flex-0">
-                            <Copy copyValue={bip21String} />
+                            <Copy copyValue={bip21String ?? ""} />
                         </div>
                     </div>
-                    <p className="text-2xl font-light"> {isCheckingAddress ? "Checking..." : "Checking"}</p>
                 </>
             }
         </>

@@ -38,7 +38,7 @@ export default function ReceiveQR() {
         navigate("/")
     }
 
-    const { data: bip21RawMaterial } = useQuery({
+    const { isLoading, data: bip21RawMaterial } = useQuery({
         // By making amount and description keys, they should automatically redo the query when they change
         queryKey: ['bip21', amount, description],
         queryFn: () => {
@@ -55,7 +55,8 @@ export default function ReceiveQR() {
         },
         enabled: !!nodeManager,
         // Don't want a new address each time they focus the window
-        refetchOnWindowFocus: false
+        refetchOnWindowFocus: false,
+        cacheTime: 0
     })
 
 
@@ -67,7 +68,10 @@ export default function ReceiveQR() {
             </header>
             <ScreenMain>
                 <div />
-                {bip21RawMaterial &&
+                {isLoading &&
+                    <p className="text-2xl font-light">Loading...</p>
+                }
+                {bip21RawMaterial && !isLoading &&
                     <div className="flex flex-col items-start gap-4">
                         <ReceiveUnified bip21String={formatBip21RawMaterial(bip21RawMaterial)} />
                     </div>
