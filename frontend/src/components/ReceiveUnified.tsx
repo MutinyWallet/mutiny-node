@@ -9,7 +9,7 @@ import bip21 from "bip21";
 import { MutinyBip21 } from "@routes/Send";
 
 export default function ReceiveUnified({ bip21String }: { bip21String: string }) {
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
     let navigate = useNavigate();
 
     const { address, options } = bip21.decode(bip21String) as MutinyBip21;
