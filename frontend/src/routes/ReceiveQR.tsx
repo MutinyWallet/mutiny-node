@@ -56,6 +56,7 @@ export default function ReceiveQR() {
         enabled: !!nodeManager,
         // Don't want a new address each time they focus the window
         refetchOnWindowFocus: false,
+        // Important! Without this, it will use a stale version of bip21RawMaterial which has already been paid
         cacheTime: 0
     })
 
