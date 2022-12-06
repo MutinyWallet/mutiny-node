@@ -59,7 +59,7 @@ function sortTx(a: OnChainTx, b: OnChainTx) {
 }
 
 function OnChain() {
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
 
     const { data: transactions } = useQuery({
         queryKey: ['transactions'],

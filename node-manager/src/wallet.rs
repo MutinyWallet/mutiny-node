@@ -28,6 +28,7 @@ impl MutinyWallet {
         mnemonic: Mnemonic,
         database: MutinyBrowserStorage,
         network: Network,
+        user_esplora_url: Option<String>,
     ) -> MutinyWallet {
         let entropy = mnemonic.to_entropy();
         let xprivkey = ExtendedPrivKey::new_master(network, &entropy).unwrap();
@@ -46,7 +47,7 @@ impl MutinyWallet {
 
         MutinyWallet {
             wallet: Mutex::new(wallet),
-            blockchain: Arc::new(esplora_from_network(network)),
+            blockchain: Arc::new(esplora_from_network(network, user_esplora_url)),
         }
     }
 
@@ -222,12 +223,19 @@ fn get_tr_descriptors_for_extended_key(
     (receive_descriptor_template, change_descriptor_template)
 }
 
-pub fn esplora_from_network(network: Network) -> EsploraBlockchain {
-    let url = match network {
-        Network::Bitcoin => "https://blockstream.info/api",
-        Network::Testnet => "https://blockstream.info/testnet/api",
-        Network::Signet => "https://mempool.space/signet/api",
-        Network::Regtest => "http://localhost:3003",
-    };
-    EsploraBlockchain::new(url, 5)
+pub fn esplora_from_network(
+    network: Network,
+    user_provided_url: Option<String>,
+) -> EsploraBlockchain {
+    if let Some(url) = user_provided_url {
+        EsploraBlockchain::new(&url, 5)
+    } else {
+        let url = match network {
+            Network::Bitcoin => "https://blockstream.info/api",
+            Network::Testnet => "https://blockstream.info/testnet/api",
+            Network::Signet => "https://mempool.space/signet/api",
+            Network::Regtest => "http://localhost:3003",
+        };
+        EsploraBlockchain::new(url, 5)
+    }
 }

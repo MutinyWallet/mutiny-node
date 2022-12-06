@@ -10,7 +10,7 @@ import { inputStyle } from "../styles";
 
 
 export default function OpenChannel() {
-	const nodeManager = useContext(NodeManagerContext);
+	const { nodeManager } = useContext(NodeManagerContext);
 	let navigate = useNavigate();
 
 	const [peerPubkey, setPeerPubkey] = useState("");

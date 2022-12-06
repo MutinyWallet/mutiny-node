@@ -12,7 +12,7 @@ import { ReactComponent as EjectIcon } from "../images/icons/eject.svg"
 function SinglePeer({ peer }: { peer: string }) {
 
     const queryClient = useQueryClient()
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
 
     async function handleDisconnectPeer() {
         const myNodes = await nodeManager?.list_nodes();
@@ -40,7 +40,7 @@ function SinglePeer({ peer }: { peer: string }) {
 }
 
 function Peers() {
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
 
     const navigate = useNavigate();
 

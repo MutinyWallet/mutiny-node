@@ -1,6 +1,7 @@
 import Copy from "@components/Copy";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import MutinyToaster from "@components/MutinyToaster";
+import SettingStringsEditor from "@components/SettingStringsEditor";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toastAnything } from "@util/dumb";
 import takeN from "@util/takeN";
@@ -29,7 +30,7 @@ function SeedWords({ words }: { words: string }) {
 }
 
 function Settings() {
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
     const queryClient = useQueryClient()
 
     const { data: words } = useQuery({
@@ -95,11 +96,13 @@ function Settings() {
 
                 console.log(newStorage)
 
-                handleClearState();
-
-                Object.entries(newStorage).forEach(([key, value]) => {
-                    localStorage.setItem(key, value as string);
-                })
+                if (window.confirm("Are you sure you want to replace your node's state? This can't be undone!")) {
+                    localStorage.clear();
+                    Object.entries(newStorage).forEach(([key, value]) => {
+                        localStorage.setItem(key, value as string);
+                    })
+                    window.location.reload();
+                }
             }
         } catch (e) {
             console.error(e);
@@ -108,7 +111,10 @@ function Settings() {
 
     function handleClearState() {
         console.log("Clearing local storage... So long, state!")
-        localStorage.clear();
+        if (window.confirm("Are you sure you want to delete your node's state? This can't be undone!")) {
+            localStorage.clear();
+            window.location.reload();
+        }
     }
 
     async function handleNewNode() {
@@ -146,6 +152,11 @@ function Settings() {
                             </> : <button onClick={handleNewNode}>New Node</button>
                         }
                     </div>
+                    <SettingStringsEditor />
+                    <div />
+                    <div />
+                    <div />
+                    <div />
 
                     <div className="bg-red p-4 rounded w-full">
                         <p className="text-2xl font-light text-white uppercase">Danger Zone</p>

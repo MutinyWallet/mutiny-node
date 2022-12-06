@@ -10,7 +10,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import MainBalance from '@components/MainBalance';
 
 function App() {
-  const nodeManager = useContext(NodeManagerContext);
+  const { nodeManager } = useContext(NodeManagerContext);
 
   const queryClient = useQueryClient()
 
@@ -22,6 +22,10 @@ function App() {
 
   function handleNavReceive() {
     navigate("/receive")
+  }
+
+  function handleNavSettings() {
+    navigate("/manager/settings")
   }
 
   async function handleSync() {
@@ -57,7 +61,10 @@ function App() {
               </div>
             </div>
           </>
-          : <><div /><p className="text-2xl font-light">Loading...</p><div /></>}
+          : <><div /><p className="text-2xl font-light">Loading...</p><div />
+            <div className='flex flex-col gap-2 items-start'>
+              <button onClick={handleNavSettings}>Settings</button>
+            </div></>}
         <MutinyToaster />
       </ScreenMain>
     </>

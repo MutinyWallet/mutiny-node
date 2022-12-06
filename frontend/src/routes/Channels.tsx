@@ -14,7 +14,7 @@ function SingleChannel({ channel }: { channel: MutinyChannel }) {
     console.table(channel);
 
     const queryClient = useQueryClient()
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
 
     // TODO: this should warn before closing
     async function handleCloseChannel() {
@@ -53,7 +53,7 @@ function Channels() {
         navigate("/openchannel")
     }
 
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
 
     const { data: channels } = useQuery({
         queryKey: ['channels'],

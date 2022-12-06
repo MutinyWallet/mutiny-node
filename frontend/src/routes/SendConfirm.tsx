@@ -21,7 +21,7 @@ export type SendConfirmParams = {
 }
 
 function SendConfirm() {
-  const nodeManager = useContext(NodeManagerContext);
+  const { nodeManager } = useContext(NodeManagerContext);
 
   const [searchParams] = useSearchParams();
   const [failed, setFailed] = useState(false)

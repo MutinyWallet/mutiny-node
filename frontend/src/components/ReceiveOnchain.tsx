@@ -6,8 +6,8 @@ import { useQuery } from "@tanstack/react-query";
 import takeN from "@util/takeN";
 import { useNavigate } from "react-router-dom";
 
-export default function ReceiveOnchain({onchainAddress}:{onchainAddress: string | undefined}) {
-    const nodeManager = useContext(NodeManagerContext);
+export default function ReceiveOnchain({ onchainAddress }: { onchainAddress: string | undefined }) {
+    const { nodeManager } = useContext(NodeManagerContext);
     let navigate = useNavigate();
 
     const { isLoading: isCheckingAddress } = useQuery({

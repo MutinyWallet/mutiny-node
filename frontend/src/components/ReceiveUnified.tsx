@@ -9,7 +9,7 @@ import bip21 from "bip21";
 import { MutinyBip21 } from "@routes/Send";
 
 export default function ReceiveUnified({ bip21String }: { bip21String: string }) {
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
     let navigate = useNavigate();
 
     const { address, options } = bip21.decode(bip21String) as MutinyBip21;
@@ -72,9 +72,7 @@ export default function ReceiveUnified({ bip21String }: { bip21String: string })
                             <Copy copyValue={bip21String} />
                         </div>
                     </div>
-                    {isCheckingAddress &&
-                        <p className="text-2xl font-light transition-all">Checking...</p>
-                    }
+                    <p className="text-2xl font-light"> {isCheckingAddress ? "Checking..." : "Checking"}</p>
                 </>
             }
         </>

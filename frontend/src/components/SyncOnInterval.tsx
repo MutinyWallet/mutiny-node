@@ -3,13 +3,17 @@ import { useContext } from "react";
 import { NodeManagerContext } from "./GlobalStateProvider";
 
 export default function SyncOnInterval({ children }: { children: React.ReactNode }) {
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
     const queryClient = useQueryClient()
 
     async function handleSync() {
         console.time("BDK Sync Time")
         console.groupCollapsed("BDK Sync")
-        await nodeManager?.sync()
+        try {
+            await nodeManager?.sync()
+        } catch (e) {
+            console.error(e);
+        }
         console.groupEnd();
         console.timeEnd("BDK Sync Time")
         queryClient.invalidateQueries({ queryKey: ['balance'] })
@@ -21,7 +25,8 @@ export default function SyncOnInterval({ children }: { children: React.ReactNode
         queryKey: ['sync_every_minute'],
         queryFn: handleSync,
         enabled: !!nodeManager,
-        refetchInterval: 1000 * 60
+        refetchInterval: 1000 * 60,
+        refetchOnWindowFocus: false
     })
 
     return <>{children}</>
