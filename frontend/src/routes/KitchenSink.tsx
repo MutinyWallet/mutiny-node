@@ -1,6 +1,6 @@
-import {useContext, useState} from 'react';
+import { useContext, useState } from 'react';
 import logo from '../images/mutiny-logo.svg';
-import {NodeManagerContext} from "@components/GlobalStateProvider";
+import { NodeManagerContext } from "@components/GlobalStateProvider";
 
 function App() {
     const [mnemonic, setMnemonic] = useState("...")
@@ -17,7 +17,7 @@ function App() {
 
     const [invoice, setInvoice] = useState("")
 
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
 
     const [currentNode, setCurrentNode] = useState("")
 
@@ -117,9 +117,9 @@ function App() {
         if (nodeManager) {
             try {
                 let invoice = await nodeManager.create_invoice(BigInt(1000), "hello");
-		if (invoice.bolt11) {
+                if (invoice.bolt11) {
                     setInvoice(invoice.bolt11)
-		}
+                }
             } catch (e) {
                 console.error(e);
             }
@@ -265,7 +265,7 @@ function App() {
                         <p>
                             <button onClick={async () => new_node()}>New Node!</button>
                         </p>
-			    <>
+                        <>
                             <pre>
                                 <code>{invoice}</code>
                             </pre>
@@ -284,7 +284,7 @@ function App() {
                                 <input type="text" placeholder='Peer' onChange={handleDisconnectPeerChange}></input>
                                 <input type="submit" value="Disconnect" />
                             </form>
-			    </>
+                        </>
                         <form onSubmit={openChannel} className="flex flex-col items-start gap-4 my-4">
                             <h2>Open Channel:</h2>
                             <input type="text" placeholder='02..' onChange={handlePeerChange}></input>

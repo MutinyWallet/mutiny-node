@@ -35,7 +35,7 @@ function sortByExpiry(a: MutinyInvoice, b: MutinyInvoice): number {
 }
 
 function Transactions() {
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
 
     const { data: invoices } = useQuery({
         queryKey: ['ln_txs'],

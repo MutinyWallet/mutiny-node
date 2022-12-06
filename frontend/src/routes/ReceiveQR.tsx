@@ -29,7 +29,7 @@ export default function ReceiveQR() {
     let navigate = useNavigate();
     const [searchParams] = useSearchParams();
 
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
 
     const amount = searchParams.get("amount")
     const description = searchParams.get("description")

@@ -175,6 +175,7 @@ impl MutinyNodePersister {
         mutiny_logger: Arc<MutinyLogger>,
         keys_manager: Arc<PhantomKeysManager>,
         mut channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
+        user_esplora_url: Option<String>,
     ) -> Result<(PhantomChannelManager, bool), MutinyError> {
         match self.read_value(CHANNEL_MANAGER_KEY) {
             Ok(kv_value) => {
@@ -199,7 +200,7 @@ impl MutinyNodePersister {
             }
             Err(_) => {
                 // no key manager stored, start a new one
-                let blockchain = esplora_from_network(network);
+                let blockchain = esplora_from_network(network, user_esplora_url);
 
                 let height_future = blockchain
                     .get_height()
