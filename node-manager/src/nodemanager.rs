@@ -99,6 +99,38 @@ pub(crate) struct MutinyInvoiceParams {
     pub is_send: bool,
 }
 
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[wasm_bindgen]
+pub struct MutinyBip21RawMaterials {
+    address: String,
+    invoice: String,
+    btc_amount: Option<String>,
+    description: Option<String>,
+}
+
+#[wasm_bindgen]
+impl MutinyBip21RawMaterials {
+    #[wasm_bindgen(getter)]
+    pub fn address(&self) -> String {
+        self.address.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn invoice(&self) -> String {
+        self.invoice.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn btc_amount(&self) -> Option<String> {
+        self.btc_amount.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn description(&self) -> Option<String> {
+        self.description.clone()
+    }
+}
+
 impl MutinyInvoice {
     pub(crate) fn new(p: MutinyInvoiceParams) -> Self {
         MutinyInvoice {
@@ -357,6 +389,33 @@ impl NodeManager {
             Ok(balance) => Ok(balance.get_total()),
             Err(_) => Err(MutinyJsError::WalletOperationFailed),
         }
+    }
+
+    #[wasm_bindgen]
+    pub async fn create_bip21(
+        &self,
+        amount: Option<u64>,
+        description: Option<String>,
+    ) -> Result<MutinyBip21RawMaterials, MutinyJsError> {
+        let Ok(address) = self.get_new_address().await else {
+            return Err(MutinyError::WalletOperationFailed.into());
+        };
+
+        // TODO if there's no description should be something random I guess
+        let Ok(invoice) = self.create_invoice(amount, description.clone().unwrap_or("".into())).await else {
+            return Err(MutinyError::WalletOperationFailed.into())
+        };
+
+        let Some(bolt11) = invoice.bolt11 else {
+            return Err(MutinyError::WalletOperationFailed.into())
+        };
+
+        Ok(MutinyBip21RawMaterials {
+            address,
+            invoice: bolt11,
+            btc_amount: amount.map(|amount| bitcoin::Amount::from_sat(amount).to_btc().to_string()),
+            description,
+        })
     }
 
     #[wasm_bindgen]

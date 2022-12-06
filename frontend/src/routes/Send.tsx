@@ -22,7 +22,7 @@ type UnifiedQrOptions =
     message?: string;
   };
 
-type Bip21 = { address: string, options: UnifiedQrOptions };
+export type MutinyBip21 = { address: string, options: UnifiedQrOptions };
 
 function Send() {
   const nodeManager = useContext(NodeManagerContext);
@@ -35,9 +35,11 @@ function Send() {
       let invoice = await nodeManager?.decode_invoice(invoiceStr);
       console.table(invoice);
       if (invoice?.amount_sats && Number(invoice?.amount_sats) > 0) {
-        navigate(`/send/confirm?destination=${invoiceStr}&amount=${invoice?.amount_sats}`)
+        const params = objectToSearchParams<SendConfirmParams>({ destination: invoiceStr, amount: invoice?.amount_sats.toString(), description: invoice?.description || undefined })
+        navigate(`/send/confirm?${params}`)
       } else {
-        navigate(`/send/amount?destination=${invoiceStr}`)
+        const params = objectToSearchParams<SendConfirmParams>({ destination: invoiceStr, description: invoice?.description || undefined })
+        navigate(`/send/amount?${params}`)
       }
     } catch (e) {
       console.error(e);
@@ -46,7 +48,7 @@ function Send() {
   }
 
   async function navigateForBip21(bip21String: string) {
-    const { address, options } = bip21.decode(bip21String) as Bip21;
+    const { address, options } = bip21.decode(bip21String) as MutinyBip21;
     if (options?.lightning) {
       await navigateForInvoice(options.lightning)
     } else if (options?.amount) {
@@ -77,7 +79,6 @@ function Send() {
     }
 
     let paymentType = detectPaymentType(destination)
-
 
     if (paymentType === PaymentType.unknown) {
       toast("Couldn't parse that one, buddy")

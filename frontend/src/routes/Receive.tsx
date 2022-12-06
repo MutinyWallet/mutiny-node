@@ -2,48 +2,21 @@ import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
 import ScreenMain from "../components/ScreenMain";
 import { useNavigate } from "react-router";
-import {useContext, useState} from "react";
-import {useQuery, useQueryClient} from "@tanstack/react-query";
-import ReceiveLightning from "@components/ReceiveLightning";
-import ReceiveOnchain from "@components/ReceiveOnchain";
-import {NodeManagerContext} from "@components/GlobalStateProvider";
+import { useState } from "react";
+import { inputStyle } from "../styles";
+import { objectToSearchParams } from "@util/dumb";
+import { ReceiveParams } from "../routes/ReceiveQR";
 
 function Receive() {
     let navigate = useNavigate();
-    const nodeManager = useContext(NodeManagerContext);
-    const queryClient = useQueryClient()
 
-    function handleCancel() {
+    const [amount, setAmount] = useState("")
+    const [description, setDescription] = useState("")
+
+    function handleContinue() {
         navigate("/")
-    }
-
-    const { data: invoice } = useQuery({
-        queryKey: ['lightninginvoice'],
-        queryFn: () => {
-            console.log("Getting new invoice...")
-            return nodeManager?.create_invoice(BigInt(1000), "testing 123");
-        },
-        enabled: !!nodeManager,
-        // Don't want a new address each time they focus the window
-        refetchOnWindowFocus: false
-    })
-
-    const { data: onchainAddress } = useQuery({
-        queryKey: ['onchainAddress'],
-        queryFn: () => {
-            console.log("Getting new address...")
-            return nodeManager?.get_new_address();
-        },
-        enabled: !!nodeManager,
-        // Don't want a new address each time they focus the window
-        refetchOnWindowFocus: false
-    })
-
-    const [isLightning, setIsLightning] = useState(true);
-
-    function handleToggle() {
-        setIsLightning(!isLightning);
-        queryClient.invalidateQueries(['onchainaddress'])
+        const params = objectToSearchParams<ReceiveParams>({ amount, description })
+        navigate(`/receive/qr?${params}`)
     }
 
     return (
@@ -54,17 +27,13 @@ function Receive() {
             </header>
             <ScreenMain>
                 <div />
-                <div className="flex gap-2">
-                    <button onClick={handleToggle} disabled={!isLightning} className={isLightning ? "secondary" : "toggle"}>On-chain</button>
-                    <button onClick={handleToggle} disabled={isLightning} className={!isLightning ? "secondary" : "toggle"}>Lightning</button>
+                <p className="text-2xl font-light">Want some sats?</p>
+                <div className="flex flex-col gap-4">
+                    <input onChange={(e) => setAmount(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='How much? (optional)' />
+                    <input onChange={(e) => setDescription(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='What for? (optional)' />
                 </div>
-
-                <div className="flex flex-col items-start gap-4">
-                    {isLightning ? <ReceiveLightning invoice={invoice} /> : <ReceiveOnchain onchainAddress={onchainAddress} />}
-                </div>
-
                 <div className='flex justify-start gap-2'>
-                    <button onClick={handleCancel}>Cancel</button>
+                    <button onClick={handleContinue}>Continue</button>
                 </div>
             </ScreenMain>
         </>

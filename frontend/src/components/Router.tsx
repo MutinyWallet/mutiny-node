@@ -18,6 +18,7 @@ import Utxos from "@routes/Utxos";
 import ConnectPeer from "@routes/ConnectPeer";
 import SendAmount from "@routes/SendAmount";
 import ReceiveFinal from "@routes/ReceiveFinal";
+import ReceiveQR from "@routes/ReceiveQR";
 
 const router = createBrowserRouter([
     {
@@ -39,6 +40,10 @@ const router = createBrowserRouter([
     {
         path: "/receive",
         element: <Receive />,
+    },
+    {
+        path: "/receive/qr",
+        element: <ReceiveQR />,
     },
     {
         path: "/receive/final",
