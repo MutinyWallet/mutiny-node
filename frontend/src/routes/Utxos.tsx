@@ -32,7 +32,7 @@ const SingleUtxo = ({ utxo }: { utxo: Utxo }) => {
 }
 
 function Utxos() {
-    const nodeManager = useContext(NodeManagerContext);
+    const { nodeManager } = useContext(NodeManagerContext);
     let navigate = useNavigate();
 
     function handleSweep() {
