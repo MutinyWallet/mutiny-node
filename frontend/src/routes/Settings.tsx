@@ -97,6 +97,7 @@ function Settings() {
                 console.log(newStorage)
 
                 if (window.confirm("Are you sure you want to replace your node's state? This can't be undone!")) {
+                    localStorage.clear();
                     Object.entries(newStorage).forEach(([key, value]) => {
                         localStorage.setItem(key, value as string);
                     })
