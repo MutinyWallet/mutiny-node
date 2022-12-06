@@ -514,8 +514,8 @@ impl NodeManager {
                     .sum();
 
                 Ok(MutinyBalance {
-                    confirmed: onchain.confirmed,
-                    unconfirmed: onchain.untrusted_pending + onchain.trusted_pending,
+                    confirmed: onchain.confirmed + onchain.trusted_pending,
+                    unconfirmed: onchain.untrusted_pending + onchain.immature,
                     lightning: lightning_msats / 1000,
                 })
             }
