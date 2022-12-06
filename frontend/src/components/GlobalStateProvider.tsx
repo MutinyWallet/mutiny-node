@@ -104,7 +104,7 @@ export const GlobalStateProvider = ({ children }: Props) => {
             console.log("Initializing Node Manager")
             console.log("Using network", network);
             console.log("Using proxy", proxy);
-            console.log("Using esplora address", proxy);
+            console.log("Using esplora address", esplora);
 
             const nodeManager = await new NodeManager("", undefined, proxy, network, esplora)
 
