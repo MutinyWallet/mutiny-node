@@ -17,6 +17,7 @@ export type SendConfirmParams = {
   amount?: string;
   destination?: string;
   description?: string;
+  all?: string;
 }
 
 function SendConfirm() {
@@ -176,10 +177,10 @@ function SendConfirm() {
                 </div>
               }
               {(!amount && sendAll) &&
-                  <div className="rounded border p-2 my-2">
-                    <dt>How Much</dt>
-                    <dd>All</dd>
-                  </div>
+                <div className="rounded border p-2 my-2">
+                  <dt>How Much</dt>
+                  <dd>All</dd>
+                </div>
               }
               {description &&
                 <div className="rounded border p-2 my-2 flex flex-col">

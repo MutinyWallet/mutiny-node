@@ -6,6 +6,7 @@ import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
 import ScreenMain from "../components/ScreenMain"
 import prettyPrintAmount from "@util/prettyPrintAmount";
+import { useNavigate } from "react-router-dom";
 
 type Utxo = {
     outpoint: string
@@ -32,6 +33,11 @@ const SingleUtxo = ({ utxo }: { utxo: Utxo }) => {
 
 function Utxos() {
     const nodeManager = useContext(NodeManagerContext);
+    let navigate = useNavigate();
+
+    function handleSweep() {
+        navigate(`/send?all=true`)
+    }
 
     const { data: utxos } = useQuery({
         queryKey: ['utxos'],
@@ -50,6 +56,7 @@ function Utxos() {
                 <Close />
             </header>
             <ScreenMain padSides={false} wontScroll={!utxos || utxos.length < 4}>
+                <button className="mx-8" onClick={handleSweep}>Sweep Wallet</button>
                 <ul className="overflow-y-scroll px-8 pb-[12rem]">
                     {utxos?.map(utxo => (
                         <SingleUtxo utxo={utxo} key={utxo.outpoint} />

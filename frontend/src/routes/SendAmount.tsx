@@ -27,11 +27,6 @@ export default function SendAmount() {
       navigate(`/send/confirm?destination=${destination}&amount=${amount}`)
     }
   }
-  function handleSendAll() {
-    if (destination) {
-      navigate(`/send/confirm?destination=${destination}&all=true`)
-    }
-  }
   return (
     <>
       <header className='p-8 flex justify-between items-center'>
@@ -46,9 +41,6 @@ export default function SendAmount() {
         </div>
         <ActionButton onClick={handleContinue}>
           Continue
-        </ActionButton>
-        <ActionButton onClick={handleSendAll}>
-          Send All
         </ActionButton>
       </ScreenMain>
       <MutinyToaster />
