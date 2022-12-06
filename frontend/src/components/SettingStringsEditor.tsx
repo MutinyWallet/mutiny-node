@@ -12,6 +12,13 @@ export default function SettingStringsEditor() {
 
     async function handleSaveSettings() {
         try {
+            let existingNetwork = getExistingSettings().network;
+            if (existingNetwork !== nodeManagerSettings.network) {
+                if (window.confirm("Changing networks will delete your node's state. This can't be undone!")) {
+                    localStorage.clear();
+                    window.location.reload();
+                }
+            }
             await setup(nodeManagerSettings);
             navigate("/")
         } catch (e) {
