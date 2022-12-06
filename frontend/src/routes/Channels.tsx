@@ -2,6 +2,7 @@ import { NodeManagerContext } from "@components/GlobalStateProvider"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { mempoolTxUrl } from "@util/dumb"
 import prettyPrintAmount from "@util/prettyPrintAmount"
+import takeN from "@util/takeN"
 import { MutinyChannel } from "node-manager"
 import { useContext } from "react"
 import { useNavigate } from "react-router-dom"
@@ -27,7 +28,7 @@ function SingleChannel({ channel }: { channel: MutinyChannel }) {
         <li className="text-off-white border-b border-blue py-2 mb-2 flex flex-col w-full">
             {!channel.confirmed && <h3 className="font-light text-2xl opacity-70">UNCONFIRMED</h3>}
             <h3 className="text-lg">
-                {channel.peer}
+                {takeN(channel.peer, 28)}
             </h3>
             <div className="flex items-center gap-4">
                 <div className="flex-1 flex flex-col gap-2">
@@ -39,7 +40,7 @@ function SingleChannel({ channel }: { channel: MutinyChannel }) {
                 <button onClick={handleCloseChannel} className="h-[3rem] w-[3rem] p-1 flex items-center justify-center flex-0"><EjectIcon /></button>
             </div>
             <a className="text-sm font-light opacity-50 mt-2" href={mempoolTxUrl(channel.outpoint?.split(":")[0], nodeManager?.get_network())} target="_blank" rel="noreferrer">
-                {channel.outpoint}
+                {takeN(channel.outpoint || "", 28)}
             </a>
         </li>
     )

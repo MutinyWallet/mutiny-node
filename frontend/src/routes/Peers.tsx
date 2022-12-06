@@ -31,7 +31,7 @@ function SinglePeer({ peer }: { peer: string }) {
                     <Copy copyValue={peer} />
                 </div>
                 <h3 className="flex-1 text-lg font-mono overflow-ellipsis">
-                    {takeN(peer, 20)}
+                    {takeN(peer, 15)}
                 </h3>
                 <button onClick={handleDisconnectPeer} className="h-[3rem] w-[3rem] p-1 flex items-center justify-center flex-0"><EjectIcon /></button>
             </div>
