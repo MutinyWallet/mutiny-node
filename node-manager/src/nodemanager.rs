@@ -631,25 +631,28 @@ impl NodeManager {
         amount: Option<u64>,
         description: String,
     ) -> Result<MutinyInvoice, MutinyJsError> {
-        // go through each node to get the route hints
+        // TODO let use_phantom be configurable from frontend
+        let use_phantom = false;
         let nodes = self.nodes.lock().await;
         if nodes.len() == 0 {
             return Err(MutinyJsError::InvoiceCreationFailed);
         }
+        let route_hints: Vec<PhantomRouteHints> = if use_phantom {
+            nodes
+                .iter()
+                .map(|(_, n)| n.get_phantom_route_hint())
+                .collect()
+        } else {
+            vec![]
+        };
 
-        let route_hints: Vec<PhantomRouteHints> = nodes
-            .iter()
-            .map(|(_, n)| n.get_phantom_route_hint())
-            .collect();
-
-        // any of the nodes can process this, but just choose the first
+        // just create a normal invoice from the first node
         let first_node = if let Some(node) = nodes.values().next() {
             node
         } else {
             return Err(MutinyJsError::WalletOperationFailed);
         };
-
-        let invoice = first_node.create_phantom_invoice(amount, description, route_hints)?;
+        let invoice = first_node.create_invoice(amount, description, route_hints)?;
 
         Ok(invoice.into())
     }

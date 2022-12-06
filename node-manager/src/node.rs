@@ -9,12 +9,14 @@ use crate::wallet::MutinyWallet;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
 use bitcoin::Network;
+use instant::Duration;
 use lightning::chain::{chainmonitor, Filter, Watch};
 use lightning::ln::channelmanager::PhantomRouteHints;
 use lightning::ln::msgs::NetAddress;
 use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::util::logger::{Logger, Record};
 use lightning::util::ser::Writeable;
+use lightning_invoice::utils::create_invoice_from_channelmanager_and_duration_since_epoch;
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
@@ -446,44 +448,89 @@ impl Node {
         self.channel_manager.get_phantom_route_hints()
     }
 
-    pub fn create_phantom_invoice(
+    pub fn create_invoice(
         &self,
         amount_sat: Option<u64>,
         description: String,
         route_hints: Vec<PhantomRouteHints>,
     ) -> Result<Invoice, MutinyError> {
         let amount_msat = amount_sat.map(|s| s * 1_000);
-        let invoice = match create_phantom_invoice::<InMemorySigner, Arc<PhantomKeysManager>>(
-            amount_msat,
-            None,
-            description,
-            1500,
-            route_hints,
-            self.keys_manager.clone(),
-            currency_from_network(self.network),
-        ) {
-            Ok(inv) => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Info,
-                    format_args!(
-                        "SUCCESS: generated invoice: {} with amount {:?}",
-                        inv, amount_msat
-                    ),
-                    "node",
-                    "",
-                    0,
-                ));
-                inv
+        let invoice = match route_hints.len() {
+            0 => {
+                let now = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+
+                match create_invoice_from_channelmanager_and_duration_since_epoch(
+                    &self.channel_manager.clone(),
+                    self.keys_manager.clone(),
+                    self.logger.clone(),
+                    currency_from_network(self.network),
+                    amount_msat,
+                    description,
+                    Duration::from_secs(now),
+                    1500,
+                ) {
+                    Ok(inv) => {
+                        self.logger.log(&Record::new(
+                            lightning::util::logger::Level::Info,
+                            format_args!(
+                                "SUCCESS: generated invoice: {} with amount {:?}",
+                                inv, amount_msat
+                            ),
+                            "node",
+                            "",
+                            0,
+                        ));
+                        inv
+                    }
+                    Err(e) => {
+                        self.logger.log(&Record::new(
+                            lightning::util::logger::Level::Error,
+                            format_args!("ERROR: could not generate invoice: {}", e),
+                            "node",
+                            "",
+                            0,
+                        ));
+                        return Err(MutinyError::InvoiceCreationFailed);
+                    }
+                }
             }
-            Err(e) => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Error,
-                    format_args!("ERROR: could not generate invoice: {}", e),
-                    "node",
-                    "",
-                    0,
-                ));
-                return Err(MutinyError::InvoiceCreationFailed);
+            _ => {
+                match create_phantom_invoice::<InMemorySigner, Arc<PhantomKeysManager>>(
+                    amount_msat,
+                    None,
+                    description,
+                    1500,
+                    route_hints,
+                    self.keys_manager.clone(),
+                    currency_from_network(self.network),
+                ) {
+                    Ok(inv) => {
+                        self.logger.log(&Record::new(
+                            lightning::util::logger::Level::Info,
+                            format_args!(
+                                "SUCCESS: generated invoice: {} with amount {:?}",
+                                inv, amount_msat
+                            ),
+                            "node",
+                            "",
+                            0,
+                        ));
+                        inv
+                    }
+                    Err(e) => {
+                        self.logger.log(&Record::new(
+                            lightning::util::logger::Level::Error,
+                            format_args!("ERROR: could not generate invoice: {}", e),
+                            "node",
+                            "",
+                            0,
+                        ));
+                        return Err(MutinyError::InvoiceCreationFailed);
+                    }
+                }
             }
         };
 
