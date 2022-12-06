@@ -45,19 +45,6 @@ const SingleTransaction = ({ tx, network }: { tx: OnChainTx, network?: string })
     )
 }
 
-// Sort by timestamp, but if there's no timestamp put it first
-function sortTx(a: OnChainTx, b: OnChainTx) {
-    if (b.confirmation_time && a.confirmation_time) {
-        return b.confirmation_time.timestamp - a.confirmation_time.timestamp
-    } else if (a.confirmation_time) {
-        return 1
-    } else if (b.confirmation_time) {
-        return -1
-    } else {
-        return a.txid.localeCompare(b.txid)
-    }
-}
-
 function OnChain() {
     const { nodeManager } = useContext(NodeManagerContext);
 
@@ -80,7 +67,7 @@ function OnChain() {
             </header>
             <ScreenMain padSides={false} wontScroll={!transactions || transactions.length < 4}>
                 <ul className="overflow-y-scroll h-full px-8 pb-[12rem]">
-                    {transactions?.sort(sortTx).map(tx => (
+                    {transactions?.map(tx => (
                         <SingleTransaction key={tx.txid} tx={tx} network={nodeManager?.get_network()} />
                     ))}
                 </ul>
