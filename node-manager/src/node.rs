@@ -434,11 +434,35 @@ impl Node {
         .await
         {
             Ok(_) => {
-                // store this so we can save later if needed
-                self.temp_peer_connection_map.lock().unwrap().insert(
-                    peer_connection_info.pubkey.to_string(),
-                    peer_connection_info.original_connection_string,
-                );
+                let pubkey = peer_connection_info.pubkey.to_string();
+
+                // if we have the connection info saved in storage, update it if we need to
+                // otherwise cache it in temp_peer_connection_map so we can later save it
+                // if we open a channel in the future.
+                if let Some(saved) = self.persister.read_peer_connection_info(pubkey.clone()) {
+                    if saved != peer_connection_info.original_connection_string {
+                        match self.persister.persist_peer_connection_info(
+                            pubkey,
+                            peer_connection_info.original_connection_string,
+                        ) {
+                            Ok(_) => (),
+                            Err(_) => self.logger.log(&Record::new(
+                                lightning::util::logger::Level::Warn,
+                                format_args!("WARN: could not store peer connection info",),
+                                "node",
+                                "",
+                                0,
+                            )),
+                        }
+                    }
+                } else {
+                    // store this so we can save later if needed
+                    self.temp_peer_connection_map
+                        .lock()
+                        .unwrap()
+                        .insert(pubkey, peer_connection_info.original_connection_string);
+                }
+
                 Ok(())
             }
             Err(e) => Err(e),
