@@ -110,8 +110,8 @@ function Settings() {
     };
 
     function handleClearState() {
-        console.log("Clearing local storage... So long, state!")
         if (window.confirm("Are you sure you want to delete your node's state? This can't be undone!")) {
+            console.log("Clearing local storage... So long, state!")
             localStorage.clear();
             window.location.reload();
         }
