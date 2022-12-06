@@ -19,6 +19,7 @@ import ConnectPeer from "@routes/ConnectPeer";
 import SendAmount from "@routes/SendAmount";
 import ReceiveFinal from "@routes/ReceiveFinal";
 import ReceiveQR from "@routes/ReceiveQR";
+import SendFinal from "@routes/SendFinal";
 
 const router = createBrowserRouter([
     {
@@ -36,6 +37,10 @@ const router = createBrowserRouter([
     {
         path: "/send/confirm",
         element: <SendConfirm />,
+    },
+    {
+        path: "/send/final",
+        element: <SendFinal />,
     },
     {
         path: "/receive",
