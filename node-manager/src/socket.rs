@@ -110,7 +110,6 @@ impl Hash for WsTcpSocketDescriptor {
 #[derive(Clone)]
 pub(crate) struct MultiWsSocketDescriptor {
     conn: Arc<Proxy>,
-    id: u64,
     read_from_sub_socket: Receiver<Message>,
     send_to_multi_socket: Sender<Message>,
     socket_map: Arc<Mutex<HashMap<Vec<u8>, Sender<Message>>>>,
@@ -121,7 +120,6 @@ impl MultiWsSocketDescriptor {
     pub fn new(conn: Arc<Proxy>, peer_manager: Arc<PeerManager>) -> Self {
         debug!("setting up multi websocket descriptor");
 
-        let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
         let (send_to_multi_socket, read_from_sub_socket): (Sender<Message>, Receiver<Message>) =
             unbounded();
 
@@ -130,7 +128,6 @@ impl MultiWsSocketDescriptor {
 
         Self {
             conn,
-            id,
             send_to_multi_socket,
             read_from_sub_socket,
             socket_map,
@@ -140,7 +137,7 @@ impl MultiWsSocketDescriptor {
     }
 
     pub fn connected(&self) -> bool {
-        return self.connected.load(Ordering::Relaxed);
+        self.connected.load(Ordering::Relaxed)
     }
 
     pub fn reconnect(&mut self, conn: Arc<Proxy>) {
@@ -285,7 +282,7 @@ pub(crate) fn schedule_descriptor_read(
     descriptor: WsSocketDescriptor,
     peer_manager: Arc<PeerManager>,
 ) {
-    let mut descriptor = descriptor.clone();
+    let mut descriptor = descriptor;
     spawn_local(async move {
         while let Some(msg) = descriptor.read().await {
             if let Ok(msg_contents) = msg {
@@ -374,7 +371,7 @@ impl ReadDescriptor for SubWsSocketDescriptor {
 
 impl peer_handler::SocketDescriptor for SubWsSocketDescriptor {
     fn send_data(&mut self, data: &[u8], _resume_read: bool) -> usize {
-        let mut addr_prefix = Vec::from(self.pubkey_bytes.to_vec());
+        let mut addr_prefix = self.pubkey_bytes.to_vec();
         let mut vec = Vec::from(data);
         addr_prefix.append(&mut vec);
         let res = self.send_channel.send(Message::Bytes(addr_prefix));

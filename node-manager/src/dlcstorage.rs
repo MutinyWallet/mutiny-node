@@ -62,7 +62,7 @@ impl Storage for MutinyBrowserStorage {
         let serialized = serialize_contract(contract)?;
 
         let key = format! {"{DLC_CONTRACT_KEY_PREFIX}{}", contract.get_id().to_hex()};
-        self.set(key, serialized.clone())?;
+        self.set(key, serialized)?;
 
         // delete old contract
         match contract {
@@ -109,7 +109,7 @@ impl Storage for MutinyBrowserStorage {
         let serialized = serialize_channel(&channel)?;
 
         let chan_key = format!("{DLC_CHANNEL_KEY_PREFIX}{}", channel.get_id().to_hex());
-        self.set(chan_key, serialized.clone())?;
+        self.set(chan_key, serialized)?;
 
         match &channel {
             a @ Channel::Accepted(_) | a @ Channel::Signed(_) => {
@@ -120,7 +120,7 @@ impl Storage for MutinyBrowserStorage {
         };
 
         if let Some(c) = contract.as_ref() {
-            return self.update_contract(c);
+            self.update_contract(c)
         } else {
             Ok(())
         }

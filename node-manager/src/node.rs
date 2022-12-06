@@ -148,6 +148,7 @@ pub(crate) struct Node {
 }
 
 impl Node {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
         node_index: NodeIndex,
         mnemonic: Mnemonic,

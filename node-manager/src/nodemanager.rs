@@ -264,7 +264,7 @@ impl NodeManager {
         set_panic_hook();
 
         let websocket_proxy_addr =
-            websocket_proxy_addr.unwrap_or_else(|| String::from("ws://127.0.0.1:3001"));
+            websocket_proxy_addr.unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
 
         let network: Network = network_str
             .unwrap_or_else(|| String::from("testnet"))
@@ -407,7 +407,7 @@ impl NodeManager {
         };
 
         // TODO if there's no description should be something random I guess
-        let Ok(invoice) = self.create_invoice(amount, description.clone().unwrap_or("".into())).await else {
+        let Ok(invoice) = self.create_invoice(amount, description.clone().unwrap_or_else(|| "".into())).await else {
             return Err(MutinyError::WalletOperationFailed.into())
         };
 
