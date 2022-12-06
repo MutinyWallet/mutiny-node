@@ -72,9 +72,7 @@ export default function ReceiveUnified({ bip21String }: { bip21String: string })
                             <Copy copyValue={bip21String} />
                         </div>
                     </div>
-                    {isCheckingAddress &&
-                        <p className="text-2xl font-light transition-all">Checking...</p>
-                    }
+                    <p className="text-2xl font-light"> {isCheckingAddress ? "Checking..." : "Checking"}</p>
                 </>
             }
         </>
