@@ -17,6 +17,7 @@ export type SendConfirmParams = {
   amount?: string;
   destination?: string;
   description?: string;
+  all?: string;
 }
 
 function SendConfirm() {
@@ -31,6 +32,7 @@ function SendConfirm() {
   const amount = searchParams.get("amount")
   const destination = searchParams.get("destination")
   const description = searchParams.get("description")
+  const sendAll = searchParams.get("all") === "true"
 
   const { data: invoice } = useQuery({
     queryKey: ['lightninginvoice'],
@@ -71,6 +73,16 @@ function SendConfirm() {
             await nodeManager?.pay_invoice(myNode, destination, BigInt(amount))
           }
           navigate(`/send/final`)
+        }
+      } else if (destination && sendAll) {
+        const paymentType = detectPaymentType(destination);
+
+        if (paymentType === PaymentType.onchain) {
+          const txid = await nodeManager?.sweep_wallet(destination);
+          await nodeManager?.sync();
+          navigate(`/send/final?txid=${txid}`)
+        } else {
+          throw new Error(`Cannot send all with payment type: ${paymentType}`)
         }
       }
     } catch (e: unknown) {
@@ -162,6 +174,12 @@ function SendConfirm() {
                 <div className="rounded border p-2 my-2">
                   <dt>How Much</dt>
                   <dd>{prettyPrintAmount(parseInt(amount))} sats</dd>
+                </div>
+              }
+              {(!amount && sendAll) &&
+                <div className="rounded border p-2 my-2">
+                  <dt>How Much</dt>
+                  <dd>All</dd>
                 </div>
               }
               {description &&

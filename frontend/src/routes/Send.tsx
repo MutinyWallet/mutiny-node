@@ -13,6 +13,7 @@ import { NodeManager } from "node-manager";
 import { QrCodeScanner } from "@components/QrCodeScanner";
 import { SendConfirmParams } from "./SendConfirm";
 import ActionButton from "@components/ActionButton";
+import { useSearchParams } from "react-router-dom";
 
 type UnifiedQrOptions =
   {
@@ -29,6 +30,9 @@ function Send() {
   let navigate = useNavigate();
 
   const [textFieldDestination, setDestination] = useState("")
+
+  const [searchParams] = useSearchParams();
+  const sendAll = searchParams.get("all")
 
   async function navigateForInvoice(invoiceStr: string) {
     try {
@@ -90,8 +94,13 @@ function Send() {
     } else if (paymentType === PaymentType.bip21) {
       await navigateForBip21(destination)
     } else if (paymentType === PaymentType.onchain) {
-      const params = objectToSearchParams<SendConfirmParams>({ destination })
-      navigate(`/send/amount?${params}`)
+      if (sendAll === "true") {
+        const params = objectToSearchParams<SendConfirmParams>({ destination, all: "true" })
+        navigate(`/send/confirm?${params}`)
+      } else {
+        const params = objectToSearchParams<SendConfirmParams>({ destination })
+        navigate(`/send/amount?${params}`)
+      }
     }
   }
 
