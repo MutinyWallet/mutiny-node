@@ -1,7 +1,8 @@
-#![feature(io_error_other)]
-#![allow(non_snake_case, non_upper_case_globals)]
 // wasm_bindgen uses improper casing and it needs to be turned off:
 // https://github.com/rustwasm/wasm-bindgen/issues/2882
+#![allow(incomplete_features, non_snake_case, non_upper_case_globals)]
+#![feature(io_error_other)]
+#![feature(async_fn_in_trait)]
 
 mod background;
 mod bdkstorage;
@@ -18,7 +19,8 @@ mod localstorage;
 mod logging;
 mod node;
 mod nodemanager;
-mod tcpproxy;
+mod proxy;
+mod socket;
 mod utils;
 mod wallet;
 

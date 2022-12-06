@@ -2,7 +2,7 @@ cargo-features = ["per-package-target"]
 
 [package]
 name = "node-manager"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 forced-target = "wasm32-unknown-unknown"
 
@@ -41,6 +41,7 @@ base64 = "0.13.0"
 pbkdf2 = "0.11"
 aes-gcm = "0.10.1"
 rand_core = { version = "0.6", features = ["std"] }
+crossbeam-channel = "0.5.6"
 
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires

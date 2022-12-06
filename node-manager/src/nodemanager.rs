@@ -6,7 +6,7 @@ use std::{str::FromStr, sync::Arc};
 use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyJsError, MutinyStorageError};
 use crate::keymanager;
-use crate::node::Node;
+use crate::node::{Node, PubkeyConnectionInfo};
 use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
@@ -407,7 +407,7 @@ impl NodeManager {
         };
 
         // TODO if there's no description should be something random I guess
-        let Ok(invoice) = self.create_invoice(amount, description.clone().unwrap_or("".into())).await else {
+        let Ok(invoice) = self.create_invoice(amount, description.clone().unwrap_or_else(|| "".into())).await else {
             return Err(MutinyError::WalletOperationFailed.into())
         };
 
@@ -597,7 +597,8 @@ impl NodeManager {
         connection_string: String,
     ) -> Result<(), MutinyJsError> {
         if let Some(node) = self.nodes.lock().await.get(&self_node_pubkey) {
-            let res = node.connect_peer(connection_string.clone()).await;
+            let connect_info = PubkeyConnectionInfo::new(connection_string.clone())?;
+            let res = node.connect_peer(connect_info).await;
             match res {
                 Ok(_) => {
                     info!("connected to peer: {connection_string}");
@@ -643,25 +644,28 @@ impl NodeManager {
         amount: Option<u64>,
         description: String,
     ) -> Result<MutinyInvoice, MutinyJsError> {
-        // go through each node to get the route hints
+        // TODO let use_phantom be configurable from frontend
+        let use_phantom = false;
         let nodes = self.nodes.lock().await;
         if nodes.len() == 0 {
             return Err(MutinyJsError::InvoiceCreationFailed);
         }
+        let route_hints: Vec<PhantomRouteHints> = if use_phantom {
+            nodes
+                .iter()
+                .map(|(_, n)| n.get_phantom_route_hint())
+                .collect()
+        } else {
+            vec![]
+        };
 
-        let route_hints: Vec<PhantomRouteHints> = nodes
-            .iter()
-            .map(|(_, n)| n.get_phantom_route_hint())
-            .collect();
-
-        // any of the nodes can process this, but just choose the first
+        // just create a normal invoice from the first node
         let first_node = if let Some(node) = nodes.values().next() {
             node
         } else {
             return Err(MutinyJsError::WalletOperationFailed);
         };
-
-        let invoice = first_node.create_phantom_invoice(amount, description, route_hints)?;
+        let invoice = first_node.create_invoice(amount, description, route_hints)?;
 
         Ok(invoice.into())
     }

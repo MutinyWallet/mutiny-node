@@ -3,18 +3,20 @@ use crate::invoice::create_phantom_invoice;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::localstorage::MutinyBrowserStorage;
 use crate::nodemanager::{MutinyInvoice, MutinyInvoiceParams};
+use crate::socket::{schedule_descriptor_read, MultiWsSocketDescriptor, WsSocketDescriptor};
 use crate::utils::{currency_from_network, sleep};
 use crate::wallet::MutinyWallet;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
 use bitcoin::Network;
-use futures::StreamExt;
-use gloo_net::websocket::Message;
+use instant::Duration;
 use lightning::chain::{chainmonitor, Filter, Watch};
 use lightning::ln::channelmanager::PhantomRouteHints;
 use lightning::ln::msgs::NetAddress;
 use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::util::logger::{Logger, Record};
+use lightning::util::ser::Writeable;
+use lightning_invoice::utils::create_invoice_from_channelmanager_and_duration_since_epoch;
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
@@ -23,7 +25,8 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::chain::MutinyChain;
 use crate::error::MutinyStorageError;
-use crate::tcpproxy::{SocketDescriptor, TcpProxy};
+use crate::proxy::Proxy;
+use crate::socket::WsTcpSocketDescriptor;
 use crate::{
     background::{BackgroundProcessor, GossipSync},
     error::MutinyError,
@@ -50,7 +53,7 @@ use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParam
 use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
 use lightning_invoice::utils::DefaultRouter;
 use lightning_invoice::{payment, Invoice};
-use log::{error, info, trace, warn};
+use log::{debug, error, info, trace};
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
@@ -61,7 +64,7 @@ pub(crate) type MessageHandler = LdkMessageHandler<
 >;
 
 pub(crate) type PeerManager = LdkPeerManager<
-    SocketDescriptor,
+    WsSocketDescriptor,
     Arc<PhantomChannelManager>,
     Arc<IgnoringMessageHandler>,
     Arc<IgnoringMessageHandler>,
@@ -87,12 +90,51 @@ type Router = DefaultRouter<
     Arc<Mutex<ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>>>,
 >;
 
-pub struct Node {
-    pub uuid: String,
+#[derive(Clone, Debug)]
+pub(crate) enum ConnectionType {
+    Tcp(SocketAddr),
+    Mutiny(String),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PubkeyConnectionInfo {
+    pub pubkey: PublicKey,
+    pub connection_type: ConnectionType,
+    pub original_connection_string: String,
+}
+
+impl PubkeyConnectionInfo {
+    pub fn new(connection: String) -> Result<Self, MutinyError> {
+        if connection.is_empty() {
+            return Err(MutinyError::PeerInfoParseFailed)
+                .context("connect_peer requires peer connection info")?;
+        };
+
+        if connection.starts_with("mutiny:") {
+            let stripped_connection = connection.strip_prefix("mutiny:").expect("should strip");
+            let (pubkey, peer_addr_str) =
+                split_peer_connection_string(stripped_connection.to_string())?;
+            Ok(Self {
+                pubkey,
+                connection_type: ConnectionType::Mutiny(peer_addr_str),
+                original_connection_string: connection.to_string(),
+            })
+        } else {
+            let (pubkey, peer_addr_str) = parse_peer_info(connection.clone())?;
+            Ok(Self {
+                pubkey,
+                connection_type: ConnectionType::Tcp(peer_addr_str),
+                original_connection_string: connection,
+            })
+        }
+    }
+}
+
+pub(crate) struct Node {
+    pub _uuid: String,
     pub pubkey: PublicKey,
     pub peer_manager: Arc<PeerManager>,
     pub keys_manager: Arc<PhantomKeysManager>,
-    pub chain: Arc<MutinyChain>,
     pub channel_manager: Arc<PhantomChannelManager>,
     pub chain_monitor: Arc<ChainMonitor>,
     pub invoice_payer: Arc<InvoicePayer<EventHandler>>,
@@ -101,10 +143,12 @@ pub struct Node {
     _background_processor: BackgroundProcessor,
     logger: Arc<MutinyLogger>,
     websocket_proxy_addr: String,
+    multi_socket: MultiWsSocketDescriptor,
     temp_peer_connection_map: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl Node {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
         node_index: NodeIndex,
         mnemonic: Mnemonic,
@@ -259,20 +303,53 @@ impl Node {
             Some(scorer),
         );
 
+        // create a connection immediately to the user's
+        // specified mutiny websocket proxy provider.
+        let self_connection = PubkeyConnectionInfo {
+            pubkey,
+            connection_type: ConnectionType::Mutiny(websocket_proxy_addr.to_string()),
+            original_connection_string: format!("mutiny:{}@{}", pubkey, websocket_proxy_addr),
+        };
+        let main_proxy =
+            Proxy::new(websocket_proxy_addr.to_string(), self_connection.clone()).await?;
+        let multi_socket = MultiWsSocketDescriptor::new(Arc::new(main_proxy), peer_man.clone());
+        multi_socket.listen();
+
+        // keep trying to reconnect to our multi socket proxy
+        let mut multi_socket_reconnect = multi_socket.clone();
+        let websocket_proxy_addr_copy = websocket_proxy_addr.clone();
+        let self_connection_copy = self_connection.clone();
+        spawn_local(async move {
+            loop {
+                if !multi_socket_reconnect.connected() {
+                    debug!("got disconnected from multi socket proxy, going to reconnect");
+                    match Proxy::new(
+                        websocket_proxy_addr_copy.to_string(),
+                        self_connection_copy.clone(),
+                    )
+                    .await
+                    {
+                        Ok(main_proxy) => {
+                            multi_socket_reconnect.reconnect(Arc::new(main_proxy));
+                        }
+                        Err(_) => {
+                            sleep(5 * 1000).await;
+                            continue;
+                        }
+                    };
+                }
+                sleep(5 * 1000).await;
+            }
+        });
+
         // try to connect to peers we already have a channel with
         let connect_peer_man = peer_man.clone();
         let connect_persister = persister.clone();
         let connect_proxy = websocket_proxy_addr.clone();
         let connect_logger = logger.clone();
+        let connect_multi_socket = multi_socket.clone();
         spawn_local(async move {
             loop {
-                connect_logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!("DEBUG: about to list peer connections"),
-                    "node",
-                    "",
-                    0,
-                ));
                 let peer_connections = connect_persister.list_peer_connection_info();
                 let current_connections = connect_peer_man.get_peer_node_ids();
 
@@ -289,14 +366,15 @@ impl Node {
                         "",
                         0,
                     ));
-                    let conn = conn_str.parse::<SocketAddr>();
-                    if conn.is_err() {
-                        continue;
-                    }
+                    let peer_connection_info = match PubkeyConnectionInfo::new(conn_str.to_string())
+                    {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
                     match connect_peer(
+                        connect_multi_socket.clone(),
                         connect_proxy.clone(),
-                        pubkey.to_owned(),
-                        conn.unwrap(),
+                        peer_connection_info,
                         connect_peer_man.clone(),
                     )
                     .await
@@ -326,11 +404,10 @@ impl Node {
         });
 
         Ok(Node {
-            uuid: node_index.uuid,
+            _uuid: node_index.uuid,
             pubkey,
             peer_manager: peer_man,
             keys_manager,
-            chain,
             channel_manager,
             chain_monitor,
             invoice_payer,
@@ -339,41 +416,32 @@ impl Node {
             _background_processor: background_processor,
             logger,
             websocket_proxy_addr,
+            multi_socket,
             temp_peer_connection_map: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
-    pub async fn connect_peer(&self, peer_pubkey_and_ip_addr: String) -> Result<(), MutinyError> {
-        if peer_pubkey_and_ip_addr.is_empty() {
-            return Err(MutinyError::PeerInfoParseFailed)
-                .context("connect_peer requires peer connection info")?;
-        };
-        let (pubkey, peer_addr) = match parse_peer_info(peer_pubkey_and_ip_addr) {
-            Ok(info) => info,
-            Err(e) => {
-                return Err(MutinyError::PeerInfoParseFailed)
-                    .with_context(|| format!("could not parse peer info: {}", e))?;
-            }
-        };
-
-        if connect_peer_if_necessary(
+    pub async fn connect_peer(
+        &self,
+        peer_connection_info: PubkeyConnectionInfo,
+    ) -> Result<(), MutinyError> {
+        match connect_peer_if_necessary(
+            self.multi_socket.clone(),
             self.websocket_proxy_addr.clone(),
-            pubkey,
-            peer_addr,
+            peer_connection_info.clone(),
             self.peer_manager.clone(),
         )
         .await
-        .is_err()
         {
-            Err(MutinyError::PeerInfoParseFailed)
-                .with_context(|| format!("could not connect to peer: {pubkey}"))?
-        } else {
-            // store this so we can save later if needed
-            self.temp_peer_connection_map
-                .lock()
-                .unwrap()
-                .insert(pubkey.to_string(), peer_addr.to_string());
-            Ok(())
+            Ok(_) => {
+                // store this so we can save later if needed
+                self.temp_peer_connection_map.lock().unwrap().insert(
+                    peer_connection_info.pubkey.to_string(),
+                    peer_connection_info.original_connection_string,
+                );
+                Ok(())
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -381,44 +449,89 @@ impl Node {
         self.channel_manager.get_phantom_route_hints()
     }
 
-    pub fn create_phantom_invoice(
+    pub fn create_invoice(
         &self,
         amount_sat: Option<u64>,
         description: String,
         route_hints: Vec<PhantomRouteHints>,
     ) -> Result<Invoice, MutinyError> {
         let amount_msat = amount_sat.map(|s| s * 1_000);
-        let invoice = match create_phantom_invoice::<InMemorySigner, Arc<PhantomKeysManager>>(
-            amount_msat,
-            None,
-            description,
-            1500,
-            route_hints,
-            self.keys_manager.clone(),
-            currency_from_network(self.network),
-        ) {
-            Ok(inv) => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Info,
-                    format_args!(
-                        "SUCCESS: generated invoice: {} with amount {:?}",
-                        inv, amount_msat
-                    ),
-                    "node",
-                    "",
-                    0,
-                ));
-                inv
+        let invoice = match route_hints.len() {
+            0 => {
+                let now = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+
+                match create_invoice_from_channelmanager_and_duration_since_epoch(
+                    &self.channel_manager.clone(),
+                    self.keys_manager.clone(),
+                    self.logger.clone(),
+                    currency_from_network(self.network),
+                    amount_msat,
+                    description,
+                    Duration::from_secs(now),
+                    1500,
+                ) {
+                    Ok(inv) => {
+                        self.logger.log(&Record::new(
+                            lightning::util::logger::Level::Info,
+                            format_args!(
+                                "SUCCESS: generated invoice: {} with amount {:?}",
+                                inv, amount_msat
+                            ),
+                            "node",
+                            "",
+                            0,
+                        ));
+                        inv
+                    }
+                    Err(e) => {
+                        self.logger.log(&Record::new(
+                            lightning::util::logger::Level::Error,
+                            format_args!("ERROR: could not generate invoice: {}", e),
+                            "node",
+                            "",
+                            0,
+                        ));
+                        return Err(MutinyError::InvoiceCreationFailed);
+                    }
+                }
             }
-            Err(e) => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Error,
-                    format_args!("ERROR: could not generate invoice: {}", e),
-                    "node",
-                    "",
-                    0,
-                ));
-                return Err(MutinyError::InvoiceCreationFailed);
+            _ => {
+                match create_phantom_invoice::<InMemorySigner, Arc<PhantomKeysManager>>(
+                    amount_msat,
+                    None,
+                    description,
+                    1500,
+                    route_hints,
+                    self.keys_manager.clone(),
+                    currency_from_network(self.network),
+                ) {
+                    Ok(inv) => {
+                        self.logger.log(&Record::new(
+                            lightning::util::logger::Level::Info,
+                            format_args!(
+                                "SUCCESS: generated invoice: {} with amount {:?}",
+                                inv, amount_msat
+                            ),
+                            "node",
+                            "",
+                            0,
+                        ));
+                        inv
+                    }
+                    Err(e) => {
+                        self.logger.log(&Record::new(
+                            lightning::util::logger::Level::Error,
+                            format_args!("ERROR: could not generate invoice: {}", e),
+                            "node",
+                            "",
+                            0,
+                        ));
+                        return Err(MutinyError::InvoiceCreationFailed);
+                    }
+                }
             }
         };
 
@@ -591,7 +704,12 @@ impl Node {
                 mutiny_invoice.is_send = true;
                 Ok(mutiny_invoice)
             }
-            Err(_) => {
+            Err(e) => {
+                error!("failed to make payment: {:?}", e);
+                // call list channels to see what our channels are
+                let current_channels = self.channel_manager.list_channels();
+                debug!("current channel details: {:?}", current_channels);
+
                 payment_info.status = HTLCStatus::Failed;
                 self.persister.persist_payment_info(
                     PaymentHash(invoice.payment_hash().into_inner()),
@@ -718,69 +836,65 @@ impl Node {
 }
 
 pub(crate) async fn connect_peer_if_necessary(
+    multi_socket: MultiWsSocketDescriptor,
     websocket_proxy_addr: String,
-    pubkey: PublicKey,
-    peer_addr: SocketAddr,
+    peer_connection_info: PubkeyConnectionInfo,
     peer_manager: Arc<PeerManager>,
 ) -> Result<(), MutinyError> {
-    if peer_manager.get_peer_node_ids().contains(&pubkey) {
+    if peer_manager
+        .get_peer_node_ids()
+        .contains(&peer_connection_info.pubkey)
+    {
         Ok(())
     } else {
-        connect_peer(websocket_proxy_addr, pubkey, peer_addr, peer_manager).await
+        connect_peer(
+            multi_socket,
+            websocket_proxy_addr,
+            peer_connection_info,
+            peer_manager,
+        )
+        .await
     }
 }
 pub(crate) async fn connect_peer(
+    multi_socket: MultiWsSocketDescriptor,
     websocket_proxy_addr: String,
-    pubkey: PublicKey,
-    peer_addr: SocketAddr,
+    peer_connection_info: PubkeyConnectionInfo,
     peer_manager: Arc<PeerManager>,
 ) -> Result<(), MutinyError> {
     // first make a connection to the node
-    let tcp_proxy = Arc::new(TcpProxy::new(websocket_proxy_addr, peer_addr).await);
-    let mut descriptor = SocketDescriptor::new(tcp_proxy);
+    debug!("making connection to peer: {:?}", peer_connection_info);
+    let (mut descriptor, socket_addr) = match peer_connection_info.connection_type {
+        ConnectionType::Tcp(t) => {
+            let proxy = Proxy::new(websocket_proxy_addr, peer_connection_info.clone()).await?;
+            (
+                WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
+                Some(get_net_addr_from_socket(t)),
+            )
+        }
+        ConnectionType::Mutiny(_) => (
+            WsSocketDescriptor::Mutiny(
+                multi_socket
+                    .create_new_subsocket(peer_connection_info.pubkey.encode())
+                    .await,
+            ),
+            None,
+        ),
+    };
 
     // then give that connection to the peer manager
     let initial_bytes = peer_manager.new_outbound_connection(
-        pubkey,
+        peer_connection_info.pubkey,
         descriptor.clone(),
-        Some(get_net_addr_from_socket(peer_addr)),
+        socket_addr,
     )?;
+    debug!("connected to peer: {:?}", peer_connection_info);
 
     let sent_bytes = descriptor.send_data(&initial_bytes, true);
-    trace!("sent {sent_bytes} to node: {pubkey}");
+    trace!("sent {sent_bytes} to node: {}", peer_connection_info.pubkey);
 
     // schedule a reader on the connection
-    let mut new_descriptor = descriptor.clone();
-    spawn_local(async move {
-        while let Some(msg) = descriptor.conn.read.lock().await.next().await {
-            if let Ok(msg_contents) = msg {
-                match msg_contents {
-                    Message::Text(t) => {
-                        warn!(
-                            "received text from websocket when we should only receive binary: {}",
-                            t
-                        )
-                    }
-                    Message::Bytes(b) => {
-                        trace!("received binary data from websocket");
-
-                        let read_res = peer_manager.read_event(&mut new_descriptor, &b);
-                        match read_res {
-                            // TODO handle read boolean event
-                            Ok(_read_bool) => {
-                                trace!("read event from the node");
-                                peer_manager.process_events();
-                            }
-                            Err(e) => error!("got an error reading event: {}", e),
-                        }
-                    }
-                };
-            }
-        }
-
-        // TODO when we detect an error, lock the writes and close connection.
-        info!("WebSocket Closed")
-    });
+    schedule_descriptor_read(descriptor, peer_manager.clone());
 
     Ok(())
 }
@@ -824,19 +938,10 @@ pub(crate) fn create_peer_manager(
 pub(crate) fn parse_peer_info(
     peer_pubkey_and_ip_addr: String,
 ) -> Result<(PublicKey, SocketAddr), MutinyError> {
-    let mut pubkey_and_addr = peer_pubkey_and_ip_addr.split('@');
-    let pubkey = pubkey_and_addr.next();
-    let peer_addr_str = match pubkey_and_addr.next() {
-        None => {
-            return Err(MutinyError::PeerInfoParseFailed).context(
-                "incorrectly formatted peer info. Should be formatted as: `pubkey@host:port`",
-            )?
-        }
-        Some(str) => str,
-    };
+    let (pubkey, peer_addr_str) = split_peer_connection_string(peer_pubkey_and_ip_addr)?;
 
     let peer_addr_str_with_port = if peer_addr_str.contains(':') {
-        peer_addr_str.to_string()
+        peer_addr_str
     } else {
         format!("{peer_addr_str}:9735")
     };
@@ -849,13 +954,35 @@ pub(crate) fn parse_peer_info(
             .context("couldn't parse pubkey@host:port into a socket address")?;
     }
 
-    let pubkey = PublicKey::from_str(pubkey.unwrap());
-    if pubkey.is_err() {
-        return Err(MutinyError::PeerInfoParseFailed)
-            .context("unable to parse given pubkey for node")?;
-    }
+    Ok((pubkey, peer_addr.unwrap().unwrap()))
+}
 
-    Ok((pubkey.unwrap(), peer_addr.unwrap().unwrap()))
+pub(crate) fn split_peer_connection_string(
+    peer_pubkey_and_ip_addr: String,
+) -> Result<(PublicKey, String), MutinyError> {
+    let mut pubkey_and_addr = peer_pubkey_and_ip_addr.split('@');
+    let pubkey = match pubkey_and_addr.next() {
+        None => {
+            error!("incorrectly formatted peer info. Should be formatted as: `pubkey@host:port` but pubkey could not be parsed");
+            return Err(MutinyError::PeerInfoParseFailed);
+        }
+        Some(str) => str,
+    };
+    let peer_addr_str = match pubkey_and_addr.next() {
+        None => {
+            error!("incorrectly formatted peer info. Should be formatted as: `pubkey@host:port` but host:port part could not be parsed");
+            return Err(MutinyError::PeerInfoParseFailed);
+        }
+        Some(str) => str,
+    };
+    let pubkey = match PublicKey::from_str(pubkey) {
+        Ok(p) => p,
+        Err(e) => {
+            error!("{}", format!("could not parse peer pubkey: {:?}", e));
+            return Err(MutinyError::PeerInfoParseFailed);
+        }
+    };
+    Ok((pubkey, peer_addr_str.to_string()))
 }
 
 pub(crate) fn default_user_config() -> UserConfig {

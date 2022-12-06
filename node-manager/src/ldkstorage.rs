@@ -167,6 +167,7 @@ impl MutinyNodePersister {
         Ok(res)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn read_channel_manager(
         &self,
         network: Network,
