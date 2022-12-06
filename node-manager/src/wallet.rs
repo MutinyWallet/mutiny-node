@@ -142,6 +142,50 @@ impl MutinyWallet {
         debug!("Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }
+
+    pub async fn create_sweep_psbt(
+        &self,
+        destination_address: Address,
+        fee_rate: Option<f32>,
+    ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
+        let wallet = self.wallet.lock().await;
+        let fee_rate = if let Some(rate) = fee_rate {
+            FeeRate::from_sat_per_vb(rate)
+        } else {
+            self.blockchain.estimate_fee(1).await?
+        };
+        let (mut psbt, details) = {
+            let mut builder = wallet.build_tx();
+            builder
+                .drain_wallet() // Spend all outputs in this wallet.
+                .drain_to(destination_address.script_pubkey())
+                .enable_rbf()
+                .fee_rate(fee_rate);
+            builder.finish()?
+        };
+        debug!("Transaction details: {:#?}", details);
+        debug!("Unsigned PSBT: {}", &psbt);
+        let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
+        debug!("{}", finalized);
+        Ok(psbt)
+    }
+
+    pub async fn sweep(
+        &self,
+        destination_address: Address,
+        fee_rate: Option<f32>,
+    ) -> Result<Txid, MutinyError> {
+        let psbt = self
+            .create_sweep_psbt(destination_address, fee_rate)
+            .await?;
+
+        let raw_transaction = psbt.extract_tx();
+        let txid = raw_transaction.txid();
+
+        maybe_await!(self.blockchain.broadcast(&raw_transaction))?;
+        debug!("Transaction broadcast! TXID: {txid}");
+        Ok(txid)
+    }
 }
 
 // mostly copied from sensei

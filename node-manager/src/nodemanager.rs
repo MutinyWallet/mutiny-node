@@ -436,6 +436,19 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
+    pub async fn sweep_wallet(
+        &self,
+        destination_address: String,
+        fee_rate: Option<f32>,
+    ) -> Result<String, MutinyJsError> {
+        let send_to = Address::from_str(&destination_address)?;
+        match self.wallet.sweep(send_to, fee_rate).await {
+            Ok(txid) => Ok(txid.to_owned().to_string()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    #[wasm_bindgen]
     pub async fn check_address(
         &self,
         address: String,
