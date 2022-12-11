@@ -38,9 +38,9 @@ const QrCodeDetectorComponent = ({
   const qrCodeRef = useRef<Html5Qrcode | null>(null)
   const [textFieldDestination, setDestination] = useState("")
   const { nodeManager } = useContext(NodeManagerContext);
-  let navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const sendAll = searchParams.get("all")
+  let navigate = useNavigate();
   
   async function navigateForInvoice(invoiceStr: string) {
     try {
@@ -153,21 +153,25 @@ const QrCodeDetectorComponent = ({
   }, [detecting, onCodeDetected, onValidCode])
 
   return (
-    <div className="qrContainer">
-      {errorMessage && <h1 className="text-2xl font-light">{errorMessage}</h1>}
-      <div>
-        <div className={cameraReady ? "border-2 border-green" : ""}>
-          <div id="qrCodeCamera" />
+    <>
+      <div className="qrContainer">
+        {errorMessage && <h1 className="text-2xl font-light">{errorMessage}</h1>}
+        <div>
+          <div className={cameraReady ? "border-2 border-green" : ""}>
+            <div id="qrCodeCamera" />
+          </div>
+          {!cameraReady &&
+            <h1 className="text-2xl font-light">Loading scanner...</h1>
+          }
         </div>
-        {!cameraReady &&
-          <h1 className="text-2xl font-light">Loading scanner...</h1>
-        }
+      </div>
+      <div className="inputContainer">
         <input onChange={e => setDestination(e.target.value)} value={textFieldDestination} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice, pubkey, or address' />
         <ActionButton onClick={() => handleContinue(undefined)}>
           Continue
         </ActionButton>
       </div>
-    </div>
+    </>
   )
 }
 
