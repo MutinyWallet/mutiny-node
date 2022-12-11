@@ -27,7 +27,7 @@ function Send() {
   const { nodeManager } = useContext(NodeManagerContext);
   let navigate = useNavigate();
 
-  const [textFieldDestination, setDestination] = useState("")
+  const [textFieldDestination] = useState("")
 
   const [searchParams] = useSearchParams();
   const sendAll = searchParams.get("all")
