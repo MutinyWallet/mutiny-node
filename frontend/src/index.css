@@ -120,6 +120,14 @@ dd {
 }
 
 .qrContainer {
-  width: 800px;
-  margin: auto; 
+  width: 70%;
+  margin: 1rem auto 0 auto;
+}
+
+.inputContainer {
+  width: 70%;
+  margin: 0 auto auto auto;
+}
+.inputContainer > input {
+  margin: 0 auto 1rem auto
 }
