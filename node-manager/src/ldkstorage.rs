@@ -271,9 +271,6 @@ impl MutinyNodePersister {
         map.into_iter().collect()
     }
 
-    // FIXME: Useful to keep around until we use it
-    // Will need to use it soon for #118
-    #[allow(dead_code)]
     pub(crate) fn read_peer_connection_info(&self, peer_pubkey: String) -> Option<String> {
         let key = self.get_key(peer_key(peer_pubkey).as_str());
         let deserialized_value: Result<String, MutinyError> =
