@@ -3,7 +3,6 @@ import { useNavigate } from "react-router";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
 import ScreenMain from "../components/ScreenMain";
-import { inputStyle } from "../styles";
 import toast from "react-hot-toast"
 import MutinyToaster from "../components/MutinyToaster";
 import { detectPaymentType, objectToSearchParams, PaymentType, toastAnything } from "@util/dumb";
@@ -12,7 +11,6 @@ import bip21 from "bip21"
 import { NodeManager } from "node-manager";
 import { QrCodeScanner } from "@components/QrCodeScanner";
 import { SendConfirmParams } from "./SendConfirm";
-import ActionButton from "@components/ActionButton";
 import { useSearchParams } from "react-router-dom";
 
 type UnifiedQrOptions =
@@ -129,10 +127,6 @@ function Send() {
       </header>
       <ScreenMain>
         <QrCodeScanner onValidCode={onValidCode} onCodeDetected={onCodeDetected} />
-        <input onChange={e => setDestination(e.target.value)} value={textFieldDestination} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice, pubkey, or address' />
-        <ActionButton onClick={() => handleContinue(undefined)}>
-          Continue
-        </ActionButton>
       </ScreenMain>
       <MutinyToaster />
     </>
