@@ -10,7 +10,7 @@ use lightning::chain::chaininterface::{
     BroadcasterInterface, ConfirmationTarget, FeeEstimator, FEERATE_FLOOR_SATS_PER_KW,
 };
 use lightning::chain::{Confirm, Filter, WatchedOutput};
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use wasm_bindgen_futures::spawn_local;
@@ -46,18 +46,21 @@ impl MutinyChain {
         }
     }
 
-    /// Syncs the LDK wallet via the `Confirm` interface. We run in a loop until we completed a
-    /// full iteration without
+    /// Synchronizes the given confirmables via the [`Confirm`] interface. This method should be
+    /// called regularly to keep LDK up-to-date with current chain data.
+    ///
+    /// [`Confirm`]: Confirm
     pub(crate) async fn sync(
         &self,
         confirmables: Vec<&(dyn Confirm + Sync)>,
     ) -> Result<(), MutinyError> {
+        info!("Starting transaction sync.");
         // This lock makes sure we're syncing once at a time.
         let mut locked_last_sync_hash = self.last_sync_hash.lock().await;
 
         let client = &*self.wallet.blockchain;
 
-        let tip_hash = client.get_tip_hash().await?;
+        let mut tip_hash = client.get_tip_hash().await?;
 
         loop {
             let registrations_are_pending = self.process_queues();
@@ -78,6 +81,9 @@ impl MutinyChain {
                         Ok(()) => {}
                         Err(MutinyError::ChainAccessFailed) => {
                             // Immediately restart syncing when we encounter any inconsistencies.
+                            debug!(
+                                "Encountered inconsistency during transaction sync, restarting."
+                            );
                             continue;
                         }
                         Err(err) => {
@@ -90,8 +96,9 @@ impl MutinyChain {
                 match self.get_confirmed_transactions().await {
                     Ok((confirmed_txs, unconfirmed_registered_txs, unspent_registered_outputs)) => {
                         // Double-check tip hash. If something changed, restart last-minute.
-                        let new_tip_hash = client.get_tip_hash().await?;
-                        if tip_hash != new_tip_hash {
+                        let check_tip_hash = self.wallet.blockchain.get_tip_hash().await?;
+                        if check_tip_hash != tip_hash {
+                            tip_hash = check_tip_hash;
                             continue;
                         }
 
@@ -104,16 +111,19 @@ impl MutinyChain {
                     }
                     Err(MutinyError::ChainAccessFailed) => {
                         // Immediately restart syncing when we encounter any inconsistencies.
+                        debug!("Encountered inconsistency during transaction sync, restarting.");
                         continue;
                     }
                     Err(err) => {
                         // (Semi-)permanent failure, retry later.
+                        error!("Failed during transaction sync, aborting.");
                         return Err(err);
                     }
                 }
                 *locked_last_sync_hash = Some(tip_hash);
             }
         }
+        info!("Finished transaction sync.");
         Ok(())
     }
 
@@ -173,10 +183,6 @@ impl MutinyChain {
         unconfirmed_registered_txs: HashSet<Txid>,
         unspent_registered_outputs: HashSet<WatchedOutput>,
     ) {
-        for c in &confirmed_txs {
-            debug!("confirming tx! {}", c.tx.txid())
-        }
-
         for ctx in confirmed_txs {
             for c in confirmables {
                 c.transactions_confirmed(
@@ -194,8 +200,6 @@ impl MutinyChain {
     async fn get_confirmed_transactions(
         &self,
     ) -> Result<(Vec<ConfirmedTx>, HashSet<Txid>, HashSet<WatchedOutput>), MutinyError> {
-        let client = &*self.wallet.blockchain;
-
         // First, check the confirmation status of registered transactions as well as the
         // status of dependent transactions of registered outputs.
 
@@ -208,14 +212,10 @@ impl MutinyChain {
         // Remember all registered but unconfirmed transactions for future processing.
         let mut unconfirmed_registered_txs = HashSet::new();
 
-        info!("registered tx size: {}", registered_txs.len());
         for txid in registered_txs {
-            info!("registered tx: {}", txid);
             if let Some(confirmed_tx) = self.get_confirmed_tx(&txid, None, None).await? {
-                info!("confirmed tx: {}", txid);
                 confirmed_txs.push(confirmed_tx);
             } else {
-                warn!("unconfirmed tx: {}", txid);
                 unconfirmed_registered_txs.insert(txid);
             }
         }
@@ -227,7 +227,9 @@ impl MutinyChain {
         let mut unspent_registered_outputs = HashSet::new();
 
         for output in registered_outputs {
-            if let Some(output_status) = client
+            if let Some(output_status) = self
+                .wallet
+                .blockchain
                 .get_output_status(&output.outpoint.txid, output.outpoint.index as u64)
                 .await?
             {
@@ -314,9 +316,9 @@ impl MutinyChain {
         confirmables: &Vec<&(dyn Confirm + Sync)>,
     ) -> Result<(), MutinyError> {
         let client = &*self.wallet.blockchain;
-        // Query the interface for relevant txids and check whether they are still
-        // in the best chain, mark them unconfirmed otherwise.
-
+        // Query the interface for relevant txids and check whether the relevant blocks are still
+        // in the best chain, mark them unconfirmed otherwise. If the transactions have been
+        // reconfirmed in another block, we'll confirm them in the next sync iteration.
         let relevant_txids = confirmables
             .iter()
             .flat_map(|c| c.get_relevant_txids())
@@ -343,7 +345,10 @@ impl MutinyChain {
             }
         }
 
-        *self.watched_transactions.lock().unwrap() = to_watch;
+        let mut locked_watched_transactions = self.watched_transactions.lock().unwrap();
+        for txid in to_watch {
+            locked_watched_transactions.insert(txid);
+        }
 
         Ok(())
     }
