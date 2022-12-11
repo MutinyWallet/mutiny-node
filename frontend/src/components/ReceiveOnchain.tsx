@@ -45,7 +45,6 @@ export default function ReceiveOnchain({ onchainAddress }: { onchainAddress: str
                             <Copy copyValue={onchainAddress} />
                         </div>
                     </div>
-                    <p className="text-2xl font-light transition-all">{isCheckingAddress ? "Checking" : "Checking..."}</p>
                 </>
             }
         </>
