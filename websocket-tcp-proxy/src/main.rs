@@ -11,7 +11,7 @@ use bitcoin_hashes::hex::FromHex;
 use bytes::Bytes;
 use futures::executor::block_on;
 use futures::lock::Mutex;
-use serde::{de, Deserialize, Deserializer};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
@@ -189,6 +189,12 @@ async fn mutiny_ws_handler(
 #[derive(Debug)]
 enum MutinyWSCommand {
     Send { id: Bytes, val: Bytes },
+    Disconnect { id: Bytes },
+}
+
+#[derive(Serialize, Deserialize)]
+enum MutinyProxyCommand {
+    Disconnect { to: Vec<u8>, from: Vec<u8> },
 }
 
 /// handle_mutiny_ws will handle mutiny to mutiny (ws to ws) logic.
@@ -297,6 +303,23 @@ async fn handle_mutiny_ws(
                                     Ok(_) => (),
                                     Err(e) => {
                                         // if we can't send down websocket, kill the connection
+                                        // TODO kill the connection to all the peers connected to
+                                        // this one
+                                        tracing::error!("could not send message to ws owner: {}", e);
+                                        state.lock().await.remove(&owner_id_bytes);
+                                        return;
+                                    },
+                                }
+                            }
+                            MutinyWSCommand::Disconnect{id} => {
+                                tracing::debug!("received an channel msg from {:?} to disconnect from {identifier}", id);
+                                let command = serde_json::to_string(&MutinyProxyCommand::Disconnect{to: id.to_vec(), from: owner_id_bytes.to_vec()}).unwrap();
+                                match socket.send(Message::Text(command)).await {
+                                    Ok(_) => (),
+                                    Err(e) => {
+                                        // if we can't send down websocket, kill the connection
+                                        // TODO kill the connection to all the peers connected to
+                                        // this one
                                         tracing::error!("could not send message to ws owner: {}", e);
                                         state.lock().await.remove(&owner_id_bytes);
                                         return;
