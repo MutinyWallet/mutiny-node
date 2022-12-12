@@ -126,21 +126,11 @@ dd {
 .fileInputButton {
   font-family: inherit;
   border-radius: 6px;
-  font-size: 1.25rem;
-  line-height: 1.75rem;
-  font-weight: 300;
-  --tw-text-opacity: 1;
-  color: rgb(0 0 0 / var(--tw-text-opacity));
-  padding-top: 0.5rem;
-  padding-bottom: 0.5rem;
-  padding-left: 1rem;
-  padding-right: 1rem;
-  background-image: linear-gradient(192.14deg, #FFFFFF -0.54%, #D9D9D9 101.77%);
-  --tw-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1), inset 4px 4px 4px rgba(255, 255, 255, 0.25), inset -4px -4px 6px rgba(0, 0, 0, 0.3);
-  --tw-shadow-colored: 2px 2px 4px var(--tw-shadow-color), inset 4px 4px 4px var(--tw-shadow-color), inset -4px -4px 6px var(--tw-shadow-color);
-  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
-  text-transform: uppercase;
-  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.15);
+  @apply text-black font-light text-xl;
+  @apply py-2 px-4;
+  @apply bg-gray-button;
+  @apply shadow-button active:shadow-button-inverted;
+  @apply uppercase;
 }
 
 .fileInputButton:hover {
