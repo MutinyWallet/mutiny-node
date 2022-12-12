@@ -166,7 +166,9 @@ function Settings() {
 
                     <button onClick={handleSave}>Save State As File</button>
 
-                    <input type="file" onChange={handleFileChoose} />
+                    <label className="fileInputButton">Upload Saved State
+                        <input className="fileInput" type="file" onChange={handleFileChoose} />
+                    </label>
                 </div>
                 <MutinyToaster />
             </ScreenMain>
