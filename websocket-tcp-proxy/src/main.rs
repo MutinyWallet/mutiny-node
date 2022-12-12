@@ -114,7 +114,7 @@ async fn handle_socket(mut socket: WebSocket, ip: String, port: String) {
 
     let mut server_stream = server_stream.unwrap();
 
-    let mut buf = [0u8; 16384]; // the max ssl record should be 16384 by default
+    let mut buf = [0u8; 65536]; // the max lightning message size is 65536
 
     loop {
         tokio::select! {
