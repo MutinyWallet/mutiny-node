@@ -662,6 +662,7 @@ impl NodeManager {
                 Err(_) => Err(MutinyJsError::PubkeyInvalid),
             }?;
 
+            // TODO this should happen in the node itself, not the manager
             node.peer_manager.disconnect_by_node_id(node_id, false);
             info!("disconnected from peer: {peer}");
             Ok(())

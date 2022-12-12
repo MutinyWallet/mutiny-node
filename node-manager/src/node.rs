@@ -336,7 +336,7 @@ impl Node {
                     .await
                     {
                         Ok(main_proxy) => {
-                            multi_socket_reconnect.reconnect(Arc::new(main_proxy));
+                            multi_socket_reconnect.reconnect(Arc::new(main_proxy)).await;
                         }
                         Err(_) => {
                             sleep(5 * 1000).await;
@@ -356,6 +356,13 @@ impl Node {
         let connect_multi_socket = multi_socket.clone();
         spawn_local(async move {
             loop {
+                // if we aren't connected to master socket
+                // then don't try to connect peer
+                if !connect_multi_socket.connected() {
+                    sleep(5 * 1000).await;
+                    continue;
+                }
+
                 let peer_connections = connect_persister.list_peer_connection_info();
                 let current_connections = connect_peer_man.get_peer_node_ids();
 
@@ -925,7 +932,7 @@ pub(crate) async fn connect_peer(
     debug!("connected to peer: {:?}", peer_connection_info);
 
     let sent_bytes = descriptor.send_data(&initial_bytes, true);
-    trace!("sent {sent_bytes} to node: {}", peer_connection_info.pubkey);
+    debug!("sent {sent_bytes} to node: {}", peer_connection_info.pubkey);
 
     // schedule a reader on the connection
     schedule_descriptor_read(descriptor, peer_manager.clone());

@@ -4,8 +4,9 @@ use crate::utils;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use futures::lock::Mutex;
 use futures::{SinkExt, StreamExt};
+use gloo_net::websocket::events::CloseEvent;
 use gloo_net::websocket::Message;
-use lightning::ln::peer_handler;
+use lightning::ln::peer_handler::{self, SocketDescriptor};
 use log::{debug, error, info, trace, warn};
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -112,7 +113,7 @@ pub(crate) struct MultiWsSocketDescriptor {
     conn: Arc<Proxy>,
     read_from_sub_socket: Receiver<Message>,
     send_to_multi_socket: Sender<Message>,
-    socket_map: Arc<Mutex<HashMap<Vec<u8>, Sender<Message>>>>,
+    socket_map: Arc<Mutex<HashMap<Vec<u8>, (SubWsSocketDescriptor, Sender<Message>)>>>,
     peer_manager: Arc<PeerManager>,
     connected: Arc<AtomicBool>,
 }
@@ -123,7 +124,7 @@ impl MultiWsSocketDescriptor {
         let (send_to_multi_socket, read_from_sub_socket): (Sender<Message>, Receiver<Message>) =
             unbounded();
 
-        let socket_map: Arc<Mutex<HashMap<Vec<u8>, Sender<Message>>>> =
+        let socket_map: Arc<Mutex<HashMap<Vec<u8>, (SubWsSocketDescriptor, Sender<Message>)>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
         Self {
@@ -140,17 +141,19 @@ impl MultiWsSocketDescriptor {
         self.connected.load(Ordering::Relaxed)
     }
 
-    pub fn reconnect(&mut self, conn: Arc<Proxy>) {
-        let (send_to_multi_socket, read_from_sub_socket): (Sender<Message>, Receiver<Message>) =
-            unbounded();
+    pub async fn reconnect(&mut self, conn: Arc<Proxy>) {
+        debug!("setting up multi websocket descriptor");
+        // if reconnecting master socket, disconnect and clear all subsockets
+        for (_id, (subsocket, _sender)) in self.socket_map.lock().await.iter_mut() {
+            // tell the subsocket to stop processing
+            // and ldk to disconnect that peer
+            subsocket.disconnect_socket();
+            self.peer_manager
+                .socket_disconnected(&WsSocketDescriptor::Mutiny(subsocket.clone()));
+        }
 
-        let socket_map: Arc<Mutex<HashMap<Vec<u8>, Sender<Message>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-
+        self.socket_map.lock().await.clear();
         self.conn = conn;
-        self.send_to_multi_socket = send_to_multi_socket;
-        self.read_from_sub_socket = read_from_sub_socket;
-        self.socket_map = socket_map;
         self.connected.store(true, Ordering::Relaxed);
 
         self.listen();
@@ -182,12 +185,12 @@ impl MultiWsSocketDescriptor {
                     }
                     let (id_bytes, message_bytes) = msg.split_at(PUBKEY_BYTES_LEN);
 
-                    // now send that data to the right subsocket
+                    // now send that data to the right subsocket;
                     let socket_lock = socket_map_copy.lock().await;
                     let found_subsocket = socket_lock.get(id_bytes);
                     match found_subsocket {
-                        Some(s) => {
-                            match s.send(Message::Bytes(message_bytes.to_vec())) {
+                        Some((_subsocket, sender)) => {
+                            match sender.send(Message::Bytes(message_bytes.to_vec())) {
                                 Ok(_) => (),
                                 Err(e) => error!("error sending msg to channel: {}", e),
                             };
@@ -222,8 +225,10 @@ impl MultiWsSocketDescriptor {
                                     // now that we have the inbound connection, send the original
                                     // message to our new subsocket descriptor
                                     match socket_map_copy.lock().await.get(id_bytes) {
-                                        Some(s) => {
-                                            match s.send(Message::Bytes(message_bytes.to_vec())) {
+                                        Some((_subsocket, sender)) => {
+                                            match sender
+                                                .send(Message::Bytes(message_bytes.to_vec()))
+                                            {
                                                 Ok(_) => {
                                                     debug!("sent incoming message to new subsocket channel: {:?}", id_bytes)
                                                 }
@@ -266,7 +271,10 @@ impl MultiWsSocketDescriptor {
                 if let Ok(msg) = read_channel_copy.try_recv() {
                     match msg {
                         Message::Text(_) => (),
-                        Message::Bytes(b) => conn_copy_send.send(b),
+                        Message::Bytes(b) => {
+                            debug!("multi socket channel reader sending bytes to proxy");
+                            conn_copy_send.send(b)
+                        }
                     }
                 }
                 if !connected_copy_send.load(Ordering::Relaxed) {
@@ -274,6 +282,7 @@ impl MultiWsSocketDescriptor {
                 }
                 utils::sleep(50).await;
             }
+            debug!("leaving multi socket channel reader");
         });
     }
 }
@@ -282,53 +291,64 @@ pub(crate) fn schedule_descriptor_read(
     descriptor: WsSocketDescriptor,
     peer_manager: Arc<PeerManager>,
 ) {
+    debug!("scheduling descriptor reader");
     let mut descriptor = descriptor;
     spawn_local(async move {
         while let Some(msg) = descriptor.read().await {
-            if let Ok(msg_contents) = msg {
-                match msg_contents {
-                    Message::Text(t) => {
-                        warn!(
+            match msg {
+                Ok(msg_contents) => {
+                    match msg_contents {
+                        Message::Text(t) => {
+                            warn!(
                             "received text from websocket when we should only receive binary: {}",
                             t
                         )
-                    }
-                    Message::Bytes(b) => {
-                        trace!("received binary data from websocket");
-
-                        let read_res = peer_manager.read_event(&mut descriptor, &b);
-                        match read_res {
-                            // TODO handle read boolean event
-                            Ok(_read_bool) => {
-                                trace!("read event from the node");
-                                peer_manager.process_events();
-                            }
-                            Err(e) => error!("got an error reading event: {}", e),
                         }
-                    }
-                };
+                        Message::Bytes(b) => {
+                            trace!("received binary data from websocket");
+
+                            let read_res = peer_manager.read_event(&mut descriptor, &b);
+                            match read_res {
+                                // TODO handle read boolean event
+                                Ok(_read_bool) => {
+                                    trace!("read event from the node");
+                                    peer_manager.process_events();
+                                }
+                                Err(e) => error!("got an error reading event: {}", e),
+                            }
+                        }
+                    };
+                }
+                Err(e) => {
+                    error!("got an error reading msg: {}", e);
+                    break;
+                }
             }
         }
 
         // TODO when we detect an error, lock the writes and close connection.
+        // TODO this, or something, should trigger LDK disconnection
         info!("WebSocket Closed")
     });
 }
 
 async fn create_new_subsocket(
-    socket_map: Arc<Mutex<HashMap<Vec<u8>, Sender<Message>>>>,
+    socket_map: Arc<Mutex<HashMap<Vec<u8>, (SubWsSocketDescriptor, Sender<Message>)>>>,
     send_to_multi_socket: Sender<Message>,
     id: Vec<u8>,
 ) -> SubWsSocketDescriptor {
     let (send_to_sub_socket, read_from_multi_socket): (Sender<Message>, Receiver<Message>) =
         unbounded();
 
+    let new_subsocket =
+        SubWsSocketDescriptor::new(send_to_multi_socket, read_from_multi_socket, id.clone());
+
     socket_map
         .lock()
         .await
-        .insert(id.clone(), send_to_sub_socket);
+        .insert(id, (new_subsocket.clone(), send_to_sub_socket));
 
-    SubWsSocketDescriptor::new(send_to_multi_socket.clone(), read_from_multi_socket, id)
+    new_subsocket
 }
 
 pub(crate) struct SubWsSocketDescriptor {
@@ -336,6 +356,7 @@ pub(crate) struct SubWsSocketDescriptor {
     read_channel: Receiver<Message>,
     pubkey_bytes: Vec<u8>,
     id: u64,
+    stop: Arc<AtomicBool>,
 }
 impl SubWsSocketDescriptor {
     pub fn new(
@@ -349,19 +370,27 @@ impl SubWsSocketDescriptor {
             send_channel,
             pubkey_bytes,
             id,
+            stop: Arc::new(AtomicBool::new(false)),
         }
     }
 }
 
 impl ReadDescriptor for SubWsSocketDescriptor {
     async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>> {
+        // TODO delete this debug, will be noisy
         debug!("starting subsocket channel reader");
         loop {
-            if let Ok(msg) = self
-                .read_channel
-                .try_recv()
-                .map_err(|_| gloo_net::websocket::WebSocketError::ConnectionError)
-            {
+            if self.stop.load(Ordering::Relaxed) {
+                debug!("stopping subsocket channel reader");
+                return Some(Err(gloo_net::websocket::WebSocketError::ConnectionClose(
+                    CloseEvent {
+                        code: 0,
+                        reason: "subsocket told to stop".to_string(),
+                        was_clean: true,
+                    },
+                )));
+            }
+            if let Ok(msg) = self.read_channel.try_recv() {
                 return Some(Ok(msg));
             }
             utils::sleep(50).await;
@@ -371,6 +400,11 @@ impl ReadDescriptor for SubWsSocketDescriptor {
 
 impl peer_handler::SocketDescriptor for SubWsSocketDescriptor {
     fn send_data(&mut self, data: &[u8], _resume_read: bool) -> usize {
+        if self.stop.load(Ordering::Relaxed) {
+            debug!("ignoring request to send down stopped subsocket");
+            return 0;
+        }
+
         let mut addr_prefix = self.pubkey_bytes.to_vec();
         let mut vec = Vec::from(data);
         addr_prefix.append(&mut vec);
@@ -383,7 +417,8 @@ impl peer_handler::SocketDescriptor for SubWsSocketDescriptor {
     }
 
     fn disconnect_socket(&mut self) {
-        debug!("I was supposed to disconnect but I don't really know how")
+        debug!("disconnecting socket from LDK");
+        self.stop.store(true, Ordering::Relaxed)
     }
 }
 
@@ -397,6 +432,7 @@ impl Clone for SubWsSocketDescriptor {
             send_channel: self.send_channel.clone(),
             pubkey_bytes: self.pubkey_bytes.clone(),
             id: self.id,
+            stop: self.stop.clone(),
         }
     }
 }
