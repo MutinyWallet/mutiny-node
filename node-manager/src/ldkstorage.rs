@@ -57,6 +57,12 @@ pub struct MutinyNodePersister {
     storage: MutinyBrowserStorage,
 }
 
+pub(crate) struct ReadChannelManager {
+    pub channel_manager: PhantomChannelManager,
+    pub is_restarting: bool,
+    pub channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
+}
+
 impl MutinyNodePersister {
     pub fn new(node_id: String, storage: MutinyBrowserStorage) -> Self {
         MutinyNodePersister { node_id, storage }
@@ -168,7 +174,7 @@ impl MutinyNodePersister {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn read_channel_manager(
+    pub(crate) async fn read_channel_manager(
         &self,
         network: Network,
         chain_monitor: Arc<ChainMonitor>,
@@ -177,7 +183,7 @@ impl MutinyNodePersister {
         keys_manager: Arc<PhantomKeysManager>,
         mut channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
         user_esplora_url: Option<String>,
-    ) -> Result<(PhantomChannelManager, bool), MutinyError> {
+    ) -> Result<ReadChannelManager, MutinyError> {
         match self.read_value(CHANNEL_MANAGER_KEY) {
             Ok(kv_value) => {
                 let mut channel_monitor_mut_references = Vec::new();
@@ -197,7 +203,11 @@ impl MutinyNodePersister {
                 let Ok((_, channel_manager)) = <(BlockHash, PhantomChannelManager)>::read(&mut readable_kv_value, read_args) else {
                     return Err(MutinyError::ReadError { source: error::MutinyStorageError::Other(anyhow!("could not read manager")) })
                 };
-                Ok((channel_manager, true))
+                Ok(ReadChannelManager {
+                    channel_manager,
+                    is_restarting: true,
+                    channel_monitors,
+                })
             }
             Err(_) => {
                 // no key manager stored, start a new one
@@ -225,7 +235,11 @@ impl MutinyNodePersister {
                     chain_params,
                 );
 
-                Ok((fresh_channel_manager, false))
+                Ok(ReadChannelManager {
+                    channel_manager: fresh_channel_manager,
+                    is_restarting: false,
+                    channel_monitors,
+                })
             }
         }
     }
