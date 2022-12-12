@@ -118,21 +118,3 @@ dd {
 *::-webkit-scrollbar {
   display: none;
 }
-
-.fileInput {
-  display: none;
-}
-
-.fileInputButton {
-  font-family: inherit;
-  border-radius: 6px;
-  @apply text-black font-light text-xl;
-  @apply py-2 px-4;
-  @apply bg-gray-button;
-  @apply shadow-button active:shadow-button-inverted;
-  @apply uppercase;
-}
-
-.fileInputButton:hover {
-  cursor: pointer;
-}
