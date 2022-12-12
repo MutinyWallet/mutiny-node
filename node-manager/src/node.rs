@@ -690,10 +690,11 @@ impl Node {
             if amt_sats.is_none() {
                 return Err(MutinyError::InvoiceInvalid);
             }
+            let amt_msats = amt_sats.unwrap() * 1_000;
             (
                 self.invoice_payer
-                    .pay_zero_value_invoice(&invoice, amt_sats.unwrap()),
-                amt_sats.unwrap() * 1_000,
+                    .pay_zero_value_invoice(&invoice, amt_msats),
+                amt_msats,
             )
         } else {
             if amt_sats.is_some() {
