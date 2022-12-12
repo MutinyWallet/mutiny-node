@@ -599,6 +599,7 @@ impl Node {
     }
 
     fn list_payment_info_from_persisters(&self, inbound: bool) -> Vec<MutinyInvoice> {
+        let now = crate::utils::now();
         self.persister
             .list_payment_info(inbound)
             .into_iter()
@@ -608,20 +609,26 @@ impl Node {
                     let invoice_res = Invoice::from_str(&bolt11).map_err(Into::<MutinyError>::into);
                     match invoice_res {
                         Ok(invoice) => {
-                            let mut mutiny_invoice: MutinyInvoice = invoice.clone().into();
-                            mutiny_invoice.is_send = !inbound;
-                            mutiny_invoice.paid = matches!(i.status, HTLCStatus::Succeeded);
-                            mutiny_invoice.amount_sats =
-                                if let Some(inv_amt) = invoice.amount_milli_satoshis() {
-                                    if inv_amt == 0 {
-                                        i.amt_msat.0.map(|a| a / 1_000)
+                            if invoice.would_expire(now)
+                                && !matches!(i.status, HTLCStatus::Succeeded | HTLCStatus::InFlight)
+                            {
+                                None
+                            } else {
+                                let mut mutiny_invoice: MutinyInvoice = invoice.clone().into();
+                                mutiny_invoice.is_send = !inbound;
+                                mutiny_invoice.paid = matches!(i.status, HTLCStatus::Succeeded);
+                                mutiny_invoice.amount_sats =
+                                    if let Some(inv_amt) = invoice.amount_milli_satoshis() {
+                                        if inv_amt == 0 {
+                                            i.amt_msat.0.map(|a| a / 1_000)
+                                        } else {
+                                            Some(inv_amt / 1_000)
+                                        }
                                     } else {
-                                        Some(inv_amt / 1_000)
-                                    }
-                                } else {
-                                    i.amt_msat.0.map(|a| a / 1_000)
-                                };
-                            Some(mutiny_invoice)
+                                        i.amt_msat.0.map(|a| a / 1_000)
+                                    };
+                                Some(mutiny_invoice)
+                            }
                         }
                         Err(_) => None,
                     }
@@ -704,7 +711,7 @@ impl Node {
         let mut payment_info = PaymentInfo {
             preimage: None,
             secret: None,
-            status: HTLCStatus::Pending,
+            status: HTLCStatus::InFlight,
             amt_msat: MillisatAmount(Some(amt_msat)),
             fee_paid_msat: None,
             bolt11: Some(invoice.to_string()),
@@ -758,7 +765,7 @@ impl Node {
         let mut payment_info = PaymentInfo {
             preimage: Some(preimage.0),
             secret: None,
-            status: HTLCStatus::Pending,
+            status: HTLCStatus::InFlight,
             amt_msat: MillisatAmount(Some(amt_msats)),
             fee_paid_msat: None,
             bolt11: None,

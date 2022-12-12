@@ -33,6 +33,7 @@ pub(crate) struct MillisatAmount(pub Option<u64>);
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) enum HTLCStatus {
     Pending,
+    InFlight,
     Succeeded,
     Failed,
 }
