@@ -349,7 +349,7 @@ impl KVStorePersister for MutinyNodePersister {
     fn persist<W: Writeable>(&self, key: &str, object: &W) -> io::Result<()> {
         let key_with_node = self.get_key(key);
         self.storage
-            .set(key_with_node, object.encode())
+            .set(key_with_node, object.encode().to_hex())
             .map_err(io::Error::other)
     }
 }
