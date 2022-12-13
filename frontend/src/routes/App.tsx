@@ -48,7 +48,7 @@ function App() {
             <div />
             <MainBalance />
             {nodeManager.get_network() === "bitcoin" &&
-              <p className='text-2xl font-light text-red'>This is alpha software, please don't trust it with money you don't want to lose!</p>
+              <p className='text-2xl font-light text-red'>This is alpha software, your money is not safe here!</p>
             }
             <div />
             <div className='flex flex-col gap-2 items-start'>
