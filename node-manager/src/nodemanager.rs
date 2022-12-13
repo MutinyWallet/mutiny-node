@@ -825,11 +825,25 @@ impl NodeManager {
     #[wasm_bindgen]
     pub async fn list_peers(&self) -> Result<JsValue /* Vec<String> */, MutinyJsError> {
         let nodes = self.nodes.lock().await;
-        let peers: Vec<String> = nodes
+
+        // get peers we are connected to
+        let mut peers: Vec<String> = nodes
             .iter()
             .flat_map(|(_, n)| n.peer_manager.get_peer_node_ids())
             .map(|p| p.to_hex())
             .collect();
+
+        // get peers saved in storage
+        let mut storage_peers: Vec<String> = nodes
+            .iter()
+            .flat_map(|(_, n)| n.persister.list_peer_connection_info())
+            .map(|p| p.0.to_hex())
+            .collect();
+
+        // combine and remove duplicates
+        peers.append(&mut storage_peers);
+        peers.sort(); // need to sort because dedup only removes consecutive duplicates
+        peers.dedup();
 
         Ok(serde_wasm_bindgen::to_value(&peers)?)
     }
