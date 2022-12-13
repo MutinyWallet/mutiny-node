@@ -20,9 +20,11 @@ function SinglePeer({ peer }: { peer: MutinyPeer }) {
 
         console.log(myNodes);
 
-        const myNode = myNodes[0]
-        await nodeManager?.disconnect_peer(myNode, peer.pubkey);
-        queryClient.invalidateQueries({ queryKey: ['peers'] })
+        if (window.confirm("Are you sure you want to delete this peer?")) {
+            const myNode = myNodes[0]
+            await nodeManager?.disconnect_peer(myNode, peer.pubkey);
+            queryClient.invalidateQueries({ queryKey: ['peers'] })
+        }
     }
 
     async function handleDeletePeer() {
@@ -30,9 +32,19 @@ function SinglePeer({ peer }: { peer: MutinyPeer }) {
 
         console.log(myNodes);
 
-        const myNode = myNodes[0]
-        await nodeManager?.delete_peer(myNode, peer.pubkey);
-        queryClient.invalidateQueries({ queryKey: ['peers'] })
+        if (window.confirm("Are you sure you want to delete this peer?")) {
+            const myNode = myNodes[0]
+            await nodeManager?.delete_peer(myNode, peer.pubkey);
+            queryClient.invalidateQueries({ queryKey: ['peers'] })
+        }
+    }
+
+    function handleClickEject() {
+        if (peer.is_connected) {
+            handleDisconnectPeer()
+        } else {
+            handleDeletePeer()
+        }
     }
 
     return (
@@ -45,15 +57,10 @@ function SinglePeer({ peer }: { peer: MutinyPeer }) {
                     <h3 className="text-lg">
                         {takeN(peer.pubkey, 15)}
                     </h3>
-                    { peer.is_connected && <h5 className="text-green">Connected</h5> }
-                    { !peer.is_connected && <h5 className="text-red">Disconnected</h5> }
+                    {peer.is_connected && <h5 className="text-green">Connected</h5>}
+                    {!peer.is_connected && <h5 className="text-red">Disconnected</h5>}
                 </div>
-                {peer.is_connected &&
-                    <button onClick={handleDisconnectPeer} className="h-[3rem] w-[3rem] p-1 flex items-center justify-center flex-0"><EjectIcon /></button>
-                }
-                {!peer.is_connected &&
-                    <button onClick={handleDeletePeer} className="h-[3rem] w-[3rem] p-1 flex items-center justify-center flex-0"><EjectIcon /></button>
-                }
+                <button onClick={handleClickEject} className="h-[3rem] w-[3rem] p-1 flex items-center justify-center flex-0"><EjectIcon /></button>
             </div>
         </li>
     )
