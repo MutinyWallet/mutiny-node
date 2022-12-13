@@ -937,11 +937,11 @@ pub(crate) async fn create_new_node_from_node_manager(
         .clone()
         .lock()
         .await
-        .insert(node_pubkey.clone().to_string(), Arc::new(new_node));
+        .insert(node_pubkey.to_string(), Arc::new(new_node));
 
     Ok(NodeIdentity {
         uuid: next_node.uuid.clone(),
-        pubkey: node_pubkey.clone().to_string(),
+        pubkey: node_pubkey.to_string(),
     })
 }
 
