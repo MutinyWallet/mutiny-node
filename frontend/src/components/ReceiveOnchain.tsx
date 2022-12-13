@@ -10,7 +10,7 @@ export default function ReceiveOnchain({ onchainAddress }: { onchainAddress: str
     const { nodeManager } = useContext(NodeManagerContext);
     let navigate = useNavigate();
 
-    const { isLoading: isCheckingAddress } = useQuery({
+    useQuery({
         queryKey: ['checktransaction'],
         queryFn: async () => {
             console.log("Checking address:", onchainAddress);
