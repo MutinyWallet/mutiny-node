@@ -8,6 +8,7 @@ on:
       - master
 jobs:
   Deploy-Production:
+    environment: Production
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
