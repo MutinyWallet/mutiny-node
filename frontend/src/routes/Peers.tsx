@@ -8,8 +8,9 @@ import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
 import ScreenMain from "../components/ScreenMain"
 import { ReactComponent as EjectIcon } from "../images/icons/eject.svg"
+import { MutinyPeer } from "node-manager";
 
-function SinglePeer({ peer }: { peer: string }) {
+function SinglePeer({ peer }: { peer: MutinyPeer }) {
 
     const queryClient = useQueryClient()
     const { nodeManager } = useContext(NodeManagerContext);
@@ -20,7 +21,17 @@ function SinglePeer({ peer }: { peer: string }) {
         console.log(myNodes);
 
         const myNode = myNodes[0]
-        await nodeManager?.disconnect_peer(myNode, peer);
+        await nodeManager?.disconnect_peer(myNode, peer.pubkey);
+        queryClient.invalidateQueries({ queryKey: ['peers'] })
+    }
+
+    async function handleDeletePeer() {
+        const myNodes = await nodeManager?.list_nodes();
+
+        console.log(myNodes);
+
+        const myNode = myNodes[0]
+        await nodeManager?.delete_peer(myNode, peer.pubkey);
         queryClient.invalidateQueries({ queryKey: ['peers'] })
     }
 
@@ -28,12 +39,21 @@ function SinglePeer({ peer }: { peer: string }) {
         <li className="text-off-white border-b border-off-white py-2 mb-2 flex flex-col w-full">
             <div className="flex items-center space-between gap-4">
                 <div>
-                    <Copy copyValue={peer} />
+                    <Copy copyValue={peer.pubkey} />
                 </div>
-                <h3 className="flex-1 text-lg font-mono overflow-ellipsis">
-                    {takeN(peer, 15)}
-                </h3>
-                <button onClick={handleDisconnectPeer} className="h-[3rem] w-[3rem] p-1 flex items-center justify-center flex-0"><EjectIcon /></button>
+                <div className="flex-1 font-mono overflow-ellipsis">
+                    <h3 className="text-lg">
+                        {takeN(peer.pubkey, 15)}
+                    </h3>
+                    { peer.is_connected && <h5 className="text-green">Connected</h5> }
+                    { !peer.is_connected && <h5 className="text-red">Disconnected</h5> }
+                </div>
+                {peer.is_connected &&
+                    <button onClick={handleDisconnectPeer} className="h-[3rem] w-[3rem] p-1 flex items-center justify-center flex-0"><EjectIcon /></button>
+                }
+                {!peer.is_connected &&
+                    <button onClick={handleDeletePeer} className="h-[3rem] w-[3rem] p-1 flex items-center justify-center flex-0"><EjectIcon /></button>
+                }
             </div>
         </li>
     )
@@ -52,8 +72,7 @@ function Peers() {
         queryKey: ['peers'],
         queryFn: () => {
             console.log("Getting peers...")
-            const txs = nodeManager?.list_peers() as Promise<string[]>;
-            return txs
+            return nodeManager?.list_peers() as Promise<MutinyPeer[]>
         },
         enabled: !!nodeManager,
         refetchInterval: 1000,

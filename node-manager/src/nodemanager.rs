@@ -204,6 +204,27 @@ impl From<Invoice> for MutinyInvoice {
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
+pub struct MutinyPeer {
+    pubkey: secp256k1::PublicKey,
+    connection_string: String,
+    pub is_connected: bool,
+}
+
+#[wasm_bindgen]
+impl MutinyPeer {
+    #[wasm_bindgen(getter)]
+    pub fn pubkey(&self) -> String {
+        self.pubkey.to_hex()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn connection_string(&self) -> String {
+        self.connection_string.clone()
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[wasm_bindgen]
 pub struct MutinyChannel {
     pub balance: u64,
     pub size: u64,
@@ -646,6 +667,21 @@ impl NodeManager {
         }
     }
 
+    #[wasm_bindgen]
+    pub async fn delete_peer(
+        &self,
+        self_node_pubkey: String,
+        peer: String,
+    ) -> Result<(), MutinyJsError> {
+        if let Some(node) = self.nodes.lock().await.get(&self_node_pubkey) {
+            node.persister.delete_peer_connection_info(peer);
+            Ok(())
+        } else {
+            error!("could not find internal node {self_node_pubkey}");
+            Err(MutinyError::WalletOperationFailed.into())
+        }
+    }
+
     // all values in sats
 
     #[wasm_bindgen]
@@ -823,29 +859,50 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub async fn list_peers(&self) -> Result<JsValue /* Vec<String> */, MutinyJsError> {
+    pub async fn list_peers(&self) -> Result<JsValue /* Vec<MutinyPeer> */, MutinyJsError> {
         let nodes = self.nodes.lock().await;
 
-        // get peers we are connected to
-        let mut peers: Vec<String> = nodes
-            .iter()
-            .flat_map(|(_, n)| n.peer_manager.get_peer_node_ids())
-            .map(|p| p.to_hex())
-            .collect();
-
         // get peers saved in storage
-        let mut storage_peers: Vec<String> = nodes
+        let mut storage_peers: Vec<MutinyPeer> = nodes
             .iter()
             .flat_map(|(_, n)| n.persister.list_peer_connection_info())
-            .map(|p| p.0.to_hex())
+            .map(|(pubkey, connection_string)| MutinyPeer {
+                pubkey,
+                connection_string,
+                is_connected: false,
+            })
             .collect();
 
-        // combine and remove duplicates
-        peers.append(&mut storage_peers);
-        peers.sort(); // need to sort because dedup only removes consecutive duplicates
-        peers.dedup();
+        // get peers we are connected to
+        let connected_peers: Vec<secp256k1::PublicKey> = nodes
+            .iter()
+            .flat_map(|(_, n)| n.peer_manager.get_peer_node_ids())
+            .collect();
 
-        Ok(serde_wasm_bindgen::to_value(&peers)?)
+        // correctly set is_connected
+        for mut peer in &mut storage_peers {
+            if connected_peers.contains(&peer.pubkey) {
+                peer.is_connected = true;
+            }
+        }
+
+        // add any connected peers that weren't in our storage,
+        // likely new or inbound connections
+        let mut missing: Vec<MutinyPeer> = Vec::new();
+        for peer in connected_peers {
+            if storage_peers.iter().find(|p| p.pubkey == peer).is_none() {
+                let new = MutinyPeer {
+                    pubkey: peer,
+                    connection_string: "unknown".to_string(),
+                    is_connected: true,
+                };
+                missing.push(new);
+            }
+        }
+
+        storage_peers.append(&mut missing);
+
+        Ok(serde_wasm_bindgen::to_value(&storage_peers)?)
     }
 
     #[wasm_bindgen]
