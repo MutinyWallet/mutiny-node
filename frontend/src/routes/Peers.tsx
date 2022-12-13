@@ -20,7 +20,7 @@ function SinglePeer({ peer }: { peer: MutinyPeer }) {
 
         console.log(myNodes);
 
-        if (window.confirm("Are you sure you want to delete this peer?")) {
+        if (window.confirm("Are you sure you want to disconnect this peer?")) {
             const myNode = myNodes[0]
             await nodeManager?.disconnect_peer(myNode, peer.pubkey);
             queryClient.invalidateQueries({ queryKey: ['peers'] })
