@@ -14,12 +14,14 @@ export default function Close({ onClose, to }: Props) {
         if (onClose) {
             onClose();
         }
+
+        // onClose could be a cleanup function
+        // So we still might want to navigate after
         if (to) {
             navigate(to);
         } else {
             navigate("/");
         }
-
     }
     return (
         <div className="h-10 w-10 min-w-10 text-white active:text-half-faint" onClick={handleClose}>
