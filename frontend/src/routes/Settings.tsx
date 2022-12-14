@@ -161,7 +161,7 @@ function Settings() {
                                 <pre>
                                     <code>{COMMIT_HASH}</code>
                                 </pre>
-                                <Copy copyValue={nodes[0]} />
+                                <Copy copyValue={COMMIT_HASH} />
                             </div>
                         </div>
                     }
