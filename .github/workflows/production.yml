@@ -51,7 +51,7 @@ jobs:
       - name: Add Commit Hash to Vercel Environment
         working-directory: ./frontend
         run: |
-          vercel env rm REACT_APP_COMMIT_HASH production --token=${{ secrets.VERCEL_TOKEN }}
+          vercel env rm REACT_APP_COMMIT_HASH production --yes --token=${{ secrets.VERCEL_TOKEN }}
           echo $GITHUB_SHA | vercel env add REACT_APP_COMMIT_HASH preview --token=${{ secrets.VERCEL_TOKEN }}
       - name: Build Project Artifacts
         working-directory: ./frontend
