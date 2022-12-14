@@ -55,8 +55,7 @@ jobs:
         working-directory: ./frontend
         run: |
           set result=$(vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }})
-          set last_line=$(echo "$result" | tail -n1)
-          echo "vercel_deploy_output=$last_line" >> $GITHUB_ENV
+          echo "vercel_deploy_output=$result" >> $GITHUB_ENV
       - name: Comment the URL
         uses: unsplash/comment-on-pr@v1.3.0
         env:
