@@ -8,7 +8,6 @@ on:
 
 jobs:
   Deploy-Preview:
-    environment: Preview
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -44,14 +43,25 @@ jobs:
           node-version: 18.x
 
       - name: Install Vercel CLI
-        run: npm install --global vercel@canary
+        run: npm install --global vercel@latest
 
       - name: Pull Vercel Environment Information
         working-directory: ./frontend
         run: vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Add Commit Hash to Vercel Environment
+        working-directory: ./frontend
+        run: |
+          vercel env rm REACT_APP_COMMIT_HASH preview --yes --token=${{ secrets.VERCEL_TOKEN }}
+          echo $GITHUB_SHA | vercel env add REACT_APP_COMMIT_HASH preview --token=${{ secrets.VERCEL_TOKEN }}
       - name: Build Project Artifacts
         working-directory: ./frontend
         run: vercel build --token=${{ secrets.VERCEL_TOKEN }}
       - name: Deploy Project Artifacts to Vercel
         working-directory: ./frontend
-        run: vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }}
+        run: |
+          echo "vercel_deploy_output=$(vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }})" >> $GITHUB_ENV
+      - name: Comment the URL
+        uses: mshick/add-pr-comment@v2
+        with:
+          message: |
+            Preview URL: ${{ env.vercel_deploy_output }}

@@ -13,6 +13,8 @@ import ScreenMain from "../components/ScreenMain"
 import { ReactComponent as Eye } from "../images/icons/eye.svg"
 import { ReactComponent as EyeClosed } from "../images/icons/eye-closed.svg"
 
+const COMMIT_HASH = process.env.REACT_APP_COMMIT_HASH || "";
+
 function SeedWords({ words }: { words: string }) {
     const [shouldShow, setShouldShow] = useState(false)
 
@@ -152,6 +154,17 @@ function Settings() {
                             </> : <button onClick={handleNewNode}>New Node</button>
                         }
                     </div>
+                    {COMMIT_HASH &&
+                        <div>
+                            <p className="text-2xl font-light">Mutiny Version</p>
+                            <div className="flex items-center gap-4">
+                                <pre>
+                                    <code>{COMMIT_HASH}</code>
+                                </pre>
+                                <Copy copyValue={COMMIT_HASH} />
+                            </div>
+                        </div>
+                    }
                     <SettingStringsEditor />
                     <div />
                     <div />

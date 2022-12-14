@@ -8,7 +8,6 @@ on:
       - master
 jobs:
   Deploy-Production:
-    environment: Production
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -44,11 +43,16 @@ jobs:
           node-version: 18.x
 
       - name: Install Vercel CLI
-        run: npm install --global vercel@canary
+        run: npm install --global vercel@latest
 
       - name: Pull Vercel Environment Information
         working-directory: ./frontend
         run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Add Commit Hash to Vercel Environment
+        working-directory: ./frontend
+        run: |
+          vercel env rm REACT_APP_COMMIT_HASH production --yes --token=${{ secrets.VERCEL_TOKEN }}
+          echo $GITHUB_SHA | vercel env add REACT_APP_COMMIT_HASH preview --token=${{ secrets.VERCEL_TOKEN }}
       - name: Build Project Artifacts
         working-directory: ./frontend
         run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
