@@ -60,4 +60,4 @@ jobs:
         uses: mshick/add-pr-comment@v2
         with:
           message: |
-            "Preview URL: {{ env.vercel_deploy_output }}"
+            "Preview URL: ${{ env.vercel_deploy_output }}"
