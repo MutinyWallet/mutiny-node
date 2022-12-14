@@ -57,8 +57,7 @@ jobs:
           set result=$(vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }})
           echo "vercel_deploy_output=$result" >> $GITHUB_ENV
       - name: Comment the URL
-        uses: unsplash/comment-on-pr@v1.3.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: mshick/add-pr-comment@v2
         with:
-          msg: "{{ env.vercel_deploy_output }}"
+          message: |
+            "Preview URL: {{ env.vercel_deploy_output }}"
