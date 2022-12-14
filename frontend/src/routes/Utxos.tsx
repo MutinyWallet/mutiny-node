@@ -57,7 +57,7 @@ function Utxos() {
             </header>
             <ScreenMain padSides={false} wontScroll={!utxos || utxos.length < 4}>
                 <button className="mx-8" onClick={handleSweep}>Sweep Wallet</button>
-                <ul className="overflow-y-scroll px-8 pb-[12rem]">
+                <ul className="overflow-y-scroll px-8 pb-[12rem] h-full">
                     {utxos?.map(utxo => (
                         <SingleUtxo utxo={utxo} key={utxo.outpoint} />
                     ))}
