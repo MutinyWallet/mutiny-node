@@ -93,6 +93,9 @@ function Send() {
       await navigateForInvoice(destination)
     } else if (paymentType === PaymentType.bip21) {
       await navigateForBip21(destination)
+    } else if (paymentType === PaymentType.keysend) {
+      const params = objectToSearchParams<SendConfirmParams>({ destination })
+        navigate(`/send/amount?${params}`)
     } else if (paymentType === PaymentType.onchain) {
       if (sendAll === "true") {
         const params = objectToSearchParams<SendConfirmParams>({ destination, all: "true" })
