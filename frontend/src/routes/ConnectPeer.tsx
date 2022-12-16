@@ -49,7 +49,7 @@ export default function ConnectPeer() {
 		<>
 			<header className='p-8 flex justify-between items-center'>
 				<PageTitle title="Connect to peer" theme="red"></PageTitle>
-				<Close />
+				<Close to="/manager/peers" />
 			</header>
 
 			<ScreenMain>
