@@ -71,7 +71,7 @@ impl EventHandler {
 }
 
 impl LdkEventHandler for EventHandler {
-    fn handle_event(&self, event: &Event) {
+    fn handle_event(&self, event: Event) {
         match event {
             Event::FundingGenerationReady {
                 temporary_channel_id,
@@ -102,14 +102,11 @@ impl LdkEventHandler for EventHandler {
                 .to_address();
 
                 let wallet_thread = self.wallet.clone();
-                let channel_values_satoshis_thread = *channel_value_satoshis;
                 let channel_manager_thread = self.channel_manager.clone();
                 let logger_thread = self.logger.clone();
-                let temporary_channel_id_thread = *temporary_channel_id;
-                let counterparty_node_id_thread = *counterparty_node_id;
                 spawn_local(async move {
                     let psbt = match wallet_thread
-                        .create_signed_psbt(addr, channel_values_satoshis_thread, None)
+                        .create_signed_psbt(addr, channel_value_satoshis, None)
                         .await
                     {
                         Ok(psbt) => psbt,
@@ -126,8 +123,8 @@ impl LdkEventHandler for EventHandler {
                     };
                     if channel_manager_thread
                         .funding_transaction_generated(
-                            &temporary_channel_id_thread,
-                            &counterparty_node_id_thread,
+                            &temporary_channel_id,
+                            &counterparty_node_id,
                             psbt.extract_tx(),
                         )
                         .is_err()
@@ -151,17 +148,21 @@ impl LdkEventHandler for EventHandler {
                     ));
                 })
             }
-            Event::PaymentReceived {
+            Event::PaymentClaimable {
+                receiver_node_id,
                 payment_hash,
                 purpose,
                 amount_msat,
+                via_channel_id: _,
+                via_user_channel_id: _,
             } => {
                 self.logger.log(&Record::new(
                     lightning::util::logger::Level::Debug,
                     format_args!(
-                        "EVENT: PaymentReceived received payment from payment hash {} of {} millisatoshis",
+                        "EVENT: PaymentReceived received payment from payment hash {} of {} millisatoshis to {:?}",
                         payment_hash.0.to_hex(),
-                        amount_msat
+                        amount_msat,
+                        receiver_node_id
                     ),
                     "event",
                     "",
@@ -171,8 +172,8 @@ impl LdkEventHandler for EventHandler {
                 let payment_preimage = if let Some(payment_preimage) = match purpose {
                     PaymentPurpose::InvoicePayment {
                         payment_preimage, ..
-                    } => *payment_preimage,
-                    PaymentPurpose::SpontaneousPayment(preimage) => Some(*preimage),
+                    } => payment_preimage,
+                    PaymentPurpose::SpontaneousPayment(preimage) => Some(preimage),
                 } {
                     payment_preimage
                 } else {
@@ -188,6 +189,7 @@ impl LdkEventHandler for EventHandler {
                 self.channel_manager.claim_funds(payment_preimage);
             }
             Event::PaymentClaimed {
+                receiver_node_id: _,
                 payment_hash,
                 purpose,
                 amount_msat,
@@ -209,12 +211,12 @@ impl LdkEventHandler for EventHandler {
                         payment_preimage,
                         payment_secret,
                         ..
-                    } => (*payment_preimage, Some(*payment_secret)),
-                    PaymentPurpose::SpontaneousPayment(preimage) => (Some(*preimage), None),
+                    } => (payment_preimage, Some(payment_secret)),
+                    PaymentPurpose::SpontaneousPayment(preimage) => (Some(preimage), None),
                 };
                 match self
                     .persister
-                    .read_payment_info(*payment_hash, true, self.logger.clone())
+                    .read_payment_info(payment_hash, true, self.logger.clone())
                 {
                     Some(mut saved_payment_info) => {
                         let payment_preimage = payment_preimage.map(|p| p.0);
@@ -222,9 +224,10 @@ impl LdkEventHandler for EventHandler {
                         saved_payment_info.status = HTLCStatus::Succeeded;
                         saved_payment_info.preimage = payment_preimage;
                         saved_payment_info.secret = payment_secret;
+                        saved_payment_info.amt_msat = MillisatAmount(Some(amount_msat));
                         saved_payment_info.last_update = crate::utils::now().as_secs();
                         match self.persister.persist_payment_info(
-                            *payment_hash,
+                            payment_hash,
                             saved_payment_info,
                             true,
                         ) {
@@ -249,14 +252,14 @@ impl LdkEventHandler for EventHandler {
                             preimage: payment_preimage,
                             secret: payment_secret,
                             status: HTLCStatus::Succeeded,
-                            amt_msat: MillisatAmount(Some(*amount_msat)),
+                            amt_msat: MillisatAmount(Some(amount_msat)),
                             fee_paid_msat: None,
                             bolt11: None,
                             last_update,
                         };
                         match self
                             .persister
-                            .persist_payment_info(*payment_hash, payment_info, true)
+                            .persist_payment_info(payment_hash, payment_info, true)
                         {
                             Ok(_) => (),
                             Err(e) => {
@@ -288,15 +291,15 @@ impl LdkEventHandler for EventHandler {
 
                 match self
                     .persister
-                    .read_payment_info(*payment_hash, false, self.logger.clone())
+                    .read_payment_info(payment_hash, false, self.logger.clone())
                 {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Succeeded;
                         saved_payment_info.preimage = Some(payment_preimage.0);
-                        saved_payment_info.fee_paid_msat = *fee_paid_msat;
+                        saved_payment_info.fee_paid_msat = fee_paid_msat;
                         saved_payment_info.last_update = crate::utils::now().as_secs();
                         match self.persister.persist_payment_info(
-                            *payment_hash,
+                            payment_hash,
                             saved_payment_info,
                             false,
                         ) {
@@ -381,13 +384,13 @@ impl LdkEventHandler for EventHandler {
 
                 match self
                     .persister
-                    .read_payment_info(*payment_hash, false, self.logger.clone())
+                    .read_payment_info(payment_hash, false, self.logger.clone())
                 {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Failed;
                         saved_payment_info.last_update = crate::utils::now().as_secs();
                         match self.persister.persist_payment_info(
-                            *payment_hash,
+                            payment_hash,
                             saved_payment_info,
                             false,
                         ) {
@@ -456,7 +459,6 @@ impl LdkEventHandler for EventHandler {
                     "",
                     0,
                 ));
-                let outputs_thread = outputs.clone();
                 let wallet_thread = self.wallet.clone();
                 let keys_manager_thread = self.keys_manager.clone();
                 let chain_thread = self.chain.clone();
@@ -468,7 +470,7 @@ impl LdkEventHandler for EventHandler {
                         .get_address(AddressIndex::New)
                         .expect("could not get new address");
 
-                    let output_descriptors = &outputs_thread.iter().collect::<Vec<_>>();
+                    let output_descriptors = &outputs.iter().collect::<Vec<_>>();
                     let tx_feerate =
                         chain_thread.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
                     let spending_tx = keys_manager_thread
@@ -511,6 +513,21 @@ impl LdkEventHandler for EventHandler {
                     0,
                 ));
             }
+            Event::ChannelReady {
+                channel_id,
+                user_channel_id,
+                counterparty_node_id,
+                channel_type,
+            } => {
+                self.logger.log(&Record::new(
+                    lightning::util::logger::Level::Debug,
+                    format_args!("EVENT: ChannelReady channel_id: {}, user_channel_id: {}, counterparty_node_id: {}, channel_type: {}", channel_id.to_hex(), user_channel_id, counterparty_node_id.to_hex(), channel_type),
+                    "event",
+                    "",
+                    0,
+                ));
+            }
+            Event::HTLCIntercepted { .. } => {}
         }
     }
 }

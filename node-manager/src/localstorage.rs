@@ -1,14 +1,11 @@
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
 use std::str;
 use std::str::FromStr;
 
 use bip39::Mnemonic;
-use dlc_manager::contract::ser::Serializable;
 
 use gloo_storage::errors::StorageError;
 use gloo_storage::{LocalStorage, Storage};
-use secp256k1::PublicKey;
 use serde::{Deserialize, Serialize};
 
 use crate::encrypt::*;
@@ -18,7 +15,6 @@ use crate::nodemanager::NodeStorage;
 const mnemonic_key: &str = "mnemonic";
 const nodes_key: &str = "nodes";
 const fee_estimates_key: &str = "fee_estimates";
-const last_dlc_key_index: &str = "dlc_key_index";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MutinyBrowserStorage {
@@ -87,36 +83,6 @@ impl MutinyBrowserStorage {
         map
     }
 
-    pub(crate) fn get_data_with_prefix<T: Serializable>(
-        &self,
-        prefix: &[u8],
-        consume: Option<u64>,
-    ) -> HashMap<String, T> {
-        let local_storage = LocalStorage::raw();
-        let length = LocalStorage::length();
-        let mut map = HashMap::with_capacity(length as usize);
-
-        for index in 0..length {
-            let key_opt: Option<String> = local_storage.key(index).unwrap();
-
-            if let Some(key) = key_opt {
-                let value: Vec<u8> = self.get(&key).unwrap();
-                let mut cursor = Cursor::new(&value);
-                let mut pref = vec![0u8; prefix.len()];
-                cursor.read_exact(&mut pref).expect("Error reading prefix");
-                if pref == prefix {
-                    if let Some(c) = consume {
-                        cursor.set_position(cursor.position() + c);
-                    }
-                    let v = T::deserialize(&mut cursor).unwrap();
-                    map.insert(key, v);
-                }
-            }
-        }
-
-        map
-    }
-
     pub(crate) fn insert_mnemonic(&self, mnemonic: Mnemonic) -> Mnemonic {
         self.set(mnemonic_key, mnemonic.to_string())
             .expect("Failed to write to storage");
@@ -174,26 +140,5 @@ impl MutinyBrowserStorage {
         fees: HashMap<String, f64>,
     ) -> Result<(), MutinyStorageError> {
         Ok(LocalStorage::set(fee_estimates_key, fees)?)
-    }
-
-    // inserts 0 if not present
-    pub(crate) fn increment_last_dlc_key_index(&self) -> Result<u32, bdk::Error> {
-        let current_opt = self.get::<u32>(last_dlc_key_index).ok();
-        let value = current_opt.map(|s| s + 1).unwrap_or_else(|| 0);
-        self.set(last_dlc_key_index, value)?;
-
-        Ok(value)
-    }
-
-    pub(crate) fn save_dlc_key_index(&self, index: u32, p: PublicKey) -> Result<(), bdk::Error> {
-        let key = format!("dlc_key_{p}");
-        Ok(self.set(key, index)?)
-    }
-
-    pub(crate) fn get_dlc_key_index(&self, p: &PublicKey) -> Result<u32, bdk::Error> {
-        let key = format!("dlc_key_{p}");
-        let result: u32 = self.get(key)?;
-
-        Ok(result)
     }
 }
