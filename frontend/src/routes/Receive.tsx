@@ -23,7 +23,6 @@ function Receive() {
             toast("That doesn't look right")
             return
         } else if (parseInt(amount) <= 0) {
-            // navigate('/')
             setAmount('')
             toast("You can't receive nothing")
             return
