@@ -22,7 +22,7 @@ export default function SendAmount() {
       toast("That doesn't look right")
       return
     } else if (parseInt(amount) <= 0) {
-      toast("you can't send nothing")
+      toast("You can't send nothing")
       return
     }
 
