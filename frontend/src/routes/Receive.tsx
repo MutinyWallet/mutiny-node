@@ -19,7 +19,7 @@ function Receive() {
     const queryClient = useQueryClient()
 
     async function handleContinue() {
-        if (!amount || typeof parseInt(amount !== "number")) {
+        if (!amount || typeof parseInt(amount) !== "number") {
             toast("That doesn't look right")
             return
         } else if (parseInt(amount) <= 0) {
