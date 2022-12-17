@@ -66,7 +66,7 @@ export function mempoolTxUrl(txid?: string, network?: string) {
         return "#"
     }
 
-    return `https://mempool.space/${network === "testnet" ? "testnet" : ""}tx/${txid}`
+    return `https://mempool.space/${network === "testnet" ? "testnet/" : ""}tx/${txid}`
 }
 
 export function objectToSearchParams<T extends Record<string, string | undefined>>(obj: T): string {
