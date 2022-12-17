@@ -48,9 +48,6 @@ function Receive() {
                     <input onChange={e => setAmount(e.target.value)} value={amount} className={`w-full ${inputStyle({ accent: "blue" })}`} type="number" min={0} placeholder='How much? (optional)' />
                     <input onChange={(e) => setDescription(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='What for? (optional)' />
                 </div>
-                {/* <div className='flex justify-start gap-2'>
-                    <button onClick={handleContinue}>Continue</button>
-                </div> */}
                 <ActionButton onClick={() => handleContinue()}>
                     Continue
                 </ActionButton>
