@@ -37,7 +37,7 @@ export default function SendAmount() {
         <div />
         <div className="flex flex-col gap-4">
           <p className="text-2xl font-light">How much would you like to send?</p>
-          <input onChange={e => setAmount(e.target.value)} className={`w-full ${inputStyle({ accent: "green" })}`} type="number" placeholder='sats' />
+          <input onChange={e => setAmount(e.target.value)} className={`w-full ${inputStyle({ accent: "green" })}`} type="number" min={0} placeholder='sats' />
         </div>
         <ActionButton onClick={handleContinue}>
           Continue
