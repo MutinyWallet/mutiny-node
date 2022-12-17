@@ -4,7 +4,7 @@ import ScreenMain from "../components/ScreenMain";
 import { useNavigate } from "react-router";
 import { useState } from "react";
 import { inputStyle } from "../styles";
-import { objectToSearchParams, toastAnything } from "@util/dumb";
+import { objectToSearchParams } from "@util/dumb";
 import { ReceiveParams } from "../routes/ReceiveQR";
 import { useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
