@@ -1,6 +1,6 @@
 import QRCode from "react-qr-code"
 import Copy from "../components/Copy";
-import { useContext } from "react";
+import { useContext, useEffect, useState } from "react";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import { useQuery } from "@tanstack/react-query";
 import takeN from "@util/takeN";
@@ -8,11 +8,25 @@ import { useNavigate } from "react-router-dom";
 import bip21 from "bip21";
 import { MutinyBip21 } from "@routes/Send";
 
-export default function ReceiveUnified({ bip21String }: { bip21String: string }) {
+export type QRMode = "lightning" | "onchain" | "bip21";
+
+export default function ReceiveUnified({ bip21String, mode }: { bip21String: string, mode: QRMode }) {
     const { nodeManager } = useContext(NodeManagerContext);
     let navigate = useNavigate();
 
     const { address, options } = bip21.decode(bip21String) as MutinyBip21;
+
+    const [activeString, setActiveString] = useState("");
+
+    useEffect(() => {
+        if (mode === "lightning") {
+            setActiveString(options.lightning ?? "")
+        } else if (mode === "onchain") {
+            setActiveString(address)
+        } else if (mode === "bip21") {
+            setActiveString(bip21String)
+        }
+    }, [mode, bip21String, address, options.lightning])
 
     useQuery({
         queryKey: ['checktransaction', address],
@@ -58,20 +72,19 @@ export default function ReceiveUnified({ bip21String }: { bip21String: string })
 
     return (
         <>
-            {bip21 &&
+            {bip21 && activeString &&
                 <>
                     <div className="bg-[#ffffff] p-4">
-                        <QRCode level="M" value={bip21String ? bip21String.toUpperCase() : ""} />
+                        <QRCode level="M" value={activeString} />
                     </div>
                     <div className="flex items-center gap-2 w-full">
-                        {/* <p className="text-lg font-mono font-light break-all"> */}
                         <pre className="flex-1">
                             <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                {takeN(bip21String ?? "", 28)}
+                                {takeN(activeString, 28)}
                             </code>
                         </pre>
                         <div className="flex-0">
-                            <Copy copyValue={bip21String ?? ""} />
+                            <Copy copyValue={activeString} />
                         </div>
                     </div>
                 </>
