@@ -20,17 +20,17 @@ function Receive() {
         if (!amount || typeof parseInt(amount) !== "number") {
             toast("That doesn't look right")
             return
-          } else if (parseInt(amount) <= 0) {
+        } else if (parseInt(amount) <= 0) {
             navigate('/')
             toast("You can't receive nothing")
             return
         }
         if (amount) {
-        const params = objectToSearchParams<ReceiveParams>({ amount, description })
-        // Important! Otherwise we might see a stale bip21 code
-        queryClient.invalidateQueries({ queryKey: ['bip21'] })
-        navigate(`/receive/qr?${params}`)
-          }
+            const params = objectToSearchParams<ReceiveParams>({ amount, description })
+            // Important! Otherwise we might see a stale bip21 code
+            queryClient.invalidateQueries({ queryKey: ['bip21'] })
+            navigate(`/receive/qr?${params}`)
+        }
     }
 
     return (
