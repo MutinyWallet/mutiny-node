@@ -20,7 +20,7 @@ function Receive() {
 
     async function handleContinue() {
         if (!amount || typeof parseInt(amount) !== "number") {
-            setAmount('')
+            setAmount(' ')
             toast("That doesn't look right")
             return
         } else if (parseInt(amount) <= 0) {
