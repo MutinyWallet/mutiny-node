@@ -222,6 +222,7 @@ impl LdkEventHandler for EventHandler {
                         saved_payment_info.status = HTLCStatus::Succeeded;
                         saved_payment_info.preimage = payment_preimage;
                         saved_payment_info.secret = payment_secret;
+                        saved_payment_info.amt_msat = MillisatAmount(Some(*amount_msat));
                         saved_payment_info.last_update = crate::utils::now().as_secs();
                         match self.persister.persist_payment_info(
                             *payment_hash,
