@@ -23,12 +23,8 @@ function Receive() {
             setAmount(' ')
             toast("That doesn't look right")
             return
-        } else if (parseInt(amount) <= 0) {
-            setAmount('')
-            toast("You can't receive nothing")
-            return
         }
-        if (parseInt(amount) > 0) {
+        if (amount) {
             const params = objectToSearchParams<ReceiveParams>({ amount, description })
             // Important! Otherwise we might see a stale bip21 code
             queryClient.invalidateQueries({ queryKey: ['bip21'] })
