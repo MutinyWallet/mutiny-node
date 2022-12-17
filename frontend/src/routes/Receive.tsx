@@ -4,10 +4,12 @@ import ScreenMain from "../components/ScreenMain";
 import { useNavigate } from "react-router";
 import { useState } from "react";
 import { inputStyle } from "../styles";
-import { objectToSearchParams } from "@util/dumb";
+import { objectToSearchParams, toastAnything } from "@util/dumb";
 import { ReceiveParams } from "../routes/ReceiveQR";
 import { useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
+import ActionButton from "@components/ActionButton";
+import MutinyToaster from "@components/MutinyToaster";
 
 function Receive() {
     let navigate = useNavigate();
@@ -16,16 +18,17 @@ function Receive() {
     const [description, setDescription] = useState("")
     const queryClient = useQueryClient()
 
-    function handleContinue() {
-        if (!amount || typeof parseInt(amount) !== "number") {
+    async function handleContinue() {
+        if (!amount) {
             toast("That doesn't look right")
             return
         } else if (parseInt(amount) <= 0) {
-            navigate('/')
+            // navigate('/')
+            setAmount('')
             toast("You can't receive nothing")
             return
         }
-        if (amount) {
+        if (parseInt(amount) > 0) {
             const params = objectToSearchParams<ReceiveParams>({ amount, description })
             // Important! Otherwise we might see a stale bip21 code
             queryClient.invalidateQueries({ queryKey: ['bip21'] })
@@ -43,13 +46,17 @@ function Receive() {
                 <div />
                 <p className="text-2xl font-light">Want some sats?</p>
                 <div className="flex flex-col gap-4">
-                    <input onChange={(e) => setAmount(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="number" min={0} placeholder='How much? (optional)' />
+                    <input onChange={e => setAmount(e.target.value)} value={amount} className={`w-full ${inputStyle({ accent: "blue" })}`} type="number" min={0} placeholder='How much? (optional)' />
                     <input onChange={(e) => setDescription(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='What for? (optional)' />
                 </div>
-                <div className='flex justify-start gap-2'>
+                {/* <div className='flex justify-start gap-2'>
                     <button onClick={handleContinue}>Continue</button>
-                </div>
+                </div> */}
+                <ActionButton onClick={() => handleContinue()}>
+                    Continue
+                </ActionButton>
             </ScreenMain>
+            <MutinyToaster />
         </>
     );
 }
