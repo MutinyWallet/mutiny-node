@@ -2,10 +2,10 @@ import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
 import ScreenMain from "../components/ScreenMain";
 import { useNavigate } from "react-router";
-import { useContext } from "react";
+import { useContext, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
-import ReceiveUnified from "@components/ReceiveUnified";
+import ReceiveUnified, { QRMode } from "@components/ReceiveUnified";
 import { useSearchParams } from "react-router-dom";
 import { MutinyBip21RawMaterials } from "node-manager";
 import { objectToSearchParams } from "@util/dumb";
@@ -30,6 +30,7 @@ export default function ReceiveQR() {
     const [searchParams] = useSearchParams();
 
     const { nodeManager } = useContext(NodeManagerContext);
+    const [mode, setMode] = useState<QRMode>('bip21');
 
     const amount = searchParams.get("amount")
     const description = searchParams.get("description")
@@ -60,6 +61,9 @@ export default function ReceiveQR() {
         cacheTime: 0
     })
 
+    function handleSetMode(mode: QRMode) {
+        setMode(mode)
+    }
 
     return (
         <>
@@ -69,15 +73,21 @@ export default function ReceiveQR() {
             </header>
             <ScreenMain>
                 <div />
+
+                <div className="flex gap-2">
+                    <button onClick={() => handleSetMode("bip21")} disabled={mode === "bip21"} className={mode !== "bip21" ? "secondary" : "toggle"}>Unified</button>
+                    <button onClick={() => handleSetMode("lightning")} disabled={mode === "lightning"} className={mode !== "lightning" ? "secondary" : "toggle"}>Lightning</button>
+                    <button onClick={() => handleSetMode("onchain")} disabled={mode === "onchain"} className={mode !== "onchain" ? "secondary" : "toggle"}>On-chain</button>
+                </div>
+
                 {isLoading &&
                     <p className="text-2xl font-light">Loading...</p>
                 }
                 {bip21RawMaterial && !isLoading &&
                     <div className="flex flex-col items-start gap-4">
-                        <ReceiveUnified bip21String={formatBip21RawMaterial(bip21RawMaterial)} />
+                        <ReceiveUnified bip21String={formatBip21RawMaterial(bip21RawMaterial)} mode={mode} />
                     </div>
                 }
-
                 <div className='flex justify-start gap-2'>
                     <button onClick={handleCancel}>Cancel</button>
                 </div>
