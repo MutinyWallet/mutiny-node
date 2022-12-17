@@ -21,6 +21,9 @@ export default function SendAmount() {
     if (!amount || typeof parseInt(amount) !== "number") {
       toast("That doesn't look right")
       return
+    } else if (parseInt(amount) <= 0) {
+      toast("you can't send nothing")
+      return
     }
 
     if (destination && amount) {

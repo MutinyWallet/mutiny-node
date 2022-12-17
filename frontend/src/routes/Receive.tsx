@@ -7,6 +7,7 @@ import { inputStyle } from "../styles";
 import { objectToSearchParams } from "@util/dumb";
 import { ReceiveParams } from "../routes/ReceiveQR";
 import { useQueryClient } from "@tanstack/react-query";
+import toast from "react-hot-toast";
 
 function Receive() {
     let navigate = useNavigate();
@@ -16,11 +17,20 @@ function Receive() {
     const queryClient = useQueryClient()
 
     function handleContinue() {
-        navigate("/")
+        if (!amount || typeof parseInt(amount) !== "number") {
+            toast("That doesn't look right")
+            return
+          } else if (parseInt(amount) <= 0) {
+            navigate('/')
+            toast("you cant receive nothing")
+            return
+        }
+        if (amount) {
         const params = objectToSearchParams<ReceiveParams>({ amount, description })
         // Important! Otherwise we might see a stale bip21 code
         queryClient.invalidateQueries({ queryKey: ['bip21'] })
         navigate(`/receive/qr?${params}`)
+          }
     }
 
     return (
