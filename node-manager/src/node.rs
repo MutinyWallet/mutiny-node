@@ -186,7 +186,7 @@ impl Node {
             })?;
 
         // init channel manager
-        let (channel_manager, restarting_node) = persister
+        let mut read_channel_manger = persister
             .read_channel_manager(
                 network,
                 chain_monitor.clone(),
@@ -197,7 +197,9 @@ impl Node {
                 user_esplora_url,
             )
             .await?;
-        let channel_manager: Arc<PhantomChannelManager> = Arc::new(channel_manager);
+
+        let channel_manager: Arc<PhantomChannelManager> =
+            Arc::new(read_channel_manger.channel_manager);
 
         // init peer manager
         let ln_msg_handler = MessageHandler {
@@ -222,18 +224,10 @@ impl Node {
             logger.clone(),
         ));
 
-        // fixme dont read from storage twice lol
-        // read channelmonitor state from disk again
-        let mut channel_monitors = persister
-            .read_channel_monitors(keys_manager.clone())
-            .map_err(|e| MutinyError::ReadError {
-                source: MutinyStorageError::Other(e.into()),
-            })?;
-
         // sync to chain tip
-        let mut chain_listener_channel_monitors = Vec::new();
-        if restarting_node {
-            for (blockhash, channel_monitor) in channel_monitors.drain(..) {
+        if read_channel_manger.is_restarting {
+            let mut chain_listener_channel_monitors = Vec::new();
+            for (blockhash, channel_monitor) in read_channel_manger.channel_monitors.drain(..) {
                 let outpoint = channel_monitor.get_funding_txo().0;
                 chain_listener_channel_monitors.push((
                     blockhash,
@@ -246,15 +240,15 @@ impl Node {
                     outpoint,
                 ));
             }
-        }
 
-        // give channel monitors to chain monitor
-        for item in chain_listener_channel_monitors.drain(..) {
-            let channel_monitor = item.1 .0;
-            let funding_outpoint = item.2;
-            chain_monitor
-                .clone()
-                .watch_channel(funding_outpoint, channel_monitor);
+            // give channel monitors to chain monitor
+            for item in chain_listener_channel_monitors.drain(..) {
+                let channel_monitor = item.1 .0;
+                let funding_outpoint = item.2;
+                chain_monitor
+                    .clone()
+                    .watch_channel(funding_outpoint, channel_monitor);
+            }
         }
 
         // todo use RGS
@@ -605,6 +599,7 @@ impl Node {
     }
 
     fn list_payment_info_from_persisters(&self, inbound: bool) -> Vec<MutinyInvoice> {
+        let now = crate::utils::now();
         self.persister
             .list_payment_info(inbound)
             .into_iter()
@@ -614,20 +609,26 @@ impl Node {
                     let invoice_res = Invoice::from_str(&bolt11).map_err(Into::<MutinyError>::into);
                     match invoice_res {
                         Ok(invoice) => {
-                            let mut mutiny_invoice: MutinyInvoice = invoice.clone().into();
-                            mutiny_invoice.is_send = !inbound;
-                            mutiny_invoice.paid = matches!(i.status, HTLCStatus::Succeeded);
-                            mutiny_invoice.amount_sats =
-                                if let Some(inv_amt) = invoice.amount_milli_satoshis() {
-                                    if inv_amt == 0 {
-                                        i.amt_msat.0.map(|a| a / 1_000)
+                            if invoice.would_expire(now)
+                                && !matches!(i.status, HTLCStatus::Succeeded | HTLCStatus::InFlight)
+                            {
+                                None
+                            } else {
+                                let mut mutiny_invoice: MutinyInvoice = invoice.clone().into();
+                                mutiny_invoice.is_send = !inbound;
+                                mutiny_invoice.paid = matches!(i.status, HTLCStatus::Succeeded);
+                                mutiny_invoice.amount_sats =
+                                    if let Some(inv_amt) = invoice.amount_milli_satoshis() {
+                                        if inv_amt == 0 {
+                                            i.amt_msat.0.map(|a| a / 1_000)
+                                        } else {
+                                            Some(inv_amt / 1_000)
+                                        }
                                     } else {
-                                        Some(inv_amt / 1_000)
-                                    }
-                                } else {
-                                    i.amt_msat.0.map(|a| a / 1_000)
-                                };
-                            Some(mutiny_invoice)
+                                        i.amt_msat.0.map(|a| a / 1_000)
+                                    };
+                                Some(mutiny_invoice)
+                            }
                         }
                         Err(_) => None,
                     }
@@ -690,10 +691,11 @@ impl Node {
             if amt_sats.is_none() {
                 return Err(MutinyError::InvoiceInvalid);
             }
+            let amt_msats = amt_sats.unwrap() * 1_000;
             (
                 self.invoice_payer
-                    .pay_zero_value_invoice(&invoice, amt_sats.unwrap()),
-                amt_sats.unwrap() * 1_000,
+                    .pay_zero_value_invoice(&invoice, amt_msats),
+                amt_msats,
             )
         } else {
             if amt_sats.is_some() {
@@ -709,7 +711,7 @@ impl Node {
         let mut payment_info = PaymentInfo {
             preimage: None,
             secret: None,
-            status: HTLCStatus::Pending,
+            status: HTLCStatus::InFlight,
             amt_msat: MillisatAmount(Some(amt_msat)),
             fee_paid_msat: None,
             bolt11: Some(invoice.to_string()),
@@ -763,7 +765,7 @@ impl Node {
         let mut payment_info = PaymentInfo {
             preimage: Some(preimage.0),
             secret: None,
-            status: HTLCStatus::Pending,
+            status: HTLCStatus::InFlight,
             amt_msat: MillisatAmount(Some(amt_msats)),
             fee_paid_msat: None,
             bolt11: None,

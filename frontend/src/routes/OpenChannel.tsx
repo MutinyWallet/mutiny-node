@@ -42,7 +42,7 @@ export default function OpenChannel() {
 		<>
 			<header className='p-8 flex justify-between items-center'>
 				<PageTitle title="Open Channel" theme="blue"></PageTitle>
-				<Close />
+				<Close to="/manager/channels" />
 			</header>
 
 			<ScreenMain>

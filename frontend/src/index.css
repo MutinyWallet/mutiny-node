@@ -119,15 +119,20 @@ dd {
   display: none;
 }
 
-.qrContainer {
-  width: 70%;
-  margin: 1rem auto 0 auto;
+.fileInput {
+  display: none;
 }
 
-.inputContainer {
-  width: 70%;
-  margin: 0 auto auto auto;
+.fileInputButton {
+  font-family: inherit;
+  border-radius: 6px;
+  @apply text-black font-light text-xl;
+  @apply py-2 px-4;
+  @apply bg-gray-button;
+  @apply shadow-button active:shadow-button-inverted;
+  @apply uppercase;
 }
-.inputContainer > input {
-  margin: 0 auto 1rem auto
+
+.fileInputButton:hover {
+  cursor: pointer;
 }

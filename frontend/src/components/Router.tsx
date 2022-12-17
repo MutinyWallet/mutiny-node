@@ -20,6 +20,7 @@ import SendAmount from "@routes/SendAmount";
 import ReceiveFinal from "@routes/ReceiveFinal";
 import ReceiveQR from "@routes/ReceiveQR";
 import SendFinal from "@routes/SendFinal";
+import NotFound from "@routes/NotFound";
 
 const router = createBrowserRouter([
     {
@@ -95,6 +96,10 @@ const router = createBrowserRouter([
                 element: <Settings />
             }
         ]
+    },
+    {
+        path: "*",
+        element: <NotFound />
     }
 ]);
 

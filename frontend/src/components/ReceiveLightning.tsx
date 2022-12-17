@@ -50,7 +50,6 @@ export default function ReceiveLightning({ invoice }: { invoice: MutinyInvoice |
                             <Copy copyValue={invoice.bolt11!} />
                         </div>
                     </div>
-                    <p className="text-2xl font-light transition-all">Checking...</p>
                 </>
             }
         </>

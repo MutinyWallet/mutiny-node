@@ -49,12 +49,6 @@ crossbeam-channel = "0.5.6"
 # code size when deploying.
 console_error_panic_hook = { version = "0.1.6", optional = true }
 
-# `wee_alloc` is a tiny allocator for wasm that is only ~1K in code size
-# compared to the default allocator's ~10K. It is slower than the default
-# allocator, however.
-#
-# Unfortunately, `wee_alloc` requires nightly Rust when targeting wasm for now.
-wee_alloc = { version = "0.4.5", optional = true }
 wasm-bindgen-futures = "0.4.33"
 wasm-logger = "0.2.0"
 log = "0.4.17"
@@ -65,10 +59,10 @@ web-sys = { version = "0.3.60", features = ["console"] }
 anyhow = "1.0"
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3.13"
+wasm-bindgen-test = "0.3.33"
 
 [features]
-default = ["console_error_panic_hook", "wee_alloc"]
+default = ["console_error_panic_hook"]
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = true
