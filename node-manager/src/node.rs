@@ -35,6 +35,7 @@ use crate::{
     nodemanager::NodeIndex,
 };
 use anyhow::Context;
+use bdk::blockchain::EsploraBlockchain;
 use bip39::Mnemonic;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::secp256k1::PublicKey;
@@ -157,7 +158,7 @@ impl Node {
         wallet: Arc<MutinyWallet>,
         network: Network,
         websocket_proxy_addr: String,
-        user_esplora_url: Option<String>,
+        esplora: Arc<EsploraBlockchain>,
     ) -> Result<Self, MutinyError> {
         info!("initialized a new node: {}", node_index.uuid);
 
@@ -194,7 +195,7 @@ impl Node {
                 logger.clone(),
                 keys_manager.clone(),
                 channel_monitors,
-                user_esplora_url,
+                esplora,
             )
             .await?;
 

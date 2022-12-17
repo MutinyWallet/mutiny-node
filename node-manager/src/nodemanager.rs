@@ -1,3 +1,4 @@
+use bdk::blockchain::EsploraBlockchain;
 use bdk::{BlockTime, TransactionDetails};
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -7,6 +8,7 @@ use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyJsError, MutinyStorageError};
 use crate::keymanager;
 use crate::node::{Node, PubkeyConnectionInfo};
+use crate::wallet::esplora_from_network;
 use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
@@ -30,7 +32,7 @@ pub struct NodeManager {
     mnemonic: Mnemonic,
     network: Network,
     websocket_proxy_addr: String,
-    user_esplora_addr: Option<String>,
+    esplora: Arc<EsploraBlockchain>,
     wallet: Arc<MutinyWallet>,
     chain: Arc<MutinyChain>,
     storage: MutinyBrowserStorage,
@@ -280,7 +282,7 @@ impl NodeManager {
         mnemonic: Option<String>,
         websocket_proxy_addr: Option<String>,
         network_str: Option<String>,
-        esplora_str: Option<String>,
+        user_esplora_url: Option<String>,
     ) -> Result<NodeManager, MutinyJsError> {
         set_panic_hook();
 
@@ -315,11 +317,13 @@ impl NodeManager {
             },
         };
 
+        let esplora = Arc::new(esplora_from_network(network, user_esplora_url));
+
         let wallet = Arc::new(MutinyWallet::new(
             mnemonic.clone(),
             storage.clone(),
             network,
-            esplora_str.clone(),
+            esplora.clone(),
         ));
 
         let chain = Arc::new(MutinyChain::new(wallet.clone()));
@@ -345,7 +349,7 @@ impl NodeManager {
                 wallet.clone(),
                 network,
                 websocket_proxy_addr.clone(),
-                esplora_str.clone(),
+                esplora.clone(),
             )
             .await?;
 
@@ -366,7 +370,7 @@ impl NodeManager {
             node_storage: Mutex::new(node_storage),
             nodes: Arc::new(Mutex::new(nodes_map)),
             websocket_proxy_addr,
-            user_esplora_addr: esplora_str,
+            esplora,
         })
     }
 
@@ -994,7 +998,7 @@ pub(crate) async fn create_new_node_from_node_manager(
         node_manager.wallet.clone(),
         node_manager.network,
         node_manager.websocket_proxy_addr.clone(),
-        node_manager.user_esplora_addr.clone(),
+        node_manager.esplora.clone(),
     )
     .await
     {
