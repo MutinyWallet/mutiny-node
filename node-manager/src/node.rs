@@ -28,7 +28,7 @@ use crate::error::MutinyStorageError;
 use crate::proxy::Proxy;
 use crate::socket::WsTcpSocketDescriptor;
 use crate::{
-    background::{BackgroundProcessor, GossipSync},
+    background::{process_events_async, GossipSync},
     error::MutinyError,
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
     logging::MutinyLogger,
@@ -140,7 +140,6 @@ pub(crate) struct Node {
     pub invoice_payer: Arc<InvoicePayer<EventHandler>>,
     network: Network,
     pub persister: Arc<MutinyNodePersister>,
-    _background_processor: BackgroundProcessor,
     logger: Arc<MutinyLogger>,
     websocket_proxy_addr: String,
     multi_socket: MultiWsSocketDescriptor,
@@ -275,27 +274,39 @@ impl Node {
             Arc::clone(&channel_manager),
             router,
             Arc::clone(&logger),
-            event_handler,
-            payment::Retry::Attempts(5), // todo potentially rethink
+            event_handler.clone(),
+            payment::Retry::Attempts(5),
         ));
 
+        let background_persister = persister.clone();
+        let background_event_handler = event_handler.clone();
         let background_processor_logger = logger.clone();
-        let background_processor_invoice_payer = invoice_payer.clone();
         let background_processor_peer_manager = peer_man.clone();
         let background_processor_channel_manager = channel_manager.clone();
         let background_chain_monitor = chain_monitor.clone();
-        let gs: GossipSync<_, _, &NetworkGraph, _, Arc<MutinyLogger>> = GossipSync::none();
 
-        let background_processor = BackgroundProcessor::start(
-            persister.clone(),
-            background_processor_invoice_payer.clone(),
-            background_chain_monitor.clone(),
-            background_processor_channel_manager.clone(),
-            gs,
-            background_processor_peer_manager.clone(),
-            background_processor_logger,
-            Some(scorer),
-        );
+        spawn_local(async move {
+            loop {
+                let gs: GossipSync<_, _, &NetworkGraph, _, Arc<MutinyLogger>> = GossipSync::none();
+                let ev = background_event_handler.clone();
+                process_events_async(
+                    background_persister.clone(),
+                    |e| ev.handle_event(e),
+                    background_chain_monitor.clone(),
+                    background_processor_channel_manager.clone(),
+                    gs,
+                    background_processor_peer_manager.clone(),
+                    background_processor_logger.clone(),
+                    Some(scorer.clone()),
+                    |d| async move {
+                        sleep(d.as_millis() as i32).await;
+                        true
+                    },
+                )
+                .await
+                .expect("Failed to process events");
+            }
+        });
 
         // create a connection immediately to the user's
         // specified mutiny websocket proxy provider.
@@ -407,7 +418,6 @@ impl Node {
             invoice_payer,
             network,
             persister,
-            _background_processor: background_processor,
             logger,
             websocket_proxy_addr,
             multi_socket,

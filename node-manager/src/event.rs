@@ -3,18 +3,18 @@ use crate::logging::MutinyLogger;
 use crate::utils::sleep;
 use crate::wallet::MutinyWallet;
 use crate::{chain::MutinyChain, ldkstorage::PhantomChannelManager};
+use bdk::blockchain::Blockchain;
 use bdk::wallet::AddressIndex;
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::Network;
 use bitcoin_bech32::WitnessProgram;
 use bitcoin_hashes::hex::ToHex;
-use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
+use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::chain::keysinterface::PhantomKeysManager;
-use lightning::util::events::{Event, EventHandler as LdkEventHandler, PaymentPurpose};
+use lightning::util::events::{Event, PaymentPurpose};
 use lightning::util::logger::{Logger, Record};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use wasm_bindgen_futures::spawn_local;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct PaymentInfo {
@@ -38,6 +38,7 @@ pub(crate) enum HTLCStatus {
     Failed,
 }
 
+#[derive(Clone)]
 pub struct EventHandler {
     channel_manager: Arc<PhantomChannelManager>,
     chain: Arc<MutinyChain>,
@@ -68,10 +69,8 @@ impl EventHandler {
             logger,
         }
     }
-}
 
-impl LdkEventHandler for EventHandler {
-    fn handle_event(&self, event: Event) {
+    pub async fn handle_event(&self, event: Event) {
         match event {
             Event::FundingGenerationReady {
                 temporary_channel_id,
@@ -101,52 +100,49 @@ impl LdkEventHandler for EventHandler {
                 .expect("Lightning funding tx should always be to a SegWit output")
                 .to_address();
 
-                let wallet_thread = self.wallet.clone();
-                let channel_manager_thread = self.channel_manager.clone();
-                let logger_thread = self.logger.clone();
-                spawn_local(async move {
-                    let psbt = match wallet_thread
-                        .create_signed_psbt(addr, channel_value_satoshis, None)
-                        .await
-                    {
-                        Ok(psbt) => psbt,
-                        Err(e) => {
-                            logger_thread.log(&Record::new(
+                let psbt = match self
+                    .wallet
+                    .create_signed_psbt(addr, channel_value_satoshis, None)
+                    .await
+                {
+                    Ok(psbt) => psbt,
+                    Err(e) => {
+                        self.logger.log(&Record::new(
                                 lightning::util::logger::Level::Error,
                                 format_args!("ERROR: Could not create a signed transaction to open channel with: {}", e),
                                 "node",
                                 "",
                                 0,
                             ));
-                            return;
-                        }
-                    };
-                    if channel_manager_thread
-                        .funding_transaction_generated(
-                            &temporary_channel_id,
-                            &counterparty_node_id,
-                            psbt.extract_tx(),
-                        )
-                        .is_err()
-                    {
-                        logger_thread.log(&Record::new(
+                        return;
+                    }
+                };
+                if self
+                    .channel_manager
+                    .funding_transaction_generated(
+                        &temporary_channel_id,
+                        &counterparty_node_id,
+                        psbt.extract_tx(),
+                    )
+                    .is_err()
+                {
+                    self.logger.log(&Record::new(
                             lightning::util::logger::Level::Error,
                             format_args!("ERROR: Channel went away before we could fund it. The peer disconnected or refused the channel."),
                             "node",
                             "",
                             0,
                         ));
-                        return;
-                    }
+                    return;
+                }
 
-                    logger_thread.log(&Record::new(
-                        lightning::util::logger::Level::Info,
-                        format_args!("FundingGenerationReady success"),
-                        "event",
-                        "",
-                        0,
-                    ));
-                })
+                self.logger.log(&Record::new(
+                    lightning::util::logger::Level::Info,
+                    format_args!("FundingGenerationReady success"),
+                    "event",
+                    "",
+                    0,
+                ));
             }
             Event::PaymentClaimable {
                 receiver_node_id,
@@ -446,10 +442,8 @@ impl LdkEventHandler for EventHandler {
                 ));
                 let forwarding_channel_manager = self.channel_manager.clone();
                 let min = time_forwardable.as_millis() as i32;
-                spawn_local(async move {
-                    sleep(min).await;
-                    forwarding_channel_manager.process_pending_htlc_forwards();
-                });
+                sleep(min).await;
+                forwarding_channel_manager.process_pending_htlc_forwards();
             }
             Event::SpendableOutputs { outputs } => {
                 self.logger.log(&Record::new(
@@ -462,28 +456,31 @@ impl LdkEventHandler for EventHandler {
                 let wallet_thread = self.wallet.clone();
                 let keys_manager_thread = self.keys_manager.clone();
                 let chain_thread = self.chain.clone();
-                spawn_local(async move {
-                    let destination_address = wallet_thread
-                        .wallet
-                        .lock()
-                        .await
-                        .get_address(AddressIndex::New)
-                        .expect("could not get new address");
+                let destination_address = wallet_thread
+                    .wallet
+                    .lock()
+                    .await
+                    .get_internal_address(AddressIndex::New)
+                    .expect("could not get new address");
 
-                    let output_descriptors = &outputs.iter().collect::<Vec<_>>();
-                    let tx_feerate =
-                        chain_thread.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
-                    let spending_tx = keys_manager_thread
-                        .spend_spendable_outputs(
-                            output_descriptors,
-                            Vec::new(),
-                            destination_address.script_pubkey(),
-                            tx_feerate,
-                            &Secp256k1::new(),
-                        )
-                        .expect("could not spend spendable outputs");
-                    chain_thread.broadcast_transaction(&spending_tx);
-                });
+                let output_descriptors = &outputs.iter().collect::<Vec<_>>();
+                let tx_feerate =
+                    chain_thread.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+                let spending_tx = keys_manager_thread
+                    .spend_spendable_outputs(
+                        output_descriptors,
+                        Vec::new(),
+                        destination_address.script_pubkey(),
+                        tx_feerate,
+                        &Secp256k1::new(),
+                    )
+                    .expect("could not spend spendable outputs");
+
+                self.wallet
+                    .blockchain
+                    .broadcast(&spending_tx)
+                    .await
+                    .expect("failed to broadcast tx");
             }
             Event::ChannelClosed {
                 channel_id,
