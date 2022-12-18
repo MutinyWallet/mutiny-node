@@ -18,15 +18,17 @@ export default function SendAmount() {
   const [amount, setAmount] = useState("")
 
   function handleContinue() {
-    if (!amount || typeof parseInt(amount) !== "number") {
+    if (!amount || amount.match(/\D/)) {
+      setAmount('')
       toast("That doesn't look right")
       return
     } else if (parseInt(amount) <= 0) {
+      setAmount('')
       toast("You can't send nothing")
       return
     }
 
-    if (destination && amount) {
+    if (destination && amount.match(/^\d+$/)) {
       navigate(`/send/confirm?destination=${destination}&amount=${amount}`)
     }
   }
@@ -40,7 +42,7 @@ export default function SendAmount() {
         <div />
         <div className="flex flex-col gap-4">
           <p className="text-2xl font-light">How much would you like to send?</p>
-          <input onChange={e => setAmount(e.target.value)} className={`w-full ${inputStyle({ accent: "green" })}`} type="number" min={0} placeholder='sats' />
+          <input onChange={e => setAmount(e.target.value)} value={amount} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" inputMode="numeric" min={0} placeholder='sats' />
         </div>
         <ActionButton onClick={handleContinue}>
           Continue
