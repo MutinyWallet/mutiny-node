@@ -14,11 +14,12 @@ import MutinyToaster from "@components/MutinyToaster";
 function Receive() {
     let navigate = useNavigate();
 
-    const [amount, setAmount] = useState("")
+    const [receiveAmount, setAmount] = useState("")
     const [description, setDescription] = useState("")
     const queryClient = useQueryClient()
 
     async function handleContinue() {
+        const amount = receiveAmount.replace(/,/g, "")
         if (amount.match(/\D/)) {
             setAmount('')
             toast("That doesn't look right")
@@ -42,7 +43,7 @@ function Receive() {
                 <div />
                 <p className="text-2xl font-light">Want some sats?</p>
                 <div className="flex flex-col gap-4">
-                    <input onChange={e => setAmount(e.target.value)} value={amount} className={`number-type w-full ${inputStyle({ accent: "blue" })}`} type="text" inputMode="numeric" min={0} placeholder='How much? (optional)' />
+                    <input onChange={e => setAmount(e.target.value)} value={receiveAmount} className={`number-type w-full ${inputStyle({ accent: "blue" })}`} type="text" inputMode="numeric" placeholder='How much? (optional)' />
                     <input onChange={(e) => setDescription(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='What for? (optional)' />
                 </div>
                 <ActionButton onClick={() => handleContinue()}>
