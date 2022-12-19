@@ -10,6 +10,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import ActionButton from "@components/ActionButton";
 import MutinyToaster from "@components/MutinyToaster";
+import prettyPrintAmount from "@util/prettyPrintAmount";
 
 function Receive() {
     let navigate = useNavigate();
@@ -19,7 +20,7 @@ function Receive() {
     const queryClient = useQueryClient()
 
     async function handleContinue() {
-        const amount = receiveAmount.replace(/,/g, "")
+        const amount = receiveAmount.replace(/_/g, "")
         if (amount.match(/\D/)) {
             setAmount('')
             toast("That doesn't look right")
@@ -33,6 +34,22 @@ function Receive() {
         }
     }
 
+    function setAmountFormatted(value: string) {
+        if (value.length === 0) {
+            setAmount('')
+            return
+        }
+        //Use a regex to replace all commas and underscores with empty string
+        const amount = value.replace(/[_,]/g, "");
+        let parsedAmount = parseInt(amount)
+        if (typeof parsedAmount === "number" && parsedAmount !== 0) {
+            setAmount(prettyPrintAmount(parseInt(amount)))
+        } else {
+            setAmount('')
+        }
+    }
+
+
     return (
         <>
             <header className='p-8 flex justify-between items-center'>
@@ -43,7 +60,7 @@ function Receive() {
                 <div />
                 <p className="text-2xl font-light">Want some sats?</p>
                 <div className="flex flex-col gap-4">
-                    <input onChange={e => setAmount(e.target.value)} value={receiveAmount} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" inputMode="numeric" placeholder='How much? (optional)' />
+                    <input onChange={e => setAmountFormatted(e.target.value)} value={receiveAmount} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" inputMode="numeric" placeholder='How much? (optional)' />
                     <input onChange={(e) => setDescription(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='What for? (optional)' />
                 </div>
                 <ActionButton onClick={() => handleContinue()}>
