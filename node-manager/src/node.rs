@@ -12,13 +12,11 @@ use bitcoin::Network;
 use instant::Duration;
 use lightning::chain::{chainmonitor, Filter, Watch};
 use lightning::ln::channelmanager::PhantomRouteHints;
-use lightning::ln::msgs::NetAddress;
 use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::util::logger::{Logger, Record};
 use lightning::util::ser::Writeable;
 use lightning_invoice::utils::create_invoice_from_channelmanager_and_duration_since_epoch;
 use std::collections::HashMap;
-use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use wasm_bindgen_futures::spawn_local;
@@ -92,7 +90,7 @@ type Router = DefaultRouter<
 
 #[derive(Clone, Debug)]
 pub(crate) enum ConnectionType {
-    Tcp(SocketAddr),
+    Tcp(String),
     Mutiny(String),
 }
 
@@ -891,11 +889,11 @@ pub(crate) async fn connect_peer(
     // first make a connection to the node
     debug!("making connection to peer: {:?}", peer_connection_info);
     let (mut descriptor, socket_addr) = match peer_connection_info.connection_type {
-        ConnectionType::Tcp(t) => {
+        ConnectionType::Tcp(_) => {
             let proxy = Proxy::new(websocket_proxy_addr, peer_connection_info.clone()).await?;
             (
                 WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
-                Some(get_net_addr_from_socket(t)),
+                None,
             )
         }
         ConnectionType::Mutiny(_) => (
@@ -925,19 +923,6 @@ pub(crate) async fn connect_peer(
     Ok(())
 }
 
-fn get_net_addr_from_socket(socket_addr: SocketAddr) -> NetAddress {
-    match socket_addr {
-        SocketAddr::V4(sockaddr) => NetAddress::IPv4 {
-            addr: sockaddr.ip().octets(),
-            port: sockaddr.port(),
-        },
-        SocketAddr::V6(sockaddr) => NetAddress::IPv6 {
-            addr: sockaddr.ip().octets(),
-            port: sockaddr.port(),
-        },
-    }
-}
-
 pub(crate) fn create_peer_manager(
     km: Arc<PhantomKeysManager>,
     lightning_msg_handler: MessageHandler,
@@ -963,7 +948,7 @@ pub(crate) fn create_peer_manager(
 
 pub(crate) fn parse_peer_info(
     peer_pubkey_and_ip_addr: String,
-) -> Result<(PublicKey, SocketAddr), MutinyError> {
+) -> Result<(PublicKey, String), MutinyError> {
     let (pubkey, peer_addr_str) = split_peer_connection_string(peer_pubkey_and_ip_addr)?;
 
     let peer_addr_str_with_port = if peer_addr_str.contains(':') {
@@ -972,15 +957,7 @@ pub(crate) fn parse_peer_info(
         format!("{peer_addr_str}:9735")
     };
 
-    let peer_addr = peer_addr_str_with_port
-        .to_socket_addrs()
-        .map(|mut r| r.next());
-    if peer_addr.is_err() || peer_addr.as_ref().unwrap().is_none() {
-        return Err(MutinyError::PeerInfoParseFailed)
-            .context("couldn't parse pubkey@host:port into a socket address")?;
-    }
-
-    Ok((pubkey, peer_addr.unwrap().unwrap()))
+    Ok((pubkey, peer_addr_str_with_port))
 }
 
 pub(crate) fn split_peer_connection_string(
@@ -1031,7 +1008,7 @@ pub(crate) fn default_user_config() -> UserConfig {
 #[cfg(test)]
 mod tests {
     use crate::test::*;
-    use std::{net::SocketAddr, str::FromStr};
+    use std::str::FromStr;
 
     use crate::node::parse_peer_info;
 
@@ -1053,7 +1030,7 @@ mod tests {
         let (peer_pubkey, peer_addr) = parse_peer_info(format!("{}@{addr}", pub_key)).unwrap();
 
         assert_eq!(pub_key, peer_pubkey);
-        assert_eq!(addr.parse::<SocketAddr>().unwrap(), peer_addr);
+        assert_eq!(addr, peer_addr);
     }
 
     #[test]
@@ -1070,9 +1047,6 @@ mod tests {
         let (peer_pubkey, peer_addr) = parse_peer_info(format!("{pub_key}@{addr}")).unwrap();
 
         assert_eq!(pub_key, peer_pubkey);
-        assert_eq!(
-            format!("{addr}:{port}").parse::<SocketAddr>().unwrap(),
-            peer_addr
-        );
+        assert_eq!(format!("{addr}:{port}"), peer_addr);
     }
 }
