@@ -18,4 +18,14 @@ const inputStyle = cva("", {
     }
 });
 
-export { inputStyle }
+const selectStyle = cva("", {
+    variants: {
+        accent: {
+            green: "bg-green focus:ring-green",
+            blue: "bg-blue focus:ring-blue",
+            red: "bg-red focus:ring-red",
+        },
+    }
+});
+
+export { inputStyle, selectStyle }
