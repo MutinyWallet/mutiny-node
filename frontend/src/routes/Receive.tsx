@@ -43,7 +43,7 @@ function Receive() {
                 <div />
                 <p className="text-2xl font-light">Want some sats?</p>
                 <div className="flex flex-col gap-4">
-                    <input onChange={e => setAmount(e.target.value)} value={receiveAmount} className={`number-type w-full ${inputStyle({ accent: "blue" })}`} type="text" inputMode="numeric" placeholder='How much? (optional)' />
+                    <input onChange={e => setAmount(e.target.value)} value={receiveAmount} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" inputMode="numeric" placeholder='How much? (optional)' />
                     <input onChange={(e) => setDescription(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='What for? (optional)' />
                 </div>
                 <ActionButton onClick={() => handleContinue()}>
