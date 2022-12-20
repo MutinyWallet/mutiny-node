@@ -1,5 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
+import { satsToUsd, usdToSats } from "@util/conversions";
 import prettyPrintAmount from "@util/prettyPrintAmount";
+import { usePriceQuery } from "@util/queries";
 import { Dispatch, SetStateAction, useContext, useState } from "react";
 import { inputStyle, selectStyle } from "../styles";
 import { NodeManagerContext } from "./GlobalStateProvider";
@@ -16,18 +17,6 @@ export enum Currency {
     SATS = "SATS"
 }
 
-function satsToUsd(amount: number, price: number): string {
-    let btc = amount / 100000000;
-    let usd = btc * price;
-    return usd.toFixed(2);
-}
-
-function usdToSats(amount: number, price: number): string {
-    let btc = amount / price;
-    let sats = btc * 100000000;
-    return sats.toFixed(0);
-}
-
 export default function AmountInput({ amountSats, setAmount, accent, placeholder }: Props) {
     const [currency, setCurrency] = useState(Currency.SATS)
 
@@ -36,14 +25,7 @@ export default function AmountInput({ amountSats, setAmount, accent, placeholder
 
     const { nodeManager } = useContext(NodeManagerContext);
 
-    const { data: price } = useQuery({
-        queryKey: ['price'],
-        queryFn: async () => {
-            console.log("Checking bitcoin price...")
-            return await nodeManager?.get_bitcoin_price()
-        },
-        enabled: !!nodeManager,
-    })
+    const { data: price } = usePriceQuery(nodeManager);
 
     function setAmountFormatted(value: string) {
         if (value.length === 0 || value === "0") {
@@ -88,8 +70,12 @@ export default function AmountInput({ amountSats, setAmount, accent, placeholder
                     setLocalDisplayAmount(prettyPrintAmount(parsedDollars))
                 }
             } else if (value === Currency.SATS) {
-                // And the localDisplayAmount to the same thing
-                setLocalDisplayAmount(prettyPrintAmount(parsedAmount))
+                if (!parsedAmount) {
+                    // 0 looks lame
+                    setLocalDisplayAmount("")
+                } else {
+                    setLocalDisplayAmount(prettyPrintAmount(parsedAmount))
+                }
             }
         }
     }
