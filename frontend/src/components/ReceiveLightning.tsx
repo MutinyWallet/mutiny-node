@@ -6,9 +6,11 @@ import { useQuery } from "@tanstack/react-query";
 import takeN from "@util/takeN";
 import { useNavigate } from "react-router-dom";
 import { MutinyInvoice } from "node-manager";
+import useScreenWidth from "@util/screenWidth";
 
 export default function ReceiveLightning({ invoice }: { invoice: MutinyInvoice | undefined }) {
     const { nodeManager } = useContext(NodeManagerContext);
+    const screenWidth = useScreenWidth();
     let navigate = useNavigate();
 
     useQuery({
@@ -43,7 +45,7 @@ export default function ReceiveLightning({ invoice }: { invoice: MutinyInvoice |
                         {/* <p className="text-lg font-mono font-light break-all"> */}
                         <pre className="flex-1">
                             <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                {takeN(invoice.bolt11!, 28)}
+                                {takeN(invoice.bolt11!, 1.08, screenWidth)}
                             </code>
                         </pre>
                         <div className="flex-0">

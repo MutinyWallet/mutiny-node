@@ -5,9 +5,11 @@ import { NodeManagerContext } from "@components/GlobalStateProvider";
 import { useQuery } from "@tanstack/react-query";
 import takeN from "@util/takeN";
 import { useNavigate } from "react-router-dom";
+import useScreenWidth from "@util/screenWidth";
 
 export default function ReceiveOnchain({ onchainAddress }: { onchainAddress: string | undefined }) {
     const { nodeManager } = useContext(NodeManagerContext);
+    const screenWidth = useScreenWidth();
     let navigate = useNavigate();
 
     useQuery({
@@ -38,7 +40,7 @@ export default function ReceiveOnchain({ onchainAddress }: { onchainAddress: str
                         {/* <p className="text-lg font-mono font-light break-all"> */}
                         <pre className="flex-1">
                             <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                {takeN(onchainAddress, 28)}
+                                {takeN(onchainAddress, 1.09, screenWidth)}
                             </code>
                         </pre>
                         <div className="flex-0">

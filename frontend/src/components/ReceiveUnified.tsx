@@ -7,11 +7,13 @@ import takeN from "@util/takeN";
 import { useNavigate } from "react-router-dom";
 import bip21 from "bip21";
 import { MutinyBip21 } from "@routes/Send";
+import useScreenWidth from "@util/screenWidth";
 
 export type QRMode = "lightning" | "onchain" | "bip21";
 
 export default function ReceiveUnified({ bip21String, mode }: { bip21String: string, mode: QRMode }) {
     const { nodeManager } = useContext(NodeManagerContext);
+    const screenWidth = useScreenWidth();
     let navigate = useNavigate();
 
     const { address, options } = bip21.decode(bip21String) as MutinyBip21;
@@ -80,7 +82,7 @@ export default function ReceiveUnified({ bip21String, mode }: { bip21String: str
                     <div className="flex items-center gap-2 w-full">
                         <pre className="flex-1">
                             <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                {takeN(activeString, 28)}
+                                {takeN(activeString, 1.09, screenWidth)}
                             </code>
                         </pre>
                         <div className="flex-0">
