@@ -28,7 +28,7 @@ impl MutinyWallet {
         mnemonic: Mnemonic,
         database: MutinyBrowserStorage,
         network: Network,
-        user_esplora_url: Option<String>,
+        esplora: Arc<EsploraBlockchain>,
     ) -> MutinyWallet {
         let entropy = mnemonic.to_entropy();
         let xprivkey = ExtendedPrivKey::new_master(network, &entropy).unwrap();
@@ -47,7 +47,7 @@ impl MutinyWallet {
 
         MutinyWallet {
             wallet: Mutex::new(wallet),
-            blockchain: Arc::new(esplora_from_network(network, user_esplora_url)),
+            blockchain: esplora,
         }
     }
 

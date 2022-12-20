@@ -6,8 +6,8 @@ use crate::localstorage::MutinyBrowserStorage;
 use crate::logging::MutinyLogger;
 use crate::node::NetworkGraph;
 use crate::node::{default_user_config, ChainMonitor};
-use crate::wallet::esplora_from_network;
 use anyhow::anyhow;
+use bdk::blockchain::EsploraBlockchain;
 use bitcoin::BlockHash;
 use bitcoin::Network;
 use bitcoin_hashes::hex::ToHex;
@@ -182,7 +182,7 @@ impl MutinyNodePersister {
         mutiny_logger: Arc<MutinyLogger>,
         keys_manager: Arc<PhantomKeysManager>,
         mut channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
-        user_esplora_url: Option<String>,
+        esplora: Arc<EsploraBlockchain>,
     ) -> Result<ReadChannelManager, MutinyError> {
         match self.read_value(CHANNEL_MANAGER_KEY) {
             Ok(kv_value) => {
@@ -211,12 +211,11 @@ impl MutinyNodePersister {
             }
             Err(_) => {
                 // no key manager stored, start a new one
-                let blockchain = esplora_from_network(network, user_esplora_url);
 
-                let height_future = blockchain
+                let height_future = esplora
                     .get_height()
                     .map_err(|_| error::MutinyError::ChainAccessFailed);
-                let hash_future = blockchain
+                let hash_future = esplora
                     .get_tip_hash()
                     .map_err(|_| error::MutinyError::ChainAccessFailed);
                 let (height, hash) = try_join!(height_future, hash_future)?;
