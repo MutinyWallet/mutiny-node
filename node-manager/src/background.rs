@@ -221,11 +221,25 @@ where
     A::Target: chain::Access,
     L::Target: Logger,
 {
-    fn handle_event(&self, event: &Event) {
+    fn handle_event(&self, event: Event) {
         if let Some(network_graph) = self.gossip_sync.network_graph() {
-            network_graph.handle_event(event);
+            handle_network_graph_update(network_graph, &event);
         }
         self.event_handler.handle_event(event);
+    }
+}
+
+fn handle_network_graph_update<L: Deref>(network_graph: &NetworkGraph<L>, event: &Event)
+where
+    L::Target: Logger,
+{
+    if let Event::PaymentPathFailed {
+        ref network_update, ..
+    } = event
+    {
+        if let Some(network_update) = network_update {
+            network_graph.handle_network_update(network_update);
+        }
     }
 }
 
@@ -424,7 +438,7 @@ impl BackgroundProcessor {
         EH: 'static + EventHandler,
         PS: 'static + Deref + Send,
         M: 'static + Deref<Target = ChainMonitor<Signer, CF, T, F, L, P>> + Send + Sync,
-        CM: 'static + Deref<Target = ChannelManager<Signer, CW, T, K, F, L>> + Send + Sync,
+        CM: 'static + Deref<Target = ChannelManager<CW, T, K, F, L>> + Send + Sync,
         PGS: 'static + Deref<Target = P2PGossipSync<G, CA, L>> + Send + Sync,
         RGS: 'static + Deref<Target = RapidGossipSync<G, L>> + Send,
         UMH: 'static + Deref + Send + Sync,
@@ -454,7 +468,7 @@ impl BackgroundProcessor {
         OMH::Target: 'static + OnionMessageHandler,
         RMH::Target: 'static + RoutingMessageHandler,
         UMH::Target: 'static + CustomMessageHandler,
-        PS::Target: 'static + Persister<'a, Signer, CW, T, K, F, L, SC>,
+        PS::Target: 'static + Persister<'a, CW, T, K, F, L, SC>,
     {
         let stop_thread = Arc::new(AtomicBool::new(false));
         let stop_thread_clone = stop_thread.clone();

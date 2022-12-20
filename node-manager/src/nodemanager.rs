@@ -894,7 +894,7 @@ impl NodeManager {
         // likely new or inbound connections
         let mut missing: Vec<MutinyPeer> = Vec::new();
         for peer in connected_peers {
-            if storage_peers.iter().find(|p| p.pubkey == peer).is_none() {
+            if !storage_peers.iter().any(|p| p.pubkey == peer) {
                 let new = MutinyPeer {
                     pubkey: peer,
                     connection_string: "unknown".to_string(),

@@ -94,7 +94,7 @@ impl MutinyChain {
                 }
 
                 match self.get_confirmed_transactions().await {
-                    Ok((confirmed_txs, unconfirmed_registered_txs, unspent_registered_outputs)) => {
+                    Ok((confirmed_txs, spent_outputs)) => {
                         // Double-check tip hash. If something changed, restart last-minute.
                         let check_tip_hash = self.wallet.blockchain.get_tip_hash().await?;
                         if check_tip_hash != tip_hash {
@@ -105,8 +105,7 @@ impl MutinyChain {
                         self.sync_confirmed_transactions(
                             &confirmables,
                             confirmed_txs,
-                            unconfirmed_registered_txs,
-                            unspent_registered_outputs,
+                            spent_outputs,
                         );
                     }
                     Err(MutinyError::ChainAccessFailed) => {
@@ -180,9 +179,9 @@ impl MutinyChain {
         &self,
         confirmables: &Vec<&(dyn Confirm + Sync)>,
         confirmed_txs: Vec<ConfirmedTx>,
-        unconfirmed_registered_txs: HashSet<Txid>,
-        unspent_registered_outputs: HashSet<WatchedOutput>,
+        spent_outputs: HashSet<WatchedOutput>,
     ) {
+        let mut locked_watched_transactions = self.watched_transactions.lock().unwrap();
         for ctx in confirmed_txs {
             for c in confirmables {
                 c.transactions_confirmed(
@@ -191,15 +190,17 @@ impl MutinyChain {
                     ctx.block_height,
                 );
             }
+
+            locked_watched_transactions.remove(&ctx.tx.txid());
         }
 
-        *self.watched_transactions.lock().unwrap() = unconfirmed_registered_txs;
-        *self.watched_outputs.lock().unwrap() = unspent_registered_outputs;
+        let mut locked_watched_outputs = self.watched_outputs.lock().unwrap();
+        *locked_watched_outputs = &*locked_watched_outputs - &spent_outputs;
     }
 
     async fn get_confirmed_transactions(
         &self,
-    ) -> Result<(Vec<ConfirmedTx>, HashSet<Txid>, HashSet<WatchedOutput>), MutinyError> {
+    ) -> Result<(Vec<ConfirmedTx>, HashSet<WatchedOutput>), MutinyError> {
         // First, check the confirmation status of registered transactions as well as the
         // status of dependent transactions of registered outputs.
 
@@ -209,22 +210,17 @@ impl MutinyChain {
         // previous iterations.
         let registered_txs = self.watched_transactions.lock().unwrap().clone();
 
-        // Remember all registered but unconfirmed transactions for future processing.
-        let mut unconfirmed_registered_txs = HashSet::new();
-
         for txid in registered_txs {
             if let Some(confirmed_tx) = self.get_confirmed_tx(&txid, None, None).await? {
                 confirmed_txs.push(confirmed_tx);
-            } else {
-                unconfirmed_registered_txs.insert(txid);
             }
         }
 
         // Check all registered outputs for dependent spending transactions.
         let registered_outputs = self.watched_outputs.lock().unwrap().clone();
 
-        // Remember all registered outputs that haven't been spent for future processing.
-        let mut unspent_registered_outputs = HashSet::new();
+        // Remember all registered outputs that have been spent.
+        let mut spent_outputs = HashSet::new();
 
         for output in registered_outputs {
             if let Some(output_status) = self
@@ -244,12 +240,12 @@ impl MutinyChain {
                             .await?
                         {
                             confirmed_txs.push(confirmed_tx);
+                            spent_outputs.insert(output);
                             continue;
                         }
                     }
                 }
             }
-            unspent_registered_outputs.insert(output);
         }
 
         // Sort all confirmed transactions first by block height, then by in-block
@@ -260,11 +256,7 @@ impl MutinyChain {
                 .then_with(|| tx1.pos.cmp(&tx2.pos))
         });
 
-        Ok((
-            confirmed_txs,
-            unconfirmed_registered_txs,
-            unspent_registered_outputs,
-        ))
+        Ok((confirmed_txs, spent_outputs))
     }
 
     async fn get_confirmed_tx(
@@ -315,39 +307,28 @@ impl MutinyChain {
         &self,
         confirmables: &Vec<&(dyn Confirm + Sync)>,
     ) -> Result<(), MutinyError> {
-        let client = &*self.wallet.blockchain;
         // Query the interface for relevant txids and check whether the relevant blocks are still
         // in the best chain, mark them unconfirmed otherwise. If the transactions have been
         // reconfirmed in another block, we'll confirm them in the next sync iteration.
         let relevant_txids = confirmables
             .iter()
             .flat_map(|c| c.get_relevant_txids())
-            .collect::<Vec<Txid>>();
-        let mut to_watch: HashSet<Txid> = HashSet::new();
-        for txid in relevant_txids {
-            debug!("unconfirmed: {}", txid);
-            match client.get_tx_status(&txid).await {
-                Ok(Some(status)) => {
-                    // Skip if the tx in question is still confirmed.
-                    if status.confirmed {
-                        to_watch.insert(txid);
-                        continue;
-                    }
+            .collect::<HashSet<(Txid, Option<BlockHash>)>>();
+
+        for (txid, block_hash_opt) in relevant_txids {
+            if let Some(block_hash) = block_hash_opt {
+                let block_status = self.wallet.blockchain.get_block_status(&block_hash).await?;
+                if block_status.in_best_chain {
+                    // Skip if the block in question is still confirmed.
+                    continue;
                 }
-                // if the tx no longer exists or errors, we should
-                // consider it unconfirmed
-                Ok(None) => (),
-                Err(_) => (),
             }
 
             for c in confirmables {
                 c.transaction_unconfirmed(&txid);
             }
-        }
 
-        let mut locked_watched_transactions = self.watched_transactions.lock().unwrap();
-        for txid in to_watch {
-            locked_watched_transactions.insert(txid);
+            self.watched_transactions.lock().unwrap().insert(txid);
         }
 
         Ok(())

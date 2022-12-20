@@ -40,7 +40,6 @@ use bip39::Mnemonic;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin_hashes::hex::ToHex;
-use dlc_messages::message_handler::MessageHandler as DlcMessageHandler;
 use instant::SystemTime;
 use lightning::chain::keysinterface::{
     InMemorySigner, KeysInterface, PhantomKeysManager, Recipient,
@@ -50,9 +49,9 @@ use lightning::ln::peer_handler::{
     SocketDescriptor as LdkSocketDescriptor,
 };
 use lightning::routing::gossip;
+use lightning::routing::router::DefaultRouter;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
 use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
-use lightning_invoice::utils::DefaultRouter;
 use lightning_invoice::{payment, Invoice};
 use log::{debug, error, info, trace};
 
@@ -70,7 +69,7 @@ pub(crate) type PeerManager = LdkPeerManager<
     Arc<IgnoringMessageHandler>,
     Arc<IgnoringMessageHandler>,
     Arc<MutinyLogger>,
-    Arc<DlcMessageHandler>,
+    Arc<IgnoringMessageHandler>,
 >;
 
 pub(crate) type ChainMonitor = chainmonitor::ChainMonitor<
@@ -958,7 +957,7 @@ pub(crate) fn create_peer_manager(
         now as u32,
         &ephemeral_bytes,
         logger,
-        Arc::new(DlcMessageHandler::new()),
+        Arc::new(IgnoringMessageHandler {}),
     )
 }
 

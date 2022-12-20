@@ -44,7 +44,6 @@ const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
 const PEER_PREFIX_KEY: &str = "peer/";
 
 pub(crate) type PhantomChannelManager = LdkChannelManager<
-    InMemorySigner,
     Arc<ChainMonitor>,
     Arc<MutinyChain>,
     Arc<PhantomKeysManager>,

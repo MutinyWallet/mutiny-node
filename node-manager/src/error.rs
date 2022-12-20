@@ -106,21 +106,9 @@ impl From<bdk::Error> for MutinyError {
     }
 }
 
-impl From<MutinyStorageError> for dlc_manager::error::Error {
-    fn from(e: MutinyStorageError) -> Self {
-        dlc_manager::error::Error::StorageError(format!("Storage error: {e}"))
-    }
-}
-
 impl From<lightning::ln::msgs::DecodeError> for MutinyError {
     fn from(_e: lightning::ln::msgs::DecodeError) -> Self {
         MutinyError::LnDecodeError
-    }
-}
-
-impl From<dlc_manager::error::Error> for MutinyError {
-    fn from(_e: dlc_manager::error::Error) -> Self {
-        MutinyError::DLCManagerError
     }
 }
 
