@@ -63,7 +63,7 @@ export default function ConnectPeer() {
 							<pre className="flex-1">
 								{/* TODO: learn how to make this responsive and actually do overflow right */}
 								<code className="break-all whitespace-nowrap">
-									{takeNWidth(connectionString, 1.09, screenWidth)}
+									{takeNWidth(connectionString, 0.08, screenWidth)}
 								</code>
 							</pre>
 							<div className="flex-0">

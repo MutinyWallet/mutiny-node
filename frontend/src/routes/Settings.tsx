@@ -149,7 +149,7 @@ function Settings() {
                                 <p className="text-2xl font-light">Node Pubkey</p>
                                 <div className="flex items-center gap-4">
                                     <pre>
-                                        <code>{takeNWidth(nodes[0], 1.08, screenWidth)}</code>
+                                        <code>{takeNWidth(nodes[0], 0.065, screenWidth)}</code>
                                     </pre>
                                     <Copy copyValue={nodes[0]} />
                                 </div>

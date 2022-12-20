@@ -82,7 +82,7 @@ export default function ReceiveUnified({ bip21String, mode }: { bip21String: str
                     <div className="flex items-center gap-2 w-full">
                         <pre className="flex-1">
                             <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                {takeNWidth(activeString, 1.09, screenWidth)}
+                                {takeNWidth(activeString, 0.08, screenWidth)}
                             </code>
                         </pre>
                         <div className="flex-0">

@@ -45,7 +45,7 @@ export default function ReceiveLightning({ invoice }: { invoice: MutinyInvoice |
                         {/* <p className="text-lg font-mono font-light break-all"> */}
                         <pre className="flex-1">
                             <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                {takeNWidth(invoice.bolt11!, 1.08, screenWidth)}
+                                {takeNWidth(invoice.bolt11!, 0.065, screenWidth)}
                             </code>
                         </pre>
                         <div className="flex-0">

@@ -71,7 +71,7 @@ export default function ReceiveFinal() {
                         <div className="text-off-white">
                             <a href={mempoolTxUrl(onchain.txid, nodeManager?.get_network())} target="_blank" rel="noreferrer">
                                 <h3 className="text-lg font-mono">
-                                    {takeNWidth(onchain.txid, 1.08, screenWidth)}
+                                    {takeNWidth(onchain.txid, 0.065, screenWidth)}
                                 </h3>
                             </a>
                             {onchain?.received !== 0 &&
@@ -87,7 +87,7 @@ export default function ReceiveFinal() {
                         <>
                             <div className="text-off-white">
                                 <h3 className="text-lg font-mono">
-                                    {takeNWidth(lightning.payment_hash, 1.08, screenWidth)}
+                                    {takeNWidth(lightning.payment_hash, 0.065, screenWidth)}
                                 </h3>
                                 <>
                                     {lightning.amount_sats?.valueOf() &&

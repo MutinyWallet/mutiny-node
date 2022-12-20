@@ -30,7 +30,7 @@ function SingleChannel({ channel }: { channel: MutinyChannel }) {
         <li className="text-off-white border-b border-blue py-2 mb-2 flex flex-col w-full">
             {!channel.confirmed && <h3 className="font-light text-2xl opacity-70">UNCONFIRMED</h3>}
             <h3 className="text-lg">
-                {takeNWidth(channel.peer, 1.09, screenWidth)}
+                {takeNWidth(channel.peer, 0.08, screenWidth)}
             </h3>
             <div className="flex items-center gap-4">
                 <div className="flex-1 flex flex-col gap-2">
@@ -42,7 +42,7 @@ function SingleChannel({ channel }: { channel: MutinyChannel }) {
                 <button onClick={handleCloseChannel} className="h-[3rem] w-[3rem] p-1 flex items-center justify-center flex-0"><EjectIcon /></button>
             </div>
             <a className="text-sm font-light opacity-50 mt-2" href={mempoolTxUrl(channel.outpoint?.split(":")[0], nodeManager?.get_network())} target="_blank" rel="noreferrer">
-                {takeNWidth(channel.outpoint || "", 1.09, screenWidth)}
+                {takeNWidth(channel.outpoint || "", 0.08, screenWidth)}
             </a>
         </li>
     )

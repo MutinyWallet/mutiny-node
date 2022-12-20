@@ -40,7 +40,7 @@ export default function ReceiveOnchain({ onchainAddress }: { onchainAddress: str
                         {/* <p className="text-lg font-mono font-light break-all"> */}
                         <pre className="flex-1">
                             <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                {takeNWidth(onchainAddress, 1.09, screenWidth)}
+                                {takeNWidth(onchainAddress, 0.08, screenWidth)}
                             </code>
                         </pre>
                         <div className="flex-0">

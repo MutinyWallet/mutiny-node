@@ -27,7 +27,7 @@ const SingleTransaction = ({ tx, network }: { tx: OnChainTx, network?: string })
         <li className="text-off-white border-b border-red py-2 mb-2">
             <a href={mempoolTxUrl(tx.txid, network)} target="_blank" rel="noreferrer">
                 <h3 className="text-lg font-mono">
-                    {takeNWidth(tx.txid, 1.08, screenWidth)}
+                    {takeNWidth(tx.txid, 0.065, screenWidth)}
                 </h3>
             </a>
             {tx.sent !== 0 &&
