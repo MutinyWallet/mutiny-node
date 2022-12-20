@@ -5,7 +5,7 @@ import { useNavigate } from "react-router";
 import { useContext } from "react";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import takeN from "@util/takeN";
+import takeNWidth from "@util/takeNWidth";
 import prettyPrintTime from "@util/prettyPrintTime";
 import { useSearchParams } from "react-router-dom";
 import { MutinyInvoice } from "node-manager";
@@ -71,7 +71,7 @@ export default function ReceiveFinal() {
                         <div className="text-off-white">
                             <a href={mempoolTxUrl(onchain.txid, nodeManager?.get_network())} target="_blank" rel="noreferrer">
                                 <h3 className="text-lg font-mono">
-                                    {takeN(onchain.txid, 1.08, screenWidth)}
+                                    {takeNWidth(onchain.txid, 1.08, screenWidth)}
                                 </h3>
                             </a>
                             {onchain?.received !== 0 &&
@@ -87,7 +87,7 @@ export default function ReceiveFinal() {
                         <>
                             <div className="text-off-white">
                                 <h3 className="text-lg font-mono">
-                                    {takeN(lightning.payment_hash, 1.08, screenWidth)}
+                                    {takeNWidth(lightning.payment_hash, 1.08, screenWidth)}
                                 </h3>
                                 <>
                                     {lightning.amount_sats?.valueOf() &&

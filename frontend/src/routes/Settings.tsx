@@ -4,8 +4,8 @@ import MutinyToaster from "@components/MutinyToaster";
 import SettingStringsEditor from "@components/SettingStringsEditor";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toastAnything } from "@util/dumb";
-import takeN from "@util/takeN";
-import { useContext, useEffect, useState } from "react";
+import takeNWidth from "@util/takeNWidth";
+import { useContext, useState } from "react";
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
 import ScreenMain from "../components/ScreenMain"
@@ -149,7 +149,7 @@ function Settings() {
                                 <p className="text-2xl font-light">Node Pubkey</p>
                                 <div className="flex items-center gap-4">
                                     <pre>
-                                        <code>{takeN(nodes[0], 1.08, screenWidth)}</code>
+                                        <code>{takeNWidth(nodes[0], 1.08, screenWidth)}</code>
                                     </pre>
                                     <Copy copyValue={nodes[0]} />
                                 </div>

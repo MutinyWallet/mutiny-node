@@ -1,6 +1,6 @@
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import { useQuery } from "@tanstack/react-query";
-import takeN from "@util/takeN";
+import takeNWidth from "@util/takeNWidth";
 import { useContext } from "react";
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
@@ -24,11 +24,11 @@ const SingleUtxo = ({ utxo }: { utxo: Utxo }) => {
     return (
         <li className="text-off-white border-b border-red py-2 mb-2">
             <h3 className="text-lg font-mono">
-                {takeN(utxo.outpoint, 1.08, screenWidth)}
+                {takeNWidth(utxo.outpoint, 1.08, screenWidth)}
             </h3>
             <h3 className="text-lg font-light">{prettyPrintAmount(utxo.txout.value)} sats</h3>
             <h3 className="text-lg font-light">{utxo.is_spent ? <span className="text-red">Spent</span> : <span className="text-green">Unspent</span>}</h3>
-            <h4 className="text-sm font-light opacity-50">Script Pubkey: {takeN(utxo.txout.script_pubkey, 1.08, screenWidth)}</h4>
+            <h4 className="text-sm font-light opacity-50">Script Pubkey: {takeNWidth(utxo.txout.script_pubkey, 1.08, screenWidth)}</h4>
         </li>
     )
 }

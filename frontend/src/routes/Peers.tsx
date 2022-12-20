@@ -1,7 +1,7 @@
 import Copy from "@components/Copy";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import takeN from "@util/takeN";
+import takeNWidth from "@util/takeNWidth";
 import { useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import Close from "../components/Close"
@@ -57,7 +57,7 @@ function SinglePeer({ peer }: { peer: MutinyPeer }) {
                 </div>
                 <div className="flex-1 font-mono overflow-ellipsis">
                     <h3 className="text-lg">
-                        {takeN(peer.pubkey, 0.05, screenWidth)}
+                        {takeNWidth(peer.pubkey, 0.05, screenWidth)}
                     </h3>
                     {peer.is_connected && <h5 className="text-green">Connected</h5>}
                     {!peer.is_connected && <h5 className="text-red">Disconnected</h5>}

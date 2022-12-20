@@ -3,7 +3,7 @@ import Copy from "../components/Copy";
 import { useContext } from "react";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import { useQuery } from "@tanstack/react-query";
-import takeN from "@util/takeN";
+import takeNWidth from "@util/takeNWidth";
 import { useNavigate } from "react-router-dom";
 import { MutinyInvoice } from "node-manager";
 import useScreenWidth from "@util/screenWidth";
@@ -45,7 +45,7 @@ export default function ReceiveLightning({ invoice }: { invoice: MutinyInvoice |
                         {/* <p className="text-lg font-mono font-light break-all"> */}
                         <pre className="flex-1">
                             <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                {takeN(invoice.bolt11!, 1.08, screenWidth)}
+                                {takeNWidth(invoice.bolt11!, 1.08, screenWidth)}
                             </code>
                         </pre>
                         <div className="flex-0">

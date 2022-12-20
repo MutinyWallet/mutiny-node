@@ -3,7 +3,7 @@ import Copy from "../components/Copy";
 import { useContext } from "react";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import { useQuery } from "@tanstack/react-query";
-import takeN from "@util/takeN";
+import takeNWidth from "@util/takeNWidth";
 import { useNavigate } from "react-router-dom";
 import useScreenWidth from "@util/screenWidth";
 
@@ -40,7 +40,7 @@ export default function ReceiveOnchain({ onchainAddress }: { onchainAddress: str
                         {/* <p className="text-lg font-mono font-light break-all"> */}
                         <pre className="flex-1">
                             <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                {takeN(onchainAddress, 1.09, screenWidth)}
+                                {takeNWidth(onchainAddress, 1.09, screenWidth)}
                             </code>
                         </pre>
                         <div className="flex-0">

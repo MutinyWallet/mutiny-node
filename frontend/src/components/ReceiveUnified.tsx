@@ -3,7 +3,7 @@ import Copy from "../components/Copy";
 import { useContext, useEffect, useState } from "react";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import { useQuery } from "@tanstack/react-query";
-import takeN from "@util/takeN";
+import takeNWidth from "@util/takeNWidth";
 import { useNavigate } from "react-router-dom";
 import bip21 from "bip21";
 import { MutinyBip21 } from "@routes/Send";
@@ -82,7 +82,7 @@ export default function ReceiveUnified({ bip21String, mode }: { bip21String: str
                     <div className="flex items-center gap-2 w-full">
                         <pre className="flex-1">
                             <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                {takeN(activeString, 1.09, screenWidth)}
+                                {takeNWidth(activeString, 1.09, screenWidth)}
                             </code>
                         </pre>
                         <div className="flex-0">
