@@ -12,10 +12,12 @@ import { MutinyInvoice } from "node-manager";
 import prettyPrintAmount from "@util/prettyPrintAmount";
 import { mempoolTxUrl } from "@util/dumb";
 import ActionButton from "@components/ActionButton";
+import useScreenWidth from "@util/screenWidth";
 
 export default function ReceiveFinal() {
     let navigate = useNavigate();
     const queryClient = useQueryClient()
+    const screenWidth = useScreenWidth();
 
     const { nodeManager } = useContext(NodeManagerContext);
 
@@ -69,7 +71,7 @@ export default function ReceiveFinal() {
                         <div className="text-off-white">
                             <a href={mempoolTxUrl(onchain.txid, nodeManager?.get_network())} target="_blank" rel="noreferrer">
                                 <h3 className="text-lg font-mono">
-                                    {takeN(onchain.txid, 25)}
+                                    {takeN(onchain.txid, 1.08, screenWidth)}
                                 </h3>
                             </a>
                             {onchain?.received !== 0 &&
@@ -85,7 +87,7 @@ export default function ReceiveFinal() {
                         <>
                             <div className="text-off-white">
                                 <h3 className="text-lg font-mono">
-                                    {takeN(lightning.payment_hash, 25)}
+                                    {takeN(lightning.payment_hash, 1.08, screenWidth)}
                                 </h3>
                                 <>
                                     {lightning.amount_sats?.valueOf() &&

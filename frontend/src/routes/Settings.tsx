@@ -5,10 +5,11 @@ import SettingStringsEditor from "@components/SettingStringsEditor";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toastAnything } from "@util/dumb";
 import takeN from "@util/takeN";
-import { useContext, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
 import ScreenMain from "../components/ScreenMain"
+import useScreenWidth from "@util/screenWidth";
 
 import { ReactComponent as Eye } from "../images/icons/eye.svg"
 import { ReactComponent as EyeClosed } from "../images/icons/eye-closed.svg"
@@ -34,6 +35,7 @@ function SeedWords({ words }: { words: string }) {
 function Settings() {
     const { nodeManager } = useContext(NodeManagerContext);
     const queryClient = useQueryClient()
+    const screenWidth = useScreenWidth();
 
     const { data: words } = useQuery({
         queryKey: ['words'],
@@ -147,7 +149,7 @@ function Settings() {
                                 <p className="text-2xl font-light">Node Pubkey</p>
                                 <div className="flex items-center gap-4">
                                     <pre>
-                                        <code>{takeN(nodes[0], 25)}</code>
+                                        <code>{takeN(nodes[0], 1.08, screenWidth)}</code>
                                     </pre>
                                     <Copy copyValue={nodes[0]} />
                                 </div>

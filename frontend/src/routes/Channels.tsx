@@ -10,11 +10,13 @@ import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
 import ScreenMain from "../components/ScreenMain"
 import { ReactComponent as EjectIcon } from "../images/icons/eject.svg"
+import useScreenWidth from "@util/screenWidth"
 
 function SingleChannel({ channel }: { channel: MutinyChannel }) {
     console.table(channel);
 
     const queryClient = useQueryClient()
+    const screenWidth = useScreenWidth();
     const { nodeManager } = useContext(NodeManagerContext);
 
     // TODO: this should warn before closing
@@ -28,7 +30,7 @@ function SingleChannel({ channel }: { channel: MutinyChannel }) {
         <li className="text-off-white border-b border-blue py-2 mb-2 flex flex-col w-full">
             {!channel.confirmed && <h3 className="font-light text-2xl opacity-70">UNCONFIRMED</h3>}
             <h3 className="text-lg">
-                {takeN(channel.peer, 28)}
+                {takeN(channel.peer, 1.09, screenWidth)}
             </h3>
             <div className="flex items-center gap-4">
                 <div className="flex-1 flex flex-col gap-2">
@@ -40,7 +42,7 @@ function SingleChannel({ channel }: { channel: MutinyChannel }) {
                 <button onClick={handleCloseChannel} className="h-[3rem] w-[3rem] p-1 flex items-center justify-center flex-0"><EjectIcon /></button>
             </div>
             <a className="text-sm font-light opacity-50 mt-2" href={mempoolTxUrl(channel.outpoint?.split(":")[0], nodeManager?.get_network())} target="_blank" rel="noreferrer">
-                {takeN(channel.outpoint || "", 28)}
+                {takeN(channel.outpoint || "", 1.09, screenWidth)}
             </a>
         </li>
     )

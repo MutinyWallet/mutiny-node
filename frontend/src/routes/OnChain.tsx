@@ -8,6 +8,7 @@ import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
 import ScreenMain from "../components/ScreenMain"
 import prettyPrintAmount from "@util/prettyPrintAmount";
+import useScreenWidth from "@util/screenWidth";
 
 export type OnChainTx = {
     txid: string
@@ -21,11 +22,12 @@ export type OnChainTx = {
 }
 
 const SingleTransaction = ({ tx, network }: { tx: OnChainTx, network?: string }) => {
+    const screenWidth = useScreenWidth();
     return (
         <li className="text-off-white border-b border-red py-2 mb-2">
             <a href={mempoolTxUrl(tx.txid, network)} target="_blank" rel="noreferrer">
                 <h3 className="text-lg font-mono">
-                    {takeN(tx.txid, 25)}
+                    {takeN(tx.txid, 1.08, screenWidth)}
                 </h3>
             </a>
             {tx.sent !== 0 &&

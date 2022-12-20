@@ -9,10 +9,12 @@ import PageTitle from "../components/PageTitle"
 import ScreenMain from "../components/ScreenMain"
 import { ReactComponent as EjectIcon } from "../images/icons/eject.svg"
 import { MutinyPeer } from "node-manager";
+import useScreenWidth from "@util/screenWidth";
 
 function SinglePeer({ peer }: { peer: MutinyPeer }) {
 
     const queryClient = useQueryClient()
+    const screenWidth = useScreenWidth();
     const { nodeManager } = useContext(NodeManagerContext);
 
     async function handleDisconnectPeer() {
@@ -55,7 +57,7 @@ function SinglePeer({ peer }: { peer: MutinyPeer }) {
                 </div>
                 <div className="flex-1 font-mono overflow-ellipsis">
                     <h3 className="text-lg">
-                        {takeN(peer.pubkey, 15)}
+                        {takeN(peer.pubkey, 0.05, screenWidth)}
                     </h3>
                     {peer.is_connected && <h5 className="text-green">Connected</h5>}
                     {!peer.is_connected && <h5 className="text-red">Disconnected</h5>}

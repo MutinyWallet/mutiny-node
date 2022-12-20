@@ -10,10 +10,12 @@ import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
 import ScreenMain from "../components/ScreenMain";
 import { inputStyle } from "../styles";
+import useScreenWidth from "@util/screenWidth";
 
 export default function ConnectPeer() {
 	const { nodeManager } = useContext(NodeManagerContext);
 	const navigate = useNavigate();
+	const screenWidth = useScreenWidth();
 
 	const [peerConnectString, setPeerConnectString] = useState("")
 	const [nodeManagerSettings] = useState<NodeManagerSettingStrings>(getExistingSettings());
@@ -61,7 +63,7 @@ export default function ConnectPeer() {
 							<pre className="flex-1">
 								{/* TODO: learn how to make this responsive and actually do overflow right */}
 								<code className="break-all whitespace-nowrap">
-									{takeN(connectionString, 28)}
+									{takeN(connectionString, 1.09, screenWidth)}
 								</code>
 							</pre>
 							<div className="flex-0">
