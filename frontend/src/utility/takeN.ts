@@ -1,3 +1,4 @@
-export default function takeN(s: string, n: number): string {
-    return `${s.substring(0, n)}…`
+export default function takeN(s: string, n: number, screenWidth: number): string {
+    let m = (screenWidth * n)
+    return `${s.substring(0, m)}…`
 }
