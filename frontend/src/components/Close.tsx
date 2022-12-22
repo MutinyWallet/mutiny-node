@@ -24,7 +24,7 @@ export default function Close({ onClose, to }: Props) {
         }
     }
     return (
-        <div className="h-10 w-10 min-w-10 text-white active:text-half-faint" onClick={handleClose}>
+        <div className="h-10 w-10 min-w-10 text-white active:text-half-faint cursor-pointer" onClick={handleClose}>
             <CloseIcon />
         </div>
     )
