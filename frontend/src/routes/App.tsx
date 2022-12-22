@@ -39,8 +39,9 @@ function App() {
 
   return (
     <>
-      <header className='p-8'>
+      <header className='p-8 pt-8 flex justify-between items-center'>
         <img src={logo} className="App-logo" alt="logo" onClick={handleSync} />
+        <More />
       </header>
       <ScreenMain>
         {nodeManager ?
@@ -57,7 +58,6 @@ function App() {
               {/* <button className='blue-button' onClick={handleNavDeposit}>Deposit</button> */}
               <div className='w-full flex justify-between items-center'>
                 <button className='blue-button' onClick={handleNavReceive}>Receive</button>
-                <More />
               </div>
             </div>
           </>
