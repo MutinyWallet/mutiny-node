@@ -17,6 +17,7 @@ use lightning::util::logger::{Logger, Record};
 use lightning::util::ser::Writeable;
 use lightning_invoice::utils::create_invoice_from_channelmanager_and_duration_since_epoch;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use wasm_bindgen_futures::spawn_local;
@@ -42,6 +43,7 @@ use instant::SystemTime;
 use lightning::chain::keysinterface::{
     InMemorySigner, KeysInterface, PhantomKeysManager, Recipient,
 };
+use lightning::ln::msgs::NetAddress;
 use lightning::ln::peer_handler::{
     IgnoringMessageHandler, MessageHandler as LdkMessageHandler, PeerManager as LdkPeerManager,
     SocketDescriptor as LdkSocketDescriptor,
@@ -889,11 +891,11 @@ pub(crate) async fn connect_peer(
     // first make a connection to the node
     debug!("making connection to peer: {:?}", peer_connection_info);
     let (mut descriptor, socket_addr) = match peer_connection_info.connection_type {
-        ConnectionType::Tcp(_) => {
+        ConnectionType::Tcp(ref t) => {
             let proxy = Proxy::new(websocket_proxy_addr, peer_connection_info.clone()).await?;
             (
                 WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
-                None,
+                try_get_net_addr_from_socket(&t),
             )
         }
         ConnectionType::Mutiny(_) => (
@@ -921,6 +923,22 @@ pub(crate) async fn connect_peer(
     schedule_descriptor_read(descriptor, peer_manager.clone());
 
     Ok(())
+}
+
+fn try_get_net_addr_from_socket(socket_addr: &str) -> Option<NetAddress> {
+    socket_addr
+        .parse::<SocketAddr>()
+        .ok()
+        .map(|socket_addr| match socket_addr {
+            SocketAddr::V4(sockaddr) => NetAddress::IPv4 {
+                addr: sockaddr.ip().octets(),
+                port: sockaddr.port(),
+            },
+            SocketAddr::V6(sockaddr) => NetAddress::IPv6 {
+                addr: sockaddr.ip().octets(),
+                port: sockaddr.port(),
+            },
+        })
 }
 
 pub(crate) fn create_peer_manager(
