@@ -1,7 +1,7 @@
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import MutinyToaster from "@components/MutinyToaster";
 import { getFirstNode, toastAnything } from "@util/dumb";
-import { useContext, useState } from "react";
+import React, { useContext, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
@@ -15,6 +15,12 @@ export default function OpenChannel() {
 
 	const [peerPubkey, setPeerPubkey] = useState("");
 	const [amount, setAmount] = useState("")
+
+	const handleKeyDown = async (event: React.KeyboardEvent) => {
+		if (event.key === 'Enter') {
+			await handleOpenChannel()
+		}
+	};
 
 	async function handleOpenChannel() {
 		try {
@@ -50,7 +56,7 @@ export default function OpenChannel() {
 				<p className="text-2xl font-light">Let's do this!</p>
 				<div className="flex flex-col gap-4">
 					<input onChange={(e) => setPeerPubkey(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='Target node pubkey' />
-					<input onChange={(e) => setAmount(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='How big?' />
+					<input onKeyDown={handleKeyDown} onChange={(e) => setAmount(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='How big?' />
 				</div>
 				<div className="flex justify-start">
 					<button onClick={handleOpenChannel}>Create</button>

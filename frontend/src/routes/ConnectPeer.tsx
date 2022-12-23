@@ -4,7 +4,7 @@ import MutinyToaster from "@components/MutinyToaster";
 import { useQuery } from "@tanstack/react-query";
 import { getFirstNode, getHostname, toastAnything } from "@util/dumb";
 import takeN from "@util/takeN";
-import { useContext, useState } from "react";
+import React, { useContext, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
@@ -21,6 +21,13 @@ export default function ConnectPeer() {
 	function handlePeerChange(e: React.ChangeEvent<HTMLInputElement>) {
 		setPeerConnectString(e.target.value)
 	}
+
+	const handleKeyDown = async (event: React.KeyboardEvent) => {
+		if (event.key === 'Enter') {
+			await handleConnectPeer()
+		}
+	};
+
 	async function handleConnectPeer() {
 		try {
 			const myNode = await getFirstNode(nodeManager!);
@@ -72,7 +79,7 @@ export default function ConnectPeer() {
 				}
 				<div className="flex flex-col gap-4">
 					<p className="text-2xl font-light">Or you can enter your peer's connection string</p>
-					<input onChange={handlePeerChange} className={`w-full ${inputStyle({ accent: "red" })}`} type="text" placeholder='Target peer' />
+					<input onChange={handlePeerChange} onKeyDown={handleKeyDown} className={`w-full ${inputStyle({ accent: "red" })}`} type="text" placeholder='Target peer' />
 				</div>
 				<div className="flex justify-start">
 					<button onClick={handleConnectPeer} disabled={!peerConnectString}>Connect</button>

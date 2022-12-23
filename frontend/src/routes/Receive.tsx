@@ -2,7 +2,7 @@ import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
 import ScreenMain from "../components/ScreenMain";
 import { useNavigate } from "react-router";
-import { useState } from "react";
+import React, { useState } from "react";
 import { inputStyle } from "../styles";
 import { objectToSearchParams } from "@util/dumb";
 import { ReceiveParams } from "../routes/ReceiveQR";
@@ -33,6 +33,12 @@ function Receive() {
             navigate(`/receive/qr?${params}`)
         }
     }
+
+    const handleKeyDown = async (event: React.KeyboardEvent) => {
+        if (event.key === 'Enter') {
+            await handleContinue()
+        }
+    };
 
     return (
         <>

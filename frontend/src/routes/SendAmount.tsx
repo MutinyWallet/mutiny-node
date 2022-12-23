@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { useNavigate } from "react-router";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
@@ -16,6 +16,12 @@ export default function SendAmount() {
   const destination = searchParams.get("destination")
 
   const [sendAmount, setAmount] = useState("")
+
+  const handleKeyDown = async (event: React.KeyboardEvent) => {
+    if (event.key === 'Enter') {
+      handleContinue()
+    }
+  };
 
   function handleContinue() {
     const amount = sendAmount.replace(/_/g, "")

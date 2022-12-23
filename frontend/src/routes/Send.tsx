@@ -1,4 +1,4 @@
-import { useContext, useState } from "react";
+import React, { useContext, useState } from "react";
 import { useNavigate } from "react-router";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
@@ -124,6 +124,12 @@ function Send() {
     await handleContinue(data)
   }
 
+  const handleKeyDown = async (event: React.KeyboardEvent) => {
+    if (event.key === 'Enter') {
+      await handleContinue(undefined)
+    }
+  };
+
   return (
     <>
       <header className='p-8 flex justify-between items-center'>
@@ -132,7 +138,7 @@ function Send() {
       </header>
       <ScreenMain>
         <QrCodeScanner onValidCode={onValidCode} onCodeDetected={onCodeDetected} />
-        <input onChange={e => setDestination(e.target.value)} value={textFieldDestination} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice, pubkey, or address' />
+        <input onKeyDown={handleKeyDown} onChange={e => setDestination(e.target.value)} value={textFieldDestination} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice, pubkey, or address' />
         <ActionButton onClick={() => handleContinue(undefined)}>
           Continue
         </ActionButton>
