@@ -186,7 +186,7 @@ impl Node {
             })?;
 
         // init channel manager
-        let mut read_channel_manger = persister
+        let mut read_channel_manager = persister
             .read_channel_manager(
                 network,
                 chain_monitor.clone(),
@@ -199,7 +199,7 @@ impl Node {
             .await?;
 
         let channel_manager: Arc<PhantomChannelManager> =
-            Arc::new(read_channel_manger.channel_manager);
+            Arc::new(read_channel_manager.channel_manager);
 
         // init peer manager
         let ln_msg_handler = MessageHandler {
@@ -225,9 +225,9 @@ impl Node {
         ));
 
         // sync to chain tip
-        if read_channel_manger.is_restarting {
+        if read_channel_manager.is_restarting {
             let mut chain_listener_channel_monitors = Vec::new();
-            for (blockhash, channel_monitor) in read_channel_manger.channel_monitors.drain(..) {
+            for (blockhash, channel_monitor) in read_channel_manager.channel_monitors.drain(..) {
                 let outpoint = channel_monitor.get_funding_txo().0;
                 chain_listener_channel_monitors.push((
                     blockhash,
