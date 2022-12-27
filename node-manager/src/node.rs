@@ -9,7 +9,6 @@ use crate::wallet::MutinyWallet;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
 use bitcoin::Network;
-use instant::Duration;
 use lightning::chain::{chainmonitor, Filter, Watch};
 use lightning::ln::channelmanager::PhantomRouteHints;
 use lightning::ln::{PaymentHash, PaymentPreimage};
@@ -39,7 +38,6 @@ use bip39::Mnemonic;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin_hashes::hex::ToHex;
-use instant::SystemTime;
 use lightning::chain::keysinterface::{
     InMemorySigner, KeysInterface, PhantomKeysManager, Recipient,
 };
@@ -486,10 +484,7 @@ impl Node {
         let amount_msat = amount_sat.map(|s| s * 1_000);
         let invoice = match route_hints.len() {
             0 => {
-                let now = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
+                let now = crate::utils::now();
 
                 match create_invoice_from_channelmanager_and_duration_since_epoch(
                     &self.channel_manager.clone(),
@@ -498,7 +493,7 @@ impl Node {
                     currency_from_network(self.network),
                     amount_msat,
                     description,
-                    Duration::from_secs(now),
+                    now,
                     1500,
                 ) {
                     Ok(inv) => {
@@ -956,10 +951,7 @@ pub(crate) fn create_peer_manager(
     lightning_msg_handler: MessageHandler,
     logger: Arc<MutinyLogger>,
 ) -> PeerManager {
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = crate::utils::now().as_secs();
     let mut ephemeral_bytes = [0u8; 32];
     getrandom::getrandom(&mut ephemeral_bytes).expect("Failed to generate entropy");
 

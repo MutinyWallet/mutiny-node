@@ -5,7 +5,6 @@ use bitcoin::bech32::ToBase32;
 use bitcoin_hashes::Hash;
 use core::ops::Deref;
 use core::time::Duration;
-use instant::SystemTime;
 use lightning::chain::keysinterface::{KeysInterface, Recipient, Sign};
 use lightning::ln::channelmanager::{ChannelDetails, MIN_FINAL_CLTV_EXPIRY};
 use lightning::ln::channelmanager::{PhantomRouteHints, MIN_CLTV_EXPIRY_DELTA};
@@ -57,10 +56,7 @@ where
         ));
     }
 
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = crate::utils::now().as_secs();
 
     let invoice = InvoiceBuilder::new(network).description(description);
 
