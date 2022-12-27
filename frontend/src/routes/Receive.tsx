@@ -1,9 +1,8 @@
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
-import ScreenMain from "../components/ScreenMain";
 import { useNavigate } from "react-router";
-import React, { useState } from "react";
-import { inputStyle } from "../styles";
+import { useState } from "react";
+import { inputStyle, mainWrapperStyle } from "../styles";
 import { objectToSearchParams } from "@util/dumb";
 import { ReceiveParams } from "../routes/ReceiveQR";
 import { useQueryClient } from "@tanstack/react-query";
@@ -19,7 +18,8 @@ function Receive() {
     const [description, setDescription] = useState("")
     const queryClient = useQueryClient()
 
-    async function handleContinue() {
+    async function handleSubmit(e: React.SyntheticEvent) {
+        e.preventDefault()
         const amount = receiveAmount.replace(/_/g, "")
         if (amount.match(/\D/)) {
             setAmount('')
@@ -34,29 +34,25 @@ function Receive() {
         }
     }
 
-    const handleKeyDown = async (event: React.KeyboardEvent) => {
-        if (event.key === 'Enter') {
-            await handleContinue()
-        }
-    };
-
     return (
         <>
             <header className='p-8 flex justify-between items-center'>
                 <PageTitle title="Receive" theme="blue"></PageTitle>
                 <Close />
             </header>
-            <ScreenMain>
-                <div />
-                <p className="text-2xl font-light">Want some sats?</p>
-                <div className="flex flex-col gap-4">
-                    <AmountInput amountSats={receiveAmount} setAmount={setAmount} accent="blue" placeholder="How much? (optional)" />
-                    <input onChange={(e) => setDescription(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='What for? (optional)' />
-                </div>
-                <ActionButton onClick={() => handleContinue()}>
-                    Continue
-                </ActionButton>
-            </ScreenMain>
+            <main>
+                <form onSubmit={handleSubmit} className={mainWrapperStyle()}>
+                    <div />
+                    <p className="text-2xl font-light">Want some sats?</p>
+                    <div className="flex flex-col gap-4">
+                        <AmountInput amountSats={receiveAmount} setAmount={setAmount} accent="blue" placeholder="How much? (optional)" />
+                        <input onChange={(e) => setDescription(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='What for? (optional)' />
+                    </div>
+                    <ActionButton>
+                        Continue
+                    </ActionButton>
+                </form>
+            </main>
             <MutinyToaster />
         </>
     );

@@ -1,12 +1,13 @@
+import ActionButton from "@components/ActionButton";
+import AmountInput from "@components/AmountInput";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import MutinyToaster from "@components/MutinyToaster";
 import { getFirstNode, toastAnything } from "@util/dumb";
-import React, { useContext, useState } from "react";
+import { useContext, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
-import ScreenMain from "../components/ScreenMain";
-import { inputStyle } from "../styles";
+import { inputStyle, mainWrapperStyle } from "../styles";
 
 
 export default function OpenChannel() {
@@ -14,15 +15,16 @@ export default function OpenChannel() {
 	let navigate = useNavigate();
 
 	const [peerPubkey, setPeerPubkey] = useState("");
-	const [amount, setAmount] = useState("")
+	const [channelAmount, setAmount] = useState("")
 
-	const handleKeyDown = async (event: React.KeyboardEvent) => {
-		if (event.key === 'Enter') {
-			await handleOpenChannel()
+	async function handleSubmit(e: React.SyntheticEvent) {
+		e.preventDefault()
+		const amount = channelAmount.replace(/_/g, "")
+		if (amount.match(/\D/)) {
+			setAmount('')
+			toastAnything("That doesn't look right")
+			return
 		}
-	};
-
-	async function handleOpenChannel() {
 		try {
 			const myNode = await getFirstNode(nodeManager!);
 
@@ -51,18 +53,18 @@ export default function OpenChannel() {
 				<Close to="/manager/channels" />
 			</header>
 
-			<ScreenMain>
-				<div />
-				<p className="text-2xl font-light">Let's do this!</p>
-				<div className="flex flex-col gap-4">
-					<input onChange={(e) => setPeerPubkey(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='Target node pubkey' />
-					<input onKeyDown={handleKeyDown} onChange={(e) => setAmount(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='How big?' />
-				</div>
-				<div className="flex justify-start">
-					<button onClick={handleOpenChannel}>Create</button>
-				</div>
-				<MutinyToaster />
-			</ScreenMain>
+			<main>
+				<form onSubmit={handleSubmit} className={mainWrapperStyle()}>
+					<div />
+					<p className="text-2xl font-light">Let's do this!</p>
+					<div className="flex flex-col gap-4">
+						<input onChange={(e) => setPeerPubkey(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='Target node pubkey' />
+						<AmountInput amountSats={channelAmount} setAmount={setAmount} accent="blue" placeholder="How big?" />
+					</div>
+					<ActionButton>Create</ActionButton>
+				</form>
+			</main>
+			<MutinyToaster />
 
 		</>
 	)

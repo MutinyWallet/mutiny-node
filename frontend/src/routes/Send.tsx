@@ -2,8 +2,7 @@ import React, { useContext, useState } from "react";
 import { useNavigate } from "react-router";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
-import ScreenMain from "../components/ScreenMain";
-import { inputStyle } from "../styles";
+import { inputStyle, mainWrapperStyle } from "../styles";
 import toast from "react-hot-toast"
 import MutinyToaster from "../components/MutinyToaster";
 import { detectPaymentType, objectToSearchParams, PaymentType, toastAnything } from "@util/dumb";
@@ -95,7 +94,7 @@ function Send() {
       await navigateForBip21(destination)
     } else if (paymentType === PaymentType.keysend) {
       const params = objectToSearchParams<SendConfirmParams>({ destination })
-        navigate(`/send/amount?${params}`)
+      navigate(`/send/amount?${params}`)
     } else if (paymentType === PaymentType.onchain) {
       if (sendAll === "true") {
         const params = objectToSearchParams<SendConfirmParams>({ destination, all: "true" })
@@ -124,11 +123,10 @@ function Send() {
     await handleContinue(data)
   }
 
-  const handleKeyDown = async (event: React.KeyboardEvent) => {
-    if (event.key === 'Enter') {
-      await handleContinue(undefined)
-    }
-  };
+  async function handleSubmit(e: React.SyntheticEvent) {
+    e.preventDefault()
+    await handleContinue(undefined)
+  }
 
   return (
     <>
@@ -136,13 +134,15 @@ function Send() {
         <PageTitle title="Send" theme="green" />
         <Close />
       </header>
-      <ScreenMain>
-        <QrCodeScanner onValidCode={onValidCode} onCodeDetected={onCodeDetected} />
-        <input onKeyDown={handleKeyDown} onChange={e => setDestination(e.target.value)} value={textFieldDestination} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice, pubkey, or address' />
-        <ActionButton onClick={() => handleContinue(undefined)}>
-          Continue
-        </ActionButton>
-      </ScreenMain>
+      <main>
+        <form onSubmit={handleSubmit} className={mainWrapperStyle()}>
+          <QrCodeScanner onValidCode={onValidCode} onCodeDetected={onCodeDetected} />
+          <input onChange={e => setDestination(e.target.value)} value={textFieldDestination} className={`w-full ${inputStyle({ accent: "green" })}`} type="text" placeholder='Paste invoice, pubkey, or address' />
+          <ActionButton>
+            Continue
+          </ActionButton>
+        </form>
+      </main>
       <MutinyToaster />
     </>
   );
