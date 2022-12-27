@@ -12,13 +12,12 @@ use bitcoin::Network;
 use instant::Duration;
 use lightning::chain::{chainmonitor, Filter, Watch};
 use lightning::ln::channelmanager::PhantomRouteHints;
-use lightning::ln::msgs::NetAddress;
 use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::util::logger::{Logger, Record};
 use lightning::util::ser::Writeable;
 use lightning_invoice::utils::create_invoice_from_channelmanager_and_duration_since_epoch;
 use std::collections::HashMap;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use wasm_bindgen_futures::spawn_local;
@@ -28,7 +27,7 @@ use crate::error::MutinyStorageError;
 use crate::proxy::Proxy;
 use crate::socket::WsTcpSocketDescriptor;
 use crate::{
-    background::{BackgroundProcessor, GossipSync},
+    background::{process_events_async, GossipSync},
     error::MutinyError,
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
     logging::MutinyLogger,
@@ -44,6 +43,7 @@ use instant::SystemTime;
 use lightning::chain::keysinterface::{
     InMemorySigner, KeysInterface, PhantomKeysManager, Recipient,
 };
+use lightning::ln::msgs::NetAddress;
 use lightning::ln::peer_handler::{
     IgnoringMessageHandler, MessageHandler as LdkMessageHandler, PeerManager as LdkPeerManager,
     SocketDescriptor as LdkSocketDescriptor,
@@ -92,7 +92,7 @@ type Router = DefaultRouter<
 
 #[derive(Clone, Debug)]
 pub(crate) enum ConnectionType {
-    Tcp(SocketAddr),
+    Tcp(String),
     Mutiny(String),
 }
 
@@ -140,7 +140,6 @@ pub(crate) struct Node {
     pub invoice_payer: Arc<InvoicePayer<EventHandler>>,
     network: Network,
     pub persister: Arc<MutinyNodePersister>,
-    _background_processor: BackgroundProcessor,
     logger: Arc<MutinyLogger>,
     websocket_proxy_addr: String,
     multi_socket: MultiWsSocketDescriptor,
@@ -186,7 +185,7 @@ impl Node {
             })?;
 
         // init channel manager
-        let mut read_channel_manger = persister
+        let mut read_channel_manager = persister
             .read_channel_manager(
                 network,
                 chain_monitor.clone(),
@@ -199,7 +198,7 @@ impl Node {
             .await?;
 
         let channel_manager: Arc<PhantomChannelManager> =
-            Arc::new(read_channel_manger.channel_manager);
+            Arc::new(read_channel_manager.channel_manager);
 
         // init peer manager
         let ln_msg_handler = MessageHandler {
@@ -225,9 +224,9 @@ impl Node {
         ));
 
         // sync to chain tip
-        if read_channel_manger.is_restarting {
+        if read_channel_manager.is_restarting {
             let mut chain_listener_channel_monitors = Vec::new();
-            for (blockhash, channel_monitor) in read_channel_manger.channel_monitors.drain(..) {
+            for (blockhash, channel_monitor) in read_channel_manager.channel_monitors.drain(..) {
                 let outpoint = channel_monitor.get_funding_txo().0;
                 chain_listener_channel_monitors.push((
                     blockhash,
@@ -275,27 +274,39 @@ impl Node {
             Arc::clone(&channel_manager),
             router,
             Arc::clone(&logger),
-            event_handler,
-            payment::Retry::Attempts(5), // todo potentially rethink
+            event_handler.clone(),
+            payment::Retry::Attempts(5),
         ));
 
+        let background_persister = persister.clone();
+        let background_event_handler = event_handler.clone();
         let background_processor_logger = logger.clone();
-        let background_processor_invoice_payer = invoice_payer.clone();
         let background_processor_peer_manager = peer_man.clone();
         let background_processor_channel_manager = channel_manager.clone();
         let background_chain_monitor = chain_monitor.clone();
-        let gs: GossipSync<_, _, &NetworkGraph, _, Arc<MutinyLogger>> = GossipSync::none();
 
-        let background_processor = BackgroundProcessor::start(
-            persister.clone(),
-            background_processor_invoice_payer.clone(),
-            background_chain_monitor.clone(),
-            background_processor_channel_manager.clone(),
-            gs,
-            background_processor_peer_manager.clone(),
-            background_processor_logger,
-            Some(scorer),
-        );
+        spawn_local(async move {
+            loop {
+                let gs: GossipSync<_, _, &NetworkGraph, _, Arc<MutinyLogger>> = GossipSync::none();
+                let ev = background_event_handler.clone();
+                process_events_async(
+                    background_persister.clone(),
+                    |e| ev.handle_event(e),
+                    background_chain_monitor.clone(),
+                    background_processor_channel_manager.clone(),
+                    gs,
+                    background_processor_peer_manager.clone(),
+                    background_processor_logger.clone(),
+                    Some(scorer.clone()),
+                    |d| async move {
+                        sleep(d.as_millis() as i32).await;
+                        true
+                    },
+                )
+                .await
+                .expect("Failed to process events");
+            }
+        });
 
         // create a connection immediately to the user's
         // specified mutiny websocket proxy provider.
@@ -407,7 +418,6 @@ impl Node {
             invoice_payer,
             network,
             persister,
-            _background_processor: background_processor,
             logger,
             websocket_proxy_addr,
             multi_socket,
@@ -891,11 +901,11 @@ pub(crate) async fn connect_peer(
     // first make a connection to the node
     debug!("making connection to peer: {:?}", peer_connection_info);
     let (mut descriptor, socket_addr) = match peer_connection_info.connection_type {
-        ConnectionType::Tcp(t) => {
+        ConnectionType::Tcp(ref t) => {
             let proxy = Proxy::new(websocket_proxy_addr, peer_connection_info.clone()).await?;
             (
                 WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
-                Some(get_net_addr_from_socket(t)),
+                try_get_net_addr_from_socket(&t),
             )
         }
         ConnectionType::Mutiny(_) => (
@@ -925,17 +935,20 @@ pub(crate) async fn connect_peer(
     Ok(())
 }
 
-fn get_net_addr_from_socket(socket_addr: SocketAddr) -> NetAddress {
-    match socket_addr {
-        SocketAddr::V4(sockaddr) => NetAddress::IPv4 {
-            addr: sockaddr.ip().octets(),
-            port: sockaddr.port(),
-        },
-        SocketAddr::V6(sockaddr) => NetAddress::IPv6 {
-            addr: sockaddr.ip().octets(),
-            port: sockaddr.port(),
-        },
-    }
+fn try_get_net_addr_from_socket(socket_addr: &str) -> Option<NetAddress> {
+    socket_addr
+        .parse::<SocketAddr>()
+        .ok()
+        .map(|socket_addr| match socket_addr {
+            SocketAddr::V4(sockaddr) => NetAddress::IPv4 {
+                addr: sockaddr.ip().octets(),
+                port: sockaddr.port(),
+            },
+            SocketAddr::V6(sockaddr) => NetAddress::IPv6 {
+                addr: sockaddr.ip().octets(),
+                port: sockaddr.port(),
+            },
+        })
 }
 
 pub(crate) fn create_peer_manager(
@@ -963,7 +976,7 @@ pub(crate) fn create_peer_manager(
 
 pub(crate) fn parse_peer_info(
     peer_pubkey_and_ip_addr: String,
-) -> Result<(PublicKey, SocketAddr), MutinyError> {
+) -> Result<(PublicKey, String), MutinyError> {
     let (pubkey, peer_addr_str) = split_peer_connection_string(peer_pubkey_and_ip_addr)?;
 
     let peer_addr_str_with_port = if peer_addr_str.contains(':') {
@@ -972,15 +985,7 @@ pub(crate) fn parse_peer_info(
         format!("{peer_addr_str}:9735")
     };
 
-    let peer_addr = peer_addr_str_with_port
-        .to_socket_addrs()
-        .map(|mut r| r.next());
-    if peer_addr.is_err() || peer_addr.as_ref().unwrap().is_none() {
-        return Err(MutinyError::PeerInfoParseFailed)
-            .context("couldn't parse pubkey@host:port into a socket address")?;
-    }
-
-    Ok((pubkey, peer_addr.unwrap().unwrap()))
+    Ok((pubkey, peer_addr_str_with_port))
 }
 
 pub(crate) fn split_peer_connection_string(
@@ -1031,7 +1036,7 @@ pub(crate) fn default_user_config() -> UserConfig {
 #[cfg(test)]
 mod tests {
     use crate::test::*;
-    use std::{net::SocketAddr, str::FromStr};
+    use std::str::FromStr;
 
     use crate::node::parse_peer_info;
 
@@ -1053,7 +1058,7 @@ mod tests {
         let (peer_pubkey, peer_addr) = parse_peer_info(format!("{}@{addr}", pub_key)).unwrap();
 
         assert_eq!(pub_key, peer_pubkey);
-        assert_eq!(addr.parse::<SocketAddr>().unwrap(), peer_addr);
+        assert_eq!(addr, peer_addr);
     }
 
     #[test]
@@ -1070,9 +1075,6 @@ mod tests {
         let (peer_pubkey, peer_addr) = parse_peer_info(format!("{pub_key}@{addr}")).unwrap();
 
         assert_eq!(pub_key, peer_pubkey);
-        assert_eq!(
-            format!("{addr}:{port}").parse::<SocketAddr>().unwrap(),
-            peer_addr
-        );
+        assert_eq!(format!("{addr}:{port}"), peer_addr);
     }
 }

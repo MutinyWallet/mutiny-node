@@ -1,15 +1,15 @@
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
-import ScreenMain from "../components/ScreenMain";
 import { useNavigate } from "react-router";
 import { useState } from "react";
-import { inputStyle } from "../styles";
+import { inputStyle, mainWrapperStyle } from "../styles";
 import { objectToSearchParams } from "@util/dumb";
 import { ReceiveParams } from "../routes/ReceiveQR";
 import { useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import ActionButton from "@components/ActionButton";
 import MutinyToaster from "@components/MutinyToaster";
+import AmountInput from "@components/AmountInput";
 
 function Receive() {
     let navigate = useNavigate();
@@ -18,8 +18,9 @@ function Receive() {
     const [description, setDescription] = useState("")
     const queryClient = useQueryClient()
 
-    async function handleContinue() {
-        const amount = receiveAmount.replace(/,/g, "")
+    async function handleSubmit(e: React.SyntheticEvent) {
+        e.preventDefault()
+        const amount = receiveAmount.replace(/_/g, "")
         if (amount.match(/\D/)) {
             setAmount('')
             toast("That doesn't look right")
@@ -39,17 +40,19 @@ function Receive() {
                 <PageTitle title="Receive" theme="blue"></PageTitle>
                 <Close />
             </header>
-            <ScreenMain>
-                <div />
-                <p className="text-2xl font-light">Want some sats?</p>
-                <div className="flex flex-col gap-4">
-                    <input onChange={e => setAmount(e.target.value)} value={receiveAmount} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" inputMode="numeric" placeholder='How much? (optional)' />
-                    <input onChange={(e) => setDescription(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='What for? (optional)' />
-                </div>
-                <ActionButton onClick={() => handleContinue()}>
-                    Continue
-                </ActionButton>
-            </ScreenMain>
+            <main>
+                <form onSubmit={handleSubmit} className={mainWrapperStyle()}>
+                    <div />
+                    <p className="text-2xl font-light">Want some sats?</p>
+                    <div className="flex flex-col gap-4">
+                        <AmountInput amountSats={receiveAmount} setAmount={setAmount} accent="blue" placeholder="How much? (optional)" />
+                        <input onChange={(e) => setDescription(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='What for? (optional)' />
+                    </div>
+                    <ActionButton>
+                        Continue
+                    </ActionButton>
+                </form>
+            </main>
             <MutinyToaster />
         </>
     );
