@@ -3,7 +3,7 @@ import useScreenWidth from "@util/screenWidth"
 
 type Props = {
     code: string
-    truncStart: number
+    truncStart?: number
   }
 
 export default function CodeTruncator({code, truncStart}: Props) {
@@ -11,6 +11,6 @@ export default function CodeTruncator({code, truncStart}: Props) {
     // the percent is when the width of the screen is 
 
     return (
-        <span>{takeNWidth(code, truncStart, screenWidth)}</span>
+        <span>{takeNWidth(code, screenWidth, truncStart)}</span>
     )
 }
