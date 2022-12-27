@@ -298,7 +298,7 @@ impl Node {
                     Some(scorer.clone()),
                     |d| async move {
                         sleep(d.as_millis() as i32).await;
-                        true
+                        false
                     },
                 )
                 .await
