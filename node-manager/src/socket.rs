@@ -207,13 +207,15 @@ impl MultiWsSocketDescriptor {
                                 serde_json::from_str(&msg).expect("could not parse"); // TODO remove
                             match command {
                                 MutinyProxyCommand::Disconnect { to: _to, from } => {
-                                    match socket_map_copy.lock().await.get_mut(&from) {
+                                    let mut locked_socket_map = socket_map_copy.lock().await;
+                                    match locked_socket_map.get_mut(&from) {
                                         Some((subsocket, _sender)) => {
                                             debug!("disconnecting subsocket");
                                             subsocket.disconnect_socket();
                                             peer_manager_copy.socket_disconnected(
                                                 &WsSocketDescriptor::Mutiny(subsocket.clone()),
                                             );
+                                            locked_socket_map.remove(&from);
                                         }
                                         None => {
                                             debug!("tried to disconnect a subsocket that doesn't exist...");
@@ -223,6 +225,7 @@ impl MultiWsSocketDescriptor {
                             };
                         }
                         Message::Bytes(msg) => {
+                            debug!("received a binary message on multi socket...");
                             // This is a mutiny to mutiny connection with pubkey + bytes
                             // as the binary message. Parse the msg and see which pubkey
                             // it belongs to.
@@ -238,7 +241,12 @@ impl MultiWsSocketDescriptor {
                             match found_subsocket {
                                 Some((_subsocket, sender)) => {
                                     match sender.send(Message::Bytes(message_bytes.to_vec())) {
-                                        Ok(_) => (),
+                                        Ok(_) => {
+                                            debug!(
+                                                "found subsocket to forward bytes to: {:?}",
+                                                id_bytes
+                                            );
+                                        }
                                         Err(e) => error!("error sending msg to channel: {}", e),
                                     };
                                 }
