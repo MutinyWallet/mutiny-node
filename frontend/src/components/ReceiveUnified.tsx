@@ -3,17 +3,15 @@ import Copy from "../components/Copy";
 import { useContext, useEffect, useState } from "react";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import { useQuery } from "@tanstack/react-query";
-import takeNWidth from "@util/takeNWidth";
 import { useNavigate } from "react-router-dom";
 import bip21 from "bip21";
 import { MutinyBip21 } from "@routes/Send";
-import useScreenWidth from "@util/screenWidth";
+import CodeTruncator from "./CodeTruncator";
 
 export type QRMode = "lightning" | "onchain" | "bip21";
 
 export default function ReceiveUnified({ bip21String, mode }: { bip21String: string, mode: QRMode }) {
     const { nodeManager } = useContext(NodeManagerContext);
-    const screenWidth = useScreenWidth();
     let navigate = useNavigate();
 
     const { address, options } = bip21.decode(bip21String) as MutinyBip21;
@@ -79,10 +77,10 @@ export default function ReceiveUnified({ bip21String, mode }: { bip21String: str
                     <div className="bg-[#ffffff] p-4">
                         <QRCode level="M" value={activeString} />
                     </div>
-                    <div className="flex items-center gap-2 w-full">
+                    <div className="flex items-center gap-2 w-fit">
                         <pre className="flex-1">
                             <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                {takeNWidth(activeString, 0.08, screenWidth)}
+                                <CodeTruncator code={activeString} truncStart={1020}/>
                             </code>
                         </pre>
                         <div className="flex-0">
