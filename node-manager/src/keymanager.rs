@@ -28,7 +28,7 @@ fn generate_12_word_seed() -> Result<Mnemonic, MutinyError> {
     Ok(mnemonic)
 }
 
-// A node private key will be derived from `m/0'/X'`, where it's node pubkey will
+// A node private key will be derived from `m/0'/X'`, where its node pubkey will
 // be derived from the LDK default being `m/0'/X'/0'`. The PhantomKeysManager shared
 // key secret will be derived from `m/0'`.
 pub(crate) fn create_keys_manager(mnemonic: Mnemonic, child_index: u32) -> PhantomKeysManager {
