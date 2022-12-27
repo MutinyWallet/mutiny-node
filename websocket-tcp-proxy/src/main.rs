@@ -193,7 +193,7 @@ enum MutinyWSCommand {
 }
 
 #[derive(Serialize, Deserialize)]
-enum MutinyProxyCommand {
+pub enum MutinyProxyCommand {
     Disconnect { to: Vec<u8>, from: Vec<u8> },
 }
 
@@ -252,6 +252,7 @@ async fn handle_mutiny_ws(
     loop {
         tokio::select! {
             // The websocket owner is sending a message to some peer
+            // or got disconnected.
             res  = socket.recv() => {
                 if let Some(msg) = res {
                     if let Ok(Message::Binary(msg)) = msg {
@@ -270,31 +271,48 @@ async fn handle_mutiny_ws(
                                 Ok(_) => (),
                                 Err(e) => {
                                     tracing::error!("could not send message to peer identity: {}", e);
-                                    // TODO return a close command, we are having a problem sending
+                                    // return a close command, we are having a problem sending
                                     // to the other peer's consumer
+                                    match tx.send(MutinyWSCommand::Disconnect { id: peer_id_bytes }).await {
+                                        Ok(_) => (),
+                                        Err(e) => {
+                                            tracing::error!("could not send disconnect msg to self: {}", e);
+                                        }
+                                    };
                                 },
                             }
                         } else {
-                            // TODO if no producer, return a close command
-                            tracing::error!("no producer found, ignoring");
+                            // if no producer, return a close command
+                            tracing::error!("no producer found, sending disconnect");
+                            match tx.send(MutinyWSCommand::Disconnect { id: peer_id_bytes }).await {
+                                Ok(_) => (),
+                                Err(e) => {
+                                    tracing::error!("could not send disconnect msg to self: {}", e);
+                                }
+                            };
                         }
                     }
                 } else {
                     // Websocket owner closed the connection, let's remove the
                     // producer from state. When others try to access producer
                     // again, they will not find it and need to close the conn.
+                    //
+                    // TODO we should accelerate the disconnection instead of
+                    // rely on the next message sent causing a disconnection.
                     state.lock().await.remove(&owner_id_bytes);
                     tracing::info!("Websocket owner closed the connection");
                     return;
                 }
             },
             // some peer is trying to send a message to the websocket owner
+            // or a disconnection happened and the websocket owner needs to
+            // disconnect from that peer.
             res  = rx.recv() => {
                 match res {
                     Some(message) => {
                         match message {
                             MutinyWSCommand::Send{id, val} => {
-                                tracing::debug!("received an channel msg from {:?} to send to {identifier}", id);
+                                tracing::debug!("received a channel msg from {:?} to send to {identifier}", id);
                                 // put in first 33 bytes as from ID
                                 let mut concat_bytes = id[..].to_vec();
                                 let mut val_bytes = val[..].to_vec();
@@ -303,8 +321,8 @@ async fn handle_mutiny_ws(
                                     Ok(_) => (),
                                     Err(e) => {
                                         // if we can't send down websocket, kill the connection
-                                        // TODO kill the connection to all the peers connected to
-                                        // this one
+                                        // TODO send a disconnection to all peers connected to
+                                        // this peer
                                         tracing::error!("could not send message to ws owner: {}", e);
                                         state.lock().await.remove(&owner_id_bytes);
                                         return;
@@ -312,14 +330,13 @@ async fn handle_mutiny_ws(
                                 }
                             }
                             MutinyWSCommand::Disconnect{id} => {
-                                tracing::debug!("received an channel msg from {:?} to disconnect from {identifier}", id);
-                                let command = serde_json::to_string(&MutinyProxyCommand::Disconnect{to: id.to_vec(), from: owner_id_bytes.to_vec()}).unwrap();
-                                match socket.send(Message::Text(command)).await {
+                                tracing::debug!("received a channel msg from {:?} to disconnect from {identifier}", id);
+                                match socket.send(Message::Text(serde_json::to_string(&MutinyProxyCommand::Disconnect{to: owner_id_bytes.to_vec(), from: id.to_vec()}).unwrap())).await {
                                     Ok(_) => (),
                                     Err(e) => {
                                         // if we can't send down websocket, kill the connection
-                                        // TODO kill the connection to all the peers connected to
-                                        // this one
+                                        // TODO send a disconnection to all peers connected to
+                                        // this peer
                                         tracing::error!("could not send message to ws owner: {}", e);
                                         state.lock().await.remove(&owner_id_bytes);
                                         return;
@@ -329,7 +346,10 @@ async fn handle_mutiny_ws(
                         };
                     },
                     None => {
+                        // TODO send a disconnection to all peers
+                        // that are connected to this peer
                         tracing::info!("channel closed");
+                        state.lock().await.remove(&owner_id_bytes);
                         return;
                     }
                 }

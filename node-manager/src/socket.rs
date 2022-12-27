@@ -14,6 +14,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use wasm_bindgen_futures::spawn_local;
 
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+enum MutinyProxyCommand {
+    Disconnect { to: Vec<u8>, from: Vec<u8> },
+}
+
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 const PUBKEY_BYTES_LEN: usize = 33;
 
@@ -169,6 +176,16 @@ impl MultiWsSocketDescriptor {
     }
 
     pub fn listen(&self) {
+        // This first part will take in messages from the websocket connection
+        // to the proxy and decide what to do with them. If it is a binary message
+        // then it is a message from one mutiny peer to another with the first bytes
+        // being the pubkey it is for. In that case, it will find the subsocket
+        // for the pubkey it is for and send the rest of the bytes to it.
+        //
+        // The websocket proxy may also send commands to the multi websocket descriptor.
+        // A disconnection message indicates that a subsocket descriptor needs to be
+        // closed but the underlying connection should stay open. This indicates that
+        // the other peer went away or there was an issue connecting / sending to them.
         let conn_copy = self.conn.clone();
         let socket_map_copy = self.socket_map.clone();
         let send_to_multi_socket_copy = self.send_to_multi_socket.clone();
@@ -177,85 +194,123 @@ impl MultiWsSocketDescriptor {
         debug!("spawning multi socket connection reader");
         spawn_local(async move {
             while let Some(msg) = conn_copy.read.lock().await.next().await {
-                if let Ok(Message::Bytes(msg)) = msg {
-                    // parse the msg and see which pubkey it belongs to
-                    if msg.len() < PUBKEY_BYTES_LEN {
-                        debug!("msg not long enough to have pubkey, ignoring...");
-                        continue;
-                    }
-                    let (id_bytes, message_bytes) = msg.split_at(PUBKEY_BYTES_LEN);
-
-                    // now send that data to the right subsocket;
-                    let socket_lock = socket_map_copy.lock().await;
-                    let found_subsocket = socket_lock.get(id_bytes);
-                    match found_subsocket {
-                        Some((_subsocket, sender)) => {
-                            match sender.send(Message::Bytes(message_bytes.to_vec())) {
-                                Ok(_) => (),
-                                Err(e) => error!("error sending msg to channel: {}", e),
-                            };
-                        }
-                        None => {
-                            drop(socket_lock);
-
-                            // create a new subsocket and pass it to peer_manager
-                            debug!(
-                                "no connection found for socket address, creating new: {:?}",
-                                id_bytes
-                            );
-                            let inbound_subsocket = WsSocketDescriptor::Mutiny(
-                                create_new_subsocket(
-                                    socket_map_copy.clone(),
-                                    send_to_multi_socket_copy.clone(),
-                                    id_bytes.to_vec(),
-                                )
-                                .await,
-                            );
-                            debug!("created new subsocket: {:?}", id_bytes);
-                            match peer_manager_copy
-                                .new_inbound_connection(inbound_subsocket.clone(), None)
-                            {
-                                Ok(_) => {
-                                    debug!("gave new subsocket to peer manager: {:?}", id_bytes);
-                                    schedule_descriptor_read(
-                                        inbound_subsocket,
-                                        peer_manager_copy.clone(),
-                                    );
-
-                                    // now that we have the inbound connection, send the original
-                                    // message to our new subsocket descriptor
-                                    match socket_map_copy.lock().await.get(id_bytes) {
-                                        Some((_subsocket, sender)) => {
-                                            match sender
-                                                .send(Message::Bytes(message_bytes.to_vec()))
-                                            {
-                                                Ok(_) => {
-                                                    debug!("sent incoming message to new subsocket channel: {:?}", id_bytes)
-                                                }
-                                                Err(e) => {
-                                                    error!("error sending msg to channel: {}", e)
-                                                }
-                                            };
+                if let Ok(msg) = msg {
+                    match msg {
+                        Message::Text(msg) => {
+                            // This is a text command from the server. Parse the type
+                            // of command it is and act accordingly.
+                            // parse and implement subsocket disconnections.
+                            // TODO right now subsocket is very tied to a specific node,
+                            // later we should share a single connection amongst all pubkeys and in
+                            // which case "to" will be important to parse.
+                            let command: MutinyProxyCommand =
+                                serde_json::from_str(&msg).expect("could not parse"); // TODO remove
+                            match command {
+                                MutinyProxyCommand::Disconnect { to: _to, from } => {
+                                    match socket_map_copy.lock().await.get_mut(&from) {
+                                        Some((subsocket, _sender)) => {
+                                            debug!("disconnecting subsocket");
+                                            subsocket.disconnect_socket();
+                                            peer_manager_copy.socket_disconnected(
+                                                &WsSocketDescriptor::Mutiny(subsocket.clone()),
+                                            );
                                         }
                                         None => {
-                                            // TODO delete the new subsocket
-                                            error!(
-                                            "we can't find our newly created subsocket???: {:?}",
-                                            id_bytes
-                                        );
+                                            debug!("tried to disconnect a subsocket that doesn't exist...");
                                         }
                                     }
                                 }
-                                Err(_) => {
-                                    // TODO delete the new subsocket
-                                    error!(
-                                        "peer manager could not handle subsocket for: {:?}",
+                            };
+                        }
+                        Message::Bytes(msg) => {
+                            // This is a mutiny to mutiny connection with pubkey + bytes
+                            // as the binary message. Parse the msg and see which pubkey
+                            // it belongs to.
+                            if msg.len() < PUBKEY_BYTES_LEN {
+                                debug!("msg not long enough to have pubkey, ignoring...");
+                                continue;
+                            }
+                            let (id_bytes, message_bytes) = msg.split_at(PUBKEY_BYTES_LEN);
+
+                            // now send that data to the right subsocket;
+                            let socket_lock = socket_map_copy.lock().await;
+                            let found_subsocket = socket_lock.get(id_bytes);
+                            match found_subsocket {
+                                Some((_subsocket, sender)) => {
+                                    match sender.send(Message::Bytes(message_bytes.to_vec())) {
+                                        Ok(_) => (),
+                                        Err(e) => error!("error sending msg to channel: {}", e),
+                                    };
+                                }
+                                None => {
+                                    drop(socket_lock);
+
+                                    // create a new subsocket and pass it to peer_manager
+                                    debug!(
+                                        "no connection found for socket address, creating new: {:?}",
                                         id_bytes
                                     );
+                                    let inbound_subsocket = WsSocketDescriptor::Mutiny(
+                                        create_new_subsocket(
+                                            socket_map_copy.clone(),
+                                            send_to_multi_socket_copy.clone(),
+                                            id_bytes.to_vec(),
+                                        )
+                                        .await,
+                                    );
+                                    debug!("created new subsocket: {:?}", id_bytes);
+                                    match peer_manager_copy
+                                        .new_inbound_connection(inbound_subsocket.clone(), None)
+                                    {
+                                        Ok(_) => {
+                                            debug!(
+                                                "gave new subsocket to peer manager: {:?}",
+                                                id_bytes
+                                            );
+                                            schedule_descriptor_read(
+                                                inbound_subsocket,
+                                                peer_manager_copy.clone(),
+                                            );
+
+                                            // now that we have the inbound connection, send the original
+                                            // message to our new subsocket descriptor
+                                            match socket_map_copy.lock().await.get(id_bytes) {
+                                                Some((_subsocket, sender)) => {
+                                                    match sender.send(Message::Bytes(
+                                                        message_bytes.to_vec(),
+                                                    )) {
+                                                        Ok(_) => {
+                                                            debug!("sent incoming message to new subsocket channel: {:?}", id_bytes)
+                                                        }
+                                                        Err(e) => {
+                                                            error!(
+                                                                "error sending msg to channel: {}",
+                                                                e
+                                                            )
+                                                        }
+                                                    };
+                                                }
+                                                None => {
+                                                    // TODO delete the new subsocket
+                                                    error!(
+                                                        "we can't find our newly created subsocket???: {:?}",
+                                                        id_bytes
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        Err(_) => {
+                                            // TODO delete the new subsocket
+                                            error!(
+                                                "peer manager could not handle subsocket for: {:?}",
+                                                id_bytes
+                                            );
+                                        }
+                                    };
                                 }
                             };
                         }
-                    };
+                    }
                 }
             }
             debug!("leaving multi socket connection reader");
@@ -270,7 +325,9 @@ impl MultiWsSocketDescriptor {
             loop {
                 if let Ok(msg) = read_channel_copy.try_recv() {
                     match msg {
-                        Message::Text(_) => (),
+                        Message::Text(_) => {
+                            debug!("Nodes should not be sending text to the proxy, ignoring..");
+                        }
                         Message::Bytes(b) => {
                             debug!("multi socket channel reader sending bytes to proxy");
                             conn_copy_send.send(b)
@@ -299,10 +356,7 @@ pub(crate) fn schedule_descriptor_read(
                 Ok(msg_contents) => {
                     match msg_contents {
                         Message::Text(t) => {
-                            warn!(
-                            "received text from websocket when we should only receive binary: {}",
-                            t
-                        )
+                            trace!("received text command from websocket");
                         }
                         Message::Bytes(b) => {
                             trace!("received binary data from websocket");

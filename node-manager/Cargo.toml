@@ -35,6 +35,8 @@ instant = { version = "0.1", features = ["wasm-bindgen"] }
 chrono = "0.4.22"
 reqwest = { version = "0.11", default-features = false, features = ["json"] }
 
+#websocket-tcp-proxy = { path="../websocket-tcp-proxy" }
+
 base64 = "0.13.0"
 pbkdf2 = "0.11"
 aes-gcm = "0.10.1"
