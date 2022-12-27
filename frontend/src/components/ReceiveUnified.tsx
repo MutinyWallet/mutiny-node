@@ -80,7 +80,7 @@ export default function ReceiveUnified({ bip21String, mode }: { bip21String: str
                     <div className="flex items-center gap-2 w-fit">
                         <pre className="flex-1">
                             <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                <CodeTruncator code={activeString} truncStart={1020}/>
+                                <CodeTruncator code={activeString}/>
                             </code>
                         </pre>
                         <div className="flex-0">

@@ -38,7 +38,7 @@ export default function ReceiveOnchain({ onchainAddress }: { onchainAddress: str
                         {/* <p className="text-lg font-mono font-light break-all"> */}
                         <pre className="flex-1">
                             <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                <CodeTruncator code={onchainAddress} truncStart={1020}/>
+                                <CodeTruncator code={onchainAddress}/>
                             </code>
                         </pre>
                         <div className="flex-0">

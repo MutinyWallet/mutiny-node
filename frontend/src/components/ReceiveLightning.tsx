@@ -43,7 +43,7 @@ export default function ReceiveLightning({ invoice }: { invoice: MutinyInvoice |
                         {/* <p className="text-lg font-mono font-light break-all"> */}
                         <pre className="flex-1">
                             <code className="break-all whitespace-nowrap overflow-hidden overflow-ellipsis">
-                                <CodeTruncator code={invoice.bolt11!} truncStart={990}/>
+                                <CodeTruncator code={invoice.bolt11!}/>
                             </code>
                         </pre>
                         <div className="flex-0">
