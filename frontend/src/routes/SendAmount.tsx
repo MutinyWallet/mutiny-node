@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";

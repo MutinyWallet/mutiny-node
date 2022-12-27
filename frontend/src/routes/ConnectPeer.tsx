@@ -5,7 +5,7 @@ import MutinyToaster from "@components/MutinyToaster";
 import { useQuery } from "@tanstack/react-query";
 import { getFirstNode, getHostname, toastAnything } from "@util/dumb";
 import takeN from "@util/takeN";
-import React, { useContext, useState } from "react";
+import { useContext, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
