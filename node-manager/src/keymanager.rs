@@ -37,10 +37,7 @@ pub(crate) fn create_keys_manager(mnemonic: Mnemonic, child_index: u32) -> Phant
         .derive_child(bip32::ChildNumber::new(0, true).unwrap())
         .unwrap();
 
-    let xpriv = XPrv::new(mnemonic.to_seed(""))
-        .unwrap()
-        .derive_child(bip32::ChildNumber::new(0, true).unwrap())
-        .unwrap()
+    let xpriv = shared_key
         .derive_child(bip32::ChildNumber::new(child_index, true).unwrap())
         .unwrap();
 
