@@ -1,4 +1,4 @@
-import takeNWidth from "@util/takeNWidth"
+import takeNWidth from "@util/truncator"
 import useScreenWidth from "@util/screenWidth"
 
 type Props = {

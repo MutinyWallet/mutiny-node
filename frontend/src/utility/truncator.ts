@@ -14,7 +14,7 @@ export default function takeNWidthWidth(s: string, screenWidth: number, truncSta
                 return `${s.substring(0, m)}`
             }
     } else if(s.length > 70) {
-    let mLong = (screenWidth / (screenWidth / (screenWidth / 15)))
+    let mLong = (screenWidth / 15)
         return `${s.substring(0, mLong)}…`
     } else {
         return s
