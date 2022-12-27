@@ -12,56 +12,23 @@
 //#[macro_use]
 //extern crate lightning;
 //extern crate lightning_rapid_gossip_sync;
-use crate::utils;
+use futures_util::{future::FutureExt, select_biased};
 use lightning::chain;
 use lightning::chain::chaininterface::{BroadcasterInterface, FeeEstimator};
 use lightning::chain::chainmonitor::{ChainMonitor, Persist};
-use lightning::chain::keysinterface::{KeysInterface, Sign};
+use lightning::chain::keysinterface::KeysInterface;
 use lightning::ln::channelmanager::ChannelManager;
 use lightning::ln::msgs::{ChannelMessageHandler, OnionMessageHandler, RoutingMessageHandler};
 use lightning::ln::peer_handler::{CustomMessageHandler, PeerManager, SocketDescriptor};
 use lightning::routing::gossip::{NetworkGraph, P2PGossipSync};
 use lightning::routing::scoring::WriteableScore;
-use lightning::util::events::{Event, EventHandler, EventsProvider};
+use lightning::util::events::{Event, EventHandler};
 use lightning::util::logger::Logger;
 use lightning::util::persist::Persister;
 use lightning_rapid_gossip_sync::RapidGossipSync;
 use log::{error, trace};
 use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::thread::JoinHandle;
-use wasm_bindgen_futures::spawn_local;
-
-/// `BackgroundProcessor` takes care of tasks that (1) need to happen periodically to keep
-/// Rust-Lightning running properly, and (2) either can or should be run in the background. Its
-/// responsibilities are:
-/// * Processing [`Event`]s with a user-provided [`EventHandler`].
-/// * Monitoring whether the [`ChannelManager`] needs to be re-persisted to disk, and if so,
-///   writing it to disk/backups by invoking the callback given to it at startup.
-///   [`ChannelManager`] persistence should be done in the background.
-/// * Calling [`ChannelManager::timer_tick_occurred`] and [`PeerManager::timer_tick_occurred`]
-///   at the appropriate intervals.
-/// * Calling [`NetworkGraph::remove_stale_channels_and_tracking`] (if a [`GossipSync`] with a
-///   [`NetworkGraph`] is provided to [`BackgroundProcessor::start`]).
-///
-/// It will also call [`PeerManager::process_events`] periodically though this shouldn't be relied
-/// upon as doing so may result in high latency.
-///
-/// # Note
-///
-/// If [`ChannelManager`] persistence fails and the persisted manager becomes out-of-date, then
-/// there is a risk of channels force-closing on startup when the manager realizes it's outdated.
-/// However, as long as [`ChannelMonitor`] backups are sound, no funds besides those used for
-/// unilateral chain closure fees are at risk.
-///
-/// [`ChannelMonitor`]: lightning::chain::channelmonitor::ChannelMonitor
-/// [`Event`]: lightning::util::events::Event
-#[must_use = "BackgroundProcessor will immediately stop on drop. It should be stored until shutdown."]
-pub struct BackgroundProcessor {
-    stop_thread: Arc<AtomicBool>,
-    thread_handle: Option<JoinHandle<Result<(), std::io::Error>>>,
-}
+use std::time::Duration;
 
 const FRESHNESS_TIMER: u64 = 60;
 
@@ -229,6 +196,7 @@ where
     }
 }
 
+#[allow(clippy::collapsible_match)]
 fn handle_network_graph_update<L: Deref>(network_graph: &NetworkGraph<L>, event: &Event)
 where
     L::Target: Logger,
@@ -244,15 +212,11 @@ where
 }
 
 macro_rules! define_run_body {
-	($persister: ident, $event_handler: ident, $chain_monitor: ident, $channel_manager: ident,
+	($persister: ident, $chain_monitor: ident, $process_chain_monitor_events: expr,
+	 $channel_manager: ident, $process_channel_manager_events: expr,
 	 $gossip_sync: ident, $peer_manager: ident, $logger: ident, $scorer: ident,
 	 $loop_exit_check: expr, $await: expr)
 	=> { {
-		let event_handler = DecoratingEventHandler {
-			event_handler: $event_handler,
-			gossip_sync: &$gossip_sync,
-		};
-
 		trace!("Calling ChannelManager's timer_tick_occurred on startup");
 		$channel_manager.timer_tick_occurred();
 
@@ -263,10 +227,8 @@ macro_rules! define_run_body {
 		let mut have_pruned = false;
 
 		loop {
-                        utils::sleep(100).await;
-
-			$channel_manager.process_pending_events(&event_handler);
-			$chain_monitor.process_pending_events(&event_handler);
+			$process_channel_manager_events;
+			$process_chain_monitor_events;
 
 			// Note that the PeerManager::process_events may block on ChannelManager's locks,
 			// hence it comes last here. When the ChannelManager finishes whatever it's doing,
@@ -370,178 +332,110 @@ macro_rules! define_run_body {
 		if let Some(network_graph) = $gossip_sync.network_graph() {
 			let _ = $persister.persist_graph(network_graph);
 		}
+
+        Ok(())
 	} }
 }
 
-impl BackgroundProcessor {
-    /// Start a background thread that takes care of responsibilities enumerated in the [top-level
-    /// documentation].
-    ///
-    /// The thread runs indefinitely unless the object is dropped, [`stop`] is called, or
-    /// [`Persister::persist_manager`] returns an error. In case of an error, the error is retrieved by calling
-    /// either [`join`] or [`stop`].
-    ///
-    /// # Data Persistence
-    ///
-    /// [`Persister::persist_manager`] is responsible for writing out the [`ChannelManager`] to disk, and/or
-    /// uploading to one or more backup services. See [`ChannelManager::write`] for writing out a
-    /// [`ChannelManager`]. See the `lightning-persister` crate for LDK's
-    /// provided implementation.
-    ///
-    /// [`Persister::persist_graph`] is responsible for writing out the [`NetworkGraph`] to disk, if
-    /// [`GossipSync`] is supplied. See [`NetworkGraph::write`] for writing out a [`NetworkGraph`].
-    /// See the `lightning-persister` crate for LDK's provided implementation.
-    ///
-    /// Typically, users should either implement [`Persister::persist_manager`] to never return an
-    /// error or call [`join`] and handle any error that may arise. For the latter case,
-    /// `BackgroundProcessor` must be restarted by calling `start` again after handling the error.
-    ///
-    /// # Event Handling
-    ///
-    /// `event_handler` is responsible for handling events that users should be notified of (e.g.,
-    /// payment failed). [`BackgroundProcessor`] may decorate the given [`EventHandler`] with common
-    /// functionality implemented by other handlers.
-    /// * [`P2PGossipSync`] if given will update the [`NetworkGraph`] based on payment failures.
-    ///
-    /// # Rapid Gossip Sync
-    ///
-    /// If rapid gossip sync is meant to run at startup, pass [`RapidGossipSync`] via `gossip_sync`
-    /// to indicate that the [`BackgroundProcessor`] should not prune the [`NetworkGraph`] instance
-    /// until the [`RapidGossipSync`] instance completes its first sync.
-    ///
-    /// [top-level documentation]: BackgroundProcessor
-    /// [`join`]: Self::join
-    /// [`stop`]: Self::stop
-    /// [`ChannelManager`]: lightning::ln::channelmanager::ChannelManager
-    /// [`ChannelManager::write`]: lightning::ln::channelmanager::ChannelManager#impl-Writeable
-    /// [`Persister::persist_manager`]: lightning::util::persist::Persister::persist_manager
-    /// [`Persister::persist_graph`]: lightning::util::persist::Persister::persist_graph
-    /// [`NetworkGraph`]: lightning::routing::gossip::NetworkGraph
-    /// [`NetworkGraph::write`]: lightning::routing::gossip::NetworkGraph#impl-Writeable
-    #[allow(clippy::too_many_arguments)]
-    pub fn start<
-        'a,
-        Signer: 'static + Sign,
-        CA: 'static + Deref + Send + Sync,
-        CF: 'static + Deref + Send + Sync,
-        CW: 'static + Deref + Send + Sync,
-        T: 'static + Deref + Send + Sync,
-        K: 'static + Deref + Send + Sync,
-        F: 'static + Deref + Send + Sync,
-        G: 'static + Deref<Target = NetworkGraph<L>> + Send + Sync,
-        L: 'static + Deref + Send + Sync,
-        P: 'static + Deref + Send + Sync,
-        Descriptor: 'static + SocketDescriptor + Send + Sync,
-        CMH: 'static + Deref + Send + Sync,
-        OMH: 'static + Deref + Send + Sync,
-        RMH: 'static + Deref + Send + Sync,
-        EH: 'static + EventHandler,
-        PS: 'static + Deref + Send,
-        M: 'static + Deref<Target = ChainMonitor<Signer, CF, T, F, L, P>> + Send + Sync,
-        CM: 'static + Deref<Target = ChannelManager<CW, T, K, F, L>> + Send + Sync,
-        PGS: 'static + Deref<Target = P2PGossipSync<G, CA, L>> + Send + Sync,
-        RGS: 'static + Deref<Target = RapidGossipSync<G, L>> + Send,
-        UMH: 'static + Deref + Send + Sync,
-        PM: 'static + Deref<Target = PeerManager<Descriptor, CMH, RMH, OMH, L, UMH>> + Send + Sync,
-        S: 'static + Deref<Target = SC> + Send + Sync,
-        SC: WriteableScore<'a>,
-    >(
-        persister: PS,
-        event_handler: EH,
-        chain_monitor: M,
-        channel_manager: CM,
-        gossip_sync: GossipSync<PGS, RGS, G, CA, L>,
-        peer_manager: PM,
-        _logger: L,
-        scorer: Option<S>,
-    ) -> Self
-    where
-        CA::Target: 'static + chain::Access,
-        CF::Target: 'static + chain::Filter,
-        CW::Target: 'static + chain::Watch<Signer>,
-        T::Target: 'static + BroadcasterInterface,
-        K::Target: 'static + KeysInterface<Signer = Signer>,
-        F::Target: 'static + FeeEstimator,
-        L::Target: 'static + Logger,
-        P::Target: 'static + Persist<Signer>,
-        CMH::Target: 'static + ChannelMessageHandler,
-        OMH::Target: 'static + OnionMessageHandler,
-        RMH::Target: 'static + RoutingMessageHandler,
-        UMH::Target: 'static + CustomMessageHandler,
-        PS::Target: 'static + Persister<'a, CW, T, K, F, L, SC>,
-    {
-        let stop_thread = Arc::new(AtomicBool::new(false));
-        let stop_thread_clone = stop_thread.clone();
-        spawn_local(async move {
-            define_run_body!(
-                persister,
-                event_handler,
-                chain_monitor,
-                channel_manager,
-                gossip_sync,
-                peer_manager,
-                logger,
-                scorer,
-                stop_thread.load(Ordering::Acquire),
-                should_update_channel_manager()
-            );
-        });
-        Self {
-            stop_thread: stop_thread_clone,
-            thread_handle: None,
+/// Processes background events in a future.
+///
+/// `sleeper` should return a future which completes in the given amount of time and returns a
+/// boolean indicating whether the background processing should exit. Once `sleeper` returns a
+/// future which outputs true, the loop will exit and this function's future will complete.
+///
+/// See [`BackgroundProcessor::start`] for information on which actions this handles.
+#[allow(clippy::too_many_arguments)]
+pub async fn process_events_async<
+    'a,
+    CA: 'static + Deref + Send + Sync,
+    CF: 'static + Deref + Send + Sync,
+    CW: 'static + Deref + Send + Sync,
+    T: 'static + Deref + Send + Sync,
+    K: 'static + Deref + Send + Sync,
+    F: 'static + Deref + Send + Sync,
+    G: 'static + Deref<Target = NetworkGraph<L>> + Send + Sync,
+    L: 'static + Deref + Send + Sync,
+    P: 'static + Deref + Send + Sync,
+    Descriptor: 'static + SocketDescriptor + Send + Sync,
+    CMH: 'static + Deref + Send + Sync,
+    RMH: 'static + Deref + Send + Sync,
+    OMH: 'static + Deref + Send + Sync,
+    EventHandlerFuture: core::future::Future<Output = ()>,
+    EventHandler: Fn(Event) -> EventHandlerFuture,
+    PS: 'static + Deref + Send,
+    M: 'static
+        + Deref<Target = ChainMonitor<<K::Target as KeysInterface>::Signer, CF, T, F, L, P>>
+        + Send
+        + Sync,
+    CM: 'static + Deref<Target = ChannelManager<CW, T, K, F, L>> + Send + Sync,
+    PGS: 'static + Deref<Target = P2PGossipSync<G, CA, L>> + Send + Sync,
+    RGS: 'static + Deref<Target = RapidGossipSync<G, L>> + Send,
+    UMH: 'static + Deref + Send + Sync,
+    PM: 'static + Deref<Target = PeerManager<Descriptor, CMH, RMH, OMH, L, UMH>> + Send + Sync,
+    S: 'static + Deref<Target = SC> + Send + Sync,
+    SC: WriteableScore<'a>,
+    SleepFuture: core::future::Future<Output = bool>,
+    Sleeper: Fn(Duration) -> SleepFuture,
+>(
+    persister: PS,
+    event_handler: EventHandler,
+    chain_monitor: M,
+    channel_manager: CM,
+    gossip_sync: GossipSync<PGS, RGS, G, CA, L>,
+    peer_manager: PM,
+    _logger: L,
+    scorer: Option<S>,
+    sleeper: Sleeper,
+) -> Result<(), std::io::Error>
+where
+    CA::Target: 'static + chain::Access,
+    CF::Target: 'static + chain::Filter,
+    CW::Target: 'static + chain::Watch<<K::Target as KeysInterface>::Signer>,
+    T::Target: 'static + BroadcasterInterface,
+    K::Target: 'static + KeysInterface,
+    F::Target: 'static + FeeEstimator,
+    L::Target: 'static + Logger,
+    P::Target: 'static + Persist<<K::Target as KeysInterface>::Signer>,
+    CMH::Target: 'static + ChannelMessageHandler,
+    OMH::Target: 'static + OnionMessageHandler,
+    RMH::Target: 'static + RoutingMessageHandler,
+    UMH::Target: 'static + CustomMessageHandler,
+    PS::Target: 'static + Persister<'a, CW, T, K, F, L, SC>,
+{
+    let mut should_break = true;
+    let async_event_handler = |event| {
+        let network_graph = gossip_sync.network_graph();
+        let event_handler = &event_handler;
+        async move {
+            if let Some(network_graph) = network_graph {
+                handle_network_graph_update(network_graph, &event)
+            }
+            event_handler(event).await;
         }
-    }
-
-    /// Join `BackgroundProcessor`'s thread, returning any error that occurred while persisting
-    /// [`ChannelManager`].
-    ///
-    /// # Panics
-    ///
-    /// This function panics if the background thread has panicked such as while persisting or
-    /// handling events.
-    ///
-    /// [`ChannelManager`]: lightning::ln::channelmanager::ChannelManager
-    #[allow(dead_code)]
-    pub fn join(mut self) -> Result<(), std::io::Error> {
-        assert!(self.thread_handle.is_some());
-        self.join_thread()
-    }
-
-    /// Stop `BackgroundProcessor`'s thread, returning any error that occurred while persisting
-    /// [`ChannelManager`].
-    ///
-    /// # Panics
-    ///
-    /// This function panics if the background thread has panicked such as while persisting or
-    /// handling events.
-    ///
-    /// [`ChannelManager`]: lightning::ln::channelmanager::ChannelManager
-    #[allow(dead_code)]
-    pub fn stop(mut self) -> Result<(), std::io::Error> {
-        assert!(self.thread_handle.is_some());
-        self.stop_and_join_thread()
-    }
-
-    fn stop_and_join_thread(&mut self) -> Result<(), std::io::Error> {
-        self.stop_thread.store(true, Ordering::Release);
-        self.join_thread()
-    }
-
-    fn join_thread(&mut self) -> Result<(), std::io::Error> {
-        match self.thread_handle.take() {
-            Some(handle) => handle.join().unwrap(),
-            None => Ok(()),
+    };
+    define_run_body!(
+        persister,
+        chain_monitor,
+        chain_monitor
+            .process_pending_events_async(async_event_handler)
+            .await,
+        channel_manager,
+        channel_manager
+            .process_pending_events_async(async_event_handler)
+            .await,
+        gossip_sync,
+        peer_manager,
+        _logger,
+        scorer,
+        should_break,
+        {
+            select_biased! {
+                _ = channel_manager.get_persistable_update_future().fuse() => true,
+                exit = sleeper(Duration::from_millis(100)).fuse() => {
+                    should_break = exit;
+                    false
+                }
+            }
         }
-    }
-}
-
-impl Drop for BackgroundProcessor {
-    fn drop(&mut self) {
-        self.stop_and_join_thread().unwrap();
-    }
-}
-
-fn should_update_channel_manager() -> bool {
-    // TODO
-    true
+    )
 }
