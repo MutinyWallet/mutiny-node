@@ -9,10 +9,11 @@ use axum::{
 };
 use bitcoin_hashes::hex::FromHex;
 use bytes::Bytes;
+use futures::executor::block_on;
 use futures::lock::Mutex;
 use serde::{de, Deserialize, Deserializer};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::{env, fmt, str::FromStr};
 use tokio::sync::mpsc::{self, Sender};
@@ -99,20 +100,40 @@ fn format_addr_from_url(ip: String, port: String) -> String {
 }
 
 // Big help from https://github.com/HsuJv/axum-websockify
-async fn handle_socket(mut socket: WebSocket, ip: String, port: String) {
-    let addr = format_addr_from_url(ip, port);
-    let server_stream = TcpStream::connect(&addr).await;
-    tracing::info!("Connect to remote {:#?}", server_stream);
+async fn handle_socket(mut socket: WebSocket, host: String, port: String) {
+    let addr_str = format_addr_from_url(host, port);
+    let addrs = addr_str.to_socket_addrs();
 
-    if server_stream.is_err() {
-        tracing::error!("Connect to remote failed {:#?}", server_stream);
+    if addrs.is_err() || addrs.as_ref().unwrap().len() == 0 {
+        tracing::error!("Could not resolve addr {addr_str}");
         let _ = socket
-            .send(Message::Text(format!("{:#?}", server_stream)))
+            .send(Message::Text(format!("Could not resolve addr {addr_str}")))
+            .await;
+        return;
+    }
+
+    let mut addrs = addrs.unwrap();
+
+    let server_stream = addrs.find_map(|addr| {
+        let connection = block_on(TcpStream::connect(&addr));
+        if let Err(error) = &connection {
+            tracing::error!("Could not connect to {addr}: {error}");
+        };
+
+        connection.ok()
+    });
+
+    if server_stream.is_none() {
+        tracing::error!("Could not connect to: {addr_str}");
+        let _ = socket
+            .send(Message::Text(format!("Could not connect to: {addr_str}")))
             .await;
         return;
     }
 
     let mut server_stream = server_stream.unwrap();
+
+    let addr = server_stream.peer_addr().unwrap();
 
     let mut buf = [0u8; 65536]; // the max lightning message size is 65536
 
