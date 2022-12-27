@@ -925,7 +925,12 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub fn convert_btc_to_sats(btc: f64) -> Result<u64, MutinyJsError> {
-        if let Ok(amount) = bitcoin::Amount::from_btc(btc) {
+        // rust bitcoin doesn't like extra precision in the float
+        // so we round to the nearest satoshi
+        // explained here: https://stackoverflow.com/questions/28655362/how-does-one-round-a-floating-point-number-to-a-specified-number-of-digits
+        let truncated = 10i32.pow(8) as f64;
+        let btc = (btc * truncated).round() / truncated;
+        if let Ok(amount) = bitcoin::Amount::from_btc(btc as f64) {
             Ok(amount.to_sat())
         } else {
             Err(MutinyJsError::BadAmountError)
@@ -933,7 +938,6 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    // Hopefully we only use this when preparing bip21 strings
     pub fn convert_sats_to_btc(sats: u64) -> f64 {
         bitcoin::Amount::from_sat(sats).to_btc()
     }
