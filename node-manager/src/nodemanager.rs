@@ -484,7 +484,7 @@ impl NodeManager {
         address: String,
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
         let script = Address::from_str(address.as_str())?.payload.script_pubkey();
-        let txs = self.wallet.blockchain.scripthash_txs(&script, None).await?;
+        let txs = self.esplora.scripthash_txs(&script, None).await?;
 
         let details_opt = txs.first().map(|tx| {
             let received: u64 = tx
