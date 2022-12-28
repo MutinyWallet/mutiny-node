@@ -46,7 +46,7 @@ pub(crate) fn create_keys_manager(mnemonic: Mnemonic, child_index: u32) -> Phant
     PhantomKeysManager::new(
         &xpriv.to_bytes(),
         now.as_secs(),
-        now.as_nanos() as u32,
+        (now.as_nanos() % (1 << 31)) as u32, // temp fix for https://github.com/lightningdevkit/rust-lightning/pull/1935
         &shared_key.to_bytes(),
     )
 }
