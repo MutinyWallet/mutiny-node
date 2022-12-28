@@ -225,6 +225,9 @@ impl Node {
         if read_channel_manager.is_restarting {
             let mut chain_listener_channel_monitors = Vec::new();
             for (blockhash, channel_monitor) in read_channel_manager.channel_monitors.drain(..) {
+                // Get channel monitor ready to sync
+                channel_monitor.load_outputs_to_watch(&chain);
+
                 let outpoint = channel_monitor.get_funding_txo().0;
                 chain_listener_channel_monitors.push((
                     blockhash,

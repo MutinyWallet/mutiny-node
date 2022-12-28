@@ -10,7 +10,7 @@ use lightning::chain::chaininterface::{
     BroadcasterInterface, ConfirmationTarget, FeeEstimator, FEERATE_FLOOR_SATS_PER_KW,
 };
 use lightning::chain::{Confirm, Filter, WatchedOutput};
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use wasm_bindgen_futures::spawn_local;
@@ -374,7 +374,7 @@ impl FeeEstimator for MutinyChain {
                 let found = estimates.get(num_blocks.to_string().as_str());
                 match found {
                     Some(num) => {
-                        info!("Got fee rate from saved cache!");
+                        trace!("Got fee rate from saved cache!");
                         let satsVbyte = num.to_owned() as f32;
                         let fee_rate = FeeRate::from_sat_per_vb(satsVbyte);
                         (fee_rate.fee_wu(1000) as u32).max(FEERATE_FLOOR_SATS_PER_KW)
