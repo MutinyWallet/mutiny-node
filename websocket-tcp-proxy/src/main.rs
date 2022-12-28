@@ -268,39 +268,64 @@ async fn handle_mutiny_ws(
             // or got disconnected.
             res  = socket.recv() => {
                 if let Some(msg) = res {
-                    if let Ok(Message::Binary(msg)) = msg {
-                        // parse the first 33 bytes to find the ID to send to
-                        if msg.len() < PUBKEY_BYTES_LEN{
-                            tracing::error!("msg not long enough to have pubkey (had {}), ignoring...", msg.len());
-                            continue
-                        }
-                        let (id_bytes, message_bytes) = msg.split_at(PUBKEY_BYTES_LEN);
-                        let peer_id_bytes = bytes::Bytes::from(id_bytes.to_vec());
-                        tracing::debug!("received a ws msg from {identifier} to send to {:?}", peer_id_bytes);
+                    if let Ok(msg_wrapper) = msg {
+                        match msg_wrapper {
+                            Message::Text(msg) => {
+                            let command: MutinyProxyCommand =
+                                serde_json::from_str(&msg).expect("could not parse"); // TODO remove
+                            match command {
+                                MutinyProxyCommand::Disconnect { to, from: _from } => {
+                                    // ignore the from and take it from our websocket owner
+                                    // find out who we are supposed to send this to and get
+                                    // producer
+                                    let peer_id_bytes = bytes::Bytes::from(to);
+                                    if let Some((peer_tx, _bc_tx)) = state.lock().await.get(&peer_id_bytes) {
+                                        try_send_disconnect_ws_command(peer_tx.clone(), owner_id_bytes.clone()).await;
+                                        connected_peers.lock().await.remove(&peer_id_bytes);
+                                    } else {
+                                        tracing::error!("peer tried to disconnect someone not connected to");
+                                    }
+                                }
+                            };
+                            },
+                            Message::Binary(msg) => {
+                                // parse the first 33 bytes to find the ID to send to
+                                if msg.len() < PUBKEY_BYTES_LEN{
+                                    tracing::error!("msg not long enough to have pubkey (had {}), ignoring...", msg.len());
+                                    continue
+                                }
+                                let (id_bytes, message_bytes) = msg.split_at(PUBKEY_BYTES_LEN);
+                                let peer_id_bytes = bytes::Bytes::from(id_bytes.to_vec());
+                                tracing::debug!("received a ws msg from {identifier} to send to {:?}", peer_id_bytes);
 
-                        // find the producer and send down it
-                        if let Some((peer_tx, bc_tx)) = state.lock().await.get(&peer_id_bytes) {
-                            match peer_tx.send(MutinyWSCommand::Send { id: owner_id_bytes.clone(), val: bytes::Bytes::from(message_bytes.to_vec()) }).await {
-                                Ok(_) => {
-                                    // Keep track that this websocket owner is connected to this
-                                    // peer. We will need to know when to send a disconnect cmd
-                                    // message back to the websocket owner if this peer goes
-                                    // offline.
-                                    tracing::debug!("successfully sent msg to {:?}", peer_id_bytes);
-                                    listen_for_disconnections(connected_peers.clone(), peer_id_bytes.clone(), bc_tx.subscribe(), tx.clone()).await;
-                                },
-                                Err(e) => {
-                                    tracing::error!("could not send message to peer identity: {}", e);
-                                    // return a close command, we are having a problem sending
-                                    // to the other peer's consumer
+                                // find the producer and send down it
+                                if let Some((peer_tx, bc_tx)) = state.lock().await.get(&peer_id_bytes) {
+                                    match peer_tx.send(MutinyWSCommand::Send { id: owner_id_bytes.clone(), val: bytes::Bytes::from(message_bytes.to_vec()) }).await {
+                                        Ok(_) => {
+                                            // Keep track that this websocket owner is connected to this
+                                            // peer. We will need to know when to send a disconnect cmd
+                                            // message back to the websocket owner if this peer goes
+                                            // offline.
+                                            tracing::debug!("successfully sent msg to {:?}", peer_id_bytes);
+                                            listen_for_disconnections(connected_peers.clone(), peer_id_bytes.clone(), bc_tx.subscribe(), tx.clone()).await;
+                                        },
+                                        Err(e) => {
+                                            tracing::error!("could not send message to peer identity: {}", e);
+                                            // return a close command, we are having a problem sending
+                                            // to the other peer's consumer
+                                            try_send_disconnect_ws_command(tx.clone(), peer_id_bytes).await;
+                                        },
+                                    }
+                                } else {
+                                    // if no producer, return a close command
+                                    tracing::error!("no producer found, sending disconnect");
                                     try_send_disconnect_ws_command(tx.clone(), peer_id_bytes).await;
-                                },
-                            }
-                        } else {
-                            // if no producer, return a close command
-                            tracing::error!("no producer found, sending disconnect");
-                            try_send_disconnect_ws_command(tx.clone(), peer_id_bytes).await;
-                        }
+                                }
+                            },
+                            _ => {
+                                // don't care about pings or others...
+                            },
+                        };
                     }
                 } else {
                     // Websocket owner closed the connection, let's remove the

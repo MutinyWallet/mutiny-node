@@ -318,7 +318,11 @@ impl Node {
         };
         let main_proxy =
             Proxy::new(websocket_proxy_addr.to_string(), self_connection.clone()).await?;
-        let multi_socket = MultiWsSocketDescriptor::new(Arc::new(main_proxy), peer_man.clone());
+        let multi_socket = MultiWsSocketDescriptor::new(
+            Arc::new(main_proxy),
+            peer_man.clone(),
+            pubkey.serialize().to_vec(),
+        );
         multi_socket.listen();
 
         // keep trying to reconnect to our multi socket proxy
@@ -479,6 +483,10 @@ impl Node {
             }
             Err(e) => Err(e),
         }
+    }
+
+    pub fn disconnect_peer(&self, peer_id: PublicKey) {
+        self.peer_manager.disconnect_by_node_id(peer_id, false);
     }
 
     pub fn get_phantom_route_hint(&self) -> PhantomRouteHints {

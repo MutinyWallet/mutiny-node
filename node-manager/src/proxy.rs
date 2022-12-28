@@ -41,7 +41,7 @@ impl Proxy {
         })
     }
 
-    pub fn send(&self, data: Vec<u8>) {
+    pub fn send(&self, data: Message) {
         debug!("initiating sending down websocket");
 
         // There can only be one sender at a time
@@ -50,7 +50,7 @@ impl Proxy {
         let cloned_conn = self.write.clone();
         spawn_local(async move {
             let mut write = cloned_conn.lock().await;
-            write.send(Message::Bytes(data)).await.unwrap();
+            write.send(data).await.unwrap();
             debug!("sent data down websocket");
         });
     }
