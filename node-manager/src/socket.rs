@@ -151,9 +151,10 @@ impl MultiWsSocketDescriptor {
     }
 
     pub async fn reconnect(&mut self, conn: Arc<Proxy>) {
+        let mut socket_map = self.socket_map.lock().await;
         debug!("setting up multi websocket descriptor");
         // if reconnecting master socket, disconnect and clear all subsockets
-        for (_id, (subsocket, _sender)) in self.socket_map.lock().await.iter_mut() {
+        for (_id, (subsocket, _sender)) in socket_map.iter_mut() {
             // tell the subsocket to stop processing
             // and ldk to disconnect that peer
             subsocket.disconnect_socket();
@@ -161,7 +162,7 @@ impl MultiWsSocketDescriptor {
                 .socket_disconnected(&WsSocketDescriptor::Mutiny(subsocket.clone()));
         }
 
-        self.socket_map.lock().await.clear();
+        socket_map.clear();
         self.conn = conn;
         self.connected.store(true, Ordering::Relaxed);
 
@@ -388,7 +389,6 @@ pub(crate) fn schedule_descriptor_read(
         }
 
         // TODO when we detect an error, lock the writes and close connection.
-        // TODO this, or something, should trigger LDK disconnection
         info!("WebSocket Closed")
     });
 }
@@ -446,8 +446,6 @@ impl SubWsSocketDescriptor {
 
 impl ReadDescriptor for SubWsSocketDescriptor {
     async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>> {
-        // TODO delete this debug, will be noisy
-        debug!("starting subsocket channel reader");
         loop {
             if self.stop.load(Ordering::Relaxed) {
                 debug!("stopping subsocket channel reader");

@@ -22,7 +22,7 @@ impl Logger for MutinyLogger {
 
         match record.level {
             Level::Gossip => trace!("{}", log),
-            Level::Trace => debug!("{}", log),
+            Level::Trace => trace!("{}", log),
             Level::Debug => debug!("{}", log),
             Level::Info => info!("{}", log),
             Level::Warn => warn!("{}", log),
