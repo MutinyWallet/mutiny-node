@@ -1,5 +1,6 @@
 use bdk::blockchain::EsploraBlockchain;
 use bdk::{BlockTime, TransactionDetails};
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::{str::FromStr, sync::Arc};
@@ -222,6 +223,21 @@ impl MutinyPeer {
     #[wasm_bindgen(getter)]
     pub fn connection_string(&self) -> String {
         self.connection_string.clone()
+    }
+}
+
+impl PartialOrd for MutinyPeer {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for MutinyPeer {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.is_connected
+            .cmp(&other.is_connected)
+            .then_with(|| self.pubkey.cmp(&other.pubkey))
+            .then_with(|| self.connection_string.cmp(&other.connection_string))
     }
 }
 
@@ -905,6 +921,7 @@ impl NodeManager {
         }
 
         storage_peers.append(&mut missing);
+        storage_peers.sort();
 
         Ok(serde_wasm_bindgen::to_value(&storage_peers)?)
     }
