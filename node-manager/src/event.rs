@@ -6,7 +6,7 @@ use crate::{chain::MutinyChain, ldkstorage::PhantomChannelManager};
 use bdk::blockchain::Blockchain;
 use bdk::wallet::AddressIndex;
 use bitcoin::secp256k1::Secp256k1;
-use bitcoin::Network;
+use bitcoin::{Address, Network};
 use bitcoin_bech32::WitnessProgram;
 use bitcoin_hashes::hex::ToHex;
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
@@ -14,6 +14,7 @@ use lightning::chain::keysinterface::PhantomKeysManager;
 use lightning::util::events::{Event, PaymentPurpose};
 use lightning::util::logger::{Logger, Record};
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use std::sync::Arc;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -100,9 +101,11 @@ impl EventHandler {
                 .expect("Lightning funding tx should always be to a SegWit output")
                 .to_address();
 
+                let address = Address::from_str(addr.as_str()).expect("Failed to parse address");
+
                 let psbt = match self
                     .wallet
-                    .create_signed_psbt(addr, channel_value_satoshis, None)
+                    .create_signed_psbt(address, channel_value_satoshis, None)
                     .await
                 {
                     Ok(psbt) => psbt,

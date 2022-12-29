@@ -22,6 +22,9 @@ pub enum MutinyError {
     /// A network connection has been closed.
     #[error("Network connection closed.")]
     ConnectionFailed,
+    /// The invoice or address is on a different network
+    #[error("The invoice or address is on a different network.")]
+    IncorrectNetwork,
     /// Payment of the given invoice has already been initiated.
     #[error("An invoice must not get payed twice.")]
     NonUniquePaymentHash,
@@ -179,6 +182,9 @@ pub enum MutinyJsError {
     /// A network connection has been closed.
     #[error("Network connection closed.")]
     ConnectionFailed,
+    /// The invoice or address is on a different network
+    #[error("The invoice or address is on a different network.")]
+    IncorrectNetwork,
     /// Payment of the given invoice has already been initiated.
     #[error("An invoice must not get payed twice.")]
     NonUniquePaymentHash,
@@ -249,6 +255,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::NotRunning => MutinyJsError::NotRunning,
             MutinyError::FundingTxCreationFailed => MutinyJsError::FundingTxCreationFailed,
             MutinyError::ConnectionFailed => MutinyJsError::ConnectionFailed,
+            MutinyError::IncorrectNetwork => MutinyJsError::IncorrectNetwork,
             MutinyError::NonUniquePaymentHash => MutinyJsError::NonUniquePaymentHash,
             MutinyError::InvoiceInvalid => MutinyJsError::InvoiceInvalid,
             MutinyError::InvoiceCreationFailed => MutinyJsError::InvoiceCreationFailed,

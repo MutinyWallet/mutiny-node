@@ -1,4 +1,3 @@
-use anyhow::Context;
 use futures::lock::Mutex;
 use log::{debug, info};
 use std::str::FromStr;
@@ -99,13 +98,15 @@ impl MutinyWallet {
 
     pub async fn create_signed_psbt(
         &self,
-        destination_address: String,
+        send_to: Address,
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
         let wallet = self.wallet.lock().await;
-        let send_to =
-            Address::from_str(&destination_address).with_context(|| "Address parse error")?;
+        if send_to.network != wallet.network() {
+            return Err(MutinyError::IncorrectNetwork);
+        }
+
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
         } else {
@@ -128,7 +129,7 @@ impl MutinyWallet {
 
     pub async fn send(
         &self,
-        destination_address: String,
+        destination_address: Address,
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<bitcoin::Txid, MutinyError> {
@@ -150,6 +151,11 @@ impl MutinyWallet {
         fee_rate: Option<f32>,
     ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
         let wallet = self.wallet.lock().await;
+
+        if destination_address.network != wallet.network() {
+            return Err(MutinyError::IncorrectNetwork);
+        }
+
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
         } else {
