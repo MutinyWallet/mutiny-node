@@ -661,9 +661,7 @@ impl NodeManager {
                 Ok(node_id) => Ok(node_id.inner),
                 Err(_) => Err(MutinyJsError::PubkeyInvalid),
             }?;
-
-            node.peer_manager.disconnect_by_node_id(node_id, false);
-            info!("disconnected from peer: {peer}");
+            node.disconnect_peer(node_id);
             Ok(())
         } else {
             error!("could not find internal node {self_node_pubkey}");
