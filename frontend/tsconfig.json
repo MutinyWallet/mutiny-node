@@ -22,5 +22,5 @@
       "@util/*": ["./src/utility/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "../node-manager/pkg/*.d.ts"]
 }
