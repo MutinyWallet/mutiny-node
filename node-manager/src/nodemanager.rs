@@ -475,6 +475,11 @@ impl NodeManager {
         fee_rate: Option<f32>,
     ) -> Result<String, MutinyJsError> {
         let send_to = Address::from_str(&destination_address)?;
+
+        if send_to.network != self.network {
+            return Err(MutinyJsError::IncorrectNetwork);
+        }
+
         match self.wallet.sweep(send_to, fee_rate).await {
             Ok(txid) => Ok(txid.to_owned().to_string()),
             Err(e) => Err(e.into()),
@@ -486,7 +491,13 @@ impl NodeManager {
         &self,
         address: String,
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
-        let script = Address::from_str(address.as_str())?.payload.script_pubkey();
+        let address = Address::from_str(address.as_str())?;
+
+        if address.network != self.network {
+            return Err(MutinyJsError::IncorrectNetwork);
+        }
+
+        let script = address.payload.script_pubkey();
         let txs = self.esplora.scripthash_txs(&script, None).await?;
 
         let details_opt = txs.first().map(|tx| {
