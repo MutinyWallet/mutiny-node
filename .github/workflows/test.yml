@@ -121,4 +121,4 @@ jobs:
 
       - name: Run all cargo tests besides node-manager
         working-directory: .
-        run: cargo test --workspace --exclude node-manager
+        run: cargo test --workspace --exclude node-manager --all-features --bins --lib

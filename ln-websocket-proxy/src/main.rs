@@ -11,7 +11,8 @@ use bitcoin_hashes::hex::FromHex;
 use bytes::Bytes;
 use futures::executor::block_on;
 use futures::lock::Mutex;
-use serde::{de, Deserialize, Deserializer, Serialize};
+use ln_websocket_proxy::MutinyProxyCommand;
+use serde::{de, Deserialize, Deserializer};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -56,7 +57,7 @@ where
 
 #[tokio::main]
 async fn main() {
-    println!("Running websocket-tcp-proxy");
+    println!("Running ln-websocket-proxy");
     tracing_subscriber::fmt::init();
 
     let producer_map: WSMap = Arc::new(Mutex::new(HashMap::new()));
@@ -70,7 +71,7 @@ async fn main() {
                 .make_span_with(DefaultMakeSpan::default().include_headers(true)),
         );
 
-    let port = match env::var("MUTINY_PROXY_PORT") {
+    let port = match env::var("LN_PROXY_PORT") {
         Ok(p) => p.parse().expect("port must be a u16 string"),
         Err(_) => 3001,
     };
@@ -192,11 +193,6 @@ async fn mutiny_ws_handler(
 enum MutinyWSCommand {
     Send { id: Bytes, val: Bytes },
     Disconnect { id: Bytes },
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub enum MutinyProxyCommand {
-    Disconnect { to: Vec<u8>, from: Vec<u8> },
 }
 
 /// handle_mutiny_ws will handle mutiny to mutiny (ws to ws) logic.

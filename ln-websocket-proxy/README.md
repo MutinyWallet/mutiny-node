@@ -6,14 +6,14 @@ it's websockify but with the client gets to pick what tcp address to connect to,
 
 ## How to test
 
-You can change default port by setting `MUTINY_PROXY_PORT=3002` or whatever your port should be.
+You can change default port by setting `LN_PROXY_PORT=3002` or whatever your port should be.
 
 You'll want `netcat` and [`websocat`](https://github.com/vi/websocat) installed.
 
 Terminal 1:
 
 ```
-RUST_LOG=debug cargo run
+RUST_LOG=debug LN_PROXY_PORT=3002 cargo run -p ln-websocket-proxy --features="server"
 ```
 
 Terminal 2:

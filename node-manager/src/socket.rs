@@ -7,19 +7,13 @@ use futures::{SinkExt, StreamExt};
 use gloo_net::websocket::events::CloseEvent;
 use gloo_net::websocket::Message;
 use lightning::ln::peer_handler::{self, SocketDescriptor};
+use ln_websocket_proxy::MutinyProxyCommand;
 use log::{debug, error, info, trace};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use wasm_bindgen_futures::spawn_local;
-
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize)]
-enum MutinyProxyCommand {
-    Disconnect { to: Vec<u8>, from: Vec<u8> },
-}
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 const PUBKEY_BYTES_LEN: usize = 33;
@@ -247,7 +241,7 @@ impl MultiWsSocketDescriptor {
                                 Some((_subsocket, sender)) => {
                                     match sender.send(Message::Bytes(message_bytes.to_vec())) {
                                         Ok(_) => {
-                                            debug!(
+                                            trace!(
                                                 "found subsocket to forward bytes to: {:?}",
                                                 id_bytes
                                             );
@@ -294,7 +288,7 @@ impl MultiWsSocketDescriptor {
                                                         message_bytes.to_vec(),
                                                     )) {
                                                         Ok(_) => {
-                                                            debug!("sent incoming message to new subsocket channel: {:?}", id_bytes)
+                                                            trace!("sent incoming message to new subsocket channel: {:?}", id_bytes)
                                                         }
                                                         Err(e) => {
                                                             error!(
