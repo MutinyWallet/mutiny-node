@@ -16,7 +16,7 @@ export default function SyncOnInterval({ children }: { children: React.ReactNode
         }
         console.groupEnd();
         console.timeEnd("BDK Sync Time")
-        queryClient.invalidateQueries({ queryKey: ['balance'] })
+        await queryClient.invalidateQueries({ queryKey: ['balance'] })
         return true
     }
 

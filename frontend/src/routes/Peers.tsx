@@ -9,6 +9,8 @@ import PageTitle from "../components/PageTitle"
 import { ReactComponent as EjectIcon } from "../images/icons/eject.svg"
 import { MutinyPeer } from "node-manager";
 import { mainWrapperStyle } from "../styles";
+import { toastAnything } from "@util/dumb";
+import MutinyToaster from "@components/MutinyToaster";
 
 function SinglePeer({ peer }: { peer: MutinyPeer }) {
 
@@ -22,8 +24,13 @@ function SinglePeer({ peer }: { peer: MutinyPeer }) {
 
         if (window.confirm("Are you sure you want to disconnect this peer?")) {
             const myNode = myNodes[0]
-            await nodeManager?.disconnect_peer(myNode, peer.pubkey);
-            queryClient.invalidateQueries({ queryKey: ['peers'] })
+            try {
+                await nodeManager?.disconnect_peer(myNode, peer.pubkey);
+                toastAnything("Disconnected peer");
+                await queryClient.invalidateQueries({ queryKey: ['peers'] })
+            } catch (e) {
+                toastAnything(e);
+            }
         }
     }
 
@@ -34,8 +41,12 @@ function SinglePeer({ peer }: { peer: MutinyPeer }) {
 
         if (window.confirm("Are you sure you want to delete this peer?")) {
             const myNode = myNodes[0]
-            await nodeManager?.delete_peer(myNode, peer.pubkey);
-            queryClient.invalidateQueries({ queryKey: ['peers'] })
+            try {
+                await nodeManager?.delete_peer(myNode, peer.pubkey);
+                await queryClient.invalidateQueries({ queryKey: ['peers'] })
+            } catch (e) {
+                toastAnything(e);
+            }
         }
     }
 
@@ -100,6 +111,7 @@ function Peers() {
                 </ul>
                 <div />
             </main>
+            <MutinyToaster />
         </>
     )
 }

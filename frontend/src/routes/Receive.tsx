@@ -29,7 +29,7 @@ function Receive() {
         if (amount.length === 0 || amount.match(/^\d+$/)) {
             const params = objectToSearchParams<ReceiveParams>({ amount, description })
             // Important! Otherwise we might see a stale bip21 code
-            queryClient.invalidateQueries({ queryKey: ['bip21'] })
+            await queryClient.invalidateQueries({ queryKey: ['bip21'] })
             navigate(`/receive/qr?${params}`)
         }
     }

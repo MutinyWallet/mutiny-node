@@ -34,7 +34,7 @@ function App() {
     await nodeManager?.sync()
     console.groupEnd();
     console.timeEnd("BDK Sync Time")
-    queryClient.invalidateQueries({ queryKey: ['balance'] })
+    await queryClient.invalidateQueries({ queryKey: ['balance'] })
   }
 
   return (

@@ -1,6 +1,7 @@
 import { NodeManagerContext } from "@components/GlobalStateProvider"
+import MutinyToaster from "@components/MutinyToaster"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { mempoolTxUrl } from "@util/dumb"
+import { mempoolTxUrl, toastAnything } from "@util/dumb"
 import prettyPrintAmount from "@util/prettyPrintAmount"
 import takeN from "@util/takeN"
 import { MutinyChannel } from "node-manager"
@@ -19,8 +20,15 @@ function SingleChannel({ channel }: { channel: MutinyChannel }) {
 
     // TODO: this should warn before closing
     async function handleCloseChannel() {
-        await nodeManager?.close_channel(channel.outpoint!);
-        queryClient.invalidateQueries({ queryKey: ['channels'] })
+        if (window.confirm("Are you sure you want to close this channel?")) {
+            try {
+                await nodeManager?.close_channel(channel.outpoint!);
+                toastAnything("Channel closed");
+                await queryClient.invalidateQueries({ queryKey: ['channels'] });
+            } catch (e) {
+                toastAnything(e);
+            }
+        }
     }
 
     let percent = Number(channel.balance / channel.size) * 100
@@ -81,6 +89,7 @@ function Channels() {
                     ))}
                 </ul>
             </main>
+            <MutinyToaster />
         </>
     )
 }

@@ -121,7 +121,7 @@ function Settings() {
     async function handleNewNode() {
         try {
             await nodeManager?.new_node()
-            queryClient.invalidateQueries({ queryKey: ['nodes'] })
+            await queryClient.invalidateQueries({ queryKey: ['nodes'] })
         } catch (e) {
             console.error(e)
             toastAnything(e);
