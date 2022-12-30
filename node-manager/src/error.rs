@@ -210,7 +210,7 @@ pub enum MutinyJsError {
     /// A failure to generate a mnemonic seed.
     #[error("Failed to generate seed")]
     SeedGenerationFailed,
-    /// User provided invalid menmonic.
+    /// User provided invalid mnemonic.
     #[error("Invalid mnemonic")]
     InvalidMnemonic,
     /// A wallet operation failed.
@@ -284,11 +284,7 @@ impl From<bitcoin::util::address::Error> for MutinyJsError {
 
 impl From<PaymentError> for MutinyJsError {
     fn from(e: PaymentError) -> Self {
-        match e {
-            PaymentError::Invoice(_) => Self::InvoiceInvalid,
-            PaymentError::Routing(_) => Self::RoutingFailed,
-            PaymentError::Sending(_) => Self::RoutingFailed,
-        }
+        MutinyError::from(e).into()
     }
 }
 
