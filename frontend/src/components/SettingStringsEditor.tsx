@@ -1,6 +1,6 @@
 import { toastAnything } from "@util/dumb";
 import { ChangeEvent, useContext, useState } from "react";
-import { inputStyle } from "../styles";
+import { inputStyle, selectStyle } from "../styles";
 import { getExistingSettings, NodeManagerContext, NodeManagerSettingStrings } from "./GlobalStateProvider";
 
 export default function SettingStringsEditor() {
@@ -49,14 +49,17 @@ export default function SettingStringsEditor() {
             <p className="text-2xl font-light">Don't trust us! Use your own servers to back Mutiny</p>
             <div className="flex flex-col gap-2 w-full">
                 <h3 className="text-lg font-light uppercase mt-2">Network</h3>
-                <form>
-                    <select onChange={handleSelectChange("network")} className={`w-full text-black bg-white text-xl ${inputStyle({ accent: "blue" })}`} name='' value={nodeManagerSettings.network} placeholder="Network">
-                        <option className="text-base" value="bitcoin">Mainnet</option>
-                        <option className="text-base" value="testnet">Testnet</option>
-                        <option className="text-base" value="signet">Signet</option>
-                        <option className="text-base" value="regtest">Regtest</option>
-                    </select>
-                </form>
+                <div className="flex gap-2">
+                    {/* <input value={(nodeManagerSettings.network === "bitcoin") ? "mainnet" : nodeManagerSettings.network} className={inputStyle({ accent: "red", width: "wide" })} type="text" placeholder={"Network"} /> */}
+                    <div className="select-wrapper bg-red">
+                        <select onChange={handleSelectChange("network")} className={selectStyle({ accent: "blue" })} name='' value={nodeManagerSettings.network} placeholder="Network">
+                            <option className="text-base" value="bitcoin">Mainnet</option>
+                            <option className="text-base" value="testnet">Testnet</option>
+                            <option className="text-base" value="signet">Signet</option>
+                            <option className="text-base" value="regtest">Regtest</option>
+                        </select>
+                    </div>
+                </div>
                 <h3 className="text-lg font-light uppercase mt-2">Esplora</h3>
                 <input onChange={handleInputChange("esplora")} defaultValue={nodeManagerSettings.esplora} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='Esplora' />
                 <h3 className="text-lg font-light uppercase mt-2">Websockets Proxy</h3>
