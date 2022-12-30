@@ -8,8 +8,8 @@ import { useContext } from "react"
 import { useNavigate } from "react-router-dom"
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
-import ScreenMain from "../components/ScreenMain"
 import { ReactComponent as EjectIcon } from "../images/icons/eject.svg"
+import { mainWrapperStyle } from "../styles"
 
 function SingleChannel({ channel }: { channel: MutinyChannel }) {
     console.table(channel);
@@ -73,14 +73,14 @@ function Channels() {
                 <PageTitle title="Channels" theme="blue" />
                 <Close />
             </header>
-            <ScreenMain padSides={false} wontScroll={!channels || channels.length < 4}>
+            <main className={mainWrapperStyle({ padSides: "no" })}>
                 <button className="mx-8" onClick={handleNavOpen}>Add Channel</button>
                 <ul className="overflow-y-scroll px-8 pb-[12rem] w-full h-full">
                     {channels?.map((channel, i) => (
                         <SingleChannel channel={channel} key={i} />
                     ))}
                 </ul>
-            </ScreenMain>
+            </main>
         </>
     )
 }

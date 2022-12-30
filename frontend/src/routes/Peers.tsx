@@ -6,9 +6,9 @@ import { useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
-import ScreenMain from "../components/ScreenMain"
 import { ReactComponent as EjectIcon } from "../images/icons/eject.svg"
 import { MutinyPeer } from "node-manager";
+import { mainWrapperStyle } from "../styles";
 
 function SinglePeer({ peer }: { peer: MutinyPeer }) {
 
@@ -91,7 +91,7 @@ function Peers() {
                 <PageTitle title="Peers" theme="white" />
                 <Close />
             </header>
-            <ScreenMain padSides={false} wontScroll={!peers || peers.length < 4}>
+            <main className={mainWrapperStyle({ padSides: "no" })}>
                 <button className="mx-8" onClick={handleNavConnect}>Add Peer</button>
                 <ul className="overflow-y-scroll px-8 pb-[12rem] h-full">
                     {peers?.map((peer, i) => (
@@ -99,7 +99,7 @@ function Peers() {
                     ))}
                 </ul>
                 <div />
-            </ScreenMain>
+            </main>
         </>
     )
 }

@@ -6,7 +6,7 @@ import { MutinyInvoice } from "node-manager";
 import { useContext } from "react";
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
-import ScreenMain from "../components/ScreenMain"
+import { mainWrapperStyle } from "../styles";
 
 function SingleTransaction({ invoice }: { invoice: MutinyInvoice }) {
     return (
@@ -52,13 +52,13 @@ function Transactions() {
                 <PageTitle title="Transactions" theme="green" />
                 <Close />
             </header>
-            <ScreenMain padSides={false} wontScroll={!invoices || invoices.length < 4}>
+            <main className={mainWrapperStyle({ padSides: "no" })}>
                 <ul className="overflow-y-scroll px-8 pb-[12rem] h-full">
                     {invoices?.sort(sortByExpiry).map((invoice, i) => (
                         <SingleTransaction invoice={invoice} key={i} />
                     ))}
                 </ul>
-            </ScreenMain>
+            </main>
         </>
     )
 }

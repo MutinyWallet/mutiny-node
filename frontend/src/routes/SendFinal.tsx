@@ -1,9 +1,9 @@
 import { useNavigate } from "react-router-dom";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
-import ScreenMain from "../components/ScreenMain";
 import { useSearchParams } from "react-router-dom";
 import ActionButton from "@components/ActionButton";
+import { mainWrapperStyle } from "../styles";
 
 export default function SendFinal() {
   let navigate = useNavigate();
@@ -21,7 +21,7 @@ export default function SendFinal() {
         <PageTitle title="Confirm" theme="green" />
         <Close />
       </header>
-      <ScreenMain>
+      <main className={mainWrapperStyle()}>
         <div />
         <p className="text-2xl font-light">Sent!</p>
         {!!txid &&
@@ -35,7 +35,7 @@ export default function SendFinal() {
           </dl>
         }
         <ActionButton onClick={handleNice}>Nice</ActionButton>
-      </ScreenMain>
+      </main>
     </>
   );
 }

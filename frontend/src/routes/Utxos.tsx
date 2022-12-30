@@ -4,9 +4,9 @@ import takeN from "@util/takeN";
 import { useContext } from "react";
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
-import ScreenMain from "../components/ScreenMain"
 import prettyPrintAmount from "@util/prettyPrintAmount";
 import { useNavigate } from "react-router-dom";
+import { mainWrapperStyle } from "../styles";
 
 type Utxo = {
     outpoint: string
@@ -55,14 +55,14 @@ function Utxos() {
                 <PageTitle title="Utxos" theme="red" />
                 <Close />
             </header>
-            <ScreenMain padSides={false} wontScroll={!utxos || utxos.length < 4}>
+            <main className={mainWrapperStyle({ padSides: "no" })}>
                 <button className="mx-8" onClick={handleSweep}>Sweep Wallet</button>
                 <ul className="overflow-y-scroll px-8 pb-[12rem] h-full">
                     {utxos?.map(utxo => (
                         <SingleUtxo utxo={utxo} key={utxo.outpoint} />
                     ))}
                 </ul>
-            </ScreenMain>
+            </main>
         </>
     )
 }

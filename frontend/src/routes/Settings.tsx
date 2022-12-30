@@ -8,10 +8,9 @@ import takeN from "@util/takeN";
 import { useContext, useState } from "react";
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
-import ScreenMain from "../components/ScreenMain"
-
 import { ReactComponent as Eye } from "../images/icons/eye.svg"
 import { ReactComponent as EyeClosed } from "../images/icons/eye-closed.svg"
+import { mainWrapperStyle } from "../styles";
 
 const COMMIT_HASH = process.env.REACT_APP_COMMIT_HASH || "";
 
@@ -135,7 +134,7 @@ function Settings() {
                 <PageTitle title="Settings" theme="red" />
                 <Close />
             </header>
-            <ScreenMain padSides={false} wontScroll={true}>
+            <main className={mainWrapperStyle({ padSides: "no" })}>
                 <div className="flex flex-col gap-4 flex-1 overflow-y-scroll px-8 pb-[12rem] items-start">
                     <div>
                         <p className="text-2xl font-light">Write down these words or you'll die!</p>
@@ -184,7 +183,7 @@ function Settings() {
                     </label>
                 </div>
                 <MutinyToaster />
-            </ScreenMain>
+            </main>
         </>
     )
 }

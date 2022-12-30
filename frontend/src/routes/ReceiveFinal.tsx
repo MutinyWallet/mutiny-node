@@ -1,6 +1,5 @@
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
-import ScreenMain from "../components/ScreenMain";
 import { useNavigate } from "react-router";
 import { useContext } from "react";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
@@ -12,6 +11,7 @@ import { MutinyInvoice } from "node-manager";
 import prettyPrintAmount from "@util/prettyPrintAmount";
 import { mempoolTxUrl } from "@util/dumb";
 import ActionButton from "@components/ActionButton";
+import { mainWrapperStyle } from "../styles";
 
 export default function ReceiveFinal() {
     let navigate = useNavigate();
@@ -61,7 +61,7 @@ export default function ReceiveFinal() {
                 <PageTitle title="Receive" theme="blue"></PageTitle>
                 <Close />
             </header>
-            <ScreenMain>
+            <main className={mainWrapperStyle()}>
                 <>
                     <div />
                     <p className="text-2xl font-light">Got it!</p>
@@ -97,7 +97,7 @@ export default function ReceiveFinal() {
                     }
                     <ActionButton onClick={handleGoHome}>Nice</ActionButton>
                 </>
-            </ScreenMain>
+            </main>
         </>
     );
 }

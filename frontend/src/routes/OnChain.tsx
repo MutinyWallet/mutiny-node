@@ -6,8 +6,8 @@ import takeN from "@util/takeN";
 import { useContext } from "react";
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
-import ScreenMain from "../components/ScreenMain"
 import prettyPrintAmount from "@util/prettyPrintAmount";
+import { mainWrapperStyle } from "../styles";
 
 export type OnChainTx = {
     txid: string
@@ -65,13 +65,13 @@ function OnChain() {
                 <PageTitle title="On-chain txs" theme="red" />
                 <Close />
             </header>
-            <ScreenMain padSides={false} wontScroll={!transactions || transactions.length < 4}>
+            <main className={mainWrapperStyle({ padSides: "no" })}>
                 <ul className="overflow-y-scroll h-full px-8 pb-[12rem]">
                     {transactions?.map(tx => (
                         <SingleTransaction key={tx.txid} tx={tx} network={nodeManager?.get_network()} />
                     ))}
                 </ul>
-            </ScreenMain>
+            </main>
         </>
     )
 }
