@@ -8,7 +8,6 @@ import { useContext, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
-import ScreenMain from "../components/ScreenMain";
 import { inputStyle, mainWrapperStyle } from "../styles";
 import CodeTruncator from "@components/CodeTruncator";
 
