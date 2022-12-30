@@ -39,7 +39,6 @@ export default function SettingStringsEditor() {
 
     const handleSelectChange = (name: string) => (e: React.ChangeEvent<HTMLSelectElement>) => {
         setSelectedNetwork(e.target.value)
-        console.log('select', selectedNetwork, 'node', nodeManagerSettings.network)
         setNodeManagerSettings({
             ...nodeManagerSettings,
             [name]: e.target.value,
