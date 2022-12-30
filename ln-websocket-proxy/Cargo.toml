@@ -1,0 +1,31 @@
+[package]
+name = "ln-websocket-proxy"
+version = "0.3.0"
+edition = "2021"
+
+[lib]
+name = "ln_websocket_proxy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ln_websocket_proxy"
+path = "src/main.rs"
+required-features = ["server"]
+
+[dependencies]
+serde = { version = "^1.0", features = ["derive"] }
+serde_json = "^1.0"
+
+# Binary dependencies
+axum = { version ="0.6.1", features = ["ws", "headers"], optional = true }
+headers = { version = "0.3", optional = true }
+tokio = { version = "1.0", features = ["full"], optional = true }
+tower-http = { version = "0.3.0", features = ["fs", "trace"], optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+bytes = { version = "1.3.0", optional = true }
+bitcoin_hashes = { version = "0.11", default-features = true, optional = true }
+futures = { version = "0.3.25", optional = true }
+
+[features]
+server = ["axum", "headers", "tokio", "tower-http", "tracing", "tracing-subscriber", "bytes", "bitcoin_hashes", "futures"]
