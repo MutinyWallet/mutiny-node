@@ -43,6 +43,7 @@ function SinglePeer({ peer }: { peer: MutinyPeer }) {
             const myNode = myNodes[0]
             try {
                 await nodeManager?.delete_peer(myNode, peer.pubkey);
+                toastAnything("Deleted peer");
                 await queryClient.invalidateQueries({ queryKey: ['peers'] })
             } catch (e) {
                 toastAnything(e);
@@ -90,7 +91,8 @@ function Peers() {
         queryKey: ['peers'],
         queryFn: () => {
             console.log("Getting peers...")
-            return nodeManager?.list_peers() as Promise<MutinyPeer[]>
+            const peers = nodeManager?.list_peers() as Promise<MutinyPeer[]>
+            return peers
         },
         enabled: !!nodeManager,
         refetchInterval: 1000,
