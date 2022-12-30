@@ -9,6 +9,7 @@ use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyJsError, MutinyStorageError};
 use crate::keymanager;
 use crate::node::{Node, PubkeyConnectionInfo};
+use crate::utils::currency_from_network;
 use crate::wallet::esplora_from_network;
 use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
 use bdk::wallet::AddressIndex;
@@ -471,11 +472,13 @@ impl NodeManager {
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<String, MutinyJsError> {
-        match self
-            .wallet
-            .send(destination_address, amount, fee_rate)
-            .await
-        {
+        let send_to = Address::from_str(&destination_address)?;
+
+        if send_to.network != self.network {
+            return Err(MutinyJsError::IncorrectNetwork);
+        }
+
+        match self.wallet.send(send_to, amount, fee_rate).await {
             Ok(txid) => Ok(txid.to_owned().to_string()),
             Err(e) => Err(e.into()),
         }
@@ -488,6 +491,11 @@ impl NodeManager {
         fee_rate: Option<f32>,
     ) -> Result<String, MutinyJsError> {
         let send_to = Address::from_str(&destination_address)?;
+
+        if send_to.network != self.network {
+            return Err(MutinyJsError::IncorrectNetwork);
+        }
+
         match self.wallet.sweep(send_to, fee_rate).await {
             Ok(txid) => Ok(txid.to_owned().to_string()),
             Err(e) => Err(e.into()),
@@ -499,7 +507,13 @@ impl NodeManager {
         &self,
         address: String,
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
-        let script = Address::from_str(address.as_str())?.payload.script_pubkey();
+        let address = Address::from_str(address.as_str())?;
+
+        if address.network != self.network {
+            return Err(MutinyJsError::IncorrectNetwork);
+        }
+
+        let script = address.payload.script_pubkey();
         let txs = self.esplora.scripthash_txs(&script, None).await?;
 
         let details_opt = txs.first().map(|tx| {
@@ -742,6 +756,11 @@ impl NodeManager {
         amt_sats: Option<u64>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let invoice = Invoice::from_str(&invoice_str)?;
+
+        if invoice.currency() != currency_from_network(self.network) {
+            return Err(MutinyJsError::IncorrectNetwork);
+        }
+
         let nodes = self.nodes.lock().await;
         let node = nodes.get(from_node.as_str()).unwrap();
         node.pay_invoice(invoice, amt_sats).map_err(|e| e.into())
@@ -768,7 +787,13 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub async fn decode_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
-        Invoice::from_str(&invoice).map(|i| Ok(i.into()))?
+        let invoice = Invoice::from_str(&invoice)?;
+
+        if invoice.currency() != currency_from_network(self.network) {
+            return Err(MutinyJsError::IncorrectNetwork);
+        }
+
+        Ok(invoice.into())
     }
 
     #[wasm_bindgen]
