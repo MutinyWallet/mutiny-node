@@ -13,6 +13,7 @@ tower-http = { version = "0.3.0", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "^1.0", features = ["derive"] }
+serde_json = "^1.0"
 bytes = "1.3.0"
 bitcoin_hashes = { version = "0.11", default-features = true }
 futures = "0.3.25"

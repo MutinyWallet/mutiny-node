@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
+import { satsToUsd } from "@util/conversions";
 import prettyPrintAmount from "@util/prettyPrintAmount";
+import { usePriceQuery } from "@util/queries";
 import { MutinyBalance } from "node-manager";
 import { useContext, useState } from "react";
 import { NodeManagerContext } from "./GlobalStateProvider";
@@ -22,9 +24,8 @@ function prettyPrintUnconfirmedUsd(b: MutinyBalance, price: number): string {
 }
 
 function prettyPrintUSD(amount: number, price: number): string {
-    let btc = amount / 100000000;
-    let usd = btc * price;
-    return prettyPrintAmount(Number(usd.toFixed(2)))
+    let usd = satsToUsd(amount, price);
+    return prettyPrintAmount(Number(usd))
 }
 
 export default function MainBalance() {
@@ -40,14 +41,8 @@ export default function MainBalance() {
         },
         enabled: !!nodeManager,
     })
-    const { data: price } = useQuery({
-        queryKey: ['price'],
-        queryFn: async () => {
-            console.log("Checking bitcoin price...")
-            return await nodeManager?.get_bitcoin_price()
-        },
-        enabled: !!nodeManager,
-    })
+
+    const { data: price } = usePriceQuery(nodeManager);
 
     return (<div className="flex flex-col gap-4 cursor-pointer" onClick={() => setShowFiat(!showFiat)}>
         {showFiat && price &&
@@ -57,7 +52,7 @@ export default function MainBalance() {
         }
         {(!showFiat || !price) &&
             <h1 className='text-4xl font-light uppercase'>
-              {balance && prettyPrintBalance(balance)} <span className='text-2xl'>sats</span>
+                {balance && prettyPrintBalance(balance)} <span className='text-2xl'>sats</span>
             </h1>
         }
         {(balance && balance.unconfirmed?.valueOf() > 0) && showFiat && price &&

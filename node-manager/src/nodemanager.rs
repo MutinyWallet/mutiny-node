@@ -484,7 +484,7 @@ impl NodeManager {
         address: String,
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
         let script = Address::from_str(address.as_str())?.payload.script_pubkey();
-        let txs = self.wallet.blockchain.scripthash_txs(&script, None).await?;
+        let txs = self.esplora.scripthash_txs(&script, None).await?;
 
         let details_opt = txs.first().map(|tx| {
             let received: u64 = tx
@@ -661,9 +661,7 @@ impl NodeManager {
                 Ok(node_id) => Ok(node_id.inner),
                 Err(_) => Err(MutinyJsError::PubkeyInvalid),
             }?;
-
-            node.peer_manager.disconnect_by_node_id(node_id, false);
-            info!("disconnected from peer: {peer}");
+            node.disconnect_peer(node_id);
             Ok(())
         } else {
             error!("could not find internal node {self_node_pubkey}");
@@ -925,7 +923,12 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub fn convert_btc_to_sats(btc: f64) -> Result<u64, MutinyJsError> {
-        if let Ok(amount) = bitcoin::Amount::from_btc(btc) {
+        // rust bitcoin doesn't like extra precision in the float
+        // so we round to the nearest satoshi
+        // explained here: https://stackoverflow.com/questions/28655362/how-does-one-round-a-floating-point-number-to-a-specified-number-of-digits
+        let truncated = 10i32.pow(8) as f64;
+        let btc = (btc * truncated).round() / truncated;
+        if let Ok(amount) = bitcoin::Amount::from_btc(btc as f64) {
             Ok(amount.to_sat())
         } else {
             Err(MutinyJsError::BadAmountError)
@@ -933,7 +936,6 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    // Hopefully we only use this when preparing bip21 strings
     pub fn convert_sats_to_btc(sats: u64) -> f64 {
         bitcoin::Amount::from_sat(sats).to_btc()
     }

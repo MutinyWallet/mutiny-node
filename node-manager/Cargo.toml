@@ -30,6 +30,7 @@ uuid = { version = "1.1.2", features = ["v4"] }
 lightning = { version = "0.0.113", features = ["max_level_trace", "no-std"] }
 lightning-invoice = { version = "0.21.0", default-features = false, features = ["no-std"] }
 lightning-rapid-gossip-sync = { version = "0.0.113", features = ["no-std"] }
+futures-util = { version = "0.3", default-features = false, features = ["async-await-macro"] }
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 chrono = "0.4.22"
 reqwest = { version = "0.11", default-features = false, features = ["json"] }
