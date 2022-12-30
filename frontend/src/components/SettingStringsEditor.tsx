@@ -9,6 +9,7 @@ export default function SettingStringsEditor() {
     const { setup } = useContext(NodeManagerContext);
 
     const [nodeManagerSettings, setNodeManagerSettings] = useState<NodeManagerSettingStrings>(getExistingSettings());
+    const [selectedNetwork, setSelectedNetwork] = useState(nodeManagerSettings.network);
 
     async function handleSaveSettings() {
         try {
@@ -36,12 +37,27 @@ export default function SettingStringsEditor() {
         });
     };
 
+    const handleSelectChange = (name: string) => (e: React.ChangeEvent<HTMLSelectElement>) => {
+        setSelectedNetwork(e.target.value)
+        setNodeManagerSettings({
+            ...nodeManagerSettings,
+            [name]: e.target.value,
+        });
+    };
+
     return (
         <>
             <p className="text-2xl font-light">Don't trust us! Use your own servers to back Mutiny</p>
             <div className="flex flex-col gap-2 w-full">
                 <h3 className="text-lg font-light uppercase mt-2">Network</h3>
-                <input onChange={handleInputChange("network")} defaultValue={nodeManagerSettings.network} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='Network' />
+                <form>
+                    <select onChange={handleSelectChange("network")} className={`w-full text-black bg-white text-xl ${inputStyle({ accent: "blue" })}`} name='' value={selectedNetwork} placeholder="Network">
+                        <option className="text-base" value="bitcoin">bitcoin</option>
+                        <option className="text-base" value="testnet">testnet</option>
+                        <option className="text-base" value="regtest">regtest</option>
+                        <option className="text-base" value="signet">signet</option>
+                    </select>
+                </form>
                 <h3 className="text-lg font-light uppercase mt-2">Esplora</h3>
                 <input onChange={handleInputChange("esplora")} defaultValue={nodeManagerSettings.esplora} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='Esplora' />
                 <h3 className="text-lg font-light uppercase mt-2">Websockets Proxy</h3>
