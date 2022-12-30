@@ -722,19 +722,20 @@ impl NodeManager {
         amount: Option<u64>,
         description: String,
     ) -> Result<MutinyInvoice, MutinyJsError> {
-        // TODO let use_phantom be configurable from frontend
-        let use_phantom = false;
         let nodes = self.nodes.lock().await;
+        let use_phantom = nodes.len() > 1;
         if nodes.len() == 0 {
             return Err(MutinyJsError::InvoiceCreationFailed);
         }
-        let route_hints: Vec<PhantomRouteHints> = if use_phantom {
-            nodes
-                .iter()
-                .map(|(_, n)| n.get_phantom_route_hint())
-                .collect()
+        let route_hints: Option<Vec<PhantomRouteHints>> = if use_phantom {
+            Some(
+                nodes
+                    .iter()
+                    .map(|(_, n)| n.get_phantom_route_hint())
+                    .collect(),
+            )
         } else {
-            vec![]
+            None
         };
 
         // just create a normal invoice from the first node
@@ -970,7 +971,7 @@ impl NodeManager {
         // explained here: https://stackoverflow.com/questions/28655362/how-does-one-round-a-floating-point-number-to-a-specified-number-of-digits
         let truncated = 10i32.pow(8) as f64;
         let btc = (btc * truncated).round() / truncated;
-        if let Ok(amount) = bitcoin::Amount::from_btc(btc as f64) {
+        if let Ok(amount) = bitcoin::Amount::from_btc(btc) {
             Ok(amount.to_sat())
         } else {
             Err(MutinyJsError::BadAmountError)

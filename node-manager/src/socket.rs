@@ -17,6 +17,8 @@ use wasm_bindgen_futures::spawn_local;
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 const PUBKEY_BYTES_LEN: usize = 33;
+pub(crate) type SubSocketMap =
+    Arc<Mutex<HashMap<Vec<u8>, (SubWsSocketDescriptor, Sender<Message>)>>>;
 
 pub(crate) trait ReadDescriptor {
     async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>>;
@@ -84,7 +86,7 @@ impl peer_handler::SocketDescriptor for WsTcpSocketDescriptor {
         let cloned = self.conn.write.clone();
         spawn_local(async move {
             let mut conn = cloned.lock().await;
-            let _ = conn.close();
+            let _ = conn.close().await;
             debug!("closed websocket");
         });
     }
@@ -114,7 +116,7 @@ pub(crate) struct MultiWsSocketDescriptor {
     conn: Arc<Proxy>,
     read_from_sub_socket: Receiver<Message>,
     send_to_multi_socket: Sender<Message>,
-    socket_map: Arc<Mutex<HashMap<Vec<u8>, (SubWsSocketDescriptor, Sender<Message>)>>>,
+    socket_map: SubSocketMap,
     peer_manager: Arc<PeerManager>,
     our_peer_pubkey: Vec<u8>,
     connected: Arc<AtomicBool>,
@@ -126,8 +128,7 @@ impl MultiWsSocketDescriptor {
         let (send_to_multi_socket, read_from_sub_socket): (Sender<Message>, Receiver<Message>) =
             unbounded();
 
-        let socket_map: Arc<Mutex<HashMap<Vec<u8>, (SubWsSocketDescriptor, Sender<Message>)>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let socket_map: SubSocketMap = Arc::new(Mutex::new(HashMap::new()));
 
         Self {
             conn,
@@ -164,9 +165,13 @@ impl MultiWsSocketDescriptor {
     }
 
     pub async fn create_new_subsocket(&self, id: Vec<u8>) -> SubWsSocketDescriptor {
+        let (send_to_sub_socket, read_from_multi_socket): (Sender<Message>, Receiver<Message>) =
+            unbounded();
         create_new_subsocket(
             self.socket_map.clone(),
             self.send_to_multi_socket.clone(),
+            send_to_sub_socket,
+            read_from_multi_socket,
             id,
             self.our_peer_pubkey.clone(),
         )
@@ -199,11 +204,16 @@ impl MultiWsSocketDescriptor {
                             // This is a text command from the server. Parse the type
                             // of command it is and act accordingly.
                             // parse and implement subsocket disconnections.
-                            // TODO right now subsocket is very tied to a specific node,
+                            // Right now subsocket is very tied to a specific node,
                             // later we should share a single connection amongst all pubkeys and in
                             // which case "to" will be important to parse.
-                            let command: MutinyProxyCommand =
-                                serde_json::from_str(&msg).expect("could not parse"); // TODO remove
+                            let command: MutinyProxyCommand = match serde_json::from_str(&msg) {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    error!("couldn't parse text command from proxy, ignoring: {e}");
+                                    continue;
+                                }
+                            };
                             match command {
                                 MutinyProxyCommand::Disconnect { to: _to, from } => {
                                     let mut locked_socket_map = socket_map_copy.lock().await;
@@ -224,10 +234,10 @@ impl MultiWsSocketDescriptor {
                             };
                         }
                         Message::Bytes(msg) => {
-                            debug!("received a binary message on multi socket...");
                             // This is a mutiny to mutiny connection with pubkey + bytes
                             // as the binary message. Parse the msg and see which pubkey
                             // it belongs to.
+                            trace!("received a binary message on multi socket...");
                             if msg.len() < PUBKEY_BYTES_LEN {
                                 debug!("msg not long enough to have pubkey, ignoring...");
                                 continue;
@@ -257,10 +267,16 @@ impl MultiWsSocketDescriptor {
                                         "no connection found for socket address, creating new: {:?}",
                                         id_bytes
                                     );
-                                    let inbound_subsocket = WsSocketDescriptor::Mutiny(
+                                    let (send_to_sub_socket, read_from_multi_socket): (
+                                        Sender<Message>,
+                                        Receiver<Message>,
+                                    ) = unbounded();
+                                    let mut inbound_subsocket = WsSocketDescriptor::Mutiny(
                                         create_new_subsocket(
                                             socket_map_copy.clone(),
                                             send_to_multi_socket_copy.clone(),
+                                            send_to_sub_socket.clone(),
+                                            read_from_multi_socket,
                                             id_bytes.to_vec(),
                                             our_peer_pubkey_copy.clone(),
                                         )
@@ -282,37 +298,29 @@ impl MultiWsSocketDescriptor {
 
                                             // now that we have the inbound connection, send the original
                                             // message to our new subsocket descriptor
-                                            match socket_map_copy.lock().await.get(id_bytes) {
-                                                Some((_subsocket, sender)) => {
-                                                    match sender.send(Message::Bytes(
-                                                        message_bytes.to_vec(),
-                                                    )) {
-                                                        Ok(_) => {
-                                                            trace!("sent incoming message to new subsocket channel: {:?}", id_bytes)
-                                                        }
-                                                        Err(e) => {
-                                                            error!(
-                                                                "error sending msg to channel: {}",
-                                                                e
-                                                            )
-                                                        }
-                                                    };
+                                            match send_to_sub_socket
+                                                .send(Message::Bytes(message_bytes.to_vec()))
+                                            {
+                                                Ok(_) => {
+                                                    trace!("sent incoming message to new subsocket channel: {:?}", id_bytes)
                                                 }
-                                                None => {
-                                                    // TODO delete the new subsocket
-                                                    error!(
-                                                        "we can't find our newly created subsocket???: {:?}",
-                                                        id_bytes
-                                                    );
+                                                Err(e) => {
+                                                    error!("error sending msg to channel: {}", e)
                                                 }
-                                            }
+                                            };
                                         }
                                         Err(_) => {
-                                            // TODO delete the new subsocket
                                             error!(
-                                                "peer manager could not handle subsocket for: {:?}",
+                                                "peer manager could not handle subsocket for: {:?}, deleting...",
                                                 id_bytes
                                             );
+                                            let mut locked_socket_map =
+                                                socket_map_copy.lock().await;
+                                            debug!("disconnecting subsocket");
+                                            inbound_subsocket.disconnect_socket();
+                                            peer_manager_copy
+                                                .socket_disconnected(&inbound_subsocket);
+                                            locked_socket_map.remove(id_bytes);
                                         }
                                     };
                                 }
@@ -356,9 +364,12 @@ pub(crate) fn schedule_descriptor_read(
             match msg {
                 Ok(msg_contents) => {
                     match msg_contents {
-                        Message::Text(t) => {
-                            // TODO why am i not doing something with this here?
-                            trace!("received text command from websocket: {t}");
+                        Message::Text(_) => {
+                            // text should not directly be sent to these sockets
+                            // the multi ws socket descriptor intercepts the m2m
+                            // sockets, meanwhile the tcp socket proxy never deals
+                            // with command messages.
+                            trace!("ignoring text sent directly to ldk socket");
                         }
                         Message::Bytes(b) => {
                             trace!("received binary data from websocket");
@@ -388,14 +399,13 @@ pub(crate) fn schedule_descriptor_read(
 }
 
 async fn create_new_subsocket(
-    socket_map: Arc<Mutex<HashMap<Vec<u8>, (SubWsSocketDescriptor, Sender<Message>)>>>,
+    socket_map: SubSocketMap,
     send_to_multi_socket: Sender<Message>,
+    send_to_sub_socket: Sender<Message>,
+    read_from_multi_socket: Receiver<Message>,
     peer_pubkey: Vec<u8>,
     our_pubkey: Vec<u8>,
 ) -> SubWsSocketDescriptor {
-    let (send_to_sub_socket, read_from_multi_socket): (Sender<Message>, Receiver<Message>) =
-        unbounded();
-
     let new_subsocket = SubWsSocketDescriptor::new(
         send_to_multi_socket,
         read_from_multi_socket,

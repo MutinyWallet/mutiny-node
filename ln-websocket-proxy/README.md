@@ -6,7 +6,7 @@ it's websockify but with the client gets to pick what tcp address to connect to,
 
 ## How to test
 
-You can change default port by setting `LN_PROXY_PORT=3002` or whatever your port should be.
+You can change default port by setting `LN_PROXY_PORT=3001` or whatever your port should be.
 
 You'll want `netcat` and [`websocat`](https://github.com/vi/websocat) installed.
 

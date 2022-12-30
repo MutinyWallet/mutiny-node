@@ -51,7 +51,7 @@ use lightning::routing::router::DefaultRouter;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
 use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
 use lightning_invoice::{payment, Invoice};
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
@@ -88,13 +88,13 @@ type Router = DefaultRouter<
     Arc<Mutex<ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>>>,
 >;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ConnectionType {
     Tcp(String),
     Mutiny(String),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PubkeyConnectionInfo {
     pub pubkey: PublicKey,
     pub connection_type: ConnectionType,
@@ -107,7 +107,7 @@ impl PubkeyConnectionInfo {
             return Err(MutinyError::PeerInfoParseFailed)
                 .context("connect_peer requires peer connection info")?;
         };
-
+        let connection = connection.to_lowercase();
         if connection.starts_with("mutiny:") {
             let stripped_connection = connection.strip_prefix("mutiny:").expect("should strip");
             let (pubkey, peer_addr_str) =
@@ -314,7 +314,7 @@ impl Node {
         let self_connection = PubkeyConnectionInfo {
             pubkey,
             connection_type: ConnectionType::Mutiny(websocket_proxy_addr.to_string()),
-            original_connection_string: format!("mutiny:{}@{}", pubkey, websocket_proxy_addr),
+            original_connection_string: format!("mutiny:{pubkey}@{websocket_proxy_addr}"),
         };
         let main_proxy =
             Proxy::new(websocket_proxy_addr.to_string(), self_connection.clone()).await?;
@@ -378,7 +378,7 @@ impl Node {
                 for (pubkey, conn_str) in not_connected.iter() {
                     connect_logger.log(&Record::new(
                         lightning::util::logger::Level::Debug,
-                        format_args!("DEBUG: going to auto connect to peer: {}", pubkey),
+                        format_args!("DEBUG: going to auto connect to peer: {pubkey}"),
                         "node",
                         "",
                         0,
@@ -386,7 +386,16 @@ impl Node {
                     let peer_connection_info = match PubkeyConnectionInfo::new(conn_str.to_string())
                     {
                         Ok(p) => p,
-                        Err(_) => continue,
+                        Err(e) => {
+                            connect_logger.log(&Record::new(
+                                lightning::util::logger::Level::Error,
+                                format_args!("ERROR: could not parse connection info: {e}"),
+                                "node",
+                                "",
+                                0,
+                            ));
+                            continue;
+                        }
                     };
                     match connect_peer(
                         connect_multi_socket.clone(),
@@ -399,7 +408,7 @@ impl Node {
                         Ok(_) => {
                             connect_logger.log(&Record::new(
                                 lightning::util::logger::Level::Debug,
-                                format_args!("DEBUG: auto connected peer: {}", pubkey),
+                                format_args!("DEBUG: auto connected peer: {pubkey}"),
                                 "node",
                                 "",
                                 0,
@@ -408,7 +417,7 @@ impl Node {
                         Err(e) => {
                             connect_logger.log(&Record::new(
                                 lightning::util::logger::Level::Warn,
-                                format_args!("WARN: could not auto connect peer: {}", e),
+                                format_args!("WARN: could not auto connect peer: {e}"),
                                 "node",
                                 "",
                                 0,
@@ -497,14 +506,13 @@ impl Node {
         &self,
         amount_sat: Option<u64>,
         description: String,
-        route_hints: Vec<PhantomRouteHints>,
+        route_hints: Option<Vec<PhantomRouteHints>>,
     ) -> Result<Invoice, MutinyError> {
         let amount_msat = amount_sat.map(|s| s * 1_000);
-        let invoice = match route_hints.len() {
-            0 => {
+        let invoice_res = match route_hints {
+            None => {
                 let now = crate::utils::now();
-
-                match create_invoice_from_channelmanager_and_duration_since_epoch(
+                create_invoice_from_channelmanager_and_duration_since_epoch(
                     &self.channel_manager.clone(),
                     self.keys_manager.clone(),
                     self.logger.clone(),
@@ -513,68 +521,28 @@ impl Node {
                     description,
                     now,
                     1500,
-                ) {
-                    Ok(inv) => {
-                        self.logger.log(&Record::new(
-                            lightning::util::logger::Level::Info,
-                            format_args!(
-                                "SUCCESS: generated invoice: {} with amount {:?}",
-                                inv, amount_msat
-                            ),
-                            "node",
-                            "",
-                            0,
-                        ));
-                        inv
-                    }
-                    Err(e) => {
-                        self.logger.log(&Record::new(
-                            lightning::util::logger::Level::Error,
-                            format_args!("ERROR: could not generate invoice: {}", e),
-                            "node",
-                            "",
-                            0,
-                        ));
-                        return Err(MutinyError::InvoiceCreationFailed);
-                    }
-                }
+                )
             }
-            _ => {
-                match create_phantom_invoice::<InMemorySigner, Arc<PhantomKeysManager>>(
-                    amount_msat,
-                    None,
-                    description,
-                    1500,
-                    route_hints,
-                    self.keys_manager.clone(),
-                    currency_from_network(self.network),
-                ) {
-                    Ok(inv) => {
-                        self.logger.log(&Record::new(
-                            lightning::util::logger::Level::Info,
-                            format_args!(
-                                "SUCCESS: generated invoice: {} with amount {:?}",
-                                inv, amount_msat
-                            ),
-                            "node",
-                            "",
-                            0,
-                        ));
-                        inv
-                    }
-                    Err(e) => {
-                        self.logger.log(&Record::new(
-                            lightning::util::logger::Level::Error,
-                            format_args!("ERROR: could not generate invoice: {}", e),
-                            "node",
-                            "",
-                            0,
-                        ));
-                        return Err(MutinyError::InvoiceCreationFailed);
-                    }
-                }
-            }
+            Some(r) => create_phantom_invoice::<InMemorySigner, Arc<PhantomKeysManager>>(
+                amount_msat,
+                None,
+                description,
+                1500,
+                r,
+                self.keys_manager.clone(),
+                currency_from_network(self.network),
+            ),
         };
+        let invoice = invoice_res.map_err(|e| {
+            self.logger.log(&Record::new(
+                lightning::util::logger::Level::Error,
+                format_args!("ERROR: could not generate invoice: {e}"),
+                "node",
+                "",
+                0,
+            ));
+            MutinyError::InvoiceCreationFailed
+        })?;
 
         let last_update = crate::utils::now().as_secs();
         let payment_hash = PaymentHash(invoice.payment_hash().into_inner());
@@ -587,21 +555,27 @@ impl Node {
             bolt11: Some(invoice.to_string()),
             last_update,
         };
-        match self
-            .persister
+        self.persister
             .persist_payment_info(payment_hash, payment_info, true)
-        {
-            Ok(_) => (),
-            Err(e) => {
+            .map_err(|e| {
                 self.logger.log(&Record::new(
                     lightning::util::logger::Level::Error,
-                    format_args!("ERROR: could not persist payment info: {}", e),
+                    format_args!("ERROR: could not persist payment info: {e}"),
                     "node",
                     "",
                     0,
                 ));
-            }
-        }
+                MutinyError::InvoiceCreationFailed
+            })?;
+
+        self.logger.log(&Record::new(
+            lightning::util::logger::Level::Info,
+            format_args!("SUCCESS: generated invoice: {invoice}",),
+            "node",
+            "",
+            0,
+        ));
+
         Ok(invoice)
     }
 
@@ -837,7 +811,7 @@ impl Node {
             Ok(res) => {
                 self.logger.log(&Record::new(
                     lightning::util::logger::Level::Info,
-                    format_args!("SUCCESS: channel initiated with peer: {:?}", pubkey),
+                    format_args!("SUCCESS: channel initiated with peer: {pubkey:?}"),
                     "node",
                     "",
                     0,
@@ -870,10 +844,7 @@ impl Node {
             Err(e) => {
                 self.logger.log(&Record::new(
                     lightning::util::logger::Level::Error,
-                    format_args!(
-                        "ERROR: failed to open channel to pubkey {:?}: {:?}",
-                        pubkey, e
-                    ),
+                    format_args!("ERROR: failed to open channel to pubkey {pubkey:?}: {e:?}"),
                     "node",
                     "",
                     0,
@@ -913,12 +884,12 @@ pub(crate) async fn connect_peer(
 ) -> Result<(), MutinyError> {
     // first make a connection to the node
     debug!("making connection to peer: {:?}", peer_connection_info);
-    let (mut descriptor, socket_addr) = match peer_connection_info.connection_type {
+    let (mut descriptor, socket_addr_opt) = match peer_connection_info.connection_type {
         ConnectionType::Tcp(ref t) => {
             let proxy = Proxy::new(websocket_proxy_addr, peer_connection_info.clone()).await?;
             (
                 WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
-                try_get_net_addr_from_socket(&t),
+                try_get_net_addr_from_socket(t),
             )
         }
         ConnectionType::Mutiny(_) => (
@@ -935,12 +906,12 @@ pub(crate) async fn connect_peer(
     let initial_bytes = peer_manager.new_outbound_connection(
         peer_connection_info.pubkey,
         descriptor.clone(),
-        socket_addr,
+        socket_addr_opt,
     )?;
     debug!("connected to peer: {:?}", peer_connection_info);
 
     let sent_bytes = descriptor.send_data(&initial_bytes, true);
-    debug!("sent {sent_bytes} to node: {}", peer_connection_info.pubkey);
+    trace!("sent {sent_bytes} to node: {}", peer_connection_info.pubkey);
 
     // schedule a reader on the connection
     schedule_descriptor_read(descriptor, peer_manager.clone());
@@ -1002,27 +973,18 @@ pub(crate) fn split_peer_connection_string(
     peer_pubkey_and_ip_addr: String,
 ) -> Result<(PublicKey, String), MutinyError> {
     let mut pubkey_and_addr = peer_pubkey_and_ip_addr.split('@');
-    let pubkey = match pubkey_and_addr.next() {
-        None => {
+    let pubkey = pubkey_and_addr.next().ok_or({
             error!("incorrectly formatted peer info. Should be formatted as: `pubkey@host:port` but pubkey could not be parsed");
-            return Err(MutinyError::PeerInfoParseFailed);
-        }
-        Some(str) => str,
-    };
-    let peer_addr_str = match pubkey_and_addr.next() {
-        None => {
+            MutinyError::PeerInfoParseFailed
+        })?;
+    let peer_addr_str = pubkey_and_addr.next().ok_or( {
             error!("incorrectly formatted peer info. Should be formatted as: `pubkey@host:port` but host:port part could not be parsed");
-            return Err(MutinyError::PeerInfoParseFailed);
-        }
-        Some(str) => str,
-    };
-    let pubkey = match PublicKey::from_str(pubkey) {
-        Ok(p) => p,
-        Err(e) => {
-            error!("{}", format!("could not parse peer pubkey: {:?}", e));
-            return Err(MutinyError::PeerInfoParseFailed);
-        }
-    };
+            MutinyError::PeerInfoParseFailed
+        })?;
+    let pubkey = PublicKey::from_str(pubkey).map_err(|e| {
+        error!("{}", format!("could not parse peer pubkey: {e:?}"));
+        MutinyError::PeerInfoParseFailed
+    })?;
     Ok((pubkey, peer_addr_str.to_string()))
 }
 
