@@ -13,7 +13,7 @@ function ManagerRoot() {
     let location = useLocation();
 
     const shouldBeActive = (matcher: string) => {
-        return location.pathname === `/manager/${matcher}` ? "" : "secondary"
+        return location.pathname === `/manager/${matcher}` ? "manager-button" : "manager-button secondary"
     }
 
     const { setManagerRoute } = useContext(ManagerRouteContext);
