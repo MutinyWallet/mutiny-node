@@ -12,12 +12,13 @@ use bytes::Bytes;
 use futures::executor::block_on;
 use futures::lock::Mutex;
 use ln_websocket_proxy::MutinyProxyCommand;
-use serde::{de, Deserialize, Deserializer};
+use serde::Deserialize;
+use serde_with::{serde_as, NoneAsEmptyString};
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::env;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
-use std::{env, fmt, str::FromStr};
 use tokio::sync::{broadcast, mpsc};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -31,28 +32,16 @@ pub(crate) type WSMap =
     Arc<Mutex<HashMap<bytes::Bytes, (mpsc::Sender<MutinyWSCommand>, broadcast::Sender<bool>)>>>;
 
 // TODO make all of these required
+// can remove serde_with/serde_as afterwards
+#[serde_as]
 #[derive(Deserialize)]
 struct MutinyConnectionParams {
-    #[serde(default, deserialize_with = "empty_string_as_none")]
+    #[serde_as(as = "NoneAsEmptyString")]
     _message: Option<String>,
-    #[serde(default, deserialize_with = "empty_string_as_none")]
+    #[serde_as(as = "NoneAsEmptyString")]
     _session_id: Option<String>,
-    #[serde(default, deserialize_with = "empty_string_as_none")]
+    #[serde_as(as = "NoneAsEmptyString")]
     _signature: Option<String>,
-}
-
-/// Serde deserialization decorator to map empty Strings to None,
-fn empty_string_as_none<'de, D, T>(de: D) -> Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: FromStr,
-    T::Err: fmt::Display,
-{
-    let opt = Option::<String>::deserialize(de)?;
-    match opt.as_deref() {
-        None | Some("") => Ok(None),
-        Some(s) => FromStr::from_str(s).map_err(de::Error::custom).map(Some),
-    }
 }
 
 #[tokio::main]
@@ -227,14 +216,14 @@ async fn handle_mutiny_ws(
     // This is important so that only the node with the
     // private key can read and send messages through
     // this socket.
-    let owner_id_bytes: Vec<u8> = if let Ok(b) = FromHex::from_hex(identifier.as_str()) {
-        b
-    } else {
-        // drop the connection if we didn't get a good pubkey hex
+    #[allow(clippy::redundant_closure)]
+    let owner_id_bytes = FromHex::from_hex(identifier.as_str())
+        .map(|h: Vec<u8>| bytes::Bytes::from(h))
+        .unwrap_or_default();
+    if owner_id_bytes.is_empty() {
         tracing::error!("could not parse hex string identifier");
         return;
-    };
-    let owner_id_bytes = bytes::Bytes::from(owner_id_bytes);
+    }
 
     // Now create one consumer and a producer that other
     // mutiny websocket connections can reference to send
@@ -267,8 +256,13 @@ async fn handle_mutiny_ws(
                     if let Ok(msg_wrapper) = msg {
                         match msg_wrapper {
                             Message::Text(msg) => {
-                            let command: MutinyProxyCommand =
-                                serde_json::from_str(&msg).expect("could not parse"); // TODO remove
+                            let command: MutinyProxyCommand = match serde_json::from_str(&msg) {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    tracing::error!("couldn't parse text command from client, ignoring: {e}");
+                                    continue;
+                                }
+                            };
                             match command {
                                 MutinyProxyCommand::Disconnect { to, from: _from } => {
                                     // ignore the from and take it from our websocket owner
@@ -286,7 +280,7 @@ async fn handle_mutiny_ws(
                             },
                             Message::Binary(msg) => {
                                 // parse the first 33 bytes to find the ID to send to
-                                if msg.len() < PUBKEY_BYTES_LEN{
+                                if msg.len() < PUBKEY_BYTES_LEN {
                                     tracing::error!("msg not long enough to have pubkey (had {}), ignoring...", msg.len());
                                     continue
                                 }
