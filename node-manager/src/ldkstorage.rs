@@ -163,7 +163,7 @@ impl MutinyNodePersister {
                         }
                         Err(e) => Err(io::Error::new(
                             io::ErrorKind::InvalidData,
-                            format!("Failed to deserialize ChannelMonitor: {}", e),
+                            format!("Failed to deserialize ChannelMonitor: {e}"),
                         )),
                     }
                 }
@@ -263,7 +263,7 @@ impl MutinyNodePersister {
         let key = self.get_key(payment_key(inbound, payment_hash).as_str());
         logger.log(&Record::new(
             lightning::util::logger::Level::Trace,
-            format_args!("Trace: checking payment key: {}", key),
+            format_args!("Trace: checking payment key: {key}"),
             "node",
             "",
             0,
@@ -323,7 +323,7 @@ impl MutinyNodePersister {
 }
 
 fn peer_key(pubkey: String) -> String {
-    format!("{}{}", PEER_PREFIX_KEY, pubkey)
+    format!("{PEER_PREFIX_KEY}{pubkey}")
 }
 
 fn payment_key(inbound: bool, payment_hash: PaymentHash) -> String {

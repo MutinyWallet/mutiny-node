@@ -314,7 +314,7 @@ impl Node {
         let self_connection = PubkeyConnectionInfo {
             pubkey,
             connection_type: ConnectionType::Mutiny(websocket_proxy_addr.to_string()),
-            original_connection_string: format!("mutiny:{}@{}", pubkey, websocket_proxy_addr),
+            original_connection_string: format!("mutiny:{pubkey}@{websocket_proxy_addr}"),
         };
         let main_proxy =
             Proxy::new(websocket_proxy_addr.to_string(), self_connection.clone()).await?;
@@ -378,7 +378,7 @@ impl Node {
                 for (pubkey, conn_str) in not_connected.iter() {
                     connect_logger.log(&Record::new(
                         lightning::util::logger::Level::Debug,
-                        format_args!("DEBUG: going to auto connect to peer: {}", pubkey),
+                        format_args!("DEBUG: going to auto connect to peer: {pubkey}"),
                         "node",
                         "",
                         0,
@@ -408,7 +408,7 @@ impl Node {
                         Ok(_) => {
                             connect_logger.log(&Record::new(
                                 lightning::util::logger::Level::Debug,
-                                format_args!("DEBUG: auto connected peer: {}", pubkey),
+                                format_args!("DEBUG: auto connected peer: {pubkey}"),
                                 "node",
                                 "",
                                 0,
@@ -417,7 +417,7 @@ impl Node {
                         Err(e) => {
                             connect_logger.log(&Record::new(
                                 lightning::util::logger::Level::Warn,
-                                format_args!("WARN: could not auto connect peer: {}", e),
+                                format_args!("WARN: could not auto connect peer: {e}"),
                                 "node",
                                 "",
                                 0,
@@ -536,7 +536,7 @@ impl Node {
         let invoice = invoice_res.map_err(|e| {
             self.logger.log(&Record::new(
                 lightning::util::logger::Level::Error,
-                format_args!("ERROR: could not generate invoice: {}", e),
+                format_args!("ERROR: could not generate invoice: {e}"),
                 "node",
                 "",
                 0,
@@ -560,7 +560,7 @@ impl Node {
             .map_err(|e| {
                 self.logger.log(&Record::new(
                     lightning::util::logger::Level::Error,
-                    format_args!("ERROR: could not persist payment info: {}", e),
+                    format_args!("ERROR: could not persist payment info: {e}"),
                     "node",
                     "",
                     0,
@@ -811,7 +811,7 @@ impl Node {
             Ok(res) => {
                 self.logger.log(&Record::new(
                     lightning::util::logger::Level::Info,
-                    format_args!("SUCCESS: channel initiated with peer: {:?}", pubkey),
+                    format_args!("SUCCESS: channel initiated with peer: {pubkey:?}"),
                     "node",
                     "",
                     0,
@@ -844,10 +844,7 @@ impl Node {
             Err(e) => {
                 self.logger.log(&Record::new(
                     lightning::util::logger::Level::Error,
-                    format_args!(
-                        "ERROR: failed to open channel to pubkey {:?}: {:?}",
-                        pubkey, e
-                    ),
+                    format_args!("ERROR: failed to open channel to pubkey {pubkey:?}: {e:?}"),
                     "node",
                     "",
                     0,
@@ -985,7 +982,7 @@ pub(crate) fn split_peer_connection_string(
             MutinyError::PeerInfoParseFailed
         })?;
     let pubkey = PublicKey::from_str(pubkey).map_err(|e| {
-        error!("{}", format!("could not parse peer pubkey: {:?}", e));
+        error!("{}", format!("could not parse peer pubkey: {e:?}"));
         MutinyError::PeerInfoParseFailed
     })?;
     Ok((pubkey, peer_addr_str.to_string()))

@@ -112,7 +112,7 @@ impl EventHandler {
                     Err(e) => {
                         self.logger.log(&Record::new(
                                 lightning::util::logger::Level::Error,
-                                format_args!("ERROR: Could not create a signed transaction to open channel with: {}", e),
+                                format_args!("ERROR: Could not create a signed transaction to open channel with: {e}"),
                                 "node",
                                 "",
                                 0,
@@ -234,7 +234,7 @@ impl EventHandler {
                             Err(e) => {
                                 self.logger.log(&Record::new(
                                     lightning::util::logger::Level::Error,
-                                    format_args!("ERROR: could not persist payment info: {}", e),
+                                    format_args!("ERROR: could not persist payment info: {e}"),
                                     "node",
                                     "",
                                     0,
@@ -264,7 +264,7 @@ impl EventHandler {
                             Err(e) => {
                                 self.logger.log(&Record::new(
                                     lightning::util::logger::Level::Error,
-                                    format_args!("ERROR: could not persist payment info: {}", e),
+                                    format_args!("ERROR: could not persist payment info: {e}"),
                                     "node",
                                     "",
                                     0,
@@ -306,7 +306,7 @@ impl EventHandler {
                             Err(e) => {
                                 self.logger.log(&Record::new(
                                     lightning::util::logger::Level::Error,
-                                    format_args!("ERROR: could not persist payment info: {}", e),
+                                    format_args!("ERROR: could not persist payment info: {e}"),
                                     "event",
                                     "",
                                     0,
@@ -397,7 +397,7 @@ impl EventHandler {
                             Err(e) => {
                                 self.logger.log(&Record::new(
                                     lightning::util::logger::Level::Error,
-                                    format_args!("ERROR: could not persist payment info: {}", e),
+                                    format_args!("ERROR: could not persist payment info: {e}"),
                                     "event",
                                     "",
                                     0,

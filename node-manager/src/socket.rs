@@ -86,7 +86,7 @@ impl peer_handler::SocketDescriptor for WsTcpSocketDescriptor {
         let cloned = self.conn.write.clone();
         spawn_local(async move {
             let mut conn = cloned.lock().await;
-            let _ = conn.close();
+            let _ = conn.close().await;
             debug!("closed websocket");
         });
     }
