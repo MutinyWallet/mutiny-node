@@ -50,7 +50,7 @@ export default function SettingStringsEditor() {
             <div className="flex flex-col gap-2 w-full">
                 <h3 className="text-lg font-light uppercase mt-2">Network</h3>
                 <div className="flex gap-2">
-                    <div className="select-wrapper bg-red">
+                    <div className="select-wrapper">
                         <select onChange={handleSelectChange("network")} className={selectStyle({ accent: "blue" })} value={nodeManagerSettings.network} placeholder="Network">
                             <option className="text-base" value="bitcoin">Mainnet</option>
                             <option className="text-base" value="testnet">Testnet</option>

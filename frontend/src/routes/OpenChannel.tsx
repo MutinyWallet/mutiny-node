@@ -10,8 +10,6 @@ import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
 import { inputStyle, mainWrapperStyle, selectStyle } from "../styles";
 import { MutinyPeer } from "node-manager";
-import takeN from "@util/takeN";
-
 
 export default function OpenChannel() {
 	const { nodeManager } = useContext(NodeManagerContext);
@@ -76,16 +74,17 @@ export default function OpenChannel() {
 					<div />
 					<p className="text-2xl font-light">Let's do this!</p>
 					<div className="flex flex-col gap-4">
-						{peers && peers.length < 0 &&
+						{peers && peers.length &&
 							<div className="flex flex-col gap-2">
-								<label className="text-xl font-light">Peers</label>
-								<select onChange={handleSelectChange} className={selectStyle({ accent: "blue" })} value={peerPubkey} placeholder="Network">
-									<option>Choose Peer</option>
-									{peers.map(p => <option key={p.pubkey} value={p.pubkey}>{takeN(p.pubkey, 15)}</option>)}
-								</select>
+								<label className="text-xl font-light">Pick the peer</label>
+								<div className="select-wrapper">
+									<select onChange={handleSelectChange} className={selectStyle({ accent: "blue", overflow: "yes" })} value={peerPubkey} placeholder="Network">
+										{peers.map(p => <option key={p.pubkey} value={p.pubkey}>{p.pubkey}</option>)}
+									</select>
+								</div>
 							</div>
 						}
-						{!peers || peers.length === 0 &&
+						{(!peers || !peers.length) &&
 							<div className="flex flex-col gap-2">
 								<label>New Peer</label>
 								<input onChange={(e) => setPeerPubkey(e.target.value)} value={peerPubkey} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='Target node pubkey' />
