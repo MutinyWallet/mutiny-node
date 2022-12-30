@@ -18,7 +18,6 @@ function SingleChannel({ channel }: { channel: MutinyChannel }) {
     const queryClient = useQueryClient()
     const { nodeManager } = useContext(NodeManagerContext);
 
-    // TODO: this should warn before closing
     async function handleCloseChannel() {
         if (window.confirm("Are you sure you want to close this channel?")) {
             try {
