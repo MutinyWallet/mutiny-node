@@ -52,10 +52,10 @@ export default function SettingStringsEditor() {
                 <h3 className="text-lg font-light uppercase mt-2">Network</h3>
                 <form>
                     <select onChange={handleSelectChange("network")} className={`w-full text-black bg-white text-xl ${inputStyle({ accent: "blue" })}`} name='' value={selectedNetwork} placeholder="Network">
-                        <option className="text-base" value="bitcoin">bitcoin</option>
-                        <option className="text-base" value="testnet">testnet</option>
-                        <option className="text-base" value="regtest">regtest</option>
-                        <option className="text-base" value="signet">signet</option>
+                        <option className="text-base" value="bitcoin">Mainnet</option>
+                        <option className="text-base" value="testnet">Testnet</option>
+                        <option className="text-base" value="signet">Signet</option>
+                        <option className="text-base" value="regtest">Regtest</option>
                     </select>
                 </form>
                 <h3 className="text-lg font-light uppercase mt-2">Esplora</h3>
