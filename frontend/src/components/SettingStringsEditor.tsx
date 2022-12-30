@@ -56,6 +56,7 @@ export default function SettingStringsEditor() {
                         <option className="text-base" value="bitcoin">bitcoin</option>
                         <option className="text-base" value="testnet">testnet</option>
                         <option className="text-base" value="regtest">regtest</option>
+                        <option className="text-base" value="signet">signet</option>
                     </select>
                 </form>
                 <h3 className="text-lg font-light uppercase mt-2">Esplora</h3>
