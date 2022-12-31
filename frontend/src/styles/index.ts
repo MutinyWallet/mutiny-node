@@ -28,20 +28,14 @@ const selectStyle = cva("", {
     }
 });
 
-const mainWrapperStyle = cva("flex flex-col justify-between overflow-y-scroll mb-4 gap-4", {
+const mainWrapperStyle = cva("flex flex-col justify-between overflow-y-scroll mb-4 gap-4 h-full", {
     variants: {
-        // TODO: this is kind of hacky but flexbox is a struggle
-        scrolls: {
-            no: "h-full",
-            yes: "h-auto"
-        },
         padSides: {
             yes: "p-8",
             no: "py-8"
         }
     },
     defaultVariants: {
-        scrolls: "no",
         padSides: "yes"
     }
 

@@ -2,7 +2,6 @@ import { useContext, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
-import ScreenMain from "../components/ScreenMain";
 import { useSearchParams } from "react-router-dom";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import toast from "react-hot-toast";
@@ -12,6 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import prettyPrintAmount from "@util/prettyPrintAmount";
 import ActionButton from "@components/ActionButton";
 import SimpleText from "@components/SimpleText";
+import { mainWrapperStyle } from "../styles";
 
 export type SendConfirmParams = {
   amount?: string;
@@ -107,7 +107,7 @@ function SendConfirm() {
         <PageTitle title="Confirm" theme="green" />
         <Close />
       </header>
-      <ScreenMain>
+      <main className={mainWrapperStyle()}>
         {loading && <>
           <div />
           <SimpleText>Sending...</SimpleText>
@@ -196,7 +196,7 @@ function SendConfirm() {
           </>
         }
 
-      </ScreenMain>
+      </main>
       <MutinyToaster />
     </>
 

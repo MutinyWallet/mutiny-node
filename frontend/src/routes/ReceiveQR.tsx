@@ -1,6 +1,5 @@
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
-import ScreenMain from "../components/ScreenMain";
 import { useNavigate } from "react-router";
 import { useContext, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -9,6 +8,7 @@ import ReceiveUnified, { QRMode } from "@components/ReceiveUnified";
 import { useSearchParams } from "react-router-dom";
 import { MutinyBip21RawMaterials } from "node-manager";
 import { objectToSearchParams } from "@util/dumb";
+import { mainWrapperStyle } from "../styles";
 
 export type ReceiveParams = {
     amount?: string;
@@ -71,7 +71,7 @@ export default function ReceiveQR() {
                 <PageTitle title="Receive" theme="blue"></PageTitle>
                 <Close />
             </header>
-            <ScreenMain>
+            <main className={mainWrapperStyle()}>
                 <div />
 
                 <div className="flex gap-2">
@@ -91,7 +91,7 @@ export default function ReceiveQR() {
                 <div className='flex justify-start gap-2'>
                     <button onClick={handleCancel}>Cancel</button>
                 </div>
-            </ScreenMain>
+            </main>
         </>
     );
 }

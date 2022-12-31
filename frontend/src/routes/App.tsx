@@ -1,13 +1,13 @@
 
 import logo from '../images/mutiny-logo.svg';
 import { useNavigate } from "react-router-dom";
-import ScreenMain from '../components/ScreenMain';
 import More from '../components/More';
 import MutinyToaster from '../components/MutinyToaster';
 import { useContext } from 'react';
 import { NodeManagerContext } from '@components/GlobalStateProvider';
 import { useQueryClient } from '@tanstack/react-query';
 import MainBalance from '@components/MainBalance';
+import { mainWrapperStyle } from '../styles';
 
 function App() {
   const { nodeManager } = useContext(NodeManagerContext);
@@ -43,7 +43,7 @@ function App() {
         <img src={logo} className="App-logo" alt="logo" onClick={handleSync} />
         <More />
       </header>
-      <ScreenMain>
+      <main className={mainWrapperStyle()}>
         {nodeManager ?
           <>
             <div />
@@ -66,7 +66,7 @@ function App() {
               <button onClick={handleNavSettings}>Settings</button>
             </div></>}
         <MutinyToaster />
-      </ScreenMain>
+      </main>
     </>
   );
 }
