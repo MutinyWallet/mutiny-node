@@ -25,4 +25,6 @@ clippy:
     cargo clippy --package node-manager -- -Aclippy::drop_non_drop
 
 clippy-mac:
-    cd ./node-manager && AR=/opt/homebrew/opt/llvm/bin/llvm-ar CC=/opt/homebrew/opt/llvm/bin/clang cargo clippy -- -Aclippy::drop_non_drop
+    cargo clippy --package ln-websocket-proxy --all-features
+    cd ./node-manager && AR=/opt/homebrew/opt/llvm/bin/llvm-ar CC=/opt/homebrew/opt/llvm/bin/clang cargo clippy --package node-manager -- -Aclippy::drop_non_drop
+
