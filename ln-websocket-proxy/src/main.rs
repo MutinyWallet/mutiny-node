@@ -256,27 +256,27 @@ async fn handle_mutiny_ws(
                     if let Ok(msg_wrapper) = msg {
                         match msg_wrapper {
                             Message::Text(msg) => {
-                            let command: MutinyProxyCommand = match serde_json::from_str(&msg) {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    tracing::error!("couldn't parse text command from client, ignoring: {e}");
-                                    continue;
-                                }
-                            };
-                            match command {
-                                MutinyProxyCommand::Disconnect { to, from: _from } => {
-                                    // ignore the from and take it from our websocket owner
-                                    // find out who we are supposed to send this to and get
-                                    // producer
-                                    let peer_id_bytes = bytes::Bytes::from(to);
-                                    if let Some((peer_tx, _bc_tx)) = state.lock().await.get(&peer_id_bytes) {
-                                        try_send_disconnect_ws_command(peer_tx.clone(), owner_id_bytes.clone()).await;
-                                        connected_peers.lock().await.remove(&peer_id_bytes);
-                                    } else {
-                                        tracing::error!("peer tried to disconnect someone not connected to");
+                                let command: MutinyProxyCommand = match serde_json::from_str(&msg) {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        tracing::error!("couldn't parse text command from client, ignoring: {e}");
+                                        continue;
                                     }
-                                }
-                            };
+                                };
+                                match command {
+                                    MutinyProxyCommand::Disconnect { to, from: _from } => {
+                                        // ignore the from and take it from our websocket owner
+                                        // find out who we are supposed to send this to and get
+                                        // producer
+                                        let peer_id_bytes = bytes::Bytes::from(to);
+                                        if let Some((peer_tx, _bc_tx)) = state.lock().await.get(&peer_id_bytes) {
+                                            try_send_disconnect_ws_command(peer_tx.clone(), owner_id_bytes.clone()).await;
+                                            connected_peers.lock().await.remove(&peer_id_bytes);
+                                        } else {
+                                            tracing::error!("peer tried to disconnect someone not connected to");
+                                        }
+                                    }
+                                };
                             },
                             Message::Binary(msg) => {
                                 // parse the first 33 bytes to find the ID to send to
