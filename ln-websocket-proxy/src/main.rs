@@ -163,7 +163,7 @@ async fn handle_socket(mut socket: WebSocket, host: String, port: String) {
 }
 
 async fn mutiny_ws_handler(
-    params: Query<MutinyConnectionParams>,
+    params: Option<Query<MutinyConnectionParams>>,
     Path(identifier): Path<String>,
     State(state): State<WSMap>,
     ws: WebSocketUpgrade,
@@ -209,7 +209,7 @@ enum MutinyWSCommand {
 async fn handle_mutiny_ws(
     mut socket: WebSocket,
     identifier: String,
-    _params: Query<MutinyConnectionParams>,
+    _params: Option<Query<MutinyConnectionParams>>,
     state: WSMap,
 ) {
     // TODO do verification on the params and identifier
