@@ -12,7 +12,7 @@ import { ReactComponent as Eye } from "../images/icons/eye.svg"
 import { ReactComponent as EyeClosed } from "../images/icons/eye-closed.svg"
 import { mainWrapperStyle } from "../styles";
 
-const COMMIT_HASH = process.env.REACT_APP_COMMIT_HASH || "";
+const COMMIT_HASH = import.meta.env.VITE_APP_COMMIT_HASH || "";
 
 function SeedWords({ words }: { words: string }) {
     const [shouldShow, setShouldShow] = useState(false)

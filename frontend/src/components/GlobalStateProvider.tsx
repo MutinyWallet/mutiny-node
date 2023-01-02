@@ -17,9 +17,9 @@ interface NodeManagerProviderProps {
 export const NodeManagerContext = createContext<NodeManagerProviderProps>({ nodeManager: undefined, setup: async () => { } });
 
 export function getExistingSettings(): NodeManagerSettingStrings {
-    const network = localStorage.getItem('MUTINY_SETTINGS_network') || process.env.REACT_APP_NETWORK;
-    const proxy = localStorage.getItem('MUTINY_SETTINGS_proxy') || process.env.REACT_APP_PROXY;
-    const esplora = localStorage.getItem('MUTINY_SETTINGS_esplora') || process.env.REACT_APP_ESPLORA;
+    const network = localStorage.getItem('MUTINY_SETTINGS_network') || import.meta.env.VITE_APP_NETWORK;
+    const proxy = localStorage.getItem('MUTINY_SETTINGS_proxy') || import.meta.env.VITE_APP_PROXY;
+    const esplora = localStorage.getItem('MUTINY_SETTINGS_esplora') || import.meta.env.VITE_APP_ESPLORA;
 
     return { network, proxy, esplora }
 }
