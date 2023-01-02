@@ -20,7 +20,6 @@
     "typescript": "^4.9.3"
   },
   "scripts": {
-    "start-ssl": "HTTPS=true SSL_CRT_FILE=./.cert/cert.pem SSL_KEY_FILE=./.cert/key.pem vite",
     "start": "vite",
     "build": "tsc && vite build",
     "serve": "vite preview",

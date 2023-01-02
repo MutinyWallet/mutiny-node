@@ -1,5 +1,5 @@
 dev:
-    cd ./frontend && npm run start-ssl
+    cd ./frontend && npm run start
 pack:
     wasm-pack build ./node-manager --dev --target web
 
