@@ -18,7 +18,7 @@ cert:
     mkdir -p ./frontend/.cert && mkcert -key-file ./frontend/.cert/key.pem -cert-file ./frontend/.cert/cert.pem "localhost"
 
 proxy:
-    cargo run -p ln-websocket-proxy
+    cargo run -p ln-websocket-proxy --features="server"
 
 clippy:
     cargo clippy --package ln-websocket-proxy --all-features
