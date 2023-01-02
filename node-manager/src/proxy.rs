@@ -1,6 +1,7 @@
 use crate::error::MutinyError;
 use crate::node::ConnectionType;
 use crate::node::PubkeyConnectionInfo;
+use async_trait::async_trait;
 use futures::stream::SplitStream;
 use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
@@ -8,15 +9,26 @@ use log::debug;
 use std::sync::Arc;
 use wasm_bindgen_futures::spawn_local;
 
-pub(crate) struct Proxy {
-    pub write: WsSplit,
-    pub read: ReadSplit,
+#[cfg(test)]
+use mockall::{automock, predicate::*};
+
+#[cfg_attr(test, automock)]
+#[async_trait(?Send)]
+pub(crate) trait Proxy {
+    fn send(&self, data: Message);
+    async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>>;
+    async fn close(&self);
+}
+
+pub(crate) struct WsProxy {
+    write: WsSplit,
+    read: ReadSplit,
 }
 
 type WsSplit = Arc<Mutex<SplitSink<WebSocket, Message>>>;
 type ReadSplit = Arc<Mutex<SplitStream<WebSocket>>>;
 
-impl Proxy {
+impl WsProxy {
     pub async fn new(
         proxy_url: String,
         peer_connection_info: PubkeyConnectionInfo,
@@ -40,8 +52,11 @@ impl Proxy {
             read: Arc::new(Mutex::new(read)),
         })
     }
+}
 
-    pub fn send(&self, data: Message) {
+#[async_trait(?Send)]
+impl Proxy for WsProxy {
+    fn send(&self, data: Message) {
         debug!("initiating sending down websocket");
 
         // There can only be one sender at a time
@@ -53,6 +68,15 @@ impl Proxy {
             write.send(data).await.unwrap();
             debug!("sent data down websocket");
         });
+    }
+
+    async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>> {
+        self.read.lock().await.next().await
+    }
+
+    async fn close(&self) {
+        let _ = self.write.lock().await.close().await;
+        debug!("closed websocket");
     }
 }
 
@@ -76,7 +100,7 @@ mod tests {
     use crate::proxy::PubkeyConnectionInfo;
     use crate::test::*;
 
-    use crate::proxy::{mutiny_conn_proxy_to_url, tcp_proxy_to_url, Proxy};
+    use crate::proxy::{mutiny_conn_proxy_to_url, tcp_proxy_to_url, WsProxy};
 
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
@@ -89,7 +113,7 @@ mod tests {
         log!("test websocket proxy");
 
         // TODO do something useful
-        let _proxy = Proxy::new(
+        let _proxy = WsProxy::new(
             "ws://127.0.0.1:3001".to_string(),
             PubkeyConnectionInfo::new(format!("{}@{}", PEER_PUBKEY.to_string(), "127.0.0.1:4000"))
                 .unwrap(),

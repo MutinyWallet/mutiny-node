@@ -3,7 +3,6 @@ use crate::proxy::Proxy;
 use crate::utils;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use futures::lock::Mutex;
-use futures::{SinkExt, StreamExt};
 use gloo_net::websocket::events::CloseEvent;
 use gloo_net::websocket::Message;
 use lightning::ln::peer_handler::{self, SocketDescriptor};
@@ -24,7 +23,7 @@ pub(crate) trait ReadDescriptor {
     async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>>;
 }
 
-#[derive(Clone, Eq, PartialEq, Hash)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub(crate) enum WsSocketDescriptor {
     Tcp(WsTcpSocketDescriptor),
     Mutiny(SubWsSocketDescriptor),
@@ -56,11 +55,11 @@ impl peer_handler::SocketDescriptor for WsSocketDescriptor {
 }
 
 pub(crate) struct WsTcpSocketDescriptor {
-    conn: Arc<Proxy>,
+    conn: Arc<dyn Proxy>,
     id: u64,
 }
 impl WsTcpSocketDescriptor {
-    pub fn new(conn: Arc<Proxy>) -> Self {
+    pub fn new(conn: Arc<dyn Proxy>) -> Self {
         let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
         Self { conn, id }
     }
@@ -68,7 +67,7 @@ impl WsTcpSocketDescriptor {
 
 impl ReadDescriptor for WsTcpSocketDescriptor {
     async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>> {
-        self.conn.read.lock().await.next().await
+        self.conn.read().await
     }
 }
 
@@ -83,11 +82,9 @@ impl peer_handler::SocketDescriptor for WsTcpSocketDescriptor {
     }
 
     fn disconnect_socket(&mut self) {
-        let cloned = self.conn.write.clone();
+        let cloned = self.conn.clone();
         spawn_local(async move {
-            let mut conn = cloned.lock().await;
-            let _ = conn.close().await;
-            debug!("closed websocket");
+            cloned.close().await;
         });
     }
 }
@@ -111,9 +108,15 @@ impl Hash for WsTcpSocketDescriptor {
     }
 }
 
+impl std::fmt::Debug for WsTcpSocketDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "({})", self.id)
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct MultiWsSocketDescriptor {
-    conn: Arc<Proxy>,
+    conn: Arc<dyn Proxy>,
     read_from_sub_socket: Receiver<Message>,
     send_to_multi_socket: Sender<Message>,
     socket_map: SubSocketMap,
@@ -122,7 +125,11 @@ pub(crate) struct MultiWsSocketDescriptor {
     connected: Arc<AtomicBool>,
 }
 impl MultiWsSocketDescriptor {
-    pub fn new(conn: Arc<Proxy>, peer_manager: Arc<PeerManager>, our_peer_pubkey: Vec<u8>) -> Self {
+    pub fn new(
+        conn: Arc<dyn Proxy>,
+        peer_manager: Arc<PeerManager>,
+        our_peer_pubkey: Vec<u8>,
+    ) -> Self {
         debug!("setting up multi websocket descriptor");
 
         let (send_to_multi_socket, read_from_sub_socket): (Sender<Message>, Receiver<Message>) =
@@ -145,7 +152,7 @@ impl MultiWsSocketDescriptor {
         self.connected.load(Ordering::Relaxed)
     }
 
-    pub async fn reconnect(&mut self, conn: Arc<Proxy>) {
+    pub async fn reconnect(&mut self, conn: Arc<dyn Proxy>) {
         let mut socket_map = self.socket_map.lock().await;
         debug!("setting up multi websocket descriptor");
         // if reconnecting master socket, disconnect and clear all subsockets
@@ -197,7 +204,7 @@ impl MultiWsSocketDescriptor {
         let our_peer_pubkey_copy = self.our_peer_pubkey.clone();
         debug!("spawning multi socket connection reader");
         spawn_local(async move {
-            while let Some(msg) = conn_copy.read.lock().await.next().await {
+            while let Some(msg) = conn_copy.read().await {
                 if let Ok(msg) = msg {
                     match msg {
                         Message::Text(msg) => {
@@ -527,5 +534,104 @@ impl PartialEq for SubWsSocketDescriptor {
 impl Hash for SubWsSocketDescriptor {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
+    }
+}
+
+impl std::fmt::Debug for SubWsSocketDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "({})", self.id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::proxy::MockProxy;
+
+    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+
+    use super::WsSocketDescriptor;
+    use crate::socket::create_new_subsocket;
+    use crate::socket::SubSocketMap;
+    use crate::socket::WsTcpSocketDescriptor;
+    use bitcoin::secp256k1::PublicKey;
+    use crossbeam_channel::{unbounded, Receiver, Sender};
+    use futures::lock::Mutex;
+    use gloo_net::websocket::Message;
+    use lightning::util::ser::Writeable;
+    use std::collections::HashMap;
+    use std::str::FromStr;
+    use std::sync::Arc;
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    const PEER_PUBKEY: &str = "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443";
+
+    const OTHER_PEER_PUBKEY: &str =
+        "03b661d965727a0751bd876efe3c826f89d5056f98501924222abd552bc2ba0ab1";
+
+    #[test]
+    async fn test_eq_for_ws_socket_descriptor() {
+        // Test ne and eq for WsTcpSocketDescriptor
+        let mock_proxy = Arc::new(MockProxy::new());
+        let tcp_ws = WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(mock_proxy));
+
+        let mock_proxy_2 = Arc::new(MockProxy::new());
+        let tcp_ws_2 = WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(mock_proxy_2));
+        assert_ne!(tcp_ws, tcp_ws_2);
+
+        let mock_proxy_3 = Arc::new(MockProxy::new());
+        let tcp_ws_3 = WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(mock_proxy_3));
+        assert_eq!(tcp_ws_3, tcp_ws_3);
+
+        // Test ne and eq for WsTcpSocketDescriptor
+        let (send_to_multi_socket, _): (Sender<Message>, Receiver<Message>) = unbounded();
+
+        let socket_map: SubSocketMap = Arc::new(Mutex::new(HashMap::new()));
+        let (send_to_sub_socket, read_from_multi_socket): (Sender<Message>, Receiver<Message>) =
+            unbounded();
+        let sub_ws_socket = create_new_subsocket(
+            socket_map.clone(),
+            send_to_multi_socket.clone(),
+            send_to_sub_socket,
+            read_from_multi_socket,
+            PublicKey::from_str(OTHER_PEER_PUBKEY).unwrap().encode(),
+            PublicKey::from_str(PEER_PUBKEY).unwrap().encode(),
+        )
+        .await;
+        let mutiny_ws = WsSocketDescriptor::Mutiny(sub_ws_socket);
+
+        let (send_to_multi_socket_2, _): (Sender<Message>, Receiver<Message>) = unbounded();
+
+        let socket_map_2: SubSocketMap = Arc::new(Mutex::new(HashMap::new()));
+        let (send_to_sub_socket_2, read_from_multi_socket_2): (Sender<Message>, Receiver<Message>) =
+            unbounded();
+        let sub_ws_socket_2 = create_new_subsocket(
+            socket_map_2.clone(),
+            send_to_multi_socket_2.clone(),
+            send_to_sub_socket_2,
+            read_from_multi_socket_2,
+            PublicKey::from_str(OTHER_PEER_PUBKEY).unwrap().encode(),
+            PublicKey::from_str(PEER_PUBKEY).unwrap().encode(),
+        )
+        .await;
+        let mutiny_ws_2 = WsSocketDescriptor::Mutiny(sub_ws_socket_2);
+        assert_ne!(mutiny_ws, mutiny_ws_2);
+
+        let (send_to_multi_socket_3, _): (Sender<Message>, Receiver<Message>) = unbounded();
+
+        let socket_map_3: SubSocketMap = Arc::new(Mutex::new(HashMap::new()));
+        let (send_to_sub_socket_3, read_from_multi_socket_3): (Sender<Message>, Receiver<Message>) =
+            unbounded();
+        let sub_ws_socket_3 = create_new_subsocket(
+            socket_map_3.clone(),
+            send_to_multi_socket_3.clone(),
+            send_to_sub_socket_3,
+            read_from_multi_socket_3,
+            PublicKey::from_str(OTHER_PEER_PUBKEY).unwrap().encode(),
+            PublicKey::from_str(PEER_PUBKEY).unwrap().encode(),
+        )
+        .await;
+        let mutiny_ws_3 = WsSocketDescriptor::Mutiny(sub_ws_socket_3);
+        assert_eq!(mutiny_ws_3, mutiny_ws_3);
     }
 }
