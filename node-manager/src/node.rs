@@ -15,7 +15,6 @@ use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::util::logger::{Logger, Record};
 use lightning::util::ser::Writeable;
 use lightning_invoice::utils::create_invoice_from_channelmanager_and_duration_since_epoch;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -141,7 +140,6 @@ pub(crate) struct Node {
     logger: Arc<MutinyLogger>,
     websocket_proxy_addr: String,
     multi_socket: MultiWsSocketDescriptor,
-    temp_peer_connection_map: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl Node {
@@ -442,7 +440,6 @@ impl Node {
             logger,
             websocket_proxy_addr,
             multi_socket,
-            temp_peer_connection_map: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -481,11 +478,23 @@ impl Node {
                         }
                     }
                 } else {
-                    // store this so we can save later if needed
-                    self.temp_peer_connection_map
-                        .lock()
-                        .unwrap()
-                        .insert(pubkey, peer_connection_info.original_connection_string);
+                    // store this so we can reconnect later
+                    if self
+                        .persister
+                        .persist_peer_connection_info(
+                            pubkey,
+                            peer_connection_info.original_connection_string,
+                        )
+                        .is_err()
+                    {
+                        self.logger.log(&Record::new(
+                            lightning::util::logger::Level::Warn,
+                            format_args!("WARN: could not store peer connection info",),
+                            "node",
+                            "",
+                            0,
+                        ));
+                    }
                 }
 
                 Ok(())
@@ -816,29 +825,6 @@ impl Node {
                     "",
                     0,
                 ));
-
-                // persist the peer channel info so we can connect later
-                if let Some(conn_str) = self
-                    .temp_peer_connection_map
-                    .lock()
-                    .unwrap()
-                    .get(&pubkey.to_string())
-                {
-                    if self
-                        .persister
-                        .persist_peer_connection_info(pubkey.to_string(), conn_str.clone())
-                        .is_err()
-                    {
-                        self.logger.log(&Record::new(
-                            lightning::util::logger::Level::Warn,
-                            format_args!("WARN: could not store peer connection info",),
-                            "node",
-                            "",
-                            0,
-                        ));
-                    }
-                }
-
                 Ok(res)
             }
             Err(e) => {
