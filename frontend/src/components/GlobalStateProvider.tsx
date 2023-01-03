@@ -1,5 +1,5 @@
-import init, { InitOutput, NodeManager } from 'node-manager';
-import React, { createContext, useEffect, useRef, useState } from 'react';
+import init, { InitOutput, NodeManager } from 'node-manager/';
+import { createContext, useEffect, useRef, useState } from 'react';
 
 interface Props {
     children: React.ReactElement;
