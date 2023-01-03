@@ -45,4 +45,8 @@ const mainWrapperStyle = cva("flex flex-col justify-between overflow-y-scroll mb
 
 });
 
-export { inputStyle, selectStyle, mainWrapperStyle }
+const bevelStyle = cva("bg-[#EEE] border-r-[#DDD] border-b-[#999] border-l-[#999] border-t-[#DDD] border-4 text-black text-xl font-light shadow-lg p-4", {
+    variants: {}
+});
+
+export { inputStyle, selectStyle, mainWrapperStyle, bevelStyle }
