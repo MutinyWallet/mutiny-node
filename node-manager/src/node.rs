@@ -23,7 +23,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::chain::MutinyChain;
 use crate::error::MutinyStorageError;
-use crate::proxy::Proxy;
+use crate::proxy::WsProxy;
 use crate::socket::WsTcpSocketDescriptor;
 use crate::{
     background::{process_events_async, GossipSync},
@@ -317,7 +317,7 @@ impl Node {
             original_connection_string: format!("mutiny:{pubkey}@{websocket_proxy_addr}"),
         };
         let main_proxy =
-            Proxy::new(websocket_proxy_addr.to_string(), self_connection.clone()).await?;
+            WsProxy::new(websocket_proxy_addr.to_string(), self_connection.clone()).await?;
         let multi_socket = MultiWsSocketDescriptor::new(
             Arc::new(main_proxy),
             peer_man.clone(),
@@ -333,7 +333,7 @@ impl Node {
             loop {
                 if !multi_socket_reconnect.connected() {
                     debug!("got disconnected from multi socket proxy, going to reconnect");
-                    match Proxy::new(
+                    match WsProxy::new(
                         websocket_proxy_addr_copy.to_string(),
                         self_connection_copy.clone(),
                     )
@@ -886,7 +886,7 @@ pub(crate) async fn connect_peer(
     debug!("making connection to peer: {:?}", peer_connection_info);
     let (mut descriptor, socket_addr_opt) = match peer_connection_info.connection_type {
         ConnectionType::Tcp(ref t) => {
-            let proxy = Proxy::new(websocket_proxy_addr, peer_connection_info.clone()).await?;
+            let proxy = WsProxy::new(websocket_proxy_addr, peer_connection_info.clone()).await?;
             (
                 WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
                 try_get_net_addr_from_socket(t),
