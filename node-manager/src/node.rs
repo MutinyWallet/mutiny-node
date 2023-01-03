@@ -1,29 +1,16 @@
+use crate::chain::MutinyChain;
+use crate::error::MutinyStorageError;
 use crate::event::{EventHandler, HTLCStatus, MillisatAmount, PaymentInfo};
 use crate::invoice::create_phantom_invoice;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::localstorage::MutinyBrowserStorage;
 use crate::nodemanager::{MutinyInvoice, MutinyInvoiceParams};
+use crate::peermanager::PeerManager;
+use crate::proxy::WsProxy;
+use crate::socket::WsTcpSocketDescriptor;
 use crate::socket::{schedule_descriptor_read, MultiWsSocketDescriptor, WsSocketDescriptor};
 use crate::utils::{currency_from_network, sleep};
 use crate::wallet::MutinyWallet;
-use bitcoin::hashes::sha256::Hash as Sha256;
-use bitcoin::hashes::Hash;
-use bitcoin::Network;
-use lightning::chain::{chainmonitor, Filter, Watch};
-use lightning::ln::channelmanager::PhantomRouteHints;
-use lightning::ln::{PaymentHash, PaymentPreimage};
-use lightning::util::logger::{Logger, Record};
-use lightning::util::ser::Writeable;
-use lightning_invoice::utils::create_invoice_from_channelmanager_and_duration_since_epoch;
-use std::net::SocketAddr;
-use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-use wasm_bindgen_futures::spawn_local;
-
-use crate::chain::MutinyChain;
-use crate::error::MutinyStorageError;
-use crate::proxy::WsProxy;
-use crate::socket::WsTcpSocketDescriptor;
 use crate::{
     background::{process_events_async, GossipSync},
     error::MutinyError,
@@ -35,37 +22,41 @@ use anyhow::Context;
 use bdk::blockchain::EsploraBlockchain;
 use bip39::Mnemonic;
 use bitcoin::blockdata::constants::genesis_block;
+use bitcoin::hashes::sha256::Hash as Sha256;
+use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::PublicKey;
+use bitcoin::Network;
 use bitcoin_hashes::hex::ToHex;
 use lightning::chain::keysinterface::{
     InMemorySigner, KeysInterface, PhantomKeysManager, Recipient,
 };
+use lightning::chain::{chainmonitor, Filter, Watch};
+use lightning::ln::channelmanager::PhantomRouteHints;
 use lightning::ln::msgs::NetAddress;
 use lightning::ln::peer_handler::{
-    IgnoringMessageHandler, MessageHandler as LdkMessageHandler, PeerManager as LdkPeerManager,
+    IgnoringMessageHandler, MessageHandler as LdkMessageHandler,
     SocketDescriptor as LdkSocketDescriptor,
 };
+use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::routing::gossip;
 use lightning::routing::router::DefaultRouter;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
 use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
+use lightning::util::logger::{Logger, Record};
+use lightning::util::ser::Writeable;
+use lightning_invoice::utils::create_invoice_from_channelmanager_and_duration_since_epoch;
 use lightning_invoice::{payment, Invoice};
 use log::{debug, error, info, trace};
+use std::net::SocketAddr;
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
+use wasm_bindgen_futures::spawn_local;
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
 pub(crate) type MessageHandler = LdkMessageHandler<
     Arc<PhantomChannelManager>,
     Arc<IgnoringMessageHandler>,
-    Arc<IgnoringMessageHandler>,
->;
-
-pub(crate) type PeerManager = LdkPeerManager<
-    WsSocketDescriptor,
-    Arc<PhantomChannelManager>,
-    Arc<IgnoringMessageHandler>,
-    Arc<IgnoringMessageHandler>,
-    Arc<MutinyLogger>,
     Arc<IgnoringMessageHandler>,
 >;
 

@@ -1,4 +1,4 @@
-use crate::node::PeerManager;
+use crate::peermanager::PeerManager;
 use crate::proxy::Proxy;
 use crate::utils;
 use crossbeam_channel::{unbounded, Receiver, Sender};
