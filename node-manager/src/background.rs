@@ -26,7 +26,7 @@ use lightning::util::events::{Event, EventHandler};
 use lightning::util::logger::Logger;
 use lightning::util::persist::Persister;
 use lightning_rapid_gossip_sync::RapidGossipSync;
-use log::{error, trace};
+use log::{debug, error, trace};
 use std::ops::Deref;
 use std::time::Duration;
 
@@ -264,7 +264,7 @@ macro_rules! define_run_body {
 				$channel_manager.timer_tick_occurred();
 				last_freshness_call = instant::now();
 			}
-			if await_time - await_start  > 1000 as f64  {
+			if await_time - await_start  > (1000 * 2) as f64 {
 				// On various platforms, we may be starved of CPU cycles for several reasons.
 				// E.g. on iOS, if we've been in the background, we will be entirely paused.
 				// Similarly, if we're on a desktop platform and the device has been asleep, we
@@ -277,7 +277,7 @@ macro_rules! define_run_body {
 				// may call Bitcoin Core RPCs during event handling, which very often takes
 				// more than a handful of seconds to complete, and shouldn't disconnect all our
 				// peers.
-				trace!("100ms sleep took more than a second, disconnecting peers.");
+				debug!("100ms sleep took more than 2 seconds, disconnecting peers.");
 				$peer_manager.disconnect_all_peers();
 				last_ping_call = instant::now();
 			} else if instant::now() - last_ping_call > (1000 * PING_TIMER) as f64 {
