@@ -5,7 +5,8 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 use futures::lock::Mutex;
 use gloo_net::websocket::events::CloseEvent;
 use gloo_net::websocket::Message;
-use lightning::ln::peer_handler::{self, SocketDescriptor};
+use lightning::ln::peer_handler;
+use lightning::ln::peer_handler::SocketDescriptor;
 use ln_websocket_proxy::MutinyProxyCommand;
 use log::{debug, error, info, trace};
 use std::collections::HashMap;
@@ -120,14 +121,14 @@ pub(crate) struct MultiWsSocketDescriptor {
     read_from_sub_socket: Receiver<Message>,
     send_to_multi_socket: Sender<Message>,
     socket_map: SubSocketMap,
-    peer_manager: Arc<PeerManager>,
+    peer_manager: Arc<dyn PeerManager>,
     our_peer_pubkey: Vec<u8>,
     connected: Arc<AtomicBool>,
 }
 impl MultiWsSocketDescriptor {
     pub fn new(
         conn: Arc<dyn Proxy>,
-        peer_manager: Arc<PeerManager>,
+        peer_manager: Arc<dyn PeerManager>,
         our_peer_pubkey: Vec<u8>,
     ) -> Self {
         debug!("setting up multi websocket descriptor");
@@ -161,7 +162,7 @@ impl MultiWsSocketDescriptor {
             // and ldk to disconnect that peer
             subsocket.disconnect_socket();
             self.peer_manager
-                .socket_disconnected(&WsSocketDescriptor::Mutiny(subsocket.clone()));
+                .socket_disconnected(&mut WsSocketDescriptor::Mutiny(subsocket.clone()));
         }
 
         socket_map.clear();
@@ -229,7 +230,7 @@ impl MultiWsSocketDescriptor {
                                             debug!("disconnecting subsocket");
                                             subsocket.disconnect_socket();
                                             peer_manager_copy.socket_disconnected(
-                                                &WsSocketDescriptor::Mutiny(subsocket.clone()),
+                                                &mut WsSocketDescriptor::Mutiny(subsocket.clone()),
                                             );
                                             locked_socket_map.remove(&from);
                                         }
@@ -326,7 +327,7 @@ impl MultiWsSocketDescriptor {
                                             debug!("disconnecting subsocket");
                                             inbound_subsocket.disconnect_socket();
                                             peer_manager_copy
-                                                .socket_disconnected(&inbound_subsocket);
+                                                .socket_disconnected(&mut inbound_subsocket);
                                             locked_socket_map.remove(id_bytes);
                                         }
                                     };
@@ -362,7 +363,7 @@ impl MultiWsSocketDescriptor {
 
 pub(crate) fn schedule_descriptor_read(
     descriptor: WsSocketDescriptor,
-    peer_manager: Arc<PeerManager>,
+    peer_manager: Arc<dyn PeerManager>,
 ) {
     debug!("scheduling descriptor reader");
     let mut descriptor = descriptor;

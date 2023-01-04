@@ -5,7 +5,7 @@ use crate::invoice::create_phantom_invoice;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::localstorage::MutinyBrowserStorage;
 use crate::nodemanager::{MutinyInvoice, MutinyInvoiceParams};
-use crate::peermanager::PeerManager;
+use crate::peermanager::{PeerManager, PeerManagerImpl};
 use crate::proxy::WsProxy;
 use crate::socket::WsTcpSocketDescriptor;
 use crate::socket::{schedule_descriptor_read, MultiWsSocketDescriptor, WsSocketDescriptor};
@@ -121,7 +121,7 @@ impl PubkeyConnectionInfo {
 pub(crate) struct Node {
     pub _uuid: String,
     pub pubkey: PublicKey,
-    pub peer_manager: Arc<PeerManager>,
+    pub peer_manager: Arc<dyn PeerManager>,
     pub keys_manager: Arc<PhantomKeysManager>,
     pub channel_manager: Arc<PhantomChannelManager>,
     pub chain_monitor: Arc<ChainMonitor>,
@@ -836,7 +836,7 @@ pub(crate) async fn connect_peer_if_necessary(
     multi_socket: MultiWsSocketDescriptor,
     websocket_proxy_addr: String,
     peer_connection_info: PubkeyConnectionInfo,
-    peer_manager: Arc<PeerManager>,
+    peer_manager: Arc<dyn PeerManager>,
 ) -> Result<(), MutinyError> {
     if peer_manager
         .get_peer_node_ids()
@@ -857,7 +857,7 @@ pub(crate) async fn connect_peer(
     multi_socket: MultiWsSocketDescriptor,
     websocket_proxy_addr: String,
     peer_connection_info: PubkeyConnectionInfo,
-    peer_manager: Arc<PeerManager>,
+    peer_manager: Arc<dyn PeerManager>,
 ) -> Result<(), MutinyError> {
     // first make a connection to the node
     debug!("making connection to peer: {:?}", peer_connection_info);
@@ -916,12 +916,12 @@ pub(crate) fn create_peer_manager(
     km: Arc<PhantomKeysManager>,
     lightning_msg_handler: MessageHandler,
     logger: Arc<MutinyLogger>,
-) -> PeerManager {
+) -> PeerManagerImpl {
     let now = crate::utils::now().as_secs();
     let mut ephemeral_bytes = [0u8; 32];
     getrandom::getrandom(&mut ephemeral_bytes).expect("Failed to generate entropy");
 
-    PeerManager::new(
+    PeerManagerImpl::new(
         lightning_msg_handler,
         km.get_node_secret(Recipient::Node)
             .expect("Failed to get node secret"),
