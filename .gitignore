@@ -3,3 +3,4 @@ debug/
 target/
 ./*/Cargo.lock
 Cargo.lock
+.vim/

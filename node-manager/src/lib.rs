@@ -17,6 +17,7 @@ mod localstorage;
 mod logging;
 mod node;
 mod nodemanager;
+mod peermanager;
 mod proxy;
 mod socket;
 mod utils;
