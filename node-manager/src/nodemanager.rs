@@ -545,16 +545,7 @@ impl NodeManager {
     #[wasm_bindgen]
     pub async fn list_onchain(&self) -> Result<JsValue, MutinyJsError> {
         let mut txs = self.wallet.list_transactions(false).await?;
-
-        // Sort by timestamp, but if there's no timestamp put it first,
-        // if timestamps are equal, compare by txid
-        txs.sort_by(|a, b| {
-            a.confirmation_time
-                .as_ref()
-                .map(|c| c.timestamp)
-                .cmp(&b.confirmation_time.as_ref().map(|c| c.timestamp))
-                .then_with(|| a.txid.cmp(&b.txid))
-        });
+        txs.sort();
 
         Ok(serde_wasm_bindgen::to_value(&txs)?)
     }

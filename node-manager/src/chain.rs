@@ -267,37 +267,45 @@ impl MutinyChain {
     ) -> Result<Option<ConfirmedTx>, MutinyError> {
         let client = &*self.wallet.blockchain;
 
-        if let Some(merkle_proof) = client.get_merkle_proof(txid).await? {
-            let block_hash = client.get_block_hash(merkle_proof.block_height).await?;
+        if let Some(merkle_block) = client.get_merkle_block(txid).await? {
+            let block_header = merkle_block.header;
+            let block_hash = block_header.block_hash();
             if let Some(expected_block_hash) = expected_block_hash {
                 if expected_block_hash != block_hash {
                     return Err(MutinyError::ChainAccessFailed);
                 }
             }
 
-            let block_header = client.get_header_by_hash(&block_hash).await?;
-
+            let mut matches = vec![*txid];
+            let mut indexes = Vec::new();
+            let _ = merkle_block.txn.extract_matches(&mut matches, &mut indexes);
+            debug_assert_eq!(indexes.len(), 1);
+            let pos = *indexes.first().ok_or(MutinyError::ChainAccessFailed)? as usize;
             if let Some(tx) = client.get_tx(txid).await? {
-                // We can take a shortcut here if a previous call already gave us the height.
                 if let Some(block_height) = known_block_height {
-                    // if we have mismatched heights something probably went wrong
-                    if merkle_proof.block_height != block_height {
-                        return Err(MutinyError::ChainAccessFailed);
-                    }
+                    // We can take a shortcut here if a previous call already gave us the height.
                     return Ok(Some(ConfirmedTx {
                         tx,
                         block_header,
-                        pos: merkle_proof.pos,
+                        pos,
                         block_height,
                     }));
                 }
 
-                return Ok(Some(ConfirmedTx {
-                    tx,
-                    block_header,
-                    pos: merkle_proof.pos,
-                    block_height: merkle_proof.block_height,
-                }));
+                let block_status = client.get_block_status(&block_hash).await?;
+                return if let Some(block_height) = block_status.height {
+                    Ok(Some(ConfirmedTx {
+                        tx,
+                        block_header,
+                        pos,
+                        block_height,
+                    }))
+                } else {
+                    // If any previously-confirmed block suddenly is no longer confirmed, we found
+                    // an inconsistency and should start over.
+                    trace!("Inconsistency: Tx {} was unconfirmed during syncing.", txid);
+                    Err(MutinyError::ChainAccessFailed)
+                };
             }
         }
         Ok(None)
