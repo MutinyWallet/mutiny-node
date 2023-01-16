@@ -2,17 +2,29 @@ import ActionButton from "@components/ActionButton";
 import AmountInput from "@components/AmountInput";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import MutinyToaster from "@components/MutinyToaster";
+import { useQuery } from "@tanstack/react-query";
 import { getFirstNode, toastAnything } from "@util/dumb";
 import { useContext, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
-import { inputStyle, mainWrapperStyle } from "../styles";
-
+import { mainWrapperStyle, selectStyle } from "../styles";
+import { MutinyPeer } from "node-manager";
 
 export default function OpenChannel() {
 	const { nodeManager } = useContext(NodeManagerContext);
 	let navigate = useNavigate();
+
+	const { data: peers } = useQuery({
+		queryKey: ['peers'],
+		queryFn: () => {
+			console.log("Getting peers...")
+			const peers = nodeManager?.list_peers() as Promise<MutinyPeer[]>
+			return peers
+		},
+		enabled: !!nodeManager,
+		refetchInterval: 1000,
+	})
 
 	const [peerPubkey, setPeerPubkey] = useState("");
 	const [channelAmount, setAmount] = useState("")
@@ -46,6 +58,10 @@ export default function OpenChannel() {
 		}
 	}
 
+	function handleSelectChange(e: React.ChangeEvent<HTMLSelectElement>) {
+		setPeerPubkey(e.target.value)
+	}
+
 	return (
 		<>
 			<header className='p-8 flex justify-between items-center'>
@@ -54,15 +70,33 @@ export default function OpenChannel() {
 			</header>
 
 			<main>
-				<form onSubmit={handleSubmit} className={mainWrapperStyle()}>
-					<div />
-					<p className="text-2xl font-light">Let's do this!</p>
-					<div className="flex flex-col gap-4">
-						<input onChange={(e) => setPeerPubkey(e.target.value)} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='Target node pubkey' />
-						<AmountInput amountSats={channelAmount} setAmount={setAmount} accent="blue" placeholder="How big?" />
+				{(peers && peers.length > 0) &&
+					<form onSubmit={handleSubmit} className={mainWrapperStyle()}>
+						<div />
+						<>
+							<p className="text-2xl font-light">Let's do this!</p>
+							<div className="flex flex-col gap-4">
+								<div className="flex flex-col gap-2">
+									<label className="text-xl font-light">Pick the peer</label>
+									<div className="select-wrapper">
+										<select onChange={handleSelectChange} className={selectStyle({ accent: "blue", overflow: "yes" })} value={peerPubkey} placeholder="Network">
+											{peers.map(p => <option key={p.pubkey} value={p.pubkey}>{p.pubkey}</option>)}
+										</select>
+									</div>
+								</div>
+								<AmountInput amountSats={channelAmount} setAmount={setAmount} accent="blue" placeholder="How big?" />
+							</div>
+							<ActionButton>Create</ActionButton>
+						</>
+					</form>
+				}
+				{(!peers || peers.length === 0) &&
+					<div className={mainWrapperStyle()}>
+						<div />
+						<p className="text-2xl font-light">You need to connect to a peer first.</p>
+						<ActionButton onClick={() => navigate("/connectpeer")}>Connect Peer</ActionButton>
 					</div>
-					<ActionButton>Create</ActionButton>
-				</form>
+				}
 			</main>
 			<MutinyToaster />
 

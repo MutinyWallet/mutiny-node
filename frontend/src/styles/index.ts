@@ -25,6 +25,10 @@ const selectStyle = cva("", {
             blue: "bg-blue focus:ring-blue",
             red: "bg-red focus:ring-red",
         },
+        overflow: {
+            yes: "text-ellipsis overflow-hidden w-full"
+        },
+        defaultVariants: {}
     }
 });
 

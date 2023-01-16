@@ -50,8 +50,8 @@ export default function ReceiveFinal() {
         enabled: !!(nodeManager && paymentHash),
     })
 
-    function handleGoHome() {
-        queryClient.invalidateQueries({ queryKey: ['balance'] })
+    async function handleGoHome() {
+        await queryClient.invalidateQueries({ queryKey: ['balance'] })
         navigate("/")
     }
 

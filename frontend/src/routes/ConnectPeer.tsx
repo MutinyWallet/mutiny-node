@@ -2,7 +2,7 @@ import ActionButton from "@components/ActionButton";
 import Copy from "@components/Copy";
 import { getExistingSettings, NodeManagerContext, NodeManagerSettingStrings } from "@components/GlobalStateProvider";
 import MutinyToaster from "@components/MutinyToaster";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getFirstNode, getHostname, toastAnything } from "@util/dumb";
 import takeN from "@util/takeN";
 import { useContext, useState } from "react";
@@ -12,6 +12,7 @@ import PageTitle from "../components/PageTitle";
 import { inputStyle, mainWrapperStyle } from "../styles";
 
 export default function ConnectPeer() {
+	const queryClient = useQueryClient()
 	const { nodeManager } = useContext(NodeManagerContext);
 	const navigate = useNavigate();
 
@@ -28,6 +29,7 @@ export default function ConnectPeer() {
 			const myNode = await getFirstNode(nodeManager!);
 
 			await nodeManager?.connect_to_peer(myNode, peerConnectString)
+			await queryClient.invalidateQueries({ queryKey: ['peers'] })
 
 			navigate("/manager/peers")
 		} catch (e) {
