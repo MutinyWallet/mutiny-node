@@ -4,7 +4,7 @@ import { NodeManagerContext } from "@components/GlobalStateProvider";
 import MutinyToaster from "@components/MutinyToaster";
 import { useQuery } from "@tanstack/react-query";
 import { getFirstNode, toastAnything } from "@util/dumb";
-import { useContext, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Close from "../components/Close";
 import PageTitle from "../components/PageTitle";
@@ -25,6 +25,13 @@ export default function OpenChannel() {
 		enabled: !!nodeManager,
 		refetchInterval: 1000,
 	})
+
+	// If we have peers set that as the default peer
+	useEffect(() => {
+		if (peers && peers.length) {
+			setPeerPubkey(peers[0].pubkey)
+		}
+	}, [peers]);
 
 	const [peerPubkey, setPeerPubkey] = useState("");
 	const [channelAmount, setAmount] = useState("")

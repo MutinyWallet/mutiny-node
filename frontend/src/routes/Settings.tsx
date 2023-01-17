@@ -11,6 +11,7 @@ import PageTitle from "../components/PageTitle"
 import { ReactComponent as Eye } from "../images/icons/eye.svg"
 import { ReactComponent as EyeClosed } from "../images/icons/eye-closed.svg"
 import { mainWrapperStyle } from "../styles";
+import ConfirmDialog from "@components/ConfirmDialog";
 
 const COMMIT_HASH = process.env.REACT_APP_COMMIT_HASH || "";
 
@@ -33,6 +34,9 @@ function SeedWords({ words }: { words: string }) {
 function Settings() {
     const { nodeManager } = useContext(NodeManagerContext);
     const queryClient = useQueryClient()
+    const [dialogOpen, setDialogOpen] = useState(false);
+    const [confirmMessage, setConfirmMessage] = useState("");
+    const [newStorage, setNewStorage] = useState<any>(null);
 
     const { data: words } = useQuery({
         queryKey: ['words'],
@@ -82,6 +86,11 @@ function Settings() {
         link.remove()
     };
 
+    function handleClearState() {
+        setConfirmMessage("Are you sure you want to clear your node's state? This can't be undone!");
+        setDialogOpen(true);
+    };
+
     async function handleFileChoose(e: React.ChangeEvent) {
         const fileReader = new FileReader();
         const target = e.target as HTMLInputElement;
@@ -93,29 +102,34 @@ function Settings() {
                 const text = e.target?.result?.toString();
 
                 // This should throw if there's a parse error, so we won't end up clearing
-                const newStorage = JSON.parse(text!);
+                const parsedNewStorage = JSON.parse(text!);
 
-                console.log(newStorage)
+                console.log(parsedNewStorage)
 
-                if (window.confirm("Are you sure you want to replace your node's state? This can't be undone!")) {
-                    localStorage.clear();
-                    Object.entries(newStorage).forEach(([key, value]) => {
-                        localStorage.setItem(key, value as string);
-                    })
-                    window.location.reload();
-                }
+                setNewStorage(parsedNewStorage);
+
+                setConfirmMessage("Are you sure you want to replace your node's state? This can't be undone!");
+                setDialogOpen(true);
             }
         } catch (e) {
             console.error(e);
         }
     };
 
-    function handleClearState() {
-        if (window.confirm("Are you sure you want to delete your node's state? This can't be undone!")) {
+    function confirmSettingsAction() {
+        // This is a kind of dumb way to tell which action to take
+        if (confirmMessage === "Are you sure you want to replace your node's state? This can't be undone!") {
+            localStorage.clear();
+            Object.entries(newStorage).forEach(([key, value]) => {
+                localStorage.setItem(key, value as string);
+            })
+            window.location.reload();
+        } else if (confirmMessage === "Are you sure you want to clear your node's state? This can't be undone!") {
             console.log("Clearing local storage... So long, state!")
             localStorage.clear();
             window.location.reload();
         }
+        setDialogOpen(false);
     }
 
     async function handleNewNode() {
@@ -183,6 +197,7 @@ function Settings() {
                     </label>
                 </div>
                 <MutinyToaster />
+                <ConfirmDialog open={dialogOpen} message={confirmMessage} onCancel={() => setDialogOpen(false)} onConfirm={confirmSettingsAction} />
             </main>
         </>
     )

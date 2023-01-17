@@ -1,3 +1,4 @@
+import ConfirmDialog from "@components/ConfirmDialog"
 import { NodeManagerContext } from "@components/GlobalStateProvider"
 import MutinyToaster from "@components/MutinyToaster"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -5,7 +6,7 @@ import { mempoolTxUrl, toastAnything } from "@util/dumb"
 import prettyPrintAmount from "@util/prettyPrintAmount"
 import takeN from "@util/takeN"
 import { MutinyChannel } from "node-manager"
-import { useContext } from "react"
+import { useContext, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
@@ -18,16 +19,23 @@ function SingleChannel({ channel }: { channel: MutinyChannel }) {
     const queryClient = useQueryClient()
     const { nodeManager } = useContext(NodeManagerContext);
 
-    async function handleCloseChannel() {
-        if (window.confirm("Are you sure you want to close this channel?")) {
-            try {
-                await nodeManager?.close_channel(channel.outpoint!);
-                toastAnything("Channel closed");
-                await queryClient.invalidateQueries({ queryKey: ['channels'] });
-            } catch (e) {
-                toastAnything(e);
-            }
+    const [dialogOpen, setDialogOpen] = useState(false);
+    const confirmMessage = "Are you sure you want to close this channel?";
+
+    async function handleClickClose() {
+        setDialogOpen(true);
+    }
+
+    async function confirmCloseChannel() {
+        try {
+            await nodeManager?.close_channel(channel.outpoint!);
+            toastAnything("Channel closed");
+            await queryClient.invalidateQueries({ queryKey: ['channels'] });
+        } catch (e) {
+            toastAnything(e);
+            setDialogOpen(false);
         }
+        setDialogOpen(false);
     }
 
     let percent = Number(channel.balance / channel.size) * 100
@@ -44,11 +52,12 @@ function SingleChannel({ channel }: { channel: MutinyChannel }) {
                         <div className={"shadow-button bg-blue-button h-6 rounded"} style={{ width: `${percent}%` }} />
                     </div>
                 </div>
-                <button onClick={handleCloseChannel} className="h-[3rem] w-[3rem] p-1 flex items-center justify-center flex-0"><EjectIcon /></button>
+                <button onClick={handleClickClose} className="h-[3rem] w-[3rem] p-1 flex items-center justify-center flex-0"><EjectIcon /></button>
             </div>
             <a className="text-sm font-light opacity-50 mt-2" href={mempoolTxUrl(channel.outpoint?.split(":")[0], nodeManager?.get_network())} target="_blank" rel="noreferrer">
                 {takeN(channel.outpoint || "", 28)}
             </a>
+            <ConfirmDialog open={dialogOpen} message={confirmMessage} onCancel={() => setDialogOpen(false)} onConfirm={confirmCloseChannel} />
         </li>
     )
 }

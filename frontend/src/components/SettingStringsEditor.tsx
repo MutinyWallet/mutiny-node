@@ -1,12 +1,15 @@
 import { toastAnything } from "@util/dumb";
 import { ChangeEvent, useContext, useState } from "react";
 import { inputStyle, selectStyle } from "../styles";
+import ConfirmDialog from "./ConfirmDialog";
 import { getExistingSettings, NodeManagerContext, NodeManagerSettingStrings } from "./GlobalStateProvider";
 
 export default function SettingStringsEditor() {
     const { setup } = useContext(NodeManagerContext);
 
     const [nodeManagerSettings, setNodeManagerSettings] = useState<NodeManagerSettingStrings>(getExistingSettings());
+    const [dialogOpen, setDialogOpen] = useState(false);
+    const confirmMessage = "Are you sure? Changing networks will delete your node's state. This can't be undone!";
 
     async function handleSaveSettings() {
         console.log('save existing network', getExistingSettings().network)
@@ -14,18 +17,29 @@ export default function SettingStringsEditor() {
         try {
             let existingNetwork = getExistingSettings().network;
             if (existingNetwork !== nodeManagerSettings.network) {
-                if (window.confirm("Changing networks will delete your node's state. This can't be undone!")) {
-                    localStorage.clear();
-                    await setup(nodeManagerSettings);
-                    window.location.reload();
-                } else {
-                    window.location.reload();
-                }
+                setDialogOpen(true);
+            } else {
+                await setup(nodeManagerSettings);
+                window.location.reload();
+
             }
         } catch (e) {
             console.error(e)
             toastAnything(e)
         }
+    }
+
+    async function confirmStateReset() {
+        try {
+            localStorage.clear();
+            await setup(nodeManagerSettings);
+            window.location.reload();
+        } catch (e) {
+            console.error(e)
+            toastAnything(e)
+        }
+
+        setDialogOpen(false);
     }
 
     const handleInputChange = (name: string) => (e: ChangeEvent<HTMLInputElement>) => {
@@ -65,6 +79,7 @@ export default function SettingStringsEditor() {
                 <input onChange={handleInputChange("proxy")} defaultValue={nodeManagerSettings.proxy} className={`w-full ${inputStyle({ accent: "blue" })}`} type="text" placeholder='Websocket Proxy' />
             </div>
             <button className="mt-4" onClick={handleSaveSettings}>Save Settings</button>
+            <ConfirmDialog open={dialogOpen} message={confirmMessage} onCancel={() => setDialogOpen(false)} onConfirm={confirmStateReset} />
         </>
     )
 
