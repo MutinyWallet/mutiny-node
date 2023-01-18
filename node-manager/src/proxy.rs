@@ -115,8 +115,7 @@ mod tests {
         // TODO do something useful
         let _proxy = WsProxy::new(
             "ws://127.0.0.1:3001".to_string(),
-            PubkeyConnectionInfo::new(format!("{}@{}", PEER_PUBKEY.to_string(), "127.0.0.1:4000"))
-                .unwrap(),
+            PubkeyConnectionInfo::new(format!("{}@{}", PEER_PUBKEY, "127.0.0.1:4000")).unwrap(),
         )
         .await;
     }
@@ -135,7 +134,7 @@ mod tests {
         );
 
         assert_eq!(
-            ("ws://127.0.0.1:3001/v1/mutiny/".to_owned() + PEER_PUBKEY).to_string(),
+            ("ws://127.0.0.1:3001/v1/mutiny/".to_owned() + PEER_PUBKEY),
             mutiny_conn_proxy_to_url("ws://127.0.0.1:3001".to_string(), PEER_PUBKEY.to_string(),)
         )
     }

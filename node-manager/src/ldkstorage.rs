@@ -327,7 +327,7 @@ fn peer_key(pubkey: String) -> String {
 }
 
 fn payment_key(inbound: bool, payment_hash: PaymentHash) -> String {
-    let key = if inbound {
+    if inbound {
         format!(
             "{}{}",
             PAYMENT_INBOUND_PREFIX_KEY,
@@ -339,8 +339,7 @@ fn payment_key(inbound: bool, payment_hash: PaymentHash) -> String {
             PAYMENT_OUTBOUND_PREFIX_KEY,
             payment_hash.0.to_hex().as_str()
         )
-    };
-    key
+    }
 }
 
 impl KVStorePersister for MutinyNodePersister {
