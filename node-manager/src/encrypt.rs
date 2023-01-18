@@ -67,10 +67,10 @@ mod tests {
         let password = "password";
         let content = "中文测试 😍 언문.";
         let encrypted = encrypt(content, password);
-        println!("{}", encrypted);
+        println!("{encrypted}");
 
         let decrypted = decrypt(&encrypted, password);
-        println!("{}", decrypted);
+        println!("{decrypted}");
         assert_eq!(content, decrypted);
 
         let fail_decrypt = decrypt(&encrypted, "incorrect");
