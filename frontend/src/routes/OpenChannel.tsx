@@ -85,11 +85,9 @@ export default function OpenChannel() {
 							<div className="flex flex-col gap-4">
 								<div className="flex flex-col gap-2">
 									<label className="text-xl font-light">Pick the peer</label>
-									<div className="select-wrapper">
-										<select onChange={handleSelectChange} className={selectStyle({ accent: "blue", overflow: "yes" })} value={peerPubkey} placeholder="Network">
-											{peers.map(p => <option key={p.pubkey} value={p.pubkey}>{p.pubkey}</option>)}
-										</select>
-									</div>
+									<select onChange={handleSelectChange} className={selectStyle({ accent: "blue", overflow: "yes" })} value={peerPubkey} placeholder="Network">
+										{peers.map(p => <option key={p.pubkey} value={p.pubkey}>{p.pubkey}</option>)}
+									</select>
 								</div>
 								<AmountInput amountSats={channelAmount} setAmount={setAmount} accent="blue" placeholder="How big?" />
 							</div>

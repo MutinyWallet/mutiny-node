@@ -86,12 +86,10 @@ export default function AmountInput({ amountSats, setAmount, accent, placeholder
             {/* <pre>{JSON.stringify({ currency, amountSats, localDisplayAmount }, null, 2)}</pre> */}
             <div className="flex gap-2">
                 <input onChange={e => setAmountFormatted(e.target.value)} value={localDisplayAmount} className={inputStyle({ accent, width: "wide" })} type="text" inputMode={currency === Currency.SATS ? "numeric" : "decimal"} placeholder={placeholder} />
-                <div className="select-wrapper">
-                    <select id="currency" value={currency} onChange={e => handleCurrencyChange(e.target.value as Currency)} className={selectStyle({ accent })}>
-                        <option value={Currency.SATS}>SATS</option>
-                        <option value={Currency.USD}>USD</option>
-                    </select>
-                </div>
+                <select id="currency" value={currency} onChange={e => handleCurrencyChange(e.target.value as Currency)} className={selectStyle({ accent })}>
+                    <option value={Currency.SATS}>SATS</option>
+                    <option value={Currency.USD}>USD</option>
+                </select>
             </div>
         </>
     )
