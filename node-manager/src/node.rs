@@ -950,11 +950,11 @@ pub(crate) fn split_peer_connection_string(
     peer_pubkey_and_ip_addr: String,
 ) -> Result<(PublicKey, String), MutinyError> {
     let mut pubkey_and_addr = peer_pubkey_and_ip_addr.split('@');
-    let pubkey = pubkey_and_addr.next().ok_or({
+    let pubkey = pubkey_and_addr.next().ok_or_else(|| {
             error!("incorrectly formatted peer info. Should be formatted as: `pubkey@host:port` but pubkey could not be parsed");
             MutinyError::PeerInfoParseFailed
         })?;
-    let peer_addr_str = pubkey_and_addr.next().ok_or( {
+    let peer_addr_str = pubkey_and_addr.next().ok_or_else(|| {
             error!("incorrectly formatted peer info. Should be formatted as: `pubkey@host:port` but host:port part could not be parsed");
             MutinyError::PeerInfoParseFailed
         })?;
