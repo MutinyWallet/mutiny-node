@@ -2,7 +2,6 @@
 
 members = [
     "node-manager",
-    "ln-websocket-proxy",
 ]
 
 [profile.release.package.node-manager]
