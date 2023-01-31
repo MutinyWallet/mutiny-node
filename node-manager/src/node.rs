@@ -976,8 +976,10 @@ pub(crate) fn default_user_config() -> UserConfig {
             minimum_depth: 1,
             announced_channel: false,
             negotiate_scid_privacy: true,
+            max_inbound_htlc_value_in_flight_percent_of_channel: 100,
             ..Default::default()
         },
+        manually_accept_inbound_channels: true,
         ..Default::default()
     }
 }
