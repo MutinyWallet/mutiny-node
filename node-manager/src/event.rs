@@ -326,15 +326,55 @@ impl EventHandler {
                     }
                 }
             }
-            Event::OpenChannelRequest { .. } => {
-                // Unreachable, we don't set manually_accept_inbound_channels
+            Event::OpenChannelRequest {
+                temporary_channel_id,
+                counterparty_node_id,
+                ..
+            } => {
                 self.logger.log(&Record::new(
                     lightning::util::logger::Level::Debug,
-                    format_args!("EVENT: OpenChannelRequest ignored"),
+                    format_args!("EVENT: OpenChannelRequest incoming"),
                     "event",
                     "",
                     0,
                 ));
+
+                let mut internal_channel_id_bytes = [0u8; 16];
+                if getrandom::getrandom(&mut internal_channel_id_bytes).is_err() {
+                    self.logger.log(&Record::new(
+                        lightning::util::logger::Level::Debug,
+                        format_args!("EVENT: OpenChannelRequest failed random number generation"),
+                        "event",
+                        "",
+                        0,
+                    ));
+                };
+                let internal_channel_id = u128::from_be_bytes(internal_channel_id_bytes);
+
+                match self.channel_manager.accept_inbound_channel(
+                    &temporary_channel_id,
+                    &counterparty_node_id,
+                    internal_channel_id,
+                ) {
+                    Ok(_) => {
+                        self.logger.log(&Record::new(
+                            lightning::util::logger::Level::Debug,
+                            format_args!("EVENT: OpenChannelRequest accepted"),
+                            "event",
+                            "",
+                            0,
+                        ));
+                    }
+                    Err(e) => {
+                        self.logger.log(&Record::new(
+                            lightning::util::logger::Level::Debug,
+                            format_args!("EVENT: OpenChannelRequest error: {e:?}"),
+                            "event",
+                            "",
+                            0,
+                        ));
+                    }
+                }
             }
             Event::PaymentPathSuccessful { .. } => {
                 self.logger.log(&Record::new(
