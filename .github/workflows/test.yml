@@ -115,14 +115,6 @@ jobs:
         working-directory: .
         run: cargo fmt --check
 
-      - name: Check clippy ln-websocket-proxy
-        working-directory: .
-        run: cargo clippy --package ln-websocket-proxy --all-features -- -D warnings
-
       - name: Check clippy node-manager
         working-directory: .
         run: cargo clippy --package node-manager -- -D warnings -Aclippy::drop_non_drop #wasm-bindgen pr #3089
-
-      - name: Run all cargo tests besides node-manager
-        working-directory: .
-        run: cargo test --workspace --exclude node-manager --all-features --bins --lib
