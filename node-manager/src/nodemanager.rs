@@ -23,6 +23,8 @@ use lightning::chain::keysinterface::{KeysInterface, Recipient};
 use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning_invoice::{Invoice, InvoiceDescription};
+use lnurl::lnurl::LnUrl;
+use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use log::{debug, error, info};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -40,6 +42,7 @@ pub struct NodeManager {
     storage: MutinyBrowserStorage,
     node_storage: Mutex<NodeStorage>,
     nodes: Arc<Mutex<HashMap<String, Arc<Node>>>>,
+    lnurl_client: LnUrlClient,
 }
 
 // This is the NodeStorage object saved to the DB
@@ -287,6 +290,21 @@ pub struct MutinyBalance {
 }
 
 #[wasm_bindgen]
+pub struct LnUrlParams {
+    pub max: u64,
+    pub min: u64,
+    tag: String,
+}
+
+#[wasm_bindgen]
+impl LnUrlParams {
+    #[wasm_bindgen(getter)]
+    pub fn tag(&self) -> String {
+        self.tag.clone()
+    }
+}
+
+#[wasm_bindgen]
 impl NodeManager {
     #[wasm_bindgen]
     pub fn has_node_manager() -> bool {
@@ -378,6 +396,8 @@ impl NodeManager {
             nodes_map.insert(id.to_hex(), Arc::new(node));
         }
 
+        let lnurl_client = lnurl::Builder::default().build_async().unwrap();
+
         Ok(NodeManager {
             mnemonic,
             network,
@@ -388,6 +408,7 @@ impl NodeManager {
             nodes: Arc::new(Mutex::new(nodes_map)),
             websocket_proxy_addr,
             esplora,
+            lnurl_client,
         })
     }
 
@@ -450,11 +471,11 @@ impl NodeManager {
 
         // TODO if there's no description should be something random I guess
         let Ok(invoice) = self.create_invoice(amount, description.clone().unwrap_or_else(|| "".into())).await else {
-            return Err(MutinyError::WalletOperationFailed.into())
+            return Err(MutinyError::WalletOperationFailed.into());
         };
 
         let Some(bolt11) = invoice.bolt11 else {
-            return Err(MutinyError::WalletOperationFailed.into())
+            return Err(MutinyError::WalletOperationFailed.into());
         };
 
         Ok(MutinyBip21RawMaterials {
@@ -786,6 +807,79 @@ impl NodeManager {
         }
 
         Ok(invoice.into())
+    }
+
+    #[wasm_bindgen]
+    pub async fn decode_lnurl(&self, lnurl: String) -> Result<LnUrlParams, MutinyJsError> {
+        let lnurl = LnUrl::from_str(&lnurl)?;
+
+        let response = self.lnurl_client.make_request(&lnurl.url).await?;
+
+        let params = match response {
+            LnUrlResponse::LnUrlPayResponse(pay) => LnUrlParams {
+                max: pay.max_sendable,
+                min: pay.min_sendable,
+                tag: "payRequest".to_string(),
+            },
+            LnUrlResponse::LnUrlWithdrawResponse(withdraw) => LnUrlParams {
+                max: withdraw.max_withdrawable,
+                min: withdraw.min_withdrawable.unwrap_or(0),
+                tag: "withdrawRequest".to_string(),
+            },
+        };
+
+        Ok(params)
+    }
+
+    #[wasm_bindgen]
+    pub async fn lnurl_pay(
+        &self,
+        from_node: String,
+        lnurl: String,
+        amount_sats: u64,
+    ) -> Result<MutinyInvoice, MutinyJsError> {
+        let lnurl = LnUrl::from_str(&lnurl)?;
+
+        let response = self.lnurl_client.make_request(&lnurl.url).await?;
+
+        match response {
+            LnUrlResponse::LnUrlPayResponse(pay) => {
+                let msats = amount_sats * 1000;
+                let invoice = self.lnurl_client.get_invoice(&pay, msats).await?;
+
+                self.pay_invoice(from_node, invoice.invoice().to_string(), None)
+                    .await
+            }
+            LnUrlResponse::LnUrlWithdrawResponse(_) => Err(MutinyJsError::IncorrectLnUrlFunction),
+        }
+    }
+
+    #[wasm_bindgen]
+    pub async fn lnurl_withdraw(
+        &self,
+        lnurl: String,
+        amount_sats: u64,
+    ) -> Result<bool, MutinyJsError> {
+        let lnurl = LnUrl::from_str(&lnurl)?;
+
+        let response = self.lnurl_client.make_request(&lnurl.url).await?;
+
+        match response {
+            LnUrlResponse::LnUrlPayResponse(_) => Err(MutinyJsError::IncorrectLnUrlFunction),
+            LnUrlResponse::LnUrlWithdrawResponse(withdraw) => {
+                let description = withdraw.default_description.clone();
+                let mutiny_invoice = self.create_invoice(Some(amount_sats), description).await?;
+                let invoice_str = mutiny_invoice.bolt11.expect("Invoice should have bolt11");
+                let res = self
+                    .lnurl_client
+                    .do_withdrawal(&withdraw, &invoice_str)
+                    .await?;
+                match res {
+                    Response::Ok { .. } => Ok(true),
+                    Response::Error { .. } => Ok(false),
+                }
+            }
+        }
     }
 
     #[wasm_bindgen]
