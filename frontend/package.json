@@ -15,7 +15,7 @@
     "bip21": "^2.0.3",
     "class-variance-authority": "^0.2.4",
     "html5-qrcode": "^2.3.4",
-    "node-manager": "file:../node-manager/pkg",
+    "@mutinywallet/node-manager": "0.2.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-hot-toast": "^2.4.0",

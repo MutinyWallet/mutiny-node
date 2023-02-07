@@ -8,7 +8,7 @@ import MutinyToaster from "../components/MutinyToaster";
 import { detectPaymentType, objectToSearchParams, PaymentType, toastAnything } from "@util/dumb";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import bip21 from "bip21"
-import { NodeManager } from "node-manager";
+import { NodeManager } from "@mutinywallet/node-manager";
 import { QrCodeScanner } from "@components/QrCodeScanner";
 import { SendConfirmParams } from "./SendConfirm";
 import ActionButton from "@components/ActionButton";

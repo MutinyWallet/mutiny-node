@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { NodeManagerContext } from "@components/GlobalStateProvider";
 import ReceiveUnified, { QRMode } from "@components/ReceiveUnified";
 import { useSearchParams } from "react-router-dom";
-import { MutinyBip21RawMaterials } from "node-manager";
+import { MutinyBip21RawMaterials } from "@mutinywallet/node-manager";
 import { objectToSearchParams } from "@util/dumb";
 import { mainWrapperStyle } from "../styles";
 

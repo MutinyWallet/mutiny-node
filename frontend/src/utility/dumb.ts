@@ -1,6 +1,6 @@
 // Stuff I'll probably delete when I do it "right"
 
-import { NodeManager } from "node-manager";
+import { NodeManager } from "@mutinywallet/node-manager";
 import toast from "react-hot-toast";
 export async function getFirstNode(nodeManager: NodeManager): Promise<string> {
     const myNodes = await nodeManager?.list_nodes();
