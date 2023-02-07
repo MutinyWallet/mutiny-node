@@ -34,6 +34,9 @@ pub enum MutinyError {
     /// Invoice creation failed.
     #[error("Failed to create invoice.")]
     InvoiceCreationFailed,
+    /// Failed to call on the given LNURL
+    #[error("Failed to call on the given LNURL.")]
+    LnUrlFailure,
     /// No route for the given target could be found.
     #[error("Failed to find route.")]
     RoutingFailed,
@@ -106,6 +109,12 @@ impl From<bdk::Error> for MutinyError {
             bdk::Error::Signer(_) => Self::WalletSigningFailed,
             _ => Self::WalletOperationFailed,
         }
+    }
+}
+
+impl From<lnurl::Error> for MutinyError {
+    fn from(_e: lnurl::Error) -> Self {
+        Self::LnUrlFailure
     }
 }
 
@@ -194,6 +203,12 @@ pub enum MutinyJsError {
     /// Invoice creation failed.
     #[error("Failed to create invoice.")]
     InvoiceCreationFailed,
+    /// Failed to call on the given LNURL
+    #[error("Failed to call on the given LNURL.")]
+    LnUrlFailure,
+    /// Called incorrect lnurl function, eg calling withdraw on a pay lnurl
+    #[error("Called incorrect lnurl function.")]
+    IncorrectLnUrlFunction,
     /// No route for the given target could be found.
     #[error("Failed to find route.")]
     RoutingFailed,
@@ -259,6 +274,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::NonUniquePaymentHash => MutinyJsError::NonUniquePaymentHash,
             MutinyError::InvoiceInvalid => MutinyJsError::InvoiceInvalid,
             MutinyError::InvoiceCreationFailed => MutinyJsError::InvoiceCreationFailed,
+            MutinyError::LnUrlFailure => MutinyJsError::LnUrlFailure,
             MutinyError::RoutingFailed => MutinyJsError::RoutingFailed,
             MutinyError::PeerInfoParseFailed => MutinyJsError::PeerInfoParseFailed,
             MutinyError::ChannelCreationFailed => MutinyJsError::ChannelCreationFailed,
@@ -291,6 +307,12 @@ impl From<bitcoin::util::address::Error> for MutinyJsError {
 
 impl From<PaymentError> for MutinyJsError {
     fn from(e: PaymentError) -> Self {
+        MutinyError::from(e).into()
+    }
+}
+
+impl From<lnurl::Error> for MutinyJsError {
+    fn from(e: lnurl::Error) -> Self {
         MutinyError::from(e).into()
     }
 }
