@@ -163,12 +163,12 @@ You'll want the pubkey you're connecting to, the IP address of bore (this could 
 
 ### Publishing
 
-Right now publishing is manual. Add a github personal github token with package:write access.
+Right now publishing is manual. 
 
 First change the version of node-manager in `./node-manager/Cargo.toml`.
 
 ```
-wasm-pack login --scope=@mutinywallet --auth-type=legacy --registry=https://npm.pkg.github.com
+wasm-pack login --scope=@mutinywallet
 wasm-pack build --release --target web --scope mutinywallet
 wasm-pack publish --access public -t web
 ```

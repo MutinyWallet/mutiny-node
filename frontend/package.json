@@ -4,6 +4,7 @@
   "private": true,
   "homepage": "https://reckless.mutinywallet.com",
   "dependencies": {
+    "@mutinywallet/node-manager": "0.2.1",
     "@tanstack/react-query": "^4.16.1",
     "@testing-library/jest-dom": "^5.16.5",
     "@testing-library/react": "^13.4.0",
@@ -15,7 +16,6 @@
     "bip21": "^2.0.3",
     "class-variance-authority": "^0.2.4",
     "html5-qrcode": "^2.3.4",
-    "@mutinywallet/node-manager": "0.2.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-hot-toast": "^2.4.0",
