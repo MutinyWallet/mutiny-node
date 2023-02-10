@@ -7,7 +7,7 @@ import { useNavigate } from "react-router-dom";
 import Close from "../components/Close"
 import PageTitle from "../components/PageTitle"
 import { ReactComponent as EjectIcon } from "../images/icons/eject.svg"
-import { MutinyPeer } from "node-manager";
+import { MutinyPeer } from "@mutinywallet/node-manager";
 import { mainWrapperStyle } from "../styles";
 import { toastAnything } from "@util/dumb";
 import MutinyToaster from "@components/MutinyToaster";

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { NodeManager } from "node-manager"
+import { NodeManager } from "@mutinywallet/node-manager"
 
 export const usePriceQuery = (nodeManager: NodeManager | undefined) =>
     useQuery({

@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import takeN from "@util/takeN";
 import prettyPrintTime from "@util/prettyPrintTime";
 import { useSearchParams } from "react-router-dom";
-import { MutinyInvoice } from "node-manager";
+import { MutinyInvoice } from "@mutinywallet/node-manager";
 import prettyPrintAmount from "@util/prettyPrintAmount";
 import { mempoolTxUrl } from "@util/dumb";
 import ActionButton from "@components/ActionButton";

@@ -160,3 +160,15 @@ You'll want the pubkey you're connecting to, the IP address of bore (this could 
 ```
 {other_node_pubkey}@159.223.171.199:{port_returned_from_bore}
 ```
+
+### Publishing
+
+Right now publishing is manual. 
+
+First change the version of node-manager in `./node-manager/Cargo.toml`.
+
+```
+wasm-pack login --scope=@mutinywallet
+wasm-pack build --release --target web --scope mutinywallet
+wasm-pack publish --access public -t web
+```
