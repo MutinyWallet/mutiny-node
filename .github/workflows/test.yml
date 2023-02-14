@@ -17,8 +17,9 @@ jobs:
           override: true
           profile: minimal
 
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'latest'
 
       - uses: actions/cache@v2
         with:
@@ -48,8 +49,9 @@ jobs:
           override: true
           profile: minimal
 
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'latest'
 
       - name: Setup trunk
         uses: jetli/trunk-action@v0.1.0
