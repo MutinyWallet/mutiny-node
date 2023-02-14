@@ -1,59 +1,44 @@
-# mutiny-web (proof of concept)
+# mutiny-node
 
-mutiny, but for the web!
+The mutiny node that powers the mutiny web frontend.
 
-## resources
+The original frontend proof of concept has moved to [here](https://github.com/MutinyWallet/mutiny-web-poc). While the latest version is being worked on [here](https://github.com/MutinyWallet/mutiny-web).
 
-https://github.com/thunderbiscuit/bitcoin-wasm-react
+## Importing
 
-https://prestonrichey.com/blog/react-rust-wasm/
+Both of those current web frontends import the NPM package that this project creates [here](https://www.npmjs.com/package/@mutinywallet/node-manager).
 
-https://tkat0.github.io/posts/how-to-create-a-react-app-with-rust-and-wasm
 
-https://github.com/benthecarman/wasm-rust-demo
+## Development
 
-## building on the mac
+### Building on the mac
 
 See the discussion here:
 https://github.com/rust-bitcoin/rust-secp256k1/issues/283
 
 I installed llvm, and then use `just pack-mac` instead of `just pack` (so that wasm-pack will use the homebrew installed version of llvm stuff, instead of the system default)
 
-## dependencies
+### Dependencies
 
-### rust
+- [rust](https://www.rust-lang.org/)
 
-https://www.rust-lang.org/
+- [node](https://nodejs.org/en/)
 
-### node (npm)
-
-https://nodejs.org/en/
-
-### wasm-pack
-
-https://rustwasm.github.io/wasm-pack/installer/#
+- [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/#)
 
 ```
 cargo install wasm-pack
 ```
 
-### just (not really required but I like it)
+- [just](https://github.com/casey/just)
 
-https://github.com/casey/just
-
-### mkcert
-
-https://github.com/FiloSottile/mkcert
-
-### chromedriver (for tests)
-
-https://chromedriver.chromium.org/
+- [chromedriver](https://chromedriver.chromium.org/)
 
 ```
 brew install chromedriver
 ```
 
-## Build
+### Build
 
 Get all the dependencies above first.
 
@@ -69,73 +54,13 @@ or on mac:
 just pack-mac
 ```
 
-do the frontend things:
-
-```
-cd frontend
-npm i
-npm start
-```
-
-## With SSL
-
-Since we plan to use web workers and other SSL-required things, we can also do SSL in localhost to make testing a little less gotch-ey.
-
-First generate the local cert (requires `mkcert` command):
-
-```
-just cert
-```
-
-Then start react with SSL flags:
-
-```
-npm run start-ssl
-```
-
-### PWA
-
-To test out PWA stuff you need to `build` and then run the built artifact:
-
-```
-npm run build
-```
-
-(if you don't have a server installed: `npm install -g serve`)
-
-Then serve the build folder:
-
-```
-serve -s build
-```
-
-They recommend running this in an incognito window because caching can be annoying with this stuff. Works for me in Chrome to install Mutiny as a desktop app.
-
 ### Websocket proxy
 
 You can use the default websocket proxy @ p.mutinywallet.com no matter what network you are on. To run it locally, follow the docker instructions [here](https://github.com/Mutiny-Wallet/ln-websocket-proxy).
 
-### Regtest development
+### Bitcoin networks
 
 You'll need a regtest bitcoin node, electrs, and an exposed port to whatever regtest node you are connecting to.
-
-#### For Testnet / Mainnet mutiny
-
-Mutiny defaults to regtest, but the network can be set by environment variable (it's set to "bitcoin" in the production deployment).
-
-Create a `.env.local` file in the frontend dir and add this:
-
-```
-REACT_APP_NETWORK="testnet"
-```
-
-Or
-
-```
-REACT_APP_NETWORK="bitcoin"
-```
-
-Then restart your dev server.
 
 #### For [electrs](https://github.com/Blockstream/electrs)
 
@@ -168,7 +93,7 @@ Right now publishing is manual.
 First change the version of node-manager in `./node-manager/Cargo.toml`.
 
 ```
-wasm-pack login --scope=@mutinywallet
-wasm-pack build --release --target web --scope mutinywallet
-wasm-pack publish --access public -t web
+just login #or login-mac
+just release # or release-mac
+just publish # or publish-mac
 ```
