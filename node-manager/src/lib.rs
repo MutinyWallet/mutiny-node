@@ -16,7 +16,6 @@ mod chain;
 mod encrypt;
 mod error;
 mod event;
-mod invoice;
 mod keymanager;
 mod ldkstorage;
 mod localstorage;

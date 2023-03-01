@@ -57,6 +57,7 @@ pub(crate) type PeerManagerImpl = LdkPeerManager<
     Arc<IgnoringMessageHandler>,
     Arc<MutinyLogger>,
     Arc<IgnoringMessageHandler>,
+    Arc<PhantomChannelManager>,
 >;
 
 impl PeerManager for PeerManagerImpl {

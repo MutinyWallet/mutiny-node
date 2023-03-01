@@ -16,12 +16,14 @@ use futures_util::{future::FutureExt, select_biased};
 use lightning::chain;
 use lightning::chain::chaininterface::{BroadcasterInterface, FeeEstimator};
 use lightning::chain::chainmonitor::{ChainMonitor, Persist};
-use lightning::chain::keysinterface::KeysInterface;
+use lightning::chain::keysinterface::{EntropySource, NodeSigner, SignerProvider};
 use lightning::ln::channelmanager::ChannelManager;
 use lightning::ln::msgs::{ChannelMessageHandler, OnionMessageHandler, RoutingMessageHandler};
 use lightning::ln::peer_handler::{CustomMessageHandler, PeerManager, SocketDescriptor};
 use lightning::routing::gossip::{NetworkGraph, P2PGossipSync};
+use lightning::routing::router::Router;
 use lightning::routing::scoring::WriteableScore;
+use lightning::routing::utxo::UtxoLookup;
 use lightning::util::events::{Event, EventHandler};
 use lightning::util::logger::Logger;
 use lightning::util::persist::Persister;
@@ -45,13 +47,13 @@ const FIRST_NETWORK_PRUNE_TIMER: u64 = 60;
 // FIXME: Use for routing soon
 #[allow(dead_code)]
 pub enum GossipSync<
-    P: Deref<Target = P2PGossipSync<G, A, L>>,
+    P: Deref<Target = P2PGossipSync<G, U, L>>,
     R: Deref<Target = RapidGossipSync<G, L>>,
     G: Deref<Target = NetworkGraph<L>>,
-    A: Deref,
+    U: Deref,
     L: Deref,
 > where
-    A::Target: chain::Access,
+    U::Target: UtxoLookup,
     L::Target: Logger,
 {
     /// Gossip sync via the lightning peer-to-peer network as defined by BOLT 7.
@@ -63,14 +65,14 @@ pub enum GossipSync<
 }
 
 impl<
-        P: Deref<Target = P2PGossipSync<G, A, L>>,
+        P: Deref<Target = P2PGossipSync<G, U, L>>,
         R: Deref<Target = RapidGossipSync<G, L>>,
         G: Deref<Target = NetworkGraph<L>>,
-        A: Deref,
+        U: Deref,
         L: Deref,
-    > GossipSync<P, R, G, A, L>
+    > GossipSync<P, R, G, U, L>
 where
-    A::Target: chain::Access,
+    U::Target: UtxoLookup,
     L::Target: Logger,
 {
     fn network_graph(&self) -> Option<&G> {
@@ -98,13 +100,13 @@ where
 
 /// (C-not exported) as the bindings concretize everything and have constructors for us
 impl<
-        P: Deref<Target = P2PGossipSync<G, A, L>>,
+        P: Deref<Target = P2PGossipSync<G, U, L>>,
         G: Deref<Target = NetworkGraph<L>>,
-        A: Deref,
+        U: Deref,
         L: Deref,
-    > GossipSync<P, &RapidGossipSync<G, L>, G, A, L>
+    > GossipSync<P, &RapidGossipSync<G, L>, G, U, L>
 where
-    A::Target: chain::Access,
+    U::Target: UtxoLookup,
     L::Target: Logger,
 {
     /// Initializes a new [`GossipSync::P2P`] variant.
@@ -123,10 +125,10 @@ impl<
         L: Deref,
     >
     GossipSync<
-        &P2PGossipSync<G, &'a (dyn chain::Access + Send + Sync), L>,
+        &P2PGossipSync<G, &'a (dyn UtxoLookup + Send + Sync), L>,
         R,
         G,
-        &'a (dyn chain::Access + Send + Sync),
+        &'a (dyn UtxoLookup + Send + Sync),
         L,
     >
 where
@@ -143,10 +145,10 @@ where
 /// (C-not exported) as the bindings concretize everything and have constructors for us
 impl<'a, L: Deref>
     GossipSync<
-        &P2PGossipSync<&'a NetworkGraph<L>, &'a (dyn chain::Access + Send + Sync), L>,
+        &P2PGossipSync<&'a NetworkGraph<L>, &'a (dyn UtxoLookup + Send + Sync), L>,
         &RapidGossipSync<&'a NetworkGraph<L>, L>,
         &'a NetworkGraph<L>,
-        &'a (dyn chain::Access + Send + Sync),
+        &'a (dyn UtxoLookup + Send + Sync),
         L,
     >
 where
@@ -159,6 +161,7 @@ where
 }
 
 /// Decorates an [`EventHandler`] with common functionality provided by standard [`EventHandler`]s.
+/*
 struct DecoratingEventHandler<
     'a,
     E: EventHandler,
@@ -195,6 +198,7 @@ where
         self.event_handler.handle_event(event);
     }
 }
+*/
 
 #[allow(clippy::collapsible_match)]
 fn handle_network_graph_update<L: Deref>(network_graph: &NetworkGraph<L>, event: &Event)
@@ -347,12 +351,15 @@ macro_rules! define_run_body {
 #[allow(clippy::too_many_arguments)]
 pub async fn process_events_async<
     'a,
-    CA: 'static + Deref + Send + Sync,
+    UL: 'static + Deref + Send + Sync,
     CF: 'static + Deref + Send + Sync,
     CW: 'static + Deref + Send + Sync,
     T: 'static + Deref + Send + Sync,
-    K: 'static + Deref + Send + Sync,
+    ES: 'static + Deref + Send + Sync,
+    NS: 'static + Deref + Send + Sync,
+    SP: 'static + Deref + Send + Sync,
     F: 'static + Deref + Send + Sync,
+    R: 'static + Deref + Send + Sync,
     G: 'static + Deref<Target = NetworkGraph<L>> + Send + Sync,
     L: 'static + Deref + Send + Sync,
     P: 'static + Deref + Send + Sync,
@@ -364,43 +371,46 @@ pub async fn process_events_async<
     EventHandler: Fn(Event) -> EventHandlerFuture,
     PS: 'static + Deref + Send,
     M: 'static
-        + Deref<Target = ChainMonitor<<K::Target as KeysInterface>::Signer, CF, T, F, L, P>>
+        + Deref<Target = ChainMonitor<<SP::Target as SignerProvider>::Signer, CF, T, F, L, P>>
         + Send
         + Sync,
-    CM: 'static + Deref<Target = ChannelManager<CW, T, K, F, L>> + Send + Sync,
-    PGS: 'static + Deref<Target = P2PGossipSync<G, CA, L>> + Send + Sync,
+    CM: 'static + Deref<Target = ChannelManager<CW, T, ES, NS, SP, F, R, L>> + Send + Sync,
+    PGS: 'static + Deref<Target = P2PGossipSync<G, UL, L>> + Send + Sync,
     RGS: 'static + Deref<Target = RapidGossipSync<G, L>> + Send,
     UMH: 'static + Deref + Send + Sync,
-    PM: 'static + Deref<Target = PeerManager<Descriptor, CMH, RMH, OMH, L, UMH>> + Send + Sync,
+    PM: 'static + Deref<Target = PeerManager<Descriptor, CMH, RMH, OMH, L, UMH, NS>> + Send + Sync,
     S: 'static + Deref<Target = SC> + Send + Sync,
-    SC: WriteableScore<'a>,
-    SleepFuture: core::future::Future<Output = bool>,
+    SC: for<'b> WriteableScore<'b>,
+    SleepFuture: core::future::Future<Output = bool> + core::marker::Unpin,
     Sleeper: Fn(Duration) -> SleepFuture,
 >(
     persister: PS,
     event_handler: EventHandler,
     chain_monitor: M,
     channel_manager: CM,
-    gossip_sync: GossipSync<PGS, RGS, G, CA, L>,
+    gossip_sync: GossipSync<PGS, RGS, G, UL, L>,
     peer_manager: PM,
-    _logger: L,
+    logger: L,
     scorer: Option<S>,
     sleeper: Sleeper,
-) -> Result<(), std::io::Error>
+) -> Result<(), lightning::io::Error>
 where
-    CA::Target: 'static + chain::Access,
+    UL::Target: 'static + UtxoLookup,
     CF::Target: 'static + chain::Filter,
-    CW::Target: 'static + chain::Watch<<K::Target as KeysInterface>::Signer>,
+    CW::Target: 'static + chain::Watch<<SP::Target as SignerProvider>::Signer>,
     T::Target: 'static + BroadcasterInterface,
-    K::Target: 'static + KeysInterface,
+    ES::Target: 'static + EntropySource,
+    NS::Target: 'static + NodeSigner,
+    SP::Target: 'static + SignerProvider,
     F::Target: 'static + FeeEstimator,
+    R::Target: 'static + Router,
     L::Target: 'static + Logger,
-    P::Target: 'static + Persist<<K::Target as KeysInterface>::Signer>,
+    P::Target: 'static + Persist<<SP::Target as SignerProvider>::Signer>,
     CMH::Target: 'static + ChannelMessageHandler,
     OMH::Target: 'static + OnionMessageHandler,
     RMH::Target: 'static + RoutingMessageHandler,
     UMH::Target: 'static + CustomMessageHandler,
-    PS::Target: 'static + Persister<'a, CW, T, K, F, L, SC>,
+    PS::Target: 'static + Persister<'a, CW, T, ES, NS, SP, F, R, L, SC>,
 {
     let mut should_break = true;
     let async_event_handler = |event| {

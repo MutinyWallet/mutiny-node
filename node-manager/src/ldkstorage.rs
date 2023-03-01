@@ -14,8 +14,7 @@ use bitcoin_hashes::hex::ToHex;
 use futures::{try_join, TryFutureExt};
 use lightning::chain::channelmonitor::ChannelMonitor;
 use lightning::chain::keysinterface::InMemorySigner;
-use lightning::chain::keysinterface::PhantomKeysManager;
-use lightning::chain::keysinterface::{KeysInterface, Sign};
+use lightning::chain::keysinterface::{PhantomKeysManager, WriteableEcdsaChannelSigner};
 use lightning::chain::BestBlock;
 use lightning::ln::channelmanager::{
     self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
@@ -44,10 +43,13 @@ const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
 const PEER_PREFIX_KEY: &str = "peer/";
 
 pub(crate) type PhantomChannelManager = LdkChannelManager<
+    Arc<PhantomKeysManager>,
+    Arc<PhantomKeysManager>,
+    Arc<PhantomKeysManager>,
     Arc<ChainMonitor>,
     Arc<MutinyChain>,
-    Arc<PhantomKeysManager>,
     Arc<MutinyChain>,
+    Arc<NetworkGraph>,
     Arc<MutinyLogger>,
 >;
 
@@ -138,12 +140,12 @@ impl MutinyNodePersister {
         }
     }
 
-    pub fn read_channel_monitors<Signer: Sign, K: Deref>(
+    pub fn read_channel_monitors<Signer: WriteableEcdsaChannelSigner, K: Deref>(
         &self,
         keys_manager: K,
     ) -> Result<Vec<(BlockHash, ChannelMonitor<Signer>)>, io::Error>
     where
-        K::Target: KeysInterface<Signer = Signer> + Sized,
+        K::Target: WriteableEcdsaChannelSigner + Sized,
     {
         // Get all the channel monitor buffers that exist for this node
         let suffix = self.node_id.as_str();

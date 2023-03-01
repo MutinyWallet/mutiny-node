@@ -2,7 +2,7 @@ use crate::error::MutinyError;
 use bip32::XPrv;
 use bip39::Mnemonic;
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
-use lightning::chain::keysinterface::{KeysInterface, PhantomKeysManager, Recipient};
+use lightning::chain::keysinterface::{PhantomKeysManager, Recipient};
 
 pub(crate) fn generate_seed(num_words: u8) -> Result<Mnemonic, MutinyError> {
     match num_words {

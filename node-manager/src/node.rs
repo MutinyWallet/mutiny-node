@@ -1,7 +1,6 @@
 use crate::chain::MutinyChain;
 use crate::error::MutinyStorageError;
 use crate::event::{EventHandler, HTLCStatus, MillisatAmount, PaymentInfo};
-use crate::invoice::create_phantom_invoice;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::localstorage::MutinyBrowserStorage;
 use crate::nodemanager::{MutinyInvoice, MutinyInvoiceParams};
@@ -27,9 +26,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
 use bitcoin_hashes::hex::ToHex;
-use lightning::chain::keysinterface::{
-    InMemorySigner, KeysInterface, PhantomKeysManager, Recipient,
-};
+use lightning::chain::keysinterface::{InMemorySigner, PhantomKeysManager, Recipient};
 use lightning::chain::{chainmonitor, Filter, Watch};
 use lightning::ln::channelmanager::PhantomRouteHints;
 use lightning::ln::msgs::NetAddress;

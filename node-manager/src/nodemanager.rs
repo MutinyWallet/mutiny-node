@@ -19,7 +19,7 @@ use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::{Address, Network, OutPoint, PublicKey, Transaction, Txid};
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
-use lightning::chain::keysinterface::{KeysInterface, Recipient};
+use lightning::chain::keysinterface::Recipient;
 use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning_invoice::{Invoice, InvoiceDescription};
