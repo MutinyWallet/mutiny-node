@@ -828,6 +828,11 @@ impl NodeManager {
                 min: pay.min_sendable,
                 tag: "payRequest".to_string(),
             },
+            LnUrlResponse::LnUrlChannelResponse(_chan) => LnUrlParams {
+                max: 0,
+                min: 0,
+                tag: "channelRequest".to_string(),
+            },
             LnUrlResponse::LnUrlWithdrawResponse(withdraw) => LnUrlParams {
                 max: withdraw.max_withdrawable,
                 min: withdraw.min_withdrawable.unwrap_or(0),
@@ -858,6 +863,7 @@ impl NodeManager {
                     .await
             }
             LnUrlResponse::LnUrlWithdrawResponse(_) => Err(MutinyJsError::IncorrectLnUrlFunction),
+            LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyJsError::IncorrectLnUrlFunction),
         }
     }
 
@@ -873,6 +879,7 @@ impl NodeManager {
 
         match response {
             LnUrlResponse::LnUrlPayResponse(_) => Err(MutinyJsError::IncorrectLnUrlFunction),
+            LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyJsError::IncorrectLnUrlFunction),
             LnUrlResponse::LnUrlWithdrawResponse(withdraw) => {
                 let description = withdraw.default_description.clone();
                 let mutiny_invoice = self.create_invoice(Some(amount_sats), description).await?;
