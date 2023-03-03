@@ -2,6 +2,7 @@ use bdk::esplora_client;
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning_invoice::payment::PaymentError;
 use lightning_invoice::ParseOrSemanticError;
+use lightning_transaction_sync::TxSyncError;
 use thiserror::Error;
 use wasm_bindgen::JsValue;
 
@@ -118,17 +119,15 @@ impl From<lnurl::Error> for MutinyError {
     }
 }
 
-impl From<lightning::ln::msgs::DecodeError> for MutinyError {
-    fn from(_e: lightning::ln::msgs::DecodeError) -> Self {
-        MutinyError::LnDecodeError
+impl From<TxSyncError> for MutinyError {
+    fn from(_e: TxSyncError) -> Self {
+        MutinyError::ChainAccessFailed
     }
 }
 
-// TODO add more granular errors for esplora failures
-impl From<esplora_client::Error> for MutinyError {
-    fn from(_e: esplora_client::Error) -> Self {
-        // This is most likely a chain access failure
-        Self::ChainAccessFailed
+impl From<lightning::ln::msgs::DecodeError> for MutinyError {
+    fn from(_e: lightning::ln::msgs::DecodeError) -> Self {
+        MutinyError::LnDecodeError
     }
 }
 

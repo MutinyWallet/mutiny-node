@@ -8,9 +8,10 @@ use std::{str::FromStr, sync::Arc};
 use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyJsError, MutinyStorageError};
 use crate::keymanager;
+use crate::logging::MutinyLogger;
 use crate::node::{Node, PubkeyConnectionInfo};
 use crate::utils::currency_from_network;
-use crate::wallet::esplora_from_network;
+use crate::wallet::get_esplora_url;
 use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
@@ -23,6 +24,7 @@ use lightning::chain::keysinterface::{NodeSigner, Recipient};
 use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning_invoice::{Invoice, InvoiceDescription};
+use lightning_transaction_sync::EsploraSyncClient;
 use lnurl::lnurl::LnUrl;
 use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use log::{debug, error, info};
@@ -352,8 +354,13 @@ impl NodeManager {
             },
         };
 
-        let esplora = Arc::new(esplora_from_network(network, user_esplora_url));
+        let esplora_server_url = get_esplora_url(network, user_esplora_url);
+        let tx_sync = Arc::new(EsploraSyncClient::new(
+            esplora_server_url,
+            Arc::new(MutinyLogger::default()),
+        ));
 
+        let esplora = Arc::new(EsploraBlockchain::from_client(tx_sync.client().clone(), 5));
         let wallet = Arc::new(MutinyWallet::new(
             mnemonic.clone(),
             storage.clone(),
@@ -361,7 +368,7 @@ impl NodeManager {
             esplora.clone(),
         ));
 
-        let chain = Arc::new(MutinyChain::new(wallet.clone()));
+        let chain = Arc::new(MutinyChain::new(tx_sync));
 
         let node_storage = match MutinyBrowserStorage::get_nodes() {
             Ok(node_storage) => node_storage,
@@ -610,16 +617,16 @@ impl NodeManager {
     async fn sync_ldk(&self) -> Result<(), MutinyError> {
         let nodes = self.nodes.lock().await;
 
-        let confirmables: Vec<&(dyn Confirm + Sync)> = nodes
+        let confirmables: Vec<&(dyn Confirm + Send + Sync)> = nodes
             .iter()
             .flat_map(|(_, node)| {
-                let vec: Vec<&(dyn Confirm + Sync)> =
+                let vec: Vec<&(dyn Confirm + Send + Sync)> =
                     vec![node.channel_manager.deref(), node.chain_monitor.deref()];
                 vec
             })
             .collect();
 
-        self.chain.sync(confirmables).await?;
+        self.chain.tx_sync.sync(confirmables).await?;
 
         Ok(())
     }

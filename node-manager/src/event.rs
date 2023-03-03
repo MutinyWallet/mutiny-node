@@ -1,8 +1,8 @@
-use crate::ldkstorage::MutinyNodePersister;
+use crate::chain::MutinyChain;
+use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::logging::MutinyLogger;
 use crate::utils::sleep;
 use crate::wallet::MutinyWallet;
-use crate::{chain::MutinyChain, ldkstorage::PhantomChannelManager};
 use bdk::blockchain::Blockchain;
 use bdk::wallet::AddressIndex;
 use bitcoin::secp256k1::Secp256k1;

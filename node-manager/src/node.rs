@@ -24,9 +24,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
 use bitcoin_hashes::hex::ToHex;
-use lightning::chain::keysinterface::{
-    EntropySource, InMemorySigner, PhantomKeysManager,
-};
+use lightning::chain::keysinterface::{EntropySource, InMemorySigner, PhantomKeysManager};
 use lightning::chain::{chainmonitor, Filter, Watch};
 use lightning::ln::channelmanager::{PaymentId, PhantomRouteHints, Retry};
 use lightning::ln::msgs::NetAddress;
@@ -154,7 +152,7 @@ impl Node {
 
         // init chain monitor
         let chain_monitor: Arc<ChainMonitor> = Arc::new(ChainMonitor::new(
-            None,
+            Some(chain.tx_sync.clone()),
             chain.clone(),
             logger.clone(),
             chain.clone(),
