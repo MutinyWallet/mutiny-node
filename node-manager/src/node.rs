@@ -938,8 +938,6 @@ pub(crate) fn create_peer_manager(
 
     PeerManagerImpl::new(
         lightning_msg_handler,
-        // km.get_node_secret(Recipient::Node)
-        //     .expect("Failed to get node secret"),
         now as u32,
         &ephemeral_bytes,
         logger,
