@@ -34,7 +34,7 @@ lightning = { git = "https://github.com/lightningdevkit/rust-lightning", rev = "
 lightning-background-processor = { git = "https://github.com/lightningdevkit/rust-lightning", rev = "5c6e36727c6a16bec20a9af74af950e7dfb31061", default-features = false, features = ["futures"] }
 lightning-transaction-sync = { git = "https://github.com/lightningdevkit/rust-lightning", rev = "5c6e36727c6a16bec20a9af74af950e7dfb31061", default-features = false, features = ["async-interface", "esplora-async"] }
 lightning-invoice = { git = "https://github.com/lightningdevkit/rust-lightning", rev = "5c6e36727c6a16bec20a9af74af950e7dfb31061", default-features = false, features = ["no-std"] }
-lightning-rapid-gossip-sync = { git = "https://github.com/lightningdevkit/rust-lightning", rev = "5c6e36727c6a16bec20a9af74af950e7dfb31061", features = ["no-std"] }
+lightning-rapid-gossip-sync = { git = "https://github.com/lightningdevkit/rust-lightning", rev = "5c6e36727c6a16bec20a9af74af950e7dfb31061", default-features = false, features = ["no-std"] }
 futures-util = { version = "0.3", default-features = false, features = ["async-await-macro"] }
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 chrono = "0.4.22"
