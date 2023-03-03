@@ -113,11 +113,11 @@ impl From<bdk::Error> for MutinyError {
     }
 }
 
-impl From<lnurl::Error> for MutinyError {
-    fn from(_e: lnurl::Error) -> Self {
-        Self::LnUrlFailure
-    }
-}
+// impl From<lnurl::Error> for MutinyError {
+//     fn from(_e: lnurl::Error) -> Self {
+//         Self::LnUrlFailure
+//     }
+// }
 
 impl From<TxSyncError> for MutinyError {
     fn from(_e: TxSyncError) -> Self {
@@ -309,11 +309,11 @@ impl From<PaymentError> for MutinyJsError {
     }
 }
 
-impl From<lnurl::Error> for MutinyJsError {
-    fn from(e: lnurl::Error) -> Self {
-        MutinyError::from(e).into()
-    }
-}
+// impl From<lnurl::Error> for MutinyJsError {
+//     fn from(e: lnurl::Error) -> Self {
+//         MutinyError::from(e).into()
+//     }
+// }
 
 impl From<esplora_client::Error> for MutinyJsError {
     fn from(_e: esplora_client::Error) -> Self {
