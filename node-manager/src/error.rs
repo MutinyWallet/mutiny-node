@@ -149,7 +149,6 @@ impl From<PaymentError> for MutinyError {
     fn from(e: PaymentError) -> Self {
         match e {
             PaymentError::Invoice(_) => Self::InvoiceInvalid,
-            PaymentError::Routing(_) => Self::RoutingFailed,
             PaymentError::Sending(_) => Self::RoutingFailed,
         }
     }

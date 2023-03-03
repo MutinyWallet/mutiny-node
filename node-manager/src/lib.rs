@@ -10,7 +10,6 @@
 #![feature(io_error_other)]
 #![feature(async_fn_in_trait)]
 
-mod background;
 mod bdkstorage;
 mod chain;
 mod encrypt;

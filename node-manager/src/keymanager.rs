@@ -2,7 +2,7 @@ use crate::error::MutinyError;
 use bip32::XPrv;
 use bip39::Mnemonic;
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
-use lightning::chain::keysinterface::{PhantomKeysManager, Recipient};
+use lightning::chain::keysinterface::{EntropySource, NodeSigner, PhantomKeysManager, Recipient};
 
 pub(crate) fn generate_seed(num_words: u8) -> Result<Mnemonic, MutinyError> {
     match num_words {
@@ -55,11 +55,9 @@ pub(crate) fn pubkey_from_keys_manager(keys_manager: &PhantomKeysManager) -> Pub
     let mut secp_ctx = Secp256k1::new();
     secp_ctx.seeded_randomize(&keys_manager.get_secure_random_bytes());
 
-    let our_network_key = keys_manager
-        .get_node_secret(Recipient::Node)
-        .expect("cannot parse node secret");
-
-    PublicKey::from_secret_key(&secp_ctx, &our_network_key)
+    keys_manager
+        .get_node_id(Recipient::Node)
+        .expect("cannot parse node id")
 }
 
 #[cfg(test)]

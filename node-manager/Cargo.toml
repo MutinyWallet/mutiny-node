@@ -31,7 +31,8 @@ serde_json = { version = "^1.0" }
 gloo-storage = "0.2.2"
 uuid = { version = "1.1.2", features = ["v4"] }
 lightning = { version = "0.0.114-beta", features = ["max_level_trace", "no-std"] }
-lightning-invoice = { version = "0.21.0", default-features = false, features = ["no-std"] }
+lightning-background-processor = { version = "0.0.114-beta", default-features = false, features = ["futures"] }
+lightning-invoice = { version = "0.22.0-beta", default-features = false, features = ["no-std"] }
 lightning-rapid-gossip-sync = { version = "0.0.114-beta", features = ["no-std"] }
 futures-util = { version = "0.3", default-features = false, features = ["async-await-macro"] }
 instant = { version = "0.1", features = ["wasm-bindgen"] }

@@ -11,7 +11,6 @@ use crate::socket::{schedule_descriptor_read, MultiWsSocketDescriptor, WsSocketD
 use crate::utils::{currency_from_network, sleep};
 use crate::wallet::MutinyWallet;
 use crate::{
-    background::{process_events_async, GossipSync},
     error::MutinyError,
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
     logging::MutinyLogger,
@@ -20,15 +19,16 @@ use crate::{
 use anyhow::Context;
 use bdk::blockchain::EsploraBlockchain;
 use bip39::Mnemonic;
-use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
 use bitcoin_hashes::hex::ToHex;
-use lightning::chain::keysinterface::{InMemorySigner, PhantomKeysManager, Recipient};
+use lightning::chain::keysinterface::{
+    EntropySource, InMemorySigner, PhantomKeysManager,
+};
 use lightning::chain::{chainmonitor, Filter, Watch};
-use lightning::ln::channelmanager::PhantomRouteHints;
+use lightning::ln::channelmanager::{PaymentId, PhantomRouteHints, Retry};
 use lightning::ln::msgs::NetAddress;
 use lightning::ln::peer_handler::{
     IgnoringMessageHandler, MessageHandler as LdkMessageHandler,
@@ -36,13 +36,17 @@ use lightning::ln::peer_handler::{
 };
 use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::routing::gossip;
-use lightning::routing::router::DefaultRouter;
+use lightning::routing::router::{DefaultRouter, PaymentParameters, RouteParameters};
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
 use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
 use lightning::util::logger::{Logger, Record};
 use lightning::util::ser::Writeable;
-use lightning_invoice::utils::create_invoice_from_channelmanager_and_duration_since_epoch;
-use lightning_invoice::{payment, Invoice};
+use lightning_background_processor::{process_events_async, GossipSync};
+use lightning_invoice::payment::{pay_invoice, pay_zero_value_invoice};
+use lightning_invoice::utils::{
+    create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice,
+};
+use lightning_invoice::Invoice;
 use log::{debug, error, info, trace};
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -66,10 +70,7 @@ pub(crate) type ChainMonitor = chainmonitor::ChainMonitor<
     Arc<MutinyNodePersister>,
 >;
 
-pub(crate) type InvoicePayer<E> =
-    payment::InvoicePayer<Arc<PhantomChannelManager>, Router, Arc<MutinyLogger>, E>;
-
-type Router = DefaultRouter<
+pub(crate) type Router = DefaultRouter<
     Arc<NetworkGraph>,
     Arc<MutinyLogger>,
     Arc<Mutex<ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>>>,
@@ -122,7 +123,6 @@ pub(crate) struct Node {
     pub keys_manager: Arc<PhantomKeysManager>,
     pub channel_manager: Arc<PhantomChannelManager>,
     pub chain_monitor: Arc<ChainMonitor>,
-    pub invoice_payer: Arc<InvoicePayer<EventHandler>>,
     network: Network,
     pub persister: Arc<MutinyNodePersister>,
     logger: Arc<MutinyLogger>,
@@ -168,6 +168,25 @@ impl Node {
                 source: MutinyStorageError::Other(e.into()),
             })?;
 
+        // todo use RGS
+        // get network graph
+        let network_graph = Arc::new(persister.read_network_graph(network, logger.clone()));
+
+        // create scorer
+        let params = ProbabilisticScoringParameters::default();
+        let scorer = Arc::new(Mutex::new(ProbabilisticScorer::new(
+            params,
+            network_graph.clone(),
+            logger.clone(),
+        )));
+
+        let router: Arc<Router> = Arc::new(DefaultRouter::new(
+            network_graph,
+            logger.clone(),
+            keys_manager.clone().get_secure_random_bytes(),
+            scorer.clone(),
+        ));
+
         // init channel manager
         let mut read_channel_manager = persister
             .read_channel_manager(
@@ -176,6 +195,7 @@ impl Node {
                 chain.clone(),
                 logger.clone(),
                 keys_manager.clone(),
+                router.clone(),
                 channel_monitors,
                 esplora,
             )
@@ -237,34 +257,6 @@ impl Node {
             }
         }
 
-        // todo use RGS
-        // get network graph
-        let genesis_hash = genesis_block(network).block_hash();
-        let network_graph = Arc::new(persister.read_network_graph(genesis_hash, logger.clone()));
-
-        // create scorer
-        let params = ProbabilisticScoringParameters::default();
-        let scorer = Arc::new(Mutex::new(ProbabilisticScorer::new(
-            params,
-            network_graph.clone(),
-            logger.clone(),
-        )));
-
-        let router: Router = DefaultRouter::new(
-            network_graph,
-            logger.clone(),
-            keys_manager.get_secure_random_bytes(),
-            scorer.clone(),
-        );
-
-        let invoice_payer: Arc<InvoicePayer<EventHandler>> = Arc::new(InvoicePayer::new(
-            Arc::clone(&channel_manager),
-            router,
-            Arc::clone(&logger),
-            event_handler.clone(),
-            payment::Retry::Attempts(5),
-        ));
-
         let background_persister = persister.clone();
         let background_event_handler = event_handler.clone();
         let background_processor_logger = logger.clone();
@@ -285,9 +277,11 @@ impl Node {
                     background_processor_peer_manager.clone(),
                     background_processor_logger.clone(),
                     Some(scorer.clone()),
-                    |d| async move {
-                        sleep(d.as_millis() as i32).await;
-                        false
+                    |d| {
+                        Box::pin(async move {
+                            sleep(d.as_millis() as i32).await;
+                            false
+                        })
                     },
                 )
                 .await
@@ -358,7 +352,7 @@ impl Node {
 
                 let not_connected: Vec<&(PublicKey, String)> = peer_connections
                     .iter()
-                    .filter(|(p, _)| !current_connections.contains(p))
+                    .filter(|(p, _)| !current_connections.iter().any(|c| &c.0 == p))
                     .collect();
 
                 for (pubkey, conn_str) in not_connected.iter() {
@@ -422,7 +416,6 @@ impl Node {
             keys_manager,
             channel_manager,
             chain_monitor,
-            invoice_payer,
             network,
             persister,
             logger,
@@ -492,7 +485,7 @@ impl Node {
     }
 
     pub fn disconnect_peer(&self, peer_id: PublicKey) {
-        self.peer_manager.disconnect_by_node_id(peer_id, false);
+        self.peer_manager.disconnect_by_node_id(peer_id);
     }
 
     pub fn get_phantom_route_hint(&self) -> PhantomRouteHints {
@@ -518,16 +511,25 @@ impl Node {
                     description,
                     now,
                     1500,
+                    None,
                 )
             }
-            Some(r) => create_phantom_invoice::<InMemorySigner, Arc<PhantomKeysManager>>(
+            Some(r) => create_phantom_invoice::<
+                Arc<PhantomKeysManager>,
+                Arc<PhantomKeysManager>,
+                Arc<MutinyLogger>,
+            >(
                 amount_msat,
                 None,
                 description,
                 1500,
                 r,
                 self.keys_manager.clone(),
+                self.keys_manager.clone(),
+                self.logger.clone(),
                 currency_from_network(self.network),
+                None,
+                crate::utils::now(),
             ),
         };
         let invoice = invoice_res.map_err(|e| {
@@ -687,8 +689,12 @@ impl Node {
             }
             let amt_msats = amt_sats.unwrap() * 1_000;
             (
-                self.invoice_payer
-                    .pay_zero_value_invoice(&invoice, amt_msats),
+                pay_zero_value_invoice(
+                    &invoice,
+                    amt_msats,
+                    Retry::Attempts(5),
+                    self.channel_manager.as_ref(),
+                ),
                 amt_msats,
             )
         } else {
@@ -696,7 +702,7 @@ impl Node {
                 return Err(MutinyError::InvoiceInvalid);
             }
             (
-                self.invoice_payer.pay_invoice(&invoice),
+                pay_invoice(&invoice, Retry::Attempts(5), self.channel_manager.as_ref()),
                 invoice.amount_milli_satoshis().unwrap(),
             )
         };
@@ -745,13 +751,26 @@ impl Node {
     pub fn keysend(&self, to_node: PublicKey, amt_sats: u64) -> Result<MutinyInvoice, MutinyError> {
         let mut entropy = [0u8; 32];
         getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
+        let payment_id = PaymentId(entropy);
+
+        let mut entropy = [0u8; 32];
+        getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
         let preimage = PaymentPreimage(entropy);
 
         let amt_msats = amt_sats * 1000;
 
-        let pay_result = self
-            .invoice_payer
-            .pay_pubkey(to_node, preimage, amt_msats, 40);
+        let payment_params = PaymentParameters::for_keysend(to_node, 40);
+        let route_params: RouteParameters = RouteParameters {
+            final_value_msat: amt_msats,
+            payment_params,
+        };
+
+        let pay_result = self.channel_manager.send_spontaneous_payment_with_retry(
+            Some(preimage),
+            payment_id,
+            route_params,
+            Retry::Attempts(5),
+        );
 
         let payment_hash = PaymentHash(Sha256::hash(&preimage.0).into_inner());
 
@@ -850,6 +869,7 @@ pub(crate) async fn connect_peer_if_necessary(
         .await
     }
 }
+
 pub(crate) async fn connect_peer(
     multi_socket: MultiWsSocketDescriptor,
     websocket_proxy_addr: String,
@@ -920,12 +940,13 @@ pub(crate) fn create_peer_manager(
 
     PeerManagerImpl::new(
         lightning_msg_handler,
-        km.get_node_secret(Recipient::Node)
-            .expect("Failed to get node secret"),
+        // km.get_node_secret(Recipient::Node)
+        //     .expect("Failed to get node secret"),
         now as u32,
         &ephemeral_bytes,
         logger,
         Arc::new(IgnoringMessageHandler {}),
+        km,
     )
 }
 
@@ -948,13 +969,13 @@ pub(crate) fn split_peer_connection_string(
 ) -> Result<(PublicKey, String), MutinyError> {
     let mut pubkey_and_addr = peer_pubkey_and_ip_addr.split('@');
     let pubkey = pubkey_and_addr.next().ok_or_else(|| {
-            error!("incorrectly formatted peer info. Should be formatted as: `pubkey@host:port` but pubkey could not be parsed");
-            MutinyError::PeerInfoParseFailed
-        })?;
+        error!("incorrectly formatted peer info. Should be formatted as: `pubkey@host:port` but pubkey could not be parsed");
+        MutinyError::PeerInfoParseFailed
+    })?;
     let peer_addr_str = pubkey_and_addr.next().ok_or_else(|| {
-            error!("incorrectly formatted peer info. Should be formatted as: `pubkey@host:port` but host:port part could not be parsed");
-            MutinyError::PeerInfoParseFailed
-        })?;
+        error!("incorrectly formatted peer info. Should be formatted as: `pubkey@host:port` but host:port part could not be parsed");
+        MutinyError::PeerInfoParseFailed
+    })?;
     let pubkey = PublicKey::from_str(pubkey).map_err(|e| {
         error!("{}", format!("could not parse peer pubkey: {e:?}"));
         MutinyError::PeerInfoParseFailed

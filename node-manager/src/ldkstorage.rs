@@ -4,8 +4,8 @@ use crate::error::MutinyError;
 use crate::event::PaymentInfo;
 use crate::localstorage::MutinyBrowserStorage;
 use crate::logging::MutinyLogger;
-use crate::node::NetworkGraph;
 use crate::node::{default_user_config, ChainMonitor};
+use crate::node::{NetworkGraph, Router};
 use anyhow::anyhow;
 use bdk::blockchain::EsploraBlockchain;
 use bitcoin::BlockHash;
@@ -14,7 +14,7 @@ use bitcoin_hashes::hex::ToHex;
 use futures::{try_join, TryFutureExt};
 use lightning::chain::channelmonitor::ChannelMonitor;
 use lightning::chain::keysinterface::InMemorySigner;
-use lightning::chain::keysinterface::{PhantomKeysManager, WriteableEcdsaChannelSigner};
+use lightning::chain::keysinterface::PhantomKeysManager;
 use lightning::chain::BestBlock;
 use lightning::ln::channelmanager::{
     self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
@@ -30,7 +30,6 @@ use secp256k1::PublicKey;
 use std::collections::HashMap;
 use std::io;
 use std::io::Cursor;
-use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -43,13 +42,13 @@ const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
 const PEER_PREFIX_KEY: &str = "peer/";
 
 pub(crate) type PhantomChannelManager = LdkChannelManager<
-    Arc<PhantomKeysManager>,
-    Arc<PhantomKeysManager>,
-    Arc<PhantomKeysManager>,
     Arc<ChainMonitor>,
     Arc<MutinyChain>,
+    Arc<PhantomKeysManager>,
+    Arc<PhantomKeysManager>,
+    Arc<PhantomKeysManager>,
     Arc<MutinyChain>,
-    Arc<NetworkGraph>,
+    Arc<Router>,
     Arc<MutinyLogger>,
 >;
 
@@ -86,11 +85,7 @@ impl MutinyNodePersister {
         self.persist(NETWORK_KEY, network_graph)
     }
 
-    pub fn read_network_graph(
-        &self,
-        genesis_hash: BlockHash,
-        logger: Arc<MutinyLogger>,
-    ) -> NetworkGraph {
+    pub fn read_network_graph(&self, network: Network, logger: Arc<MutinyLogger>) -> NetworkGraph {
         match self.read_value(NETWORK_KEY) {
             Ok(kv_value) => {
                 let mut readable_kv_value = Cursor::new(kv_value);
@@ -98,11 +93,11 @@ impl MutinyNodePersister {
                     Ok(graph) => graph,
                     Err(e) => {
                         error!("Error reading NetworkGraph: {}", e.to_string());
-                        NetworkGraph::new(genesis_hash, logger)
+                        NetworkGraph::new(network, logger)
                     }
                 }
             }
-            Err(_) => NetworkGraph::new(genesis_hash, logger),
+            Err(_) => NetworkGraph::new(network, logger),
         }
     }
 
@@ -140,13 +135,10 @@ impl MutinyNodePersister {
         }
     }
 
-    pub fn read_channel_monitors<Signer: WriteableEcdsaChannelSigner, K: Deref>(
+    pub fn read_channel_monitors(
         &self,
-        keys_manager: K,
-    ) -> Result<Vec<(BlockHash, ChannelMonitor<Signer>)>, io::Error>
-    where
-        K::Target: WriteableEcdsaChannelSigner + Sized,
-    {
+        keys_manager: Arc<PhantomKeysManager>,
+    ) -> Result<Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>, io::Error> {
         // Get all the channel monitor buffers that exist for this node
         let suffix = self.node_id.as_str();
         let channel_monitor_list: HashMap<String, Vec<u8>> =
@@ -158,7 +150,10 @@ impl MutinyNodePersister {
                 Err(e) => Err(e),
                 Ok(mut accum) => {
                     let mut buffer = Cursor::new(data);
-                    match <(BlockHash, ChannelMonitor<Signer>)>::read(&mut buffer, &*keys_manager) {
+                    match <(BlockHash, ChannelMonitor<InMemorySigner>)>::read(
+                        &mut buffer,
+                        (keys_manager.as_ref(), keys_manager.as_ref()),
+                    ) {
                         Ok((blockhash, channel_monitor)) => {
                             accum.push((blockhash, channel_monitor));
                             Ok(accum)
@@ -182,6 +177,7 @@ impl MutinyNodePersister {
         mutiny_chain: Arc<MutinyChain>,
         mutiny_logger: Arc<MutinyLogger>,
         keys_manager: Arc<PhantomKeysManager>,
+        router: Arc<Router>,
         mut channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
         esplora: Arc<EsploraBlockchain>,
     ) -> Result<ReadChannelManager, MutinyError> {
@@ -192,10 +188,13 @@ impl MutinyNodePersister {
                     channel_monitor_mut_references.push(channel_monitor);
                 }
                 let read_args = ChannelManagerReadArgs::new(
-                    keys_manager,
+                    keys_manager.clone(),
+                    keys_manager.clone(),
+                    keys_manager.clone(),
                     mutiny_chain.clone(),
                     chain_monitor,
                     mutiny_chain,
+                    router,
                     mutiny_logger,
                     default_user_config(),
                     channel_monitor_mut_references,
@@ -225,15 +224,19 @@ impl MutinyNodePersister {
                     best_block: BestBlock::new(hash, height),
                 };
 
-                let fresh_channel_manager = channelmanager::ChannelManager::new(
-                    mutiny_chain.clone(),
-                    chain_monitor,
-                    mutiny_chain,
-                    mutiny_logger,
-                    keys_manager,
-                    default_user_config(),
-                    chain_params,
-                );
+                let fresh_channel_manager: PhantomChannelManager =
+                    channelmanager::ChannelManager::new(
+                        mutiny_chain.clone(),
+                        chain_monitor,
+                        mutiny_chain,
+                        router,
+                        mutiny_logger,
+                        keys_manager.clone(),
+                        keys_manager.clone(),
+                        keys_manager,
+                        default_user_config(),
+                        chain_params,
+                    );
 
                 Ok(ReadChannelManager {
                     channel_manager: fresh_channel_manager,
