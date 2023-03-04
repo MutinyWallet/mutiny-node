@@ -50,6 +50,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use wasm_bindgen_futures::spawn_local;
+use crate::fees::MutinyFeeEstimator;
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
@@ -63,7 +64,7 @@ pub(crate) type ChainMonitor = chainmonitor::ChainMonitor<
     InMemorySigner,
     Arc<dyn Filter + Send + Sync>,
     Arc<MutinyChain>,
-    Arc<MutinyChain>,
+    Arc<MutinyFeeEstimator>,
     Arc<MutinyLogger>,
     Arc<MutinyNodePersister>,
 >;
@@ -135,6 +136,7 @@ impl Node {
         mnemonic: Mnemonic,
         storage: MutinyBrowserStorage,
         chain: Arc<MutinyChain>,
+        fee_estimator: Arc<MutinyFeeEstimator>,
         wallet: Arc<MutinyWallet>,
         network: Network,
         websocket_proxy_addr: String,
@@ -155,7 +157,7 @@ impl Node {
             Some(chain.tx_sync.clone()),
             chain.clone(),
             logger.clone(),
-            chain.clone(),
+            fee_estimator.clone(),
             persister.clone(),
         ));
 
@@ -191,6 +193,7 @@ impl Node {
                 network,
                 chain_monitor.clone(),
                 chain.clone(),
+                fee_estimator.clone(),
                 logger.clone(),
                 keys_manager.clone(),
                 router.clone(),
@@ -212,7 +215,7 @@ impl Node {
         // init event handler
         let event_handler = EventHandler::new(
             channel_manager.clone(),
-            chain.clone(),
+            fee_estimator,
             wallet.clone(),
             keys_manager.clone(),
             persister.clone(),

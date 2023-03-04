@@ -1,4 +1,3 @@
-use crate::chain::MutinyChain;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::logging::MutinyLogger;
 use crate::utils::sleep;
@@ -16,6 +15,7 @@ use lightning::util::logger::{Logger, Record};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
+use crate::fees::MutinyFeeEstimator;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct PaymentInfo {
@@ -42,7 +42,7 @@ pub(crate) enum HTLCStatus {
 #[derive(Clone)]
 pub struct EventHandler {
     channel_manager: Arc<PhantomChannelManager>,
-    chain: Arc<MutinyChain>,
+    fee_estimator: Arc<MutinyFeeEstimator>,
     wallet: Arc<MutinyWallet>,
     keys_manager: Arc<PhantomKeysManager>,
     persister: Arc<MutinyNodePersister>,
@@ -53,7 +53,7 @@ pub struct EventHandler {
 impl EventHandler {
     pub(crate) fn new(
         channel_manager: Arc<PhantomChannelManager>,
-        chain: Arc<MutinyChain>,
+        fee_estimator: Arc<MutinyFeeEstimator>,
         wallet: Arc<MutinyWallet>,
         keys_manager: Arc<PhantomKeysManager>,
         persister: Arc<MutinyNodePersister>,
@@ -62,7 +62,7 @@ impl EventHandler {
     ) -> Self {
         Self {
             channel_manager,
-            chain,
+            fee_estimator,
             wallet,
             keys_manager,
             network,
@@ -498,7 +498,7 @@ impl EventHandler {
                 ));
                 let wallet_thread = self.wallet.clone();
                 let keys_manager_thread = self.keys_manager.clone();
-                let chain_thread = self.chain.clone();
+                let fee_thread = self.fee_estimator.clone();
                 let destination_address = wallet_thread
                     .wallet
                     .lock()
@@ -508,7 +508,7 @@ impl EventHandler {
 
                 let output_descriptors = &outputs.iter().collect::<Vec<_>>();
                 let tx_feerate =
-                    chain_thread.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+                    fee_thread.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
                 let spending_tx = keys_manager_thread
                     .spend_spendable_outputs(
                         output_descriptors,

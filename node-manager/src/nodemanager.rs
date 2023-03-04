@@ -32,6 +32,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
+use crate::fees::MutinyFeeEstimator;
 
 #[wasm_bindgen]
 pub struct NodeManager {
@@ -41,6 +42,7 @@ pub struct NodeManager {
     esplora: Arc<EsploraBlockchain>,
     wallet: Arc<MutinyWallet>,
     chain: Arc<MutinyChain>,
+    fee_estimator: Arc<MutinyFeeEstimator>,
     storage: MutinyBrowserStorage,
     node_storage: Mutex<NodeStorage>,
     nodes: Arc<Mutex<HashMap<String, Arc<Node>>>>,
@@ -370,6 +372,8 @@ impl NodeManager {
 
         let chain = Arc::new(MutinyChain::new(tx_sync));
 
+        let fee_estimator = Arc::new(MutinyFeeEstimator::default());
+
         let node_storage = match MutinyBrowserStorage::get_nodes() {
             Ok(node_storage) => node_storage,
             Err(e) => {
@@ -388,6 +392,7 @@ impl NodeManager {
                 mnemonic.clone(),
                 storage.clone(),
                 chain.clone(),
+                fee_estimator.clone(),
                 wallet.clone(),
                 network,
                 websocket_proxy_addr.clone(),
@@ -410,6 +415,7 @@ impl NodeManager {
             network,
             wallet,
             chain,
+            fee_estimator,
             storage,
             node_storage: Mutex::new(node_storage),
             nodes: Arc::new(Mutex::new(nodes_map)),
@@ -648,13 +654,13 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub fn estimate_fee_normal(&self) -> u32 {
-        self.chain
+        self.fee_estimator
             .get_est_sat_per_1000_weight(ConfirmationTarget::Normal)
     }
 
     #[wasm_bindgen]
     pub fn estimate_fee_high(&self) -> u32 {
-        self.chain
+        self.fee_estimator
             .get_est_sat_per_1000_weight(ConfirmationTarget::HighPriority)
     }
 
@@ -1139,6 +1145,7 @@ pub(crate) async fn create_new_node_from_node_manager(
         node_manager.mnemonic.clone(),
         node_manager.storage.clone(),
         node_manager.chain.clone(),
+        node_manager.fee_estimator.clone(),
         node_manager.wallet.clone(),
         node_manager.network,
         node_manager.websocket_proxy_addr.clone(),

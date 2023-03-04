@@ -32,6 +32,7 @@ use std::io;
 use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::Arc;
+use crate::fees::MutinyFeeEstimator;
 
 const NETWORK_KEY: &str = "network";
 const PROB_SCORER_KEY: &str = "prob_scorer";
@@ -47,7 +48,7 @@ pub(crate) type PhantomChannelManager = LdkChannelManager<
     Arc<PhantomKeysManager>,
     Arc<PhantomKeysManager>,
     Arc<PhantomKeysManager>,
-    Arc<MutinyChain>,
+    Arc<MutinyFeeEstimator>,
     Arc<Router>,
     Arc<MutinyLogger>,
 >;
@@ -175,6 +176,7 @@ impl MutinyNodePersister {
         network: Network,
         chain_monitor: Arc<ChainMonitor>,
         mutiny_chain: Arc<MutinyChain>,
+        fee_estimator: Arc<MutinyFeeEstimator>,
         mutiny_logger: Arc<MutinyLogger>,
         keys_manager: Arc<PhantomKeysManager>,
         router: Arc<Router>,
@@ -191,7 +193,7 @@ impl MutinyNodePersister {
                     keys_manager.clone(),
                     keys_manager.clone(),
                     keys_manager.clone(),
-                    mutiny_chain.clone(),
+                    fee_estimator,
                     chain_monitor,
                     mutiny_chain,
                     router,
@@ -226,7 +228,7 @@ impl MutinyNodePersister {
 
                 let fresh_channel_manager: PhantomChannelManager =
                     channelmanager::ChannelManager::new(
-                        mutiny_chain.clone(),
+                        fee_estimator,
                         chain_monitor,
                         mutiny_chain,
                         router,

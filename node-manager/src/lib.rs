@@ -26,6 +26,7 @@ mod proxy;
 mod socket;
 mod utils;
 mod wallet;
+mod fees;
 
 use log::{debug, Level};
 use wasm_bindgen::prelude::*;
