@@ -61,6 +61,7 @@ futures = "0.3.25"
 thiserror = "1.0"
 web-sys = { version = "0.3.60", features = ["console"] }
 anyhow = "1.0"
+miniscript = { version = "9.0.0", default-features = false, features = ["no-std"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.33"
