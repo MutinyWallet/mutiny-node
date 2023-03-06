@@ -10,11 +10,13 @@
 #![feature(io_error_other)]
 #![feature(async_fn_in_trait)]
 
+mod background;
 mod bdkstorage;
 mod chain;
 mod encrypt;
 mod error;
 mod event;
+mod fees;
 mod keymanager;
 mod ldkstorage;
 mod localstorage;
@@ -26,7 +28,6 @@ mod proxy;
 mod socket;
 mod utils;
 mod wallet;
-mod fees;
 
 use log::{debug, Level};
 use wasm_bindgen::prelude::*;

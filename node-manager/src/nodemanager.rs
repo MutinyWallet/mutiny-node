@@ -27,12 +27,12 @@ use lightning_invoice::{Invoice, InvoiceDescription};
 use lightning_transaction_sync::EsploraSyncClient;
 // use lnurl::lnurl::LnUrl;
 // use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
+use crate::fees::MutinyFeeEstimator;
 use log::{debug, error, info};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
-use crate::fees::MutinyFeeEstimator;
 
 #[wasm_bindgen]
 pub struct NodeManager {
@@ -621,6 +621,8 @@ impl NodeManager {
     }
 
     async fn sync_ldk(&self) -> Result<(), MutinyError> {
+        // TODO
+        /*
         let nodes = self.nodes.lock().await;
 
         let confirmables: Vec<&(dyn Confirm + Send + Sync)> = nodes
@@ -633,6 +635,7 @@ impl NodeManager {
             .collect();
 
         self.chain.tx_sync.sync(confirmables).await?;
+        */
 
         Ok(())
     }

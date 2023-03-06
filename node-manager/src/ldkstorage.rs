@@ -2,6 +2,7 @@ use crate::chain::MutinyChain;
 use crate::error;
 use crate::error::MutinyError;
 use crate::event::PaymentInfo;
+use crate::fees::MutinyFeeEstimator;
 use crate::localstorage::MutinyBrowserStorage;
 use crate::logging::MutinyLogger;
 use crate::node::{default_user_config, ChainMonitor};
@@ -32,7 +33,6 @@ use std::io;
 use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::Arc;
-use crate::fees::MutinyFeeEstimator;
 
 const NETWORK_KEY: &str = "network";
 const PROB_SCORER_KEY: &str = "prob_scorer";
@@ -82,14 +82,17 @@ impl MutinyNodePersister {
 
     // FIXME: Useful to use soon when we implement paying network nodes
     #[allow(dead_code)]
-    pub fn persist_network_graph(&self, network_graph: &NetworkGraph) -> io::Result<()> {
+    pub fn persist_network_graph(
+        &self,
+        network_graph: &NetworkGraph,
+    ) -> Result<(), lightning::io::Error> {
         self.persist(NETWORK_KEY, network_graph)
     }
 
     pub fn read_network_graph(&self, network: Network, logger: Arc<MutinyLogger>) -> NetworkGraph {
         match self.read_value(NETWORK_KEY) {
             Ok(kv_value) => {
-                let mut readable_kv_value = Cursor::new(kv_value);
+                let mut readable_kv_value = lightning::io::Cursor::new(kv_value);
                 match NetworkGraph::read(&mut readable_kv_value, logger.clone()) {
                     Ok(graph) => graph,
                     Err(e) => {
@@ -107,7 +110,7 @@ impl MutinyNodePersister {
     pub fn persist_scorer(
         &self,
         scorer: &ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>,
-    ) -> io::Result<()> {
+    ) -> Result<(), lightning::io::Error> {
         self.persist(PROB_SCORER_KEY, scorer)
     }
 
@@ -122,7 +125,7 @@ impl MutinyNodePersister {
 
         match self.read_value(PROB_SCORER_KEY) {
             Ok(kv_value) => {
-                let mut readable_kv_value = Cursor::new(kv_value);
+                let mut readable_kv_value = lightning::io::Cursor::new(kv_value);
                 let args = (params.clone(), Arc::clone(&graph), Arc::clone(&logger));
                 match ProbabilisticScorer::read(&mut readable_kv_value, args) {
                     Ok(scorer) => scorer,
@@ -150,7 +153,7 @@ impl MutinyNodePersister {
             .fold(Ok(Vec::new()), |current_res, (_, data)| match current_res {
                 Err(e) => Err(e),
                 Ok(mut accum) => {
-                    let mut buffer = Cursor::new(data);
+                    let mut buffer = lightning::io::Cursor::new(data);
                     match <(BlockHash, ChannelMonitor<InMemorySigner>)>::read(
                         &mut buffer,
                         (keys_manager.as_ref(), keys_manager.as_ref()),
@@ -201,7 +204,7 @@ impl MutinyNodePersister {
                     default_user_config(),
                     channel_monitor_mut_references,
                 );
-                let mut readable_kv_value = Cursor::new(kv_value);
+                let mut readable_kv_value = lightning::io::Cursor::new(kv_value);
                 let Ok((_, channel_manager)) = <(BlockHash, PhantomChannelManager)>::read(&mut readable_kv_value, read_args) else {
                     return Err(MutinyError::ReadError { source: error::MutinyStorageError::Other(anyhow!("could not read manager")) })
                 };
@@ -350,10 +353,10 @@ fn payment_key(inbound: bool, payment_hash: PaymentHash) -> String {
 }
 
 impl KVStorePersister for MutinyNodePersister {
-    fn persist<W: Writeable>(&self, key: &str, object: &W) -> io::Result<()> {
+    fn persist<W: Writeable>(&self, key: &str, object: &W) -> Result<(), lightning::io::Error> {
         let key_with_node = self.get_key(key);
         self.storage
             .set(key_with_node, object.encode())
-            .map_err(io::Error::other)
+            .map_err(|_| lightning::io::ErrorKind::Other.into())
     }
 }

@@ -1,6 +1,8 @@
+use crate::background::process_events_async;
 use crate::chain::MutinyChain;
 use crate::error::MutinyStorageError;
 use crate::event::{EventHandler, HTLCStatus, MillisatAmount, PaymentInfo};
+use crate::fees::MutinyFeeEstimator;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::localstorage::MutinyBrowserStorage;
 use crate::nodemanager::{MutinyInvoice, MutinyInvoiceParams};
@@ -8,6 +10,7 @@ use crate::peermanager::{PeerManager, PeerManagerImpl};
 use crate::proxy::WsProxy;
 use crate::socket::WsTcpSocketDescriptor;
 use crate::socket::{schedule_descriptor_read, MultiWsSocketDescriptor, WsSocketDescriptor};
+use crate::utils;
 use crate::utils::{currency_from_network, sleep};
 use crate::wallet::MutinyWallet;
 use crate::{
@@ -35,11 +38,14 @@ use lightning::ln::peer_handler::{
 use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::routing::gossip;
 use lightning::routing::router::{DefaultRouter, PaymentParameters, RouteParameters};
+use lightning::routing::scoring::LockableScore;
+use lightning::routing::scoring::ProbabilisticScorerUsingTime;
+use lightning::routing::scoring::Score;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
 use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
 use lightning::util::logger::{Logger, Record};
 use lightning::util::ser::Writeable;
-use lightning_background_processor::{process_events_async, GossipSync};
+use lightning_background_processor::GossipSync;
 use lightning_invoice::payment::{pay_invoice, pay_zero_value_invoice};
 use lightning_invoice::utils::{
     create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice,
@@ -48,9 +54,9 @@ use lightning_invoice::Invoice;
 use log::{debug, error, info, trace};
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex};
 use wasm_bindgen_futures::spawn_local;
-use crate::fees::MutinyFeeEstimator;
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
@@ -72,8 +78,24 @@ pub(crate) type ChainMonitor = chainmonitor::ChainMonitor<
 pub(crate) type Router = DefaultRouter<
     Arc<NetworkGraph>,
     Arc<MutinyLogger>,
-    Arc<Mutex<ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>>>,
+    Arc<utils::Mutex<ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>>>,
 >;
+
+impl Writeable
+    for utils::Mutex<
+        ProbabilisticScorer<
+            Arc<lightning::routing::gossip::NetworkGraph<Arc<MutinyLogger>>>,
+            Arc<MutinyLogger>,
+        >,
+    >
+{
+    fn write<W: lightning::util::ser::Writer>(
+        &self,
+        writer: &mut W,
+    ) -> Result<(), lightning::io::Error> {
+        ProbabilisticScorer::write(&self.lock().unwrap(), writer)
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ConnectionType {
@@ -174,7 +196,7 @@ impl Node {
 
         // create scorer
         let params = ProbabilisticScoringParameters::default();
-        let scorer = Arc::new(Mutex::new(ProbabilisticScorer::new(
+        let scorer = Arc::new(utils::Mutex::new(ProbabilisticScorer::new(
             params,
             network_graph.clone(),
             logger.clone(),
@@ -267,7 +289,8 @@ impl Node {
 
         spawn_local(async move {
             loop {
-                let gs: GossipSync<_, _, &NetworkGraph, _, Arc<MutinyLogger>> = GossipSync::none();
+                let gs: crate::background::GossipSync<_, _, &NetworkGraph, _, Arc<MutinyLogger>> =
+                    crate::background::GossipSync::none();
                 let ev = background_event_handler.clone();
                 process_events_async(
                     background_persister.clone(),
