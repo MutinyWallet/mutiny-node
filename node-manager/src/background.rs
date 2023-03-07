@@ -348,9 +348,9 @@ macro_rules! define_run_body {
 						error!("Error: Failed to persist network graph, check your disk and permissions {}", e)
 					}
 
-					last_prune_call = $get_timer(NETWORK_PRUNE_TIMER);
 					have_pruned = true;
 				}
+				last_prune_call = $get_timer(NETWORK_PRUNE_TIMER);
 			}
 
 			if $timer_elapsed(&mut last_scorer_persist_call, SCORER_PERSIST_TIMER) {
