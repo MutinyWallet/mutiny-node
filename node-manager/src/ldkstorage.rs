@@ -16,7 +16,7 @@ use futures::{try_join, TryFutureExt};
 use lightning::chain::channelmonitor::ChannelMonitor;
 use lightning::chain::keysinterface::InMemorySigner;
 use lightning::chain::keysinterface::PhantomKeysManager;
-use lightning::chain::BestBlock;
+use lightning::chain::{BestBlock, Confirm};
 use lightning::ln::channelmanager::{
     self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
 };

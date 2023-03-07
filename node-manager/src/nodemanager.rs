@@ -622,20 +622,18 @@ impl NodeManager {
 
     async fn sync_ldk(&self) -> Result<(), MutinyError> {
         // TODO
-        /*
         let nodes = self.nodes.lock().await;
 
-        let confirmables: Vec<&(dyn Confirm + Send + Sync)> = nodes
+        let confirmables: Vec<&(dyn Confirm)> = nodes
             .iter()
             .flat_map(|(_, node)| {
-                let vec: Vec<&(dyn Confirm + Send + Sync)> =
+                let vec: Vec<&(dyn Confirm)> =
                     vec![node.channel_manager.deref(), node.chain_monitor.deref()];
                 vec
             })
             .collect();
 
         self.chain.tx_sync.sync(confirmables).await?;
-        */
 
         Ok(())
     }

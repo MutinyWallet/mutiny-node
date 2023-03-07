@@ -1,3 +1,4 @@
+use crate::fees::MutinyFeeEstimator;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::logging::MutinyLogger;
 use crate::utils::sleep;
@@ -15,7 +16,6 @@ use lightning::util::logger::{Logger, Record};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
-use crate::fees::MutinyFeeEstimator;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct PaymentInfo {
@@ -507,8 +507,7 @@ impl EventHandler {
                     .expect("could not get new address");
 
                 let output_descriptors = &outputs.iter().collect::<Vec<_>>();
-                let tx_feerate =
-                    fee_thread.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+                let tx_feerate = fee_thread.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
                 let spending_tx = keys_manager_thread
                     .spend_spendable_outputs(
                         output_descriptors,
