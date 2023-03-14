@@ -38,14 +38,11 @@ use lightning::ln::peer_handler::{
 use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::routing::gossip;
 use lightning::routing::router::{DefaultRouter, PaymentParameters, RouteParameters};
-use lightning::routing::scoring::LockableScore;
-use lightning::routing::scoring::ProbabilisticScorerUsingTime;
-use lightning::routing::scoring::Score;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
 use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
 use lightning::util::logger::{Logger, Record};
 use lightning::util::ser::Writeable;
-use lightning_background_processor::GossipSync;
+
 use lightning_invoice::payment::{pay_invoice, pay_zero_value_invoice};
 use lightning_invoice::utils::{
     create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice,
@@ -54,8 +51,8 @@ use lightning_invoice::Invoice;
 use log::{debug, error, info, trace};
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::MutexGuard;
-use std::sync::{Arc, Mutex};
+
+use std::sync::Arc;
 use wasm_bindgen_futures::spawn_local;
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;

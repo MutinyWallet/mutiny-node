@@ -16,7 +16,7 @@ use futures::{try_join, TryFutureExt};
 use lightning::chain::channelmonitor::ChannelMonitor;
 use lightning::chain::keysinterface::InMemorySigner;
 use lightning::chain::keysinterface::PhantomKeysManager;
-use lightning::chain::{BestBlock, Confirm};
+use lightning::chain::BestBlock;
 use lightning::ln::channelmanager::{
     self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
 };
@@ -30,7 +30,7 @@ use log::error;
 use secp256k1::PublicKey;
 use std::collections::HashMap;
 use std::io;
-use std::io::Cursor;
+
 use std::str::FromStr;
 use std::sync::Arc;
 

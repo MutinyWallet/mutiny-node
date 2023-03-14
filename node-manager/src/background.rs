@@ -8,12 +8,12 @@
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-#![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
+#![allow(dead_code)]
 
 #[cfg(any(test, feature = "std"))]
 extern crate core;
 
-use log::{debug, error, info, trace, warn};
+use log::{error, trace, warn};
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;
@@ -433,7 +433,7 @@ pub async fn process_events_async<
     channel_manager: CM,
     gossip_sync: GossipSync<PGS, RGS, G, UL, L>,
     peer_manager: PM,
-    logger: L,
+    _logger: L,
     scorer: Option<S>,
     sleeper: Sleeper,
 ) -> Result<(), lightning::io::Error>

@@ -1,5 +1,5 @@
 use bitcoin::Network;
-use core::cell::{Ref, RefCell, RefMut};
+use core::cell::{RefCell, RefMut};
 use core::ops::{Deref, DerefMut};
 use core::time::Duration;
 use instant::SystemTime;
@@ -64,7 +64,7 @@ impl<T: ?Sized> Deref for MutexGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        &self.lock.deref()
+        self.lock.deref()
     }
 }
 
@@ -81,20 +81,10 @@ impl<T> Mutex<T> {
         }
     }
 
-    pub fn lock<'a>(&'a self) -> LockResult<MutexGuard<'a, T>> {
+    pub fn lock(&self) -> LockResult<MutexGuard<'_, T>> {
         Ok(MutexGuard {
             lock: self.inner.borrow_mut(),
         })
-    }
-
-    pub fn try_lock<'a>(&'a self) -> LockResult<MutexGuard<'a, T>> {
-        Ok(MutexGuard {
-            lock: self.inner.borrow_mut(),
-        })
-    }
-
-    pub fn into_inner(self) -> LockResult<T> {
-        Ok(self.inner.into_inner())
     }
 }
 

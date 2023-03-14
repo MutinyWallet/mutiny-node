@@ -1,7 +1,9 @@
-use bdk::FeeRate;
-use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator, FEERATE_FLOOR_SATS_PER_KW};
-use log::trace;
 use crate::localstorage::MutinyBrowserStorage;
+use bdk::FeeRate;
+use lightning::chain::chaininterface::{
+    ConfirmationTarget, FeeEstimator, FEERATE_FLOOR_SATS_PER_KW,
+};
+use log::trace;
 
 #[derive(Debug, Clone, Default)]
 pub struct MutinyFeeEstimator {}
