@@ -37,11 +37,9 @@ jobs:
           version: 'latest'
 
       - name: Build wasm
-        working-directory: ./node-manager
         run: wasm-pack build --release --target web --scope mutinywallet
 
       - name: Publish wasm
-        working-directory: ./node-manager
         run: wasm-pack publish --access public -t web
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
