@@ -55,6 +55,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use wasm_bindgen_futures::spawn_local;
 
+pub(crate) type RapidGossipSync =
+    lightning_rapid_gossip_sync::RapidGossipSync<Arc<NetworkGraph>, Arc<MutinyLogger>>;
+
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
 pub(crate) type MessageHandler = LdkMessageHandler<
@@ -154,6 +157,7 @@ impl Node {
         node_index: NodeIndex,
         mnemonic: Mnemonic,
         storage: MutinyBrowserStorage,
+        gossip_sync: Arc<RapidGossipSync>,
         chain: Arc<MutinyChain>,
         fee_estimator: Arc<MutinyFeeEstimator>,
         wallet: Arc<MutinyWallet>,
@@ -187,9 +191,7 @@ impl Node {
                 source: MutinyStorageError::Other(e.into()),
             })?;
 
-        // todo use RGS
-        // get network graph
-        let network_graph = Arc::new(persister.read_network_graph(network, logger.clone()));
+        let network_graph = gossip_sync.network_graph().clone();
 
         // create scorer
         let params = ProbabilisticScoringParameters::default();
@@ -283,11 +285,11 @@ impl Node {
         let background_processor_peer_manager = peer_man.clone();
         let background_processor_channel_manager = channel_manager.clone();
         let background_chain_monitor = chain_monitor.clone();
+        let background_gossip_sync = gossip_sync.clone();
 
         spawn_local(async move {
             loop {
-                let gs: crate::background::GossipSync<_, _, &NetworkGraph, _, Arc<MutinyLogger>> =
-                    crate::background::GossipSync::none();
+                let gs = crate::background::GossipSync::rapid(background_gossip_sync.clone());
                 let ev = background_event_handler.clone();
                 process_events_async(
                     background_persister.clone(),

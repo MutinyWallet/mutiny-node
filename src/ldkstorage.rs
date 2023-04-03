@@ -89,6 +89,8 @@ impl MutinyNodePersister {
         self.persist(NETWORK_KEY, network_graph)
     }
 
+    // FIXME: Useful to use soon when we implement paying network nodes
+    #[allow(dead_code)]
     pub fn read_network_graph(&self, network: Network, logger: Arc<MutinyLogger>) -> NetworkGraph {
         match self.read_value(NETWORK_KEY) {
             Ok(kv_value) => {

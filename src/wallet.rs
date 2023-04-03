@@ -242,3 +242,30 @@ pub(crate) fn get_esplora_url(network: Network, user_provided_url: Option<String
         .to_string()
     }
 }
+
+pub(crate) fn get_rgs_url(
+    network: Network,
+    user_provided_url: Option<String>,
+    last_sync_time: Option<u64>,
+) -> String {
+    let last_sync_time = last_sync_time.unwrap_or(0);
+    if let Some(url) = user_provided_url {
+        url
+    } else {
+        // todo - add regtest and signet
+        match network {
+            Network::Bitcoin => {
+                format!("https://rapidsync.lightningdevkit.org/snapshot/{last_sync_time}")
+            }
+            Network::Testnet => {
+                format!("https://rapidsync.lightningdevkit.org/testnet/snapshot/{last_sync_time}")
+            }
+            Network::Signet => {
+                format!("https://rapidsync.lightningdevkit.org/testnet/snapshot/{last_sync_time}")
+            }
+            Network::Regtest => {
+                format!("https://rapidsync.lightningdevkit.org/testnet/snapshot/{last_sync_time}")
+            }
+        }
+    }
+}
