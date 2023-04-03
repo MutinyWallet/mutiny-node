@@ -2,6 +2,7 @@ use bdk::esplora_client;
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning_invoice::payment::PaymentError;
 use lightning_invoice::ParseOrSemanticError;
+use lightning_rapid_gossip_sync::GraphSyncError;
 use lightning_transaction_sync::TxSyncError;
 use thiserror::Error;
 use wasm_bindgen::JsValue;
@@ -75,6 +76,9 @@ pub enum MutinyError {
     /// A chain access operation failed.
     #[error("Failed to conduct chain access operation.")]
     ChainAccessFailed,
+    /// An error with rapid gossip sync
+    #[error("Failed to execute a rapid gossip sync function")]
+    RapidGossipSyncError,
     /// A error with DLCs
     #[error("Failed to execute a dlc function")]
     DLCManagerError,
@@ -167,6 +171,12 @@ impl From<MutinyStorageError> for bdk::Error {
     }
 }
 
+impl From<GraphSyncError> for MutinyError {
+    fn from(_e: GraphSyncError) -> Self {
+        MutinyError::RapidGossipSyncError
+    }
+}
+
 impl From<std::io::Error> for MutinyError {
     fn from(e: std::io::Error) -> Self {
         MutinyError::PersistenceFailed {
@@ -241,6 +251,9 @@ pub enum MutinyJsError {
     /// A chain access operation failed.
     #[error("Failed to conduct chain access operation.")]
     ChainAccessFailed,
+    /// An error with rapid gossip sync
+    #[error("Failed to execute a rapid gossip sync function")]
+    RapidGossipSyncError,
     /// An error when reading/writing json to the front end.
     #[error("Failed to read or write json from the front end")]
     JsonReadWriteError,
@@ -285,6 +298,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::InvalidMnemonic => MutinyJsError::InvalidMnemonic,
             MutinyError::WalletSigningFailed => MutinyJsError::WalletSigningFailed,
             MutinyError::ChainAccessFailed => MutinyJsError::ChainAccessFailed,
+            MutinyError::RapidGossipSyncError => MutinyJsError::RapidGossipSyncError,
             MutinyError::DLCManagerError => MutinyJsError::DLCManagerError,
             MutinyError::Other(_) => MutinyJsError::UnknownError,
         }
@@ -319,6 +333,12 @@ impl From<esplora_client::Error> for MutinyJsError {
     fn from(_e: esplora_client::Error) -> Self {
         // This is most likely a chain access failure
         Self::ChainAccessFailed
+    }
+}
+
+impl From<GraphSyncError> for MutinyJsError {
+    fn from(e: GraphSyncError) -> Self {
+        MutinyError::from(e).into()
     }
 }
 

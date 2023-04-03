@@ -9,9 +9,9 @@ use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyJsError, MutinyStorageError};
 use crate::keymanager;
 use crate::logging::MutinyLogger;
-use crate::node::{Node, PubkeyConnectionInfo};
+use crate::node::{NetworkGraph, Node, PubkeyConnectionInfo, RapidGossipSync};
 use crate::utils::currency_from_network;
-use crate::wallet::get_esplora_url;
+use crate::wallet::{get_esplora_url, get_rgs_url};
 use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
@@ -41,6 +41,7 @@ pub struct NodeManager {
     websocket_proxy_addr: String,
     esplora: Arc<EsploraBlockchain>,
     wallet: Arc<MutinyWallet>,
+    gossip_sync: Arc<RapidGossipSync>,
     chain: Arc<MutinyChain>,
     fee_estimator: Arc<MutinyFeeEstimator>,
     storage: MutinyBrowserStorage,
@@ -322,6 +323,7 @@ impl NodeManager {
         websocket_proxy_addr: Option<String>,
         network_str: Option<String>,
         user_esplora_url: Option<String>,
+        user_rgs_url: Option<String>,
     ) -> Result<NodeManager, MutinyJsError> {
         set_panic_hook();
 
@@ -356,11 +358,10 @@ impl NodeManager {
             },
         };
 
+        let logger = Arc::new(MutinyLogger::default());
+
         let esplora_server_url = get_esplora_url(network, user_esplora_url);
-        let tx_sync = Arc::new(EsploraSyncClient::new(
-            esplora_server_url,
-            Arc::new(MutinyLogger::default()),
-        ));
+        let tx_sync = Arc::new(EsploraSyncClient::new(esplora_server_url, logger.clone()));
 
         let esplora = Arc::new(EsploraBlockchain::from_client(tx_sync.client().clone(), 5));
         let wallet = Arc::new(MutinyWallet::new(
@@ -371,6 +372,25 @@ impl NodeManager {
         ));
 
         let chain = Arc::new(MutinyChain::new(tx_sync));
+
+        // get network graph
+        let network_graph = Arc::new(NetworkGraph::new(network, logger.clone()));
+        let gossip_sync = Arc::new(RapidGossipSync::new(network_graph.clone(), logger.clone()));
+
+        // todo store RGS and last sync timestamp in storage
+        let rgs_url = get_rgs_url(network, user_rgs_url, None);
+        info!("RGS URL: {}", rgs_url);
+
+        let http_client = Client::builder().build()?;
+        let rgs_response = http_client.get(rgs_url).send().await?;
+
+        let rgs_data = rgs_response.bytes().await?.to_vec();
+
+        let now = crate::utils::now().as_secs();
+        let new_last_sync_timestamp_result =
+            gossip_sync.update_network_graph_no_std(&rgs_data, Some(now))?;
+
+        info!("RGS sync result: {}", new_last_sync_timestamp_result);
 
         let fee_estimator = Arc::new(MutinyFeeEstimator::default());
 
@@ -391,6 +411,7 @@ impl NodeManager {
                 node_item.1,
                 mnemonic.clone(),
                 storage.clone(),
+                gossip_sync.clone(),
                 chain.clone(),
                 fee_estimator.clone(),
                 wallet.clone(),
@@ -414,6 +435,7 @@ impl NodeManager {
             mnemonic,
             network,
             wallet,
+            gossip_sync,
             chain,
             fee_estimator,
             storage,
@@ -1145,6 +1167,7 @@ pub(crate) async fn create_new_node_from_node_manager(
         next_node.clone(),
         node_manager.mnemonic.clone(),
         node_manager.storage.clone(),
+        node_manager.gossip_sync.clone(),
         node_manager.chain.clone(),
         node_manager.fee_estimator.clone(),
         node_manager.wallet.clone(),
@@ -1194,6 +1217,7 @@ mod tests {
             None,
             Some("testnet".to_owned()),
             None,
+            None,
         )
         .await
         .expect("node manager should initialize");
@@ -1212,6 +1236,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("testnet".to_owned()),
+            None,
             None,
         )
         .await
@@ -1233,6 +1258,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("testnet".to_owned()),
+            None,
             None,
         )
         .await
