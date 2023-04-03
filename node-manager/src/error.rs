@@ -2,6 +2,7 @@ use bdk::esplora_client;
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning_invoice::payment::PaymentError;
 use lightning_invoice::ParseOrSemanticError;
+use lightning_transaction_sync::TxSyncError;
 use thiserror::Error;
 use wasm_bindgen::JsValue;
 
@@ -112,23 +113,21 @@ impl From<bdk::Error> for MutinyError {
     }
 }
 
-impl From<lnurl::Error> for MutinyError {
-    fn from(_e: lnurl::Error) -> Self {
-        Self::LnUrlFailure
+// impl From<lnurl::Error> for MutinyError {
+//     fn from(_e: lnurl::Error) -> Self {
+//         Self::LnUrlFailure
+//     }
+// }
+
+impl From<TxSyncError> for MutinyError {
+    fn from(_e: TxSyncError) -> Self {
+        MutinyError::ChainAccessFailed
     }
 }
 
 impl From<lightning::ln::msgs::DecodeError> for MutinyError {
     fn from(_e: lightning::ln::msgs::DecodeError) -> Self {
         MutinyError::LnDecodeError
-    }
-}
-
-// TODO add more granular errors for esplora failures
-impl From<esplora_client::Error> for MutinyError {
-    fn from(_e: esplora_client::Error) -> Self {
-        // This is most likely a chain access failure
-        Self::ChainAccessFailed
     }
 }
 
@@ -149,7 +148,6 @@ impl From<PaymentError> for MutinyError {
     fn from(e: PaymentError) -> Self {
         match e {
             PaymentError::Invoice(_) => Self::InvoiceInvalid,
-            PaymentError::Routing(_) => Self::RoutingFailed,
             PaymentError::Sending(_) => Self::RoutingFailed,
         }
     }
@@ -311,11 +309,11 @@ impl From<PaymentError> for MutinyJsError {
     }
 }
 
-impl From<lnurl::Error> for MutinyJsError {
-    fn from(e: lnurl::Error) -> Self {
-        MutinyError::from(e).into()
-    }
-}
+// impl From<lnurl::Error> for MutinyJsError {
+//     fn from(e: lnurl::Error) -> Self {
+//         MutinyError::from(e).into()
+//     }
+// }
 
 impl From<esplora_client::Error> for MutinyJsError {
     fn from(_e: esplora_client::Error) -> Self {

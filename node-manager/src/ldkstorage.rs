@@ -2,10 +2,11 @@ use crate::chain::MutinyChain;
 use crate::error;
 use crate::error::MutinyError;
 use crate::event::PaymentInfo;
+use crate::fees::MutinyFeeEstimator;
 use crate::localstorage::MutinyBrowserStorage;
 use crate::logging::MutinyLogger;
-use crate::node::NetworkGraph;
 use crate::node::{default_user_config, ChainMonitor};
+use crate::node::{NetworkGraph, Router};
 use anyhow::anyhow;
 use bdk::blockchain::EsploraBlockchain;
 use bitcoin::BlockHash;
@@ -15,7 +16,6 @@ use futures::{try_join, TryFutureExt};
 use lightning::chain::channelmonitor::ChannelMonitor;
 use lightning::chain::keysinterface::InMemorySigner;
 use lightning::chain::keysinterface::PhantomKeysManager;
-use lightning::chain::keysinterface::{KeysInterface, Sign};
 use lightning::chain::BestBlock;
 use lightning::ln::channelmanager::{
     self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
@@ -30,8 +30,7 @@ use log::error;
 use secp256k1::PublicKey;
 use std::collections::HashMap;
 use std::io;
-use std::io::Cursor;
-use std::ops::Deref;
+
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -47,7 +46,10 @@ pub(crate) type PhantomChannelManager = LdkChannelManager<
     Arc<ChainMonitor>,
     Arc<MutinyChain>,
     Arc<PhantomKeysManager>,
-    Arc<MutinyChain>,
+    Arc<PhantomKeysManager>,
+    Arc<PhantomKeysManager>,
+    Arc<MutinyFeeEstimator>,
+    Arc<Router>,
     Arc<MutinyLogger>,
 >;
 
@@ -80,27 +82,26 @@ impl MutinyNodePersister {
 
     // FIXME: Useful to use soon when we implement paying network nodes
     #[allow(dead_code)]
-    pub fn persist_network_graph(&self, network_graph: &NetworkGraph) -> io::Result<()> {
+    pub fn persist_network_graph(
+        &self,
+        network_graph: &NetworkGraph,
+    ) -> Result<(), lightning::io::Error> {
         self.persist(NETWORK_KEY, network_graph)
     }
 
-    pub fn read_network_graph(
-        &self,
-        genesis_hash: BlockHash,
-        logger: Arc<MutinyLogger>,
-    ) -> NetworkGraph {
+    pub fn read_network_graph(&self, network: Network, logger: Arc<MutinyLogger>) -> NetworkGraph {
         match self.read_value(NETWORK_KEY) {
             Ok(kv_value) => {
-                let mut readable_kv_value = Cursor::new(kv_value);
+                let mut readable_kv_value = lightning::io::Cursor::new(kv_value);
                 match NetworkGraph::read(&mut readable_kv_value, logger.clone()) {
                     Ok(graph) => graph,
                     Err(e) => {
                         error!("Error reading NetworkGraph: {}", e.to_string());
-                        NetworkGraph::new(genesis_hash, logger)
+                        NetworkGraph::new(network, logger)
                     }
                 }
             }
-            Err(_) => NetworkGraph::new(genesis_hash, logger),
+            Err(_) => NetworkGraph::new(network, logger),
         }
     }
 
@@ -109,7 +110,7 @@ impl MutinyNodePersister {
     pub fn persist_scorer(
         &self,
         scorer: &ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>,
-    ) -> io::Result<()> {
+    ) -> Result<(), lightning::io::Error> {
         self.persist(PROB_SCORER_KEY, scorer)
     }
 
@@ -124,7 +125,7 @@ impl MutinyNodePersister {
 
         match self.read_value(PROB_SCORER_KEY) {
             Ok(kv_value) => {
-                let mut readable_kv_value = Cursor::new(kv_value);
+                let mut readable_kv_value = lightning::io::Cursor::new(kv_value);
                 let args = (params.clone(), Arc::clone(&graph), Arc::clone(&logger));
                 match ProbabilisticScorer::read(&mut readable_kv_value, args) {
                     Ok(scorer) => scorer,
@@ -138,13 +139,10 @@ impl MutinyNodePersister {
         }
     }
 
-    pub fn read_channel_monitors<Signer: Sign, K: Deref>(
+    pub fn read_channel_monitors(
         &self,
-        keys_manager: K,
-    ) -> Result<Vec<(BlockHash, ChannelMonitor<Signer>)>, io::Error>
-    where
-        K::Target: KeysInterface<Signer = Signer> + Sized,
-    {
+        keys_manager: Arc<PhantomKeysManager>,
+    ) -> Result<Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>, io::Error> {
         // Get all the channel monitor buffers that exist for this node
         let suffix = self.node_id.as_str();
         let channel_monitor_list: HashMap<String, Vec<u8>> =
@@ -155,8 +153,11 @@ impl MutinyNodePersister {
             .fold(Ok(Vec::new()), |current_res, (_, data)| match current_res {
                 Err(e) => Err(e),
                 Ok(mut accum) => {
-                    let mut buffer = Cursor::new(data);
-                    match <(BlockHash, ChannelMonitor<Signer>)>::read(&mut buffer, &*keys_manager) {
+                    let mut buffer = lightning::io::Cursor::new(data);
+                    match <(BlockHash, ChannelMonitor<InMemorySigner>)>::read(
+                        &mut buffer,
+                        (keys_manager.as_ref(), keys_manager.as_ref()),
+                    ) {
                         Ok((blockhash, channel_monitor)) => {
                             accum.push((blockhash, channel_monitor));
                             Ok(accum)
@@ -178,8 +179,10 @@ impl MutinyNodePersister {
         network: Network,
         chain_monitor: Arc<ChainMonitor>,
         mutiny_chain: Arc<MutinyChain>,
+        fee_estimator: Arc<MutinyFeeEstimator>,
         mutiny_logger: Arc<MutinyLogger>,
         keys_manager: Arc<PhantomKeysManager>,
+        router: Arc<Router>,
         mut channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
         esplora: Arc<EsploraBlockchain>,
     ) -> Result<ReadChannelManager, MutinyError> {
@@ -190,15 +193,18 @@ impl MutinyNodePersister {
                     channel_monitor_mut_references.push(channel_monitor);
                 }
                 let read_args = ChannelManagerReadArgs::new(
-                    keys_manager,
-                    mutiny_chain.clone(),
+                    keys_manager.clone(),
+                    keys_manager.clone(),
+                    keys_manager.clone(),
+                    fee_estimator,
                     chain_monitor,
                     mutiny_chain,
+                    router,
                     mutiny_logger,
                     default_user_config(),
                     channel_monitor_mut_references,
                 );
-                let mut readable_kv_value = Cursor::new(kv_value);
+                let mut readable_kv_value = lightning::io::Cursor::new(kv_value);
                 let Ok((_, channel_manager)) = <(BlockHash, PhantomChannelManager)>::read(&mut readable_kv_value, read_args) else {
                     return Err(MutinyError::ReadError { source: error::MutinyStorageError::Other(anyhow!("could not read manager")) })
                 };
@@ -223,15 +229,19 @@ impl MutinyNodePersister {
                     best_block: BestBlock::new(hash, height),
                 };
 
-                let fresh_channel_manager = channelmanager::ChannelManager::new(
-                    mutiny_chain.clone(),
-                    chain_monitor,
-                    mutiny_chain,
-                    mutiny_logger,
-                    keys_manager,
-                    default_user_config(),
-                    chain_params,
-                );
+                let fresh_channel_manager: PhantomChannelManager =
+                    channelmanager::ChannelManager::new(
+                        fee_estimator,
+                        chain_monitor,
+                        mutiny_chain,
+                        router,
+                        mutiny_logger,
+                        keys_manager.clone(),
+                        keys_manager.clone(),
+                        keys_manager,
+                        default_user_config(),
+                        chain_params,
+                    );
 
                 Ok(ReadChannelManager {
                     channel_manager: fresh_channel_manager,
@@ -343,10 +353,10 @@ fn payment_key(inbound: bool, payment_hash: PaymentHash) -> String {
 }
 
 impl KVStorePersister for MutinyNodePersister {
-    fn persist<W: Writeable>(&self, key: &str, object: &W) -> io::Result<()> {
+    fn persist<W: Writeable>(&self, key: &str, object: &W) -> Result<(), lightning::io::Error> {
         let key_with_node = self.get_key(key);
         self.storage
             .set(key_with_node, object.encode())
-            .map_err(io::Error::other)
+            .map_err(|_| lightning::io::ErrorKind::Other.into())
     }
 }

@@ -8,9 +8,10 @@ use std::{str::FromStr, sync::Arc};
 use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyJsError, MutinyStorageError};
 use crate::keymanager;
+use crate::logging::MutinyLogger;
 use crate::node::{Node, PubkeyConnectionInfo};
 use crate::utils::currency_from_network;
-use crate::wallet::esplora_from_network;
+use crate::wallet::get_esplora_url;
 use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
@@ -19,12 +20,14 @@ use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::{Address, Network, OutPoint, PublicKey, Transaction, Txid};
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
-use lightning::chain::keysinterface::{KeysInterface, Recipient};
+use lightning::chain::keysinterface::{NodeSigner, Recipient};
 use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning_invoice::{Invoice, InvoiceDescription};
-use lnurl::lnurl::LnUrl;
-use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
+use lightning_transaction_sync::EsploraSyncClient;
+// use lnurl::lnurl::LnUrl;
+// use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
+use crate::fees::MutinyFeeEstimator;
 use log::{debug, error, info};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -39,10 +42,11 @@ pub struct NodeManager {
     esplora: Arc<EsploraBlockchain>,
     wallet: Arc<MutinyWallet>,
     chain: Arc<MutinyChain>,
+    fee_estimator: Arc<MutinyFeeEstimator>,
     storage: MutinyBrowserStorage,
     node_storage: Mutex<NodeStorage>,
     nodes: Arc<Mutex<HashMap<String, Arc<Node>>>>,
-    lnurl_client: LnUrlClient,
+    // lnurl_client: LnUrlClient,
 }
 
 // This is the NodeStorage object saved to the DB
@@ -352,8 +356,13 @@ impl NodeManager {
             },
         };
 
-        let esplora = Arc::new(esplora_from_network(network, user_esplora_url));
+        let esplora_server_url = get_esplora_url(network, user_esplora_url);
+        let tx_sync = Arc::new(EsploraSyncClient::new(
+            esplora_server_url,
+            Arc::new(MutinyLogger::default()),
+        ));
 
+        let esplora = Arc::new(EsploraBlockchain::from_client(tx_sync.client().clone(), 5));
         let wallet = Arc::new(MutinyWallet::new(
             mnemonic.clone(),
             storage.clone(),
@@ -361,7 +370,9 @@ impl NodeManager {
             esplora.clone(),
         ));
 
-        let chain = Arc::new(MutinyChain::new(wallet.clone()));
+        let chain = Arc::new(MutinyChain::new(tx_sync));
+
+        let fee_estimator = Arc::new(MutinyFeeEstimator::default());
 
         let node_storage = match MutinyBrowserStorage::get_nodes() {
             Ok(node_storage) => node_storage,
@@ -381,6 +392,7 @@ impl NodeManager {
                 mnemonic.clone(),
                 storage.clone(),
                 chain.clone(),
+                fee_estimator.clone(),
                 wallet.clone(),
                 network,
                 websocket_proxy_addr.clone(),
@@ -396,19 +408,20 @@ impl NodeManager {
             nodes_map.insert(id.to_hex(), Arc::new(node));
         }
 
-        let lnurl_client = lnurl::Builder::default().build_async().unwrap();
+        // let lnurl_client = lnurl::Builder::default().build_async().unwrap();
 
         Ok(NodeManager {
             mnemonic,
             network,
             wallet,
             chain,
+            fee_estimator,
             storage,
             node_storage: Mutex::new(node_storage),
             nodes: Arc::new(Mutex::new(nodes_map)),
             websocket_proxy_addr,
             esplora,
-            lnurl_client,
+            // lnurl_client,
         })
     }
 
@@ -608,18 +621,19 @@ impl NodeManager {
     }
 
     async fn sync_ldk(&self) -> Result<(), MutinyError> {
+        // TODO
         let nodes = self.nodes.lock().await;
 
-        let confirmables: Vec<&(dyn Confirm + Sync)> = nodes
+        let confirmables: Vec<&(dyn Confirm)> = nodes
             .iter()
             .flat_map(|(_, node)| {
-                let vec: Vec<&(dyn Confirm + Sync)> =
+                let vec: Vec<&(dyn Confirm)> =
                     vec![node.channel_manager.deref(), node.chain_monitor.deref()];
                 vec
             })
             .collect();
 
-        self.chain.sync(confirmables).await?;
+        self.chain.tx_sync.sync(confirmables).await?;
 
         Ok(())
     }
@@ -641,13 +655,13 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub fn estimate_fee_normal(&self) -> u32 {
-        self.chain
+        self.fee_estimator
             .get_est_sat_per_1000_weight(ConfirmationTarget::Normal)
     }
 
     #[wasm_bindgen]
     pub fn estimate_fee_high(&self) -> u32 {
-        self.chain
+        self.fee_estimator
             .get_est_sat_per_1000_weight(ConfirmationTarget::HighPriority)
     }
 
@@ -808,79 +822,86 @@ impl NodeManager {
 
         Ok(invoice.into())
     }
-
-    #[wasm_bindgen]
-    pub async fn decode_lnurl(&self, lnurl: String) -> Result<LnUrlParams, MutinyJsError> {
-        let lnurl = LnUrl::from_str(&lnurl)?;
-
-        let response = self.lnurl_client.make_request(&lnurl.url).await?;
-
-        let params = match response {
-            LnUrlResponse::LnUrlPayResponse(pay) => LnUrlParams {
-                max: pay.max_sendable,
-                min: pay.min_sendable,
-                tag: "payRequest".to_string(),
-            },
-            LnUrlResponse::LnUrlWithdrawResponse(withdraw) => LnUrlParams {
-                max: withdraw.max_withdrawable,
-                min: withdraw.min_withdrawable.unwrap_or(0),
-                tag: "withdrawRequest".to_string(),
-            },
-        };
-
-        Ok(params)
-    }
-
-    #[wasm_bindgen]
-    pub async fn lnurl_pay(
-        &self,
-        from_node: String,
-        lnurl: String,
-        amount_sats: u64,
-    ) -> Result<MutinyInvoice, MutinyJsError> {
-        let lnurl = LnUrl::from_str(&lnurl)?;
-
-        let response = self.lnurl_client.make_request(&lnurl.url).await?;
-
-        match response {
-            LnUrlResponse::LnUrlPayResponse(pay) => {
-                let msats = amount_sats * 1000;
-                let invoice = self.lnurl_client.get_invoice(&pay, msats).await?;
-
-                self.pay_invoice(from_node, invoice.invoice().to_string(), None)
-                    .await
-            }
-            LnUrlResponse::LnUrlWithdrawResponse(_) => Err(MutinyJsError::IncorrectLnUrlFunction),
-        }
-    }
-
-    #[wasm_bindgen]
-    pub async fn lnurl_withdraw(
-        &self,
-        lnurl: String,
-        amount_sats: u64,
-    ) -> Result<bool, MutinyJsError> {
-        let lnurl = LnUrl::from_str(&lnurl)?;
-
-        let response = self.lnurl_client.make_request(&lnurl.url).await?;
-
-        match response {
-            LnUrlResponse::LnUrlPayResponse(_) => Err(MutinyJsError::IncorrectLnUrlFunction),
-            LnUrlResponse::LnUrlWithdrawResponse(withdraw) => {
-                let description = withdraw.default_description.clone();
-                let mutiny_invoice = self.create_invoice(Some(amount_sats), description).await?;
-                let invoice_str = mutiny_invoice.bolt11.expect("Invoice should have bolt11");
-                let res = self
-                    .lnurl_client
-                    .do_withdrawal(&withdraw, &invoice_str)
-                    .await?;
-                match res {
-                    Response::Ok { .. } => Ok(true),
-                    Response::Error { .. } => Ok(false),
-                }
-            }
-        }
-    }
+    //
+    // #[wasm_bindgen]
+    // pub async fn decode_lnurl(&self, lnurl: String) -> Result<LnUrlParams, MutinyJsError> {
+    //     let lnurl = LnUrl::from_str(&lnurl)?;
+    //
+    //     let response = self.lnurl_client.make_request(&lnurl.url).await?;
+    //
+    //     let params = match response {
+    //         LnUrlResponse::LnUrlPayResponse(pay) => LnUrlParams {
+    //             max: pay.max_sendable,
+    //             min: pay.min_sendable,
+    //             tag: "payRequest".to_string(),
+    //         },
+    //         LnUrlResponse::LnUrlChannelResponse(_chan) => LnUrlParams {
+    //             max: 0,
+    //             min: 0,
+    //             tag: "channelRequest".to_string(),
+    //         },
+    //         LnUrlResponse::LnUrlWithdrawResponse(withdraw) => LnUrlParams {
+    //             max: withdraw.max_withdrawable,
+    //             min: withdraw.min_withdrawable.unwrap_or(0),
+    //             tag: "withdrawRequest".to_string(),
+    //         },
+    //     };
+    //
+    //     Ok(params)
+    // }
+    //
+    // #[wasm_bindgen]
+    // pub async fn lnurl_pay(
+    //     &self,
+    //     from_node: String,
+    //     lnurl: String,
+    //     amount_sats: u64,
+    // ) -> Result<MutinyInvoice, MutinyJsError> {
+    //     let lnurl = LnUrl::from_str(&lnurl)?;
+    //
+    //     let response = self.lnurl_client.make_request(&lnurl.url).await?;
+    //
+    //     match response {
+    //         LnUrlResponse::LnUrlPayResponse(pay) => {
+    //             let msats = amount_sats * 1000;
+    //             let invoice = self.lnurl_client.get_invoice(&pay, msats).await?;
+    //
+    //             self.pay_invoice(from_node, invoice.invoice().to_string(), None)
+    //                 .await
+    //         }
+    //         LnUrlResponse::LnUrlWithdrawResponse(_) => Err(MutinyJsError::IncorrectLnUrlFunction),
+    //         LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyJsError::IncorrectLnUrlFunction),
+    //     }
+    // }
+    //
+    // #[wasm_bindgen]
+    // pub async fn lnurl_withdraw(
+    //     &self,
+    //     lnurl: String,
+    //     amount_sats: u64,
+    // ) -> Result<bool, MutinyJsError> {
+    //     let lnurl = LnUrl::from_str(&lnurl)?;
+    //
+    //     let response = self.lnurl_client.make_request(&lnurl.url).await?;
+    //
+    //     match response {
+    //         LnUrlResponse::LnUrlPayResponse(_) => Err(MutinyJsError::IncorrectLnUrlFunction),
+    //         LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyJsError::IncorrectLnUrlFunction),
+    //         LnUrlResponse::LnUrlWithdrawResponse(withdraw) => {
+    //             let description = withdraw.default_description.clone();
+    //             let mutiny_invoice = self.create_invoice(Some(amount_sats), description).await?;
+    //             let invoice_str = mutiny_invoice.bolt11.expect("Invoice should have bolt11");
+    //             let res = self
+    //                 .lnurl_client
+    //                 .do_withdrawal(&withdraw, &invoice_str)
+    //                 .await?;
+    //             match res {
+    //                 Response::Ok { .. } => Ok(true),
+    //                 Response::Error { .. } => Ok(false),
+    //             }
+    //         }
+    //     }
+    // }
 
     #[wasm_bindgen]
     pub async fn get_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
@@ -1125,6 +1146,7 @@ pub(crate) async fn create_new_node_from_node_manager(
         node_manager.mnemonic.clone(),
         node_manager.storage.clone(),
         node_manager.chain.clone(),
+        node_manager.fee_estimator.clone(),
         node_manager.wallet.clone(),
         node_manager.network,
         node_manager.websocket_proxy_addr.clone(),

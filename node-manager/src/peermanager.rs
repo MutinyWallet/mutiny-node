@@ -1,5 +1,6 @@
 use crate::{ldkstorage::PhantomChannelManager, logging::MutinyLogger, socket::WsSocketDescriptor};
 use bitcoin::secp256k1::PublicKey;
+use lightning::chain::keysinterface::PhantomKeysManager;
 use lightning::ln::msgs::NetAddress;
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning::ln::peer_handler::{IgnoringMessageHandler, PeerManager as LdkPeerManager};
@@ -36,7 +37,7 @@ pub(crate) trait PeerManager {
 
     fn socket_disconnected(&self, descriptor: &mut WsSocketDescriptor);
 
-    fn disconnect_by_node_id(&self, node_id: PublicKey, no_connection_possible: bool);
+    fn disconnect_by_node_id(&self, node_id: PublicKey);
 
     fn disconnect_all_peers(&self);
 
@@ -57,11 +58,12 @@ pub(crate) type PeerManagerImpl = LdkPeerManager<
     Arc<IgnoringMessageHandler>,
     Arc<MutinyLogger>,
     Arc<IgnoringMessageHandler>,
+    Arc<PhantomKeysManager>,
 >;
 
 impl PeerManager for PeerManagerImpl {
     fn get_peer_node_ids(&self) -> Vec<PublicKey> {
-        self.get_peer_node_ids()
+        self.get_peer_node_ids().into_iter().map(|x| x.0).collect()
     }
 
     fn new_outbound_connection(
@@ -104,8 +106,8 @@ impl PeerManager for PeerManagerImpl {
         self.socket_disconnected(descriptor)
     }
 
-    fn disconnect_by_node_id(&self, node_id: PublicKey, no_connection_possible: bool) {
-        self.disconnect_by_node_id(node_id, no_connection_possible)
+    fn disconnect_by_node_id(&self, node_id: PublicKey) {
+        self.disconnect_by_node_id(node_id)
     }
 
     fn disconnect_all_peers(&self) {

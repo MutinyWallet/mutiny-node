@@ -229,19 +229,16 @@ fn get_tr_descriptors_for_extended_key(
     (receive_descriptor_template, change_descriptor_template)
 }
 
-pub fn esplora_from_network(
-    network: Network,
-    user_provided_url: Option<String>,
-) -> EsploraBlockchain {
+pub(crate) fn get_esplora_url(network: Network, user_provided_url: Option<String>) -> String {
     if let Some(url) = user_provided_url {
-        EsploraBlockchain::new(&url, 5)
+        url
     } else {
-        let url = match network {
+        match network {
             Network::Bitcoin => "https://blockstream.info/api",
             Network::Testnet => "https://blockstream.info/testnet/api",
             Network::Signet => "https://mempool.space/signet/api",
             Network::Regtest => "http://localhost:3003",
-        };
-        EsploraBlockchain::new(url, 5)
+        }
+        .to_string()
     }
 }

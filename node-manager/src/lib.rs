@@ -9,14 +9,16 @@
 )]
 #![feature(io_error_other)]
 #![feature(async_fn_in_trait)]
-
+// background file is mostly an LDK copy paste
+#![allow(clippy::all)]
 mod background;
+
 mod bdkstorage;
 mod chain;
 mod encrypt;
 mod error;
 mod event;
-mod invoice;
+mod fees;
 mod keymanager;
 mod ldkstorage;
 mod localstorage;

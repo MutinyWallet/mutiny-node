@@ -1,8 +1,8 @@
-use crate::ldkstorage::MutinyNodePersister;
+use crate::fees::MutinyFeeEstimator;
+use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::logging::MutinyLogger;
 use crate::utils::sleep;
 use crate::wallet::MutinyWallet;
-use crate::{chain::MutinyChain, ldkstorage::PhantomChannelManager};
 use bdk::blockchain::Blockchain;
 use bdk::wallet::AddressIndex;
 use bitcoin::secp256k1::Secp256k1;
@@ -42,7 +42,7 @@ pub(crate) enum HTLCStatus {
 #[derive(Clone)]
 pub struct EventHandler {
     channel_manager: Arc<PhantomChannelManager>,
-    chain: Arc<MutinyChain>,
+    fee_estimator: Arc<MutinyFeeEstimator>,
     wallet: Arc<MutinyWallet>,
     keys_manager: Arc<PhantomKeysManager>,
     persister: Arc<MutinyNodePersister>,
@@ -53,7 +53,7 @@ pub struct EventHandler {
 impl EventHandler {
     pub(crate) fn new(
         channel_manager: Arc<PhantomChannelManager>,
-        chain: Arc<MutinyChain>,
+        fee_estimator: Arc<MutinyFeeEstimator>,
         wallet: Arc<MutinyWallet>,
         keys_manager: Arc<PhantomKeysManager>,
         persister: Arc<MutinyNodePersister>,
@@ -62,7 +62,7 @@ impl EventHandler {
     ) -> Self {
         Self {
             channel_manager,
-            chain,
+            fee_estimator,
             wallet,
             keys_manager,
             network,
@@ -498,7 +498,7 @@ impl EventHandler {
                 ));
                 let wallet_thread = self.wallet.clone();
                 let keys_manager_thread = self.keys_manager.clone();
-                let chain_thread = self.chain.clone();
+                let fee_thread = self.fee_estimator.clone();
                 let destination_address = wallet_thread
                     .wallet
                     .lock()
@@ -507,8 +507,7 @@ impl EventHandler {
                     .expect("could not get new address");
 
                 let output_descriptors = &outputs.iter().collect::<Vec<_>>();
-                let tx_feerate =
-                    chain_thread.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+                let tx_feerate = fee_thread.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
                 let spending_tx = keys_manager_thread
                     .spend_spendable_outputs(
                         output_descriptors,
