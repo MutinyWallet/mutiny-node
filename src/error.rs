@@ -1,9 +1,9 @@
+use crate::esplora::TxSyncError;
 use bdk::esplora_client;
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning_invoice::payment::PaymentError;
 use lightning_invoice::ParseOrSemanticError;
 use lightning_rapid_gossip_sync::GraphSyncError;
-use crate::esplora::TxSyncError;
 use thiserror::Error;
 use wasm_bindgen::JsValue;
 
