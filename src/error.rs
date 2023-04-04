@@ -98,6 +98,8 @@ pub enum MutinyStorageError {
         #[from]
         source: serde_json::Error,
     },
+    #[error("Failed to use indexeddb storage")]
+    IndexedDBError,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -181,6 +183,30 @@ impl From<std::io::Error> for MutinyError {
     fn from(e: std::io::Error) -> Self {
         MutinyError::PersistenceFailed {
             source: MutinyStorageError::Other(e.into()),
+        }
+    }
+}
+
+impl From<serde_wasm_bindgen::Error> for MutinyError {
+    fn from(_: serde_wasm_bindgen::Error) -> Self {
+        Self::ReadError {
+            source: MutinyStorageError::Other(anyhow::anyhow!("Failed to deserialize")),
+        }
+    }
+}
+
+impl From<rexie::Error> for MutinyError {
+    fn from(_e: rexie::Error) -> Self {
+        MutinyError::PersistenceFailed {
+            source: MutinyStorageError::IndexedDBError,
+        }
+    }
+}
+
+impl From<bitcoin_hashes::hex::Error> for MutinyError {
+    fn from(_e: bitcoin_hashes::hex::Error) -> Self {
+        MutinyError::ReadError {
+            source: MutinyStorageError::Other(anyhow::anyhow!("Failed to decode hex")),
         }
     }
 }
