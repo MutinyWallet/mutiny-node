@@ -246,7 +246,7 @@ pub(crate) fn get_esplora_url(network: Network, user_provided_url: Option<String
 pub(crate) fn get_rgs_url(
     network: Network,
     user_provided_url: Option<String>,
-    last_sync_time: Option<u64>,
+    last_sync_time: Option<u32>,
 ) -> String {
     let last_sync_time = last_sync_time.unwrap_or(0);
     if let Some(url) = user_provided_url {

@@ -34,7 +34,6 @@ use std::io;
 use std::str::FromStr;
 use std::sync::Arc;
 
-const NETWORK_KEY: &str = "network";
 const PROB_SCORER_KEY: &str = "prob_scorer";
 const CHANNEL_MANAGER_KEY: &str = "manager";
 const MONITORS_PREFIX_KEY: &str = "monitors/";
@@ -78,33 +77,6 @@ impl MutinyNodePersister {
     fn read_value(&self, _key: &str) -> Result<Vec<u8>, MutinyError> {
         let key = self.get_key(_key);
         self.storage.get(key).map_err(MutinyError::read_err)
-    }
-
-    // FIXME: Useful to use soon when we implement paying network nodes
-    #[allow(dead_code)]
-    pub fn persist_network_graph(
-        &self,
-        network_graph: &NetworkGraph,
-    ) -> Result<(), lightning::io::Error> {
-        self.persist(NETWORK_KEY, network_graph)
-    }
-
-    // FIXME: Useful to use soon when we implement paying network nodes
-    #[allow(dead_code)]
-    pub fn read_network_graph(&self, network: Network, logger: Arc<MutinyLogger>) -> NetworkGraph {
-        match self.read_value(NETWORK_KEY) {
-            Ok(kv_value) => {
-                let mut readable_kv_value = lightning::io::Cursor::new(kv_value);
-                match NetworkGraph::read(&mut readable_kv_value, logger.clone()) {
-                    Ok(graph) => graph,
-                    Err(e) => {
-                        error!("Error reading NetworkGraph: {}", e.to_string());
-                        NetworkGraph::new(network, logger)
-                    }
-                }
-            }
-            Err(_) => NetworkGraph::new(network, logger),
-        }
     }
 
     // FIXME: Useful to use soon when we implement paying network nodes

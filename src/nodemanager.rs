@@ -6,13 +6,13 @@ use std::ops::Deref;
 use std::{str::FromStr, sync::Arc};
 
 use crate::chain::MutinyChain;
-use crate::error::{MutinyError, MutinyJsError, MutinyStorageError};
+use crate::error::*;
 use crate::esplora::EsploraSyncClient;
-use crate::keymanager;
 use crate::logging::MutinyLogger;
-use crate::node::{NetworkGraph, Node, PubkeyConnectionInfo, RapidGossipSync};
+use crate::node::{Node, PubkeyConnectionInfo, RapidGossipSync};
 use crate::utils::currency_from_network;
-use crate::wallet::{get_esplora_url, get_rgs_url};
+use crate::wallet::get_esplora_url;
+use crate::{gossip, keymanager};
 use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
@@ -373,34 +373,24 @@ impl NodeManager {
 
         let chain = Arc::new(MutinyChain::new(tx_sync));
 
-        // get network graph
-        let network_graph = Arc::new(NetworkGraph::new(network, logger.clone()));
-        let gossip_sync = Arc::new(RapidGossipSync::new(network_graph, logger.clone()));
+        // We don't need to actually sync gossip in tests unless we need to test gossip
+        #[cfg(test)]
+        let gossip_sync = Arc::new(gossip::get_dummy_gossip(
+            user_rgs_url.clone(),
+            network,
+            logger.clone(),
+        ));
 
-        // todo store RGS and last sync timestamp in storage
-        let rgs_url = get_rgs_url(network, user_rgs_url, None);
-        info!("RGS URL: {}", rgs_url);
-
-        let http_client = Client::builder().build()?;
-        let rgs_response = http_client.get(rgs_url).send().await?;
-
-        let rgs_data = rgs_response.bytes().await?.to_vec();
-
-        let now = crate::utils::now().as_secs();
-        let new_last_sync_timestamp_result =
-            gossip_sync.update_network_graph_no_std(&rgs_data, Some(now))?;
-
-        info!("RGS sync result: {}", new_last_sync_timestamp_result);
+        #[cfg(not(test))]
+        let gossip_sync =
+            Arc::new(gossip::get_gossip_sync(user_rgs_url, network, logger.clone()).await?);
 
         let fee_estimator = Arc::new(MutinyFeeEstimator::default());
 
         let node_storage = match MutinyBrowserStorage::get_nodes() {
             Ok(node_storage) => node_storage,
             Err(e) => {
-                return Err(MutinyError::ReadError {
-                    source: MutinyStorageError::Other(e.into()),
-                }
-                .into());
+                return Err(MutinyError::ReadError { source: e }.into());
             }
         };
 
