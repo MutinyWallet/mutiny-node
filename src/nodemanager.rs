@@ -375,7 +375,7 @@ impl NodeManager {
 
         // get network graph
         let network_graph = Arc::new(NetworkGraph::new(network, logger.clone()));
-        let gossip_sync = Arc::new(RapidGossipSync::new(network_graph.clone(), logger.clone()));
+        let gossip_sync = Arc::new(RapidGossipSync::new(network_graph, logger.clone()));
 
         // todo store RGS and last sync timestamp in storage
         let rgs_url = get_rgs_url(network, user_rgs_url, None);
