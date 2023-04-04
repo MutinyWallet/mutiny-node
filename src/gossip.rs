@@ -1,5 +1,5 @@
-use crate::error::{MutinyError, MutinyStorageError};
-use crate::logging::MutinyLogger;
+use std::sync::Arc;
+
 use anyhow::anyhow;
 use bitcoin::Network;
 use bitcoin_hashes::hex::{FromHex, ToHex};
@@ -7,9 +7,10 @@ use lightning::util::ser::{ReadableArgs, Writeable};
 use log::{debug, info, warn};
 use reqwest::Client;
 use rexie::{ObjectStore, Rexie, TransactionMode};
-use std::sync::Arc;
 use wasm_bindgen::JsValue;
 
+use crate::error::{MutinyError, MutinyStorageError};
+use crate::logging::MutinyLogger;
 use crate::node::{NetworkGraph, RapidGossipSync};
 use crate::wallet::get_rgs_url;
 
@@ -212,9 +213,9 @@ pub fn get_dummy_gossip(
 mod test {
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
-    wasm_bindgen_test_configure!(run_in_browser);
-
     use super::*;
+
+    wasm_bindgen_test_configure!(run_in_browser);
 
     #[test]
     async fn test_gossip() {
