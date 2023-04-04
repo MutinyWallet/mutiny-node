@@ -17,6 +17,7 @@ mod bdkstorage;
 mod chain;
 mod encrypt;
 mod error;
+mod esplora;
 mod event;
 mod fees;
 mod keymanager;
