@@ -26,6 +26,7 @@ mod keymanager;
 mod ldkstorage;
 mod localstorage;
 mod logging;
+mod lspclient;
 mod node;
 mod nodemanager;
 mod peermanager;
