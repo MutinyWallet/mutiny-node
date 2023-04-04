@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
+use crate::esplora::EsploraSyncClient;
 use bdk_macros::maybe_await;
 use bitcoin::{Script, Transaction, Txid};
 use lightning::chain::chaininterface::BroadcasterInterface;
 use lightning::chain::{Filter, WatchedOutput};
-use lightning_transaction_sync::EsploraSyncClient;
 use log::error;
 use wasm_bindgen_futures::spawn_local;
 

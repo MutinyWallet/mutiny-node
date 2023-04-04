@@ -7,6 +7,7 @@ use std::{str::FromStr, sync::Arc};
 
 use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyJsError, MutinyStorageError};
+use crate::esplora::EsploraSyncClient;
 use crate::keymanager;
 use crate::logging::MutinyLogger;
 use crate::node::{NetworkGraph, Node, PubkeyConnectionInfo, RapidGossipSync};
@@ -24,7 +25,6 @@ use lightning::chain::keysinterface::{NodeSigner, Recipient};
 use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning_invoice::{Invoice, InvoiceDescription};
-use lightning_transaction_sync::EsploraSyncClient;
 // use lnurl::lnurl::LnUrl;
 // use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use crate::fees::MutinyFeeEstimator;
@@ -655,7 +655,11 @@ impl NodeManager {
             })
             .collect();
 
-        self.chain.tx_sync.sync(confirmables).await?;
+        self.chain
+            .tx_sync
+            .sync(confirmables)
+            .await
+            .map_err(|_e| MutinyError::ChainAccessFailed)?;
 
         Ok(())
     }
