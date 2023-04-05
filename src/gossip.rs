@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use bitcoin::Network;
 use bitcoin_hashes::hex::{FromHex, ToHex};
 use lightning::util::ser::{ReadableArgs, Writeable};
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use reqwest::Client;
 use rexie::{ObjectStore, Rexie, TransactionMode};
 use wasm_bindgen::JsValue;
@@ -46,7 +46,10 @@ async fn build_gossip_database() -> Result<Rexie, MutinyError> {
     Ok(rexie)
 }
 
-async fn get_gossip_data(rexie: &Rexie, logger: Arc<MutinyLogger>) -> Result<Gossip, MutinyError> {
+async fn get_gossip_data(
+    rexie: &Rexie,
+    logger: Arc<MutinyLogger>,
+) -> Result<Option<Gossip>, MutinyError> {
     // Create a new read-only transaction
     let transaction = rexie.transaction(&[GOSSIP_OBJECT_STORE_NAME], TransactionMode::ReadOnly)?;
 
@@ -54,6 +57,12 @@ async fn get_gossip_data(rexie: &Rexie, logger: Arc<MutinyLogger>) -> Result<Gos
 
     // Get the `last_sync_timestamp`
     let last_sync_timestamp_js = store.get(&JsValue::from(GOSSIP_SYNC_TIME_KEY)).await?;
+
+    // If the key doesn't exist, we return None
+    if last_sync_timestamp_js.is_null() || last_sync_timestamp_js.is_undefined() {
+        return Ok(None);
+    }
+
     let last_sync_timestamp: u32 =
         last_sync_timestamp_js
             .as_f64()
@@ -67,6 +76,11 @@ async fn get_gossip_data(rexie: &Rexie, logger: Arc<MutinyLogger>) -> Result<Gos
     // Get the `network_graph`
     let network_graph_js = store.get(&JsValue::from(NETWORK_GRAPH_KEY)).await?;
 
+    // If the key doesn't exist, we return None
+    if network_graph_js.is_null() || network_graph_js.is_undefined() {
+        return Ok(None);
+    }
+
     let network_graph_str: String = serde_wasm_bindgen::from_value(network_graph_js)?;
     let network_graph_bytes: Vec<u8> = Vec::from_hex(&network_graph_str)?;
     let mut readable_bytes = lightning::io::Cursor::new(network_graph_bytes);
@@ -77,7 +91,7 @@ async fn get_gossip_data(rexie: &Rexie, logger: Arc<MutinyLogger>) -> Result<Gos
         network_graph,
     };
 
-    Ok(gossip)
+    Ok(Some(gossip))
 }
 
 async fn write_network_graph(
@@ -119,8 +133,12 @@ pub async fn get_gossip_sync(
 
     // if we error out, we just use the default gossip data
     let gossip_data = match get_gossip_data(&rexie, logger.clone()).await {
-        Ok(gossip_data) => gossip_data,
-        Err(_) => Gossip::new(network, logger.clone()),
+        Ok(Some(gossip_data)) => gossip_data,
+        Ok(None) => Gossip::new(network, logger.clone()),
+        Err(e) => {
+            error!("Error getting gossip data from storage: {e}, re-syncing gossip...");
+            Gossip::new(network, logger.clone())
+        }
     };
 
     debug!(
@@ -231,6 +249,7 @@ mod test {
 
         let data = get_gossip_data(&rexie, logger).await.unwrap();
 
-        assert!(data.last_sync_timestamp > 0);
+        assert!(data.is_some());
+        assert!(data.unwrap().last_sync_timestamp > 0);
     }
 }
