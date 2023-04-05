@@ -92,7 +92,15 @@ impl<'a, T: 'a + Score> LockableScore<'a> for Mutex<T> {
     type Locked = MutexGuard<'a, T>;
 
     fn lock(&'a self) -> MutexGuard<'a, T> {
-        Mutex::lock(self).unwrap()
+        Mutex::lock(self).expect("Failed to lock mutex")
+    }
+}
+
+impl<'a, S: Writeable> Writeable for Mutex<S> {
+    fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
+        self.lock()
+            .expect("Failed to lock mutex for write")
+            .write(writer)
     }
 }
 

@@ -1,40 +1,42 @@
 use crate::chain::MutinyChain;
-use crate::error;
 use crate::error::MutinyError;
 use crate::event::PaymentInfo;
 use crate::fees::MutinyFeeEstimator;
+use crate::gossip;
 use crate::localstorage::MutinyBrowserStorage;
 use crate::logging::MutinyLogger;
-use crate::node::{default_user_config, ChainMonitor};
+use crate::node::{default_user_config, ChainMonitor, ProbScorer};
 use crate::node::{NetworkGraph, Router};
+use crate::{error, utils};
 use anyhow::anyhow;
 use bdk::blockchain::EsploraBlockchain;
 use bitcoin::BlockHash;
 use bitcoin::Network;
 use bitcoin_hashes::hex::ToHex;
 use futures::{try_join, TryFutureExt};
-use lightning::chain::channelmonitor::ChannelMonitor;
-use lightning::chain::keysinterface::InMemorySigner;
+use lightning::chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate};
 use lightning::chain::keysinterface::PhantomKeysManager;
+use lightning::chain::keysinterface::{InMemorySigner, WriteableEcdsaChannelSigner};
 use lightning::chain::BestBlock;
 use lightning::ln::channelmanager::{
     self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
 };
 use lightning::ln::PaymentHash;
-use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
 use lightning::util::logger::Logger;
 use lightning::util::logger::Record;
-use lightning::util::persist::KVStorePersister;
+use lightning::util::persist::Persister;
 use lightning::util::ser::{ReadableArgs, Writeable};
-use log::error;
 use secp256k1::PublicKey;
 use std::collections::HashMap;
 use std::io;
 
+use lightning::chain;
+use lightning::chain::chainmonitor::{MonitorUpdateId, Persist};
+use lightning::chain::transaction::OutPoint;
+use lightning::io::Error;
 use std::str::FromStr;
 use std::sync::Arc;
 
-const PROB_SCORER_KEY: &str = "prob_scorer";
 const CHANNEL_MANAGER_KEY: &str = "manager";
 const MONITORS_PREFIX_KEY: &str = "monitors/";
 const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
@@ -72,45 +74,18 @@ impl MutinyNodePersister {
         format!("{}_{}", key, self.node_id)
     }
 
+    fn persist_local_storage<W: Writeable>(&self, key: &str, object: &W) -> Result<(), Error> {
+        let key_with_node = self.get_key(key);
+        self.storage
+            .set(key_with_node, object.encode())
+            .map_err(|_| lightning::io::ErrorKind::Other.into())
+    }
+
     // name this param _key so it is not confused with the key
     // that has the concatenated node_id
     fn read_value(&self, _key: &str) -> Result<Vec<u8>, MutinyError> {
         let key = self.get_key(_key);
         self.storage.get(key).map_err(MutinyError::read_err)
-    }
-
-    // FIXME: Useful to use soon when we implement paying network nodes
-    #[allow(dead_code)]
-    pub fn persist_scorer(
-        &self,
-        scorer: &ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>,
-    ) -> Result<(), lightning::io::Error> {
-        self.persist(PROB_SCORER_KEY, scorer)
-    }
-
-    // FIXME: Useful to use soon when we implement paying network nodes
-    #[allow(dead_code)]
-    pub fn read_scorer(
-        &self,
-        graph: Arc<NetworkGraph>,
-        logger: Arc<MutinyLogger>,
-    ) -> ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>> {
-        let params = ProbabilisticScoringParameters::default();
-
-        match self.read_value(PROB_SCORER_KEY) {
-            Ok(kv_value) => {
-                let mut readable_kv_value = lightning::io::Cursor::new(kv_value);
-                let args = (params.clone(), Arc::clone(&graph), Arc::clone(&logger));
-                match ProbabilisticScorer::read(&mut readable_kv_value, args) {
-                    Ok(scorer) => scorer,
-                    Err(e) => {
-                        error!("Error reading ProbabilisticScorer: {}", e.to_string());
-                        ProbabilisticScorer::new(params, graph, logger)
-                    }
-                }
-            }
-            Err(_) => ProbabilisticScorer::new(params, graph, logger),
-        }
     }
 
     pub fn read_channel_monitors(
@@ -326,11 +301,66 @@ fn payment_key(inbound: bool, payment_hash: PaymentHash) -> String {
     }
 }
 
-impl KVStorePersister for MutinyNodePersister {
-    fn persist<W: Writeable>(&self, key: &str, object: &W) -> Result<(), lightning::io::Error> {
-        let key_with_node = self.get_key(key);
-        self.storage
-            .set(key_with_node, object.encode())
-            .map_err(|_| lightning::io::ErrorKind::Other.into())
+impl
+    Persister<
+        '_,
+        Arc<ChainMonitor>,
+        Arc<MutinyChain>,
+        Arc<PhantomKeysManager>,
+        Arc<PhantomKeysManager>,
+        Arc<PhantomKeysManager>,
+        Arc<MutinyFeeEstimator>,
+        Arc<Router>,
+        Arc<MutinyLogger>,
+        utils::Mutex<ProbScorer>,
+    > for MutinyNodePersister
+{
+    fn persist_manager(&self, channel_manager: &PhantomChannelManager) -> Result<(), Error> {
+        self.persist_local_storage(CHANNEL_MANAGER_KEY, channel_manager)
+    }
+
+    fn persist_graph(&self, network_graph: &NetworkGraph) -> Result<(), Error> {
+        gossip::persist_network_graph(network_graph)
+    }
+
+    fn persist_scorer(&self, scorer: &utils::Mutex<ProbScorer>) -> Result<(), Error> {
+        gossip::persist_scorer(scorer)
+    }
+}
+
+impl<ChannelSigner: WriteableEcdsaChannelSigner> Persist<ChannelSigner> for MutinyNodePersister {
+    fn persist_new_channel(
+        &self,
+        funding_txo: OutPoint,
+        monitor: &ChannelMonitor<ChannelSigner>,
+        _update_id: MonitorUpdateId,
+    ) -> chain::ChannelMonitorUpdateStatus {
+        let key = format!(
+            "{MONITORS_PREFIX_KEY}/{}_{}",
+            funding_txo.txid.to_hex(),
+            funding_txo.index
+        );
+        match self.persist_local_storage(&key, monitor) {
+            Ok(()) => chain::ChannelMonitorUpdateStatus::Completed,
+            Err(_) => chain::ChannelMonitorUpdateStatus::PermanentFailure,
+        }
+    }
+
+    fn update_persisted_channel(
+        &self,
+        funding_txo: OutPoint,
+        _update: Option<&ChannelMonitorUpdate>,
+        monitor: &ChannelMonitor<ChannelSigner>,
+        _update_id: MonitorUpdateId,
+    ) -> chain::ChannelMonitorUpdateStatus {
+        let key = format!(
+            "{MONITORS_PREFIX_KEY}/{}_{}",
+            funding_txo.txid.to_hex(),
+            funding_txo.index
+        );
+        match self.persist_local_storage(&key, monitor) {
+            Ok(()) => chain::ChannelMonitorUpdateStatus::Completed,
+            Err(_) => chain::ChannelMonitorUpdateStatus::PermanentFailure,
+        }
     }
 }
