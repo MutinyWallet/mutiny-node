@@ -38,7 +38,7 @@ use lightning::ln::peer_handler::{
 use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::routing::gossip;
 use lightning::routing::router::{DefaultRouter, PaymentParameters, RouteParameters};
-use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
+use lightning::routing::scoring::ProbabilisticScorer;
 use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
 use lightning::util::logger::{Logger, Record};
 use lightning::util::ser::Writeable;
@@ -75,27 +75,10 @@ pub(crate) type ChainMonitor = chainmonitor::ChainMonitor<
     Arc<MutinyNodePersister>,
 >;
 
-pub(crate) type Router = DefaultRouter<
-    Arc<NetworkGraph>,
-    Arc<MutinyLogger>,
-    Arc<utils::Mutex<ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>>>,
->;
+pub(crate) type Router =
+    DefaultRouter<Arc<NetworkGraph>, Arc<MutinyLogger>, Arc<utils::Mutex<ProbScorer>>>;
 
-impl Writeable
-    for utils::Mutex<
-        ProbabilisticScorer<
-            Arc<lightning::routing::gossip::NetworkGraph<Arc<MutinyLogger>>>,
-            Arc<MutinyLogger>,
-        >,
-    >
-{
-    fn write<W: lightning::util::ser::Writer>(
-        &self,
-        writer: &mut W,
-    ) -> Result<(), lightning::io::Error> {
-        ProbabilisticScorer::write(&self.lock().unwrap(), writer)
-    }
-}
+pub(crate) type ProbScorer = ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ConnectionType {
@@ -158,6 +141,7 @@ impl Node {
         mnemonic: Mnemonic,
         storage: MutinyBrowserStorage,
         gossip_sync: Arc<RapidGossipSync>,
+        scorer: Arc<utils::Mutex<ProbScorer>>,
         chain: Arc<MutinyChain>,
         fee_estimator: Arc<MutinyFeeEstimator>,
         wallet: Arc<MutinyWallet>,
@@ -192,14 +176,6 @@ impl Node {
             })?;
 
         let network_graph = gossip_sync.network_graph().clone();
-
-        // create scorer
-        let params = ProbabilisticScoringParameters::default();
-        let scorer = Arc::new(utils::Mutex::new(ProbabilisticScorer::new(
-            params,
-            network_graph.clone(),
-            logger.clone(),
-        )));
 
         let router: Arc<Router> = Arc::new(DefaultRouter::new(
             network_graph,

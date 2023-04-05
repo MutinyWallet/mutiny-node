@@ -10,10 +10,10 @@ use crate::error::*;
 use crate::esplora::EsploraSyncClient;
 use crate::fees::MutinyFeeEstimator;
 use crate::logging::MutinyLogger;
-use crate::node::{Node, PubkeyConnectionInfo, RapidGossipSync};
+use crate::node::{Node, ProbScorer, PubkeyConnectionInfo, RapidGossipSync};
 use crate::utils::currency_from_network;
 use crate::wallet::get_esplora_url;
-use crate::{gossip, keymanager};
+use crate::{gossip, keymanager, utils};
 use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
@@ -42,6 +42,7 @@ pub struct NodeManager {
     esplora: Arc<EsploraBlockchain>,
     wallet: Arc<MutinyWallet>,
     gossip_sync: Arc<RapidGossipSync>,
+    scorer: Arc<utils::Mutex<ProbScorer>>,
     chain: Arc<MutinyChain>,
     fee_estimator: Arc<MutinyFeeEstimator>,
     storage: MutinyBrowserStorage,
@@ -375,15 +376,16 @@ impl NodeManager {
 
         // We don't need to actually sync gossip in tests unless we need to test gossip
         #[cfg(test)]
-        let gossip_sync = Arc::new(gossip::get_dummy_gossip(
-            user_rgs_url.clone(),
-            network,
-            logger.clone(),
-        ));
+        let (gossip_sync, scorer) =
+            gossip::get_dummy_gossip(user_rgs_url.clone(), network, logger.clone());
 
         #[cfg(not(test))]
-        let gossip_sync =
-            Arc::new(gossip::get_gossip_sync(user_rgs_url, network, logger.clone()).await?);
+        let (gossip_sync, scorer) =
+            gossip::get_gossip_sync(user_rgs_url, network, logger.clone()).await?;
+
+        let scorer = Arc::new(utils::Mutex::new(scorer));
+
+        let gossip_sync = Arc::new(gossip_sync);
 
         let fee_estimator = Arc::new(MutinyFeeEstimator::default());
 
@@ -402,6 +404,7 @@ impl NodeManager {
                 mnemonic.clone(),
                 storage.clone(),
                 gossip_sync.clone(),
+                scorer.clone(),
                 chain.clone(),
                 fee_estimator.clone(),
                 wallet.clone(),
@@ -428,6 +431,7 @@ impl NodeManager {
             network,
             wallet,
             gossip_sync,
+            scorer,
             chain,
             fee_estimator,
             storage,
@@ -1164,6 +1168,7 @@ pub(crate) async fn create_new_node_from_node_manager(
         node_manager.mnemonic.clone(),
         node_manager.storage.clone(),
         node_manager.gossip_sync.clone(),
+        node_manager.scorer.clone(),
         node_manager.chain.clone(),
         node_manager.fee_estimator.clone(),
         node_manager.wallet.clone(),
