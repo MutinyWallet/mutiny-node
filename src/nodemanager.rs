@@ -401,7 +401,7 @@ impl NodeManager {
                 // is erroring out completely okay?
                 let lsp_client = LspClient::new(lsp_url_ref)
                     .await
-                    .map_err(|_| MutinyError::LnUrlFailure)?; // TODO
+                    .map_err(|_| MutinyError::LspFailure)?;
                 Some(lsp_client)
             }
             _ => None,
