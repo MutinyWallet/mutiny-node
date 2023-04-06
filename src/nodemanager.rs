@@ -1,21 +1,23 @@
-use bdk::blockchain::EsploraBlockchain;
-use bdk::{BlockTime, TransactionDetails};
 use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::ops::Deref;
-use std::{str::FromStr, sync::Arc};
+use std::{collections::HashMap, ops::Deref, str::FromStr, sync::Arc};
 
-use crate::chain::MutinyChain;
-use crate::error::*;
-use crate::esplora::EsploraSyncClient;
-use crate::fees::MutinyFeeEstimator;
-use crate::logging::MutinyLogger;
-use crate::node::{Node, ProbScorer, PubkeyConnectionInfo, RapidGossipSync};
-use crate::utils::currency_from_network;
-use crate::wallet::get_esplora_url;
-use crate::{gossip, keymanager, utils};
-use crate::{localstorage::MutinyBrowserStorage, utils::set_panic_hook, wallet::MutinyWallet};
-use bdk::wallet::AddressIndex;
+use crate::{
+    chain::MutinyChain,
+    error::{MutinyError, MutinyJsError},
+    esplora::EsploraSyncClient,
+    fees::MutinyFeeEstimator,
+    gossip, keymanager,
+    localstorage::MutinyBrowserStorage,
+    logging::MutinyLogger,
+    lspclient::LspClient,
+    node::{Node, ProbScorer, PubkeyConnectionInfo, RapidGossipSync},
+    utils,
+    utils::currency_from_network,
+    utils::set_panic_hook,
+    wallet::get_esplora_url,
+    wallet::MutinyWallet,
+};
+use bdk::{blockchain::EsploraBlockchain, wallet::AddressIndex, BlockTime, TransactionDetails};
 use bip39::Mnemonic;
 use bitcoin::consensus::deserialize;
 use bitcoin::hashes::hex::{FromHex, ToHex};
@@ -49,6 +51,7 @@ pub struct NodeManager {
     node_storage: Mutex<NodeStorage>,
     nodes: Arc<Mutex<HashMap<String, Arc<Node>>>>,
     lnurl_client: LnUrlClient,
+    lsp_client: Option<LspClient>,
 }
 
 // This is the NodeStorage object saved to the DB
@@ -325,6 +328,7 @@ impl NodeManager {
         network_str: Option<String>,
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
+        lsp_url: Option<String>,
     ) -> Result<NodeManager, MutinyJsError> {
         set_panic_hook();
 
@@ -389,6 +393,20 @@ impl NodeManager {
 
         let fee_estimator = Arc::new(MutinyFeeEstimator::default());
 
+        // load lsp client, if any
+        let lsp_client: Option<LspClient> = match lsp_url.clone() {
+            // check if string is some and not an empty string
+            Some(lsp_url_ref) if !lsp_url_ref.is_empty() => {
+                // TODO what to do if the getinfo call fails?
+                // is erroring out completely okay?
+                let lsp_client = LspClient::new(lsp_url_ref)
+                    .await
+                    .map_err(|_| MutinyError::LnUrlFailure)?; // TODO
+                Some(lsp_client)
+            }
+            _ => None,
+        };
+
         let node_storage = match MutinyBrowserStorage::get_nodes() {
             Ok(node_storage) => node_storage,
             Err(e) => {
@@ -411,6 +429,7 @@ impl NodeManager {
                 network,
                 websocket_proxy_addr.clone(),
                 esplora.clone(),
+                lsp_client.clone(),
             )
             .await?;
 
@@ -440,6 +459,7 @@ impl NodeManager {
             websocket_proxy_addr,
             esplora,
             lnurl_client,
+            lsp_client,
         })
     }
 
@@ -792,7 +812,9 @@ impl NodeManager {
         } else {
             return Err(MutinyJsError::WalletOperationFailed);
         };
-        let invoice = first_node.create_invoice(amount, description, route_hints)?;
+        let invoice = first_node
+            .create_invoice(amount, description, route_hints)
+            .await?;
 
         Ok(invoice.into())
     }
@@ -1175,6 +1197,7 @@ pub(crate) async fn create_new_node_from_node_manager(
         node_manager.network,
         node_manager.websocket_proxy_addr.clone(),
         node_manager.esplora.clone(),
+        node_manager.lsp_client.clone(),
     )
     .await
     {
@@ -1219,6 +1242,7 @@ mod tests {
             Some("testnet".to_owned()),
             None,
             None,
+            None,
         )
         .await
         .expect("node manager should initialize");
@@ -1237,6 +1261,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("testnet".to_owned()),
+            None,
             None,
             None,
         )
@@ -1259,6 +1284,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("testnet".to_owned()),
+            None,
             None,
             None,
         )

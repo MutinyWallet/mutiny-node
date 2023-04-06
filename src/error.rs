@@ -39,6 +39,8 @@ pub enum MutinyError {
     /// Failed to call on the given LNURL
     #[error("Failed to call on the given LNURL.")]
     LnUrlFailure,
+    #[error("Failed to connect to LSP.")]
+    LspFailure,
     /// No route for the given target could be found.
     #[error("Failed to find route.")]
     RoutingFailed,
@@ -240,6 +242,8 @@ pub enum MutinyJsError {
     /// Failed to call on the given LNURL
     #[error("Failed to call on the given LNURL.")]
     LnUrlFailure,
+    #[error("Failed to connect to LSP.")]
+    LspFailure,
     /// Called incorrect lnurl function, eg calling withdraw on a pay lnurl
     #[error("Called incorrect lnurl function.")]
     IncorrectLnUrlFunction,
@@ -312,6 +316,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::InvoiceInvalid => MutinyJsError::InvoiceInvalid,
             MutinyError::InvoiceCreationFailed => MutinyJsError::InvoiceCreationFailed,
             MutinyError::LnUrlFailure => MutinyJsError::LnUrlFailure,
+            MutinyError::LspFailure => MutinyJsError::LspFailure,
             MutinyError::RoutingFailed => MutinyJsError::RoutingFailed,
             MutinyError::PeerInfoParseFailed => MutinyJsError::PeerInfoParseFailed,
             MutinyError::ChannelCreationFailed => MutinyJsError::ChannelCreationFailed,

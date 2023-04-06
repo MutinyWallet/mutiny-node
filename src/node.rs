@@ -1,58 +1,63 @@
-use crate::background::process_events_async;
-use crate::chain::MutinyChain;
-use crate::error::MutinyStorageError;
-use crate::event::{EventHandler, HTLCStatus, MillisatAmount, PaymentInfo};
-use crate::fees::MutinyFeeEstimator;
-use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
-use crate::localstorage::MutinyBrowserStorage;
-use crate::nodemanager::{MutinyInvoice, MutinyInvoiceParams};
-use crate::peermanager::{PeerManager, PeerManagerImpl};
-use crate::proxy::WsProxy;
-use crate::socket::WsTcpSocketDescriptor;
-use crate::socket::{schedule_descriptor_read, MultiWsSocketDescriptor, WsSocketDescriptor};
-use crate::utils;
-use crate::utils::{currency_from_network, sleep};
-use crate::wallet::MutinyWallet;
 use crate::{
-    error::MutinyError,
+    background::process_events_async,
+    chain::MutinyChain,
+    error::{MutinyError, MutinyStorageError},
+    event::{EventHandler, HTLCStatus, MillisatAmount, PaymentInfo},
+    fees::MutinyFeeEstimator,
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
+    ldkstorage::{MutinyNodePersister, PhantomChannelManager},
+    localstorage::MutinyBrowserStorage,
     logging::MutinyLogger,
-    nodemanager::NodeIndex,
+    lspclient::LspClient,
+    nodemanager::{MutinyInvoice, MutinyInvoiceParams, NodeIndex},
+    peermanager::{PeerManager, PeerManagerImpl},
+    proxy::WsProxy,
+    socket::{
+        schedule_descriptor_read, MultiWsSocketDescriptor, WsSocketDescriptor,
+        WsTcpSocketDescriptor,
+    },
+    utils::{self, currency_from_network, sleep},
+    wallet::MutinyWallet,
 };
 use anyhow::Context;
 use bdk::blockchain::EsploraBlockchain;
 use bip39::Mnemonic;
 use bitcoin::hashes::sha256::Hash as Sha256;
-use bitcoin::hashes::Hash;
-use bitcoin::secp256k1::PublicKey;
-use bitcoin::Network;
+use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network};
 use bitcoin_hashes::hex::ToHex;
-use lightning::chain::keysinterface::{EntropySource, InMemorySigner, PhantomKeysManager};
-use lightning::chain::{chainmonitor, Filter, Watch};
-use lightning::ln::channelmanager::{PaymentId, PhantomRouteHints, Retry};
-use lightning::ln::msgs::NetAddress;
-use lightning::ln::peer_handler::{
-    IgnoringMessageHandler, MessageHandler as LdkMessageHandler,
-    SocketDescriptor as LdkSocketDescriptor,
+use lightning::{
+    chain::{
+        chainmonitor,
+        keysinterface::{EntropySource, InMemorySigner, PhantomKeysManager},
+        Filter, Watch,
+    },
+    ln::{
+        channelmanager::{PaymentId, PhantomRouteHints, Retry},
+        msgs::NetAddress,
+        peer_handler::{
+            IgnoringMessageHandler, MessageHandler as LdkMessageHandler,
+            SocketDescriptor as LdkSocketDescriptor,
+        },
+        PaymentHash, PaymentPreimage,
+    },
+    routing::{
+        gossip,
+        router::{DefaultRouter, PaymentParameters, RouteParameters},
+        scoring::ProbabilisticScorer,
+    },
+    util::{
+        config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig},
+        logger::{Logger, Record},
+        ser::Writeable,
+    },
 };
-use lightning::ln::{PaymentHash, PaymentPreimage};
-use lightning::routing::gossip;
-use lightning::routing::router::{DefaultRouter, PaymentParameters, RouteParameters};
-use lightning::routing::scoring::ProbabilisticScorer;
-use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
-use lightning::util::logger::{Logger, Record};
-use lightning::util::ser::Writeable;
-
-use lightning_invoice::payment::{pay_invoice, pay_zero_value_invoice};
-use lightning_invoice::utils::{
-    create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice,
+use lightning_invoice::{
+    payment::{pay_invoice, pay_zero_value_invoice},
+    utils::{create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice},
+    Invoice,
 };
-use lightning_invoice::Invoice;
 use log::{debug, error, info, trace};
-use std::net::SocketAddr;
-use std::str::FromStr;
-
-use std::sync::Arc;
+use std::{net::SocketAddr, str::FromStr, sync::Arc};
 use wasm_bindgen_futures::spawn_local;
 
 pub(crate) type RapidGossipSync =
@@ -132,6 +137,7 @@ pub(crate) struct Node {
     logger: Arc<MutinyLogger>,
     websocket_proxy_addr: String,
     multi_socket: MultiWsSocketDescriptor,
+    lsp_client: Option<LspClient>,
 }
 
 impl Node {
@@ -148,6 +154,7 @@ impl Node {
         network: Network,
         websocket_proxy_addr: String,
         esplora: Arc<EsploraBlockchain>,
+        lsp_client: Option<LspClient>,
     ) -> Result<Self, MutinyError> {
         info!("initialized a new node: {}", node_index.uuid);
 
@@ -209,6 +216,18 @@ impl Node {
             onion_message_handler: Arc::new(IgnoringMessageHandler {}),
         };
 
+        let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.pubkey);
+
+        // save connection info peer connection list to auto connect
+        if let Some(lsp) = lsp_client.clone() {
+            if let Err(e) = persister.persist_peer_connection_info(
+                lsp_client_pubkey.unwrap().to_string(),
+                &lsp.connection_string,
+            ) {
+                error!("could not save connection to lsp: {e}");
+            }
+        }
+
         // init event handler
         let event_handler = EventHandler::new(
             channel_manager.clone(),
@@ -216,6 +235,7 @@ impl Node {
             wallet.clone(),
             keys_manager.clone(),
             persister.clone(),
+            lsp_client_pubkey.clone(),
             network,
             logger.clone(),
         );
@@ -420,6 +440,7 @@ impl Node {
             logger,
             websocket_proxy_addr,
             multi_socket,
+            lsp_client,
         })
     }
 
@@ -445,7 +466,7 @@ impl Node {
                     if saved != peer_connection_info.original_connection_string {
                         match self.persister.persist_peer_connection_info(
                             pubkey,
-                            peer_connection_info.original_connection_string,
+                            &peer_connection_info.original_connection_string,
                         ) {
                             Ok(_) => (),
                             Err(_) => self.logger.log(&Record::new(
@@ -463,7 +484,7 @@ impl Node {
                         .persister
                         .persist_peer_connection_info(
                             pubkey,
-                            peer_connection_info.original_connection_string,
+                            &peer_connection_info.original_connection_string,
                         )
                         .is_err()
                     {
@@ -491,7 +512,7 @@ impl Node {
         self.channel_manager.get_phantom_route_hints()
     }
 
-    pub fn create_invoice(
+    pub async fn create_invoice(
         &self,
         amount_sat: Option<u64>,
         description: String,
@@ -574,7 +595,14 @@ impl Node {
             0,
         ));
 
-        Ok(invoice)
+        if let Some(lsp) = self.lsp_client.clone() {
+            self.connect_peer(PubkeyConnectionInfo::new(lsp.clone().connection_string)?)
+                .await?;
+            let invoice = lsp.get_lsp_invoice(invoice.to_string()).await?;
+            Ok(Invoice::from_str(&invoice)?)
+        } else {
+            Ok(invoice)
+        }
     }
 
     pub fn get_invoice(&self, invoice: Invoice) -> Result<MutinyInvoice, MutinyError> {

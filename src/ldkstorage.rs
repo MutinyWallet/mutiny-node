@@ -252,7 +252,7 @@ impl MutinyNodePersister {
     pub(crate) fn persist_peer_connection_info(
         &self,
         peer_pubkey: String,
-        connection_string: String,
+        connection_string: &str,
     ) -> io::Result<()> {
         let key = self.get_key(peer_key(peer_pubkey).as_str());
         self.storage

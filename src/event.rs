@@ -5,14 +5,20 @@ use crate::utils::sleep;
 use crate::wallet::MutinyWallet;
 use bdk::blockchain::Blockchain;
 use bdk::wallet::AddressIndex;
+use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::{Address, Network};
 use bitcoin_bech32::WitnessProgram;
 use bitcoin_hashes::hex::ToHex;
-use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
-use lightning::chain::keysinterface::PhantomKeysManager;
-use lightning::util::events::{Event, PaymentPurpose};
-use lightning::util::logger::{Logger, Record};
+use lightning::{
+    chain::chaininterface::{ConfirmationTarget, FeeEstimator},
+    chain::keysinterface::PhantomKeysManager,
+    util::errors::APIError,
+    util::{
+        events::{Event, PaymentPurpose},
+        logger::{Logger, Record},
+    },
+};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -46,6 +52,7 @@ pub struct EventHandler {
     wallet: Arc<MutinyWallet>,
     keys_manager: Arc<PhantomKeysManager>,
     persister: Arc<MutinyNodePersister>,
+    lsp_client_pubkey: Option<PublicKey>,
     network: Network,
     logger: Arc<MutinyLogger>,
 }
@@ -57,6 +64,7 @@ impl EventHandler {
         wallet: Arc<MutinyWallet>,
         keys_manager: Arc<PhantomKeysManager>,
         persister: Arc<MutinyNodePersister>,
+        lsp_client_pubkey: Option<PublicKey>,
         network: Network,
         logger: Arc<MutinyLogger>,
     ) -> Self {
@@ -66,6 +74,7 @@ impl EventHandler {
             wallet,
             keys_manager,
             network,
+            lsp_client_pubkey,
             persister,
             logger,
         }
@@ -351,11 +360,7 @@ impl EventHandler {
                 };
                 let internal_channel_id = u128::from_be_bytes(internal_channel_id_bytes);
 
-                match self.channel_manager.accept_inbound_channel(
-                    &temporary_channel_id,
-                    &counterparty_node_id,
-                    internal_channel_id,
-                ) {
+                let log_result = |result: Result<(), APIError>| match result {
                     Ok(_) => {
                         self.logger.log(&Record::new(
                             lightning::util::logger::Level::Debug,
@@ -368,12 +373,32 @@ impl EventHandler {
                     Err(e) => {
                         self.logger.log(&Record::new(
                             lightning::util::logger::Level::Debug,
-                            format_args!("EVENT: OpenChannelRequest error: {e:?}"),
+                            format_args!("EVENT: OpenChannelRequest error: {:?}", e),
                             "event",
                             "",
                             0,
                         ));
                     }
+                };
+
+                if self.lsp_client_pubkey.as_ref() != Some(&counterparty_node_id) {
+                    // did not match the lsp pubkey, normal open
+                    let result = self.channel_manager.accept_inbound_channel(
+                        &temporary_channel_id,
+                        &counterparty_node_id,
+                        internal_channel_id,
+                    );
+                    log_result(result);
+                } else {
+                    // matched lsp pubkey, accept 0 conf
+                    let result = self
+                        .channel_manager
+                        .accept_inbound_channel_from_trusted_peer_0conf(
+                            &temporary_channel_id,
+                            &counterparty_node_id,
+                            internal_channel_id,
+                        );
+                    log_result(result);
                 }
             }
             Event::PaymentPathSuccessful { .. } => {
