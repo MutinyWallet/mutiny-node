@@ -250,7 +250,11 @@ pub(crate) fn get_rgs_url(
 ) -> String {
     let last_sync_time = last_sync_time.unwrap_or(0);
     if let Some(url) = user_provided_url {
-        url
+        if url.is_empty() {
+            get_rgs_url(network, None, Some(last_sync_time))
+        } else {
+            url
+        }
     } else {
         // todo - add regtest and signet
         match network {
