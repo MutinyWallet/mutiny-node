@@ -445,7 +445,7 @@ impl Node {
                     if saved != peer_connection_info.original_connection_string {
                         match self.persister.persist_peer_connection_info(
                             pubkey,
-                            peer_connection_info.original_connection_string,
+                            &peer_connection_info.original_connection_string,
                         ) {
                             Ok(_) => (),
                             Err(_) => self.logger.log(&Record::new(
@@ -463,7 +463,7 @@ impl Node {
                         .persister
                         .persist_peer_connection_info(
                             pubkey,
-                            peer_connection_info.original_connection_string,
+                            &peer_connection_info.original_connection_string,
                         )
                         .is_err()
                     {
