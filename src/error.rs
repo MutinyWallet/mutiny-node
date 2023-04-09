@@ -1,5 +1,6 @@
 use crate::esplora::TxSyncError;
 use bdk::esplora_client;
+use bitcoin::Network;
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning_invoice::payment::PaymentError;
 use lightning_invoice::ParseOrSemanticError;
@@ -26,7 +27,7 @@ pub enum MutinyError {
     ConnectionFailed,
     /// The invoice or address is on a different network
     #[error("The invoice or address is on a different network.")]
-    IncorrectNetwork,
+    IncorrectNetwork(Network),
     /// Payment of the given invoice has already been initiated.
     #[error("An invoice must not get payed twice.")]
     NonUniquePaymentHash,
@@ -229,7 +230,7 @@ pub enum MutinyJsError {
     ConnectionFailed,
     /// The invoice or address is on a different network
     #[error("The invoice or address is on a different network.")]
-    IncorrectNetwork,
+    IncorrectNetwork(Network),
     /// Payment of the given invoice has already been initiated.
     #[error("An invoice must not get payed twice.")]
     NonUniquePaymentHash,
@@ -311,7 +312,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::NotRunning => MutinyJsError::NotRunning,
             MutinyError::FundingTxCreationFailed => MutinyJsError::FundingTxCreationFailed,
             MutinyError::ConnectionFailed => MutinyJsError::ConnectionFailed,
-            MutinyError::IncorrectNetwork => MutinyJsError::IncorrectNetwork,
+            MutinyError::IncorrectNetwork(net) => MutinyJsError::IncorrectNetwork(net),
             MutinyError::NonUniquePaymentHash => MutinyJsError::NonUniquePaymentHash,
             MutinyError::InvoiceInvalid => MutinyJsError::InvoiceInvalid,
             MutinyError::InvoiceCreationFailed => MutinyJsError::InvoiceCreationFailed,

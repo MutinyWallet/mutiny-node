@@ -15,6 +15,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::error::MutinyError;
 use crate::localstorage::MutinyBrowserStorage;
+use crate::utils::is_valid_network;
 
 #[derive(Debug)]
 pub struct MutinyWallet {
@@ -103,8 +104,8 @@ impl MutinyWallet {
         fee_rate: Option<f32>,
     ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
         let wallet = self.wallet.lock().await;
-        if send_to.network != wallet.network() {
-            return Err(MutinyError::IncorrectNetwork);
+        if is_valid_network(wallet.network(), send_to.network) {
+            return Err(MutinyError::IncorrectNetwork(send_to.network));
         }
 
         let fee_rate = if let Some(rate) = fee_rate {
@@ -152,8 +153,8 @@ impl MutinyWallet {
     ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
         let wallet = self.wallet.lock().await;
 
-        if destination_address.network != wallet.network() {
-            return Err(MutinyError::IncorrectNetwork);
+        if is_valid_network(wallet.network(), destination_address.network) {
+            return Err(MutinyError::IncorrectNetwork(destination_address.network));
         }
 
         let fee_rate = if let Some(rate) = fee_rate {
