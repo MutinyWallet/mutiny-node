@@ -40,6 +40,16 @@ pub fn currency_from_network(network: Network) -> Currency {
     }
 }
 
+pub fn network_from_currency(currency: Currency) -> Network {
+    match currency {
+        Currency::Bitcoin => Network::Bitcoin,
+        Currency::BitcoinTestnet => Network::Testnet,
+        Currency::Signet => Network::Signet,
+        Currency::Regtest => Network::Regtest,
+        Currency::Simnet => Network::Regtest,
+    }
+}
+
 pub fn now() -> Duration {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -107,5 +117,21 @@ impl<'a, S: Writeable> Writeable for Mutex<S> {
 impl<'a, S: Writeable> Writeable for MutexGuard<'a, S> {
     fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
         S::write(&**self, writer)
+    }
+}
+
+/// Returns true if the given network is valid for the given destination network.
+/// This is used to prevent users from sending funds to the wrong network.
+/// We can't just compare the network directly because signet and testnet
+/// have conflicting address prefixes.
+pub(crate) fn is_valid_network(my_network: Network, dest_network: Network) -> bool {
+    match (my_network, dest_network) {
+        (Network::Bitcoin, Network::Bitcoin) => true,
+        (Network::Testnet, Network::Testnet) => true,
+        (Network::Signet, Network::Testnet) => true,
+        (Network::Testnet, Network::Signet) => true,
+        (Network::Signet, Network::Signet) => true,
+        (Network::Regtest, Network::Regtest) => true,
+        _ => false,
     }
 }

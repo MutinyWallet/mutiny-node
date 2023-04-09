@@ -12,7 +12,8 @@ use crate::{
     lspclient::LspClient,
     node::{Node, ProbScorer, PubkeyConnectionInfo, RapidGossipSync},
     utils,
-    utils::currency_from_network,
+    utils::is_valid_network,
+    utils::network_from_currency,
     utils::set_panic_hook,
     wallet::get_esplora_url,
     wallet::MutinyWallet,
@@ -546,8 +547,8 @@ impl NodeManager {
     ) -> Result<String, MutinyJsError> {
         let send_to = Address::from_str(&destination_address)?;
 
-        if send_to.network != self.network {
-            return Err(MutinyJsError::IncorrectNetwork);
+        if is_valid_network(self.network, send_to.network) {
+            return Err(MutinyJsError::IncorrectNetwork(send_to.network));
         }
 
         match self.wallet.send(send_to, amount, fee_rate).await {
@@ -564,8 +565,8 @@ impl NodeManager {
     ) -> Result<String, MutinyJsError> {
         let send_to = Address::from_str(&destination_address)?;
 
-        if send_to.network != self.network {
-            return Err(MutinyJsError::IncorrectNetwork);
+        if is_valid_network(self.network, send_to.network) {
+            return Err(MutinyJsError::IncorrectNetwork(send_to.network));
         }
 
         match self.wallet.sweep(send_to, fee_rate).await {
@@ -581,8 +582,8 @@ impl NodeManager {
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
         let address = Address::from_str(address.as_str())?;
 
-        if address.network != self.network {
-            return Err(MutinyJsError::IncorrectNetwork);
+        if is_valid_network(self.network, address.network) {
+            return Err(MutinyJsError::IncorrectNetwork(address.network));
         }
 
         let script = address.payload.script_pubkey();
@@ -828,8 +829,9 @@ impl NodeManager {
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let invoice = Invoice::from_str(&invoice_str)?;
 
-        if invoice.currency() != currency_from_network(self.network) {
-            return Err(MutinyJsError::IncorrectNetwork);
+        let invoice_network = network_from_currency(invoice.currency());
+        if is_valid_network(invoice_network, self.network) {
+            return Err(MutinyJsError::IncorrectNetwork(invoice_network));
         }
 
         let nodes = self.nodes.lock().await;
@@ -860,8 +862,9 @@ impl NodeManager {
     pub async fn decode_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
         let invoice = Invoice::from_str(&invoice)?;
 
-        if invoice.currency() != currency_from_network(self.network) {
-            return Err(MutinyJsError::IncorrectNetwork);
+        let invoice_network = network_from_currency(invoice.currency());
+        if is_valid_network(invoice_network, self.network) {
+            return Err(MutinyJsError::IncorrectNetwork(invoice_network));
         }
 
         Ok(invoice.into())
