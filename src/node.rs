@@ -16,7 +16,7 @@ use crate::{
         schedule_descriptor_read, MultiWsSocketDescriptor, WsSocketDescriptor,
         WsTcpSocketDescriptor,
     },
-    utils::{self, currency_from_network, sleep},
+    utils::{self, currency_from_network, is_valid_network, network_from_currency, sleep},
     wallet::MutinyWallet,
 };
 use anyhow::Context;
@@ -598,8 +598,21 @@ impl Node {
         if let Some(lsp) = self.lsp_client.clone() {
             self.connect_peer(PubkeyConnectionInfo::new(lsp.clone().connection_string)?)
                 .await?;
-            let invoice = lsp.get_lsp_invoice(invoice.to_string()).await?;
-            Ok(Invoice::from_str(&invoice)?)
+            let lsp_invoice_str = lsp.get_lsp_invoice(invoice.to_string()).await?;
+            let lsp_invoice = Invoice::from_str(&lsp_invoice_str)?;
+
+            let invoice_network = network_from_currency(lsp_invoice.currency());
+            if is_valid_network(invoice_network, self.network) {
+                return Err(MutinyError::IncorrectNetwork(invoice_network));
+            }
+
+            if lsp_invoice.payment_hash() != invoice.payment_hash()
+                || lsp_invoice.recover_payee_pub_key() != lsp.pubkey
+            {
+                return Err(MutinyError::InvoiceCreationFailed);
+            }
+
+            Ok(lsp_invoice)
         } else {
             Ok(invoice)
         }
