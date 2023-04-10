@@ -10,7 +10,7 @@ use bdk::{FeeRate, LocalUtxo, SignOptions, SyncOptions, TransactionDetails, Wall
 use bdk_macros::maybe_await;
 use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
-use bitcoin::{Address, Network, Txid};
+use bitcoin::{Address, Network, Script, Txid};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::error::MutinyError;
@@ -105,9 +105,20 @@ impl MutinyWallet {
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
-        if is_valid_network(self.network, send_to.network) {
+        if !is_valid_network(self.network, send_to.network) {
             return Err(MutinyError::IncorrectNetwork(send_to.network));
         }
+
+        self.create_signed_psbt_to_spk(send_to.script_pubkey(), amount, fee_rate)
+            .await
+    }
+
+    pub async fn create_signed_psbt_to_spk(
+        &self,
+        spk: Script,
+        amount: u64,
+        fee_rate: Option<f32>,
+    ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
         let wallet = self.wallet.lock().await;
 
         let fee_rate = if let Some(rate) = fee_rate {
@@ -118,7 +129,7 @@ impl MutinyWallet {
         let (mut psbt, details) = {
             let mut builder = wallet.build_tx();
             builder
-                .add_recipient(send_to.script_pubkey(), amount)
+                .add_recipient(spk, amount)
                 .enable_rbf()
                 .fee_rate(fee_rate);
             builder.finish()?
