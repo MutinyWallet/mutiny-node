@@ -602,7 +602,7 @@ impl Node {
             let lsp_invoice = Invoice::from_str(&lsp_invoice_str)?;
 
             let invoice_network = network_from_currency(lsp_invoice.currency());
-            if is_valid_network(invoice_network, self.network) {
+            if !is_valid_network(invoice_network, self.network) {
                 return Err(MutinyError::IncorrectNetwork(invoice_network));
             }
 

@@ -153,7 +153,7 @@ impl MutinyWallet {
         destination_address: Address,
         fee_rate: Option<f32>,
     ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
-        if is_valid_network(self.network, destination_address.network) {
+        if !is_valid_network(self.network, destination_address.network) {
             return Err(MutinyError::IncorrectNetwork(destination_address.network));
         }
 
