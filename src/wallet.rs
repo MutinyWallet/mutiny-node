@@ -20,6 +20,7 @@ use crate::utils::is_valid_network;
 #[derive(Debug)]
 pub struct MutinyWallet {
     pub wallet: Mutex<Wallet<MutinyBrowserStorage>>,
+    network: Network,
     pub blockchain: Arc<EsploraBlockchain>,
 }
 
@@ -47,6 +48,7 @@ impl MutinyWallet {
 
         MutinyWallet {
             wallet: Mutex::new(wallet),
+            network,
             blockchain: esplora,
         }
     }
@@ -103,10 +105,10 @@ impl MutinyWallet {
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
-        let wallet = self.wallet.lock().await;
-        if is_valid_network(wallet.network(), send_to.network) {
+        if is_valid_network(self.network, send_to.network) {
             return Err(MutinyError::IncorrectNetwork(send_to.network));
         }
+        let wallet = self.wallet.lock().await;
 
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
@@ -151,11 +153,11 @@ impl MutinyWallet {
         destination_address: Address,
         fee_rate: Option<f32>,
     ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
-        let wallet = self.wallet.lock().await;
-
-        if is_valid_network(wallet.network(), destination_address.network) {
+        if is_valid_network(self.network, destination_address.network) {
             return Err(MutinyError::IncorrectNetwork(destination_address.network));
         }
+
+        let wallet = self.wallet.lock().await;
 
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
