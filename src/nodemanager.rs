@@ -547,7 +547,7 @@ impl NodeManager {
     ) -> Result<String, MutinyJsError> {
         let send_to = Address::from_str(&destination_address)?;
 
-        if is_valid_network(self.network, send_to.network) {
+        if !is_valid_network(self.network, send_to.network) {
             return Err(MutinyJsError::IncorrectNetwork(send_to.network));
         }
 
@@ -565,7 +565,7 @@ impl NodeManager {
     ) -> Result<String, MutinyJsError> {
         let send_to = Address::from_str(&destination_address)?;
 
-        if is_valid_network(self.network, send_to.network) {
+        if !is_valid_network(self.network, send_to.network) {
             return Err(MutinyJsError::IncorrectNetwork(send_to.network));
         }
 
@@ -582,7 +582,7 @@ impl NodeManager {
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
         let address = Address::from_str(address.as_str())?;
 
-        if is_valid_network(self.network, address.network) {
+        if !is_valid_network(self.network, address.network) {
             return Err(MutinyJsError::IncorrectNetwork(address.network));
         }
 
@@ -830,7 +830,7 @@ impl NodeManager {
         let invoice = Invoice::from_str(&invoice_str)?;
 
         let invoice_network = network_from_currency(invoice.currency());
-        if is_valid_network(invoice_network, self.network) {
+        if !is_valid_network(invoice_network, self.network) {
             return Err(MutinyJsError::IncorrectNetwork(invoice_network));
         }
 
@@ -863,7 +863,7 @@ impl NodeManager {
         let invoice = Invoice::from_str(&invoice)?;
 
         let invoice_network = network_from_currency(invoice.currency());
-        if is_valid_network(invoice_network, self.network) {
+        if !is_valid_network(invoice_network, self.network) {
             return Err(MutinyJsError::IncorrectNetwork(invoice_network));
         }
 
