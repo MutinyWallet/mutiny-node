@@ -7,8 +7,6 @@ use bdk::blockchain::Blockchain;
 use bdk::wallet::AddressIndex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
-use bitcoin::{Address, Network};
-use bitcoin_bech32::WitnessProgram;
 use bitcoin_hashes::hex::ToHex;
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
@@ -20,7 +18,6 @@ use lightning::{
     },
 };
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 use std::sync::Arc;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -53,7 +50,6 @@ pub struct EventHandler {
     keys_manager: Arc<PhantomKeysManager>,
     persister: Arc<MutinyNodePersister>,
     lsp_client_pubkey: Option<PublicKey>,
-    network: Network,
     logger: Arc<MutinyLogger>,
 }
 
@@ -65,7 +61,6 @@ impl EventHandler {
         keys_manager: Arc<PhantomKeysManager>,
         persister: Arc<MutinyNodePersister>,
         lsp_client_pubkey: Option<PublicKey>,
-        network: Network,
         logger: Arc<MutinyLogger>,
     ) -> Self {
         Self {
@@ -73,7 +68,6 @@ impl EventHandler {
             fee_estimator,
             wallet,
             keys_manager,
-            network,
             lsp_client_pubkey,
             persister,
             logger,
@@ -96,25 +90,10 @@ impl EventHandler {
                     "",
                     0,
                 ));
-                // Construct the raw transaction with one output, that is paid the amount of the
-                // channel.
-                let addr = WitnessProgram::from_scriptpubkey(
-                    &output_script[..],
-                    match self.network {
-                        Network::Bitcoin => bitcoin_bech32::constants::Network::Bitcoin,
-                        Network::Testnet => bitcoin_bech32::constants::Network::Testnet,
-                        Network::Regtest => bitcoin_bech32::constants::Network::Regtest,
-                        Network::Signet => bitcoin_bech32::constants::Network::Signet,
-                    },
-                )
-                .expect("Lightning funding tx should always be to a SegWit output")
-                .to_address();
-
-                let address = Address::from_str(addr.as_str()).expect("Failed to parse address");
 
                 let psbt = match self
                     .wallet
-                    .create_signed_psbt(address, channel_value_satoshis, None)
+                    .create_signed_psbt_to_spk(output_script, channel_value_satoshis, None)
                     .await
                 {
                     Ok(psbt) => psbt,

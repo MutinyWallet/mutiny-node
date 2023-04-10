@@ -236,7 +236,6 @@ impl Node {
             keys_manager.clone(),
             persister.clone(),
             lsp_client_pubkey.clone(),
-            network,
             logger.clone(),
         );
         let peer_man = Arc::new(create_peer_manager(
