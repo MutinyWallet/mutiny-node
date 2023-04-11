@@ -143,6 +143,7 @@ pub(crate) struct Node {
 impl Node {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
+        uuid: String,
         node_index: NodeIndex,
         mnemonic: Mnemonic,
         storage: MutinyBrowserStorage,
@@ -156,7 +157,7 @@ impl Node {
         esplora: Arc<EsploraBlockchain>,
         lsp_client: Option<LspClient>,
     ) -> Result<Self, MutinyError> {
-        info!("initialized a new node: {}", node_index.uuid);
+        info!("initialized a new node: {uuid}");
 
         let logger = Arc::new(MutinyLogger::default());
 
@@ -164,7 +165,7 @@ impl Node {
         let pubkey = pubkey_from_keys_manager(&keys_manager);
 
         // init the persister
-        let persister = Arc::new(MutinyNodePersister::new(node_index.uuid.clone(), storage));
+        let persister = Arc::new(MutinyNodePersister::new(uuid.clone(), storage));
 
         // init chain monitor
         let chain_monitor: Arc<ChainMonitor> = Arc::new(ChainMonitor::new(
@@ -428,7 +429,7 @@ impl Node {
         });
 
         Ok(Node {
-            _uuid: node_index.uuid,
+            _uuid: uuid,
             pubkey,
             peer_manager: peer_man,
             keys_manager,

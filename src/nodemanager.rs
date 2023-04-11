@@ -64,7 +64,6 @@ pub(crate) struct NodeStorage {
 // This is the NodeIndex reference that is saved to the DB
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct NodeIndex {
-    pub uuid: String,
     pub child_index: u32,
 }
 
@@ -419,6 +418,7 @@ impl NodeManager {
 
         for node_item in node_storage.clone().nodes {
             let node = Node::new(
+                node_item.0,
                 node_item.1,
                 mnemonic.clone(),
                 storage.clone(),
@@ -1176,7 +1176,6 @@ pub(crate) async fn create_new_node_from_node_manager(
     // Create and save a new node using the next child index
     let next_node_uuid = Uuid::new_v4().to_string();
     let next_node = NodeIndex {
-        uuid: next_node_uuid.clone(),
         child_index: next_node_index,
     };
 
@@ -1189,6 +1188,7 @@ pub(crate) async fn create_new_node_from_node_manager(
 
     // now create the node process and init it
     let new_node = match Node::new(
+        next_node_uuid.clone(),
         next_node.clone(),
         node_manager.mnemonic.clone(),
         node_manager.storage.clone(),
@@ -1217,7 +1217,7 @@ pub(crate) async fn create_new_node_from_node_manager(
         .insert(node_pubkey.to_string(), Arc::new(new_node));
 
     Ok(NodeIdentity {
-        uuid: next_node.uuid.clone(),
+        uuid: next_node_uuid.clone(),
         pubkey: node_pubkey.to_string(),
     })
 }
