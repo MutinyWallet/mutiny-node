@@ -398,12 +398,8 @@ impl NodeManager {
         let lsp_client: Option<LspClient> = match lsp_url.clone() {
             // check if string is some and not an empty string
             Some(lsp_url_ref) if !lsp_url_ref.is_empty() => {
-                // TODO what to do if the getinfo call fails?
-                // is erroring out completely okay?
-                let lsp_client = LspClient::new(lsp_url_ref)
-                    .await
-                    .map_err(|_| MutinyError::LspFailure)?;
-                Some(lsp_client)
+                // if it fails, return None so the user can continue without lsp
+                LspClient::new(lsp_url_ref).await.ok()
             }
             _ => None,
         };
