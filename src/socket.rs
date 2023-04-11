@@ -1,6 +1,7 @@
 use crate::peermanager::PeerManager;
 use crate::proxy::Proxy;
 use crate::utils;
+use bitcoin_hashes::hex::ToHex;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use futures::lock::Mutex;
 use gloo_net::websocket::events::CloseEvent;
@@ -227,8 +228,11 @@ impl MultiWsSocketDescriptor {
                                     let mut locked_socket_map = socket_map_copy.lock().await;
                                     match locked_socket_map.get_mut(&from) {
                                         Some((subsocket, _sender)) => {
-                                            debug!("disconnecting subsocket");
-                                            subsocket.disconnect_socket();
+                                            // if we got told by server to disconnect then stop
+                                            // reading from the socket and tell LDK that the socket
+                                            // is disconnected.
+                                            debug!("was told by server to disconnect subsocket connection with {}", from.to_hex());
+                                            subsocket.stop_reading();
                                             peer_manager_copy.socket_disconnected(
                                                 &mut WsSocketDescriptor::Mutiny(subsocket.clone()),
                                             );
@@ -395,7 +399,21 @@ pub(crate) fn schedule_descriptor_read(
                     };
                 }
                 Err(e) => {
-                    error!("got an error reading msg: {}", e);
+                    match e {
+                        gloo_net::websocket::WebSocketError::ConnectionError => {
+                            error!("got connection error");
+                        }
+                        gloo_net::websocket::WebSocketError::ConnectionClose(e) => match e.code {
+                            1000 => debug!("normal connection closure"),
+                            _ => error!("connection closed due to: {:?}", e),
+                        },
+                        gloo_net::websocket::WebSocketError::MessageSendError(e) => {
+                            error!("got an error sending msg: {}", e);
+                        }
+                        _ => {
+                            error!("got an error reading msg: {}", e);
+                        }
+                    };
                     break;
                 }
             }
@@ -454,6 +472,10 @@ impl SubWsSocketDescriptor {
             stop: Arc::new(AtomicBool::new(false)),
         }
     }
+
+    pub fn stop_reading(&self) {
+        self.stop.store(true, Ordering::Relaxed)
+    }
 }
 
 impl ReadDescriptor for SubWsSocketDescriptor {
@@ -463,7 +485,7 @@ impl ReadDescriptor for SubWsSocketDescriptor {
                 debug!("stopping subsocket channel reader");
                 return Some(Err(gloo_net::websocket::WebSocketError::ConnectionClose(
                     CloseEvent {
-                        code: 0,
+                        code: 1000,
                         reason: "subsocket told to stop".to_string(),
                         was_clean: true,
                     },
