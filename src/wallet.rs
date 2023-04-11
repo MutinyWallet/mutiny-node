@@ -250,7 +250,7 @@ pub(crate) fn get_esplora_url(network: Network, user_provided_url: Option<String
         match network {
             Network::Bitcoin => "https://blockstream.info/api",
             Network::Testnet => "https://blockstream.info/testnet/api",
-            Network::Signet => "https://mempool.space/signet/api",
+            Network::Signet => "https://mutinynet.com/api",
             Network::Regtest => "http://localhost:3003",
         }
         .to_string()
@@ -270,7 +270,7 @@ pub(crate) fn get_rgs_url(
             url
         }
     } else {
-        // todo - add regtest and signet
+        // todo - handle regtest
         match network {
             Network::Bitcoin => {
                 format!("https://rapidsync.lightningdevkit.org/snapshot/{last_sync_time}")
@@ -279,10 +279,11 @@ pub(crate) fn get_rgs_url(
                 format!("https://rapidsync.lightningdevkit.org/testnet/snapshot/{last_sync_time}")
             }
             Network::Signet => {
-                format!("https://rapidsync.lightningdevkit.org/testnet/snapshot/{last_sync_time}")
+                format!("https://rgs.mutinynet.com/snapshots/{last_sync_time}")
             }
             Network::Regtest => {
-                format!("https://rapidsync.lightningdevkit.org/testnet/snapshot/{last_sync_time}")
+                // for now use the signet rgs because it is the least amount of data
+                format!("https://rgs.mutinynet.com/snapshot/{last_sync_time}")
             }
         }
     }
