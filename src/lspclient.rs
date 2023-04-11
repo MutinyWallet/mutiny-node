@@ -56,10 +56,10 @@ const GET_INFO_PATH: &str = "/api/v1/info";
 const PROPOSAL_PATH: &str = "/api/v1/proposal";
 
 impl LspClient {
-    pub async fn new(url: String) -> anyhow::Result<Self> {
+    pub async fn new(url: &str) -> anyhow::Result<Self> {
         let http_client = Client::new();
         let get_info_response: GetInfoResponse = http_client
-            .get(format!("{}{}", &url, GET_INFO_PATH))
+            .get(format!("{}{}", url, GET_INFO_PATH))
             .send()
             .await?
             .json()
@@ -95,7 +95,7 @@ impl LspClient {
 
         Ok(LspClient {
             pubkey,
-            url,
+            url: String::from(url),
             connection_string,
             http_client,
         })

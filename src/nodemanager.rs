@@ -31,8 +31,9 @@ use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning_invoice::{Invoice, InvoiceDescription};
 use lnurl::lnurl::LnUrl;
 use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use reqwest::Client;
+use secp256k1::rand;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
@@ -52,7 +53,7 @@ pub struct NodeManager {
     node_storage: Mutex<NodeStorage>,
     nodes: Arc<Mutex<HashMap<String, Arc<Node>>>>,
     lnurl_client: LnUrlClient,
-    lsp_client: Option<LspClient>,
+    lsp_clients: Vec<LspClient>,
 }
 
 // This is the NodeStorage object saved to the DB
@@ -65,6 +66,7 @@ pub(crate) struct NodeStorage {
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct NodeIndex {
     pub child_index: u32,
+    pub lsp: Option<String>,
 }
 
 // This is the NodeIdentity that refer to a specific node
@@ -393,18 +395,28 @@ impl NodeManager {
 
         let fee_estimator = Arc::new(MutinyFeeEstimator::default());
 
-        // load lsp client, if any
-        let lsp_client: Option<LspClient> = match lsp_url.clone() {
+        // load lsp clients, if any
+        let lsp_clients: Vec<LspClient> = match lsp_url.clone() {
             // check if string is some and not an empty string
-            Some(lsp_url_ref) if !lsp_url_ref.is_empty() => {
-                // TODO what to do if the getinfo call fails?
-                // is erroring out completely okay?
-                let lsp_client = LspClient::new(lsp_url_ref)
-                    .await
-                    .map_err(|_| MutinyError::LspFailure)?;
-                Some(lsp_client)
+            Some(lsp_urls) if !lsp_urls.is_empty() => {
+                let urls: Vec<&str> = lsp_urls.split(',').collect();
+
+                let futs = urls.into_iter().map(|url| LspClient::new(url.trim()));
+
+                let results = futures::future::join_all(futs).await;
+
+                results
+                    .into_iter()
+                    .flat_map(|res| match res {
+                        Ok(client) => Some(client),
+                        Err(e) => {
+                            warn!("Error starting up lsp client: {e}");
+                            None
+                        }
+                    })
+                    .collect()
             }
-            _ => None,
+            _ => Vec::new(),
         };
 
         let node_storage = match MutinyBrowserStorage::get_nodes() {
@@ -430,7 +442,7 @@ impl NodeManager {
                 network,
                 websocket_proxy_addr.clone(),
                 esplora.clone(),
-                lsp_client.clone(),
+                &lsp_clients,
             )
             .await?;
 
@@ -441,6 +453,22 @@ impl NodeManager {
 
             nodes_map.insert(id.to_hex(), Arc::new(node));
         }
+
+        // when we create the nodes we set the LSP if one is missing
+        // we need to save it to local storage after startup in case
+        // a LSP was set.
+        let updated_nodes: HashMap<String, NodeIndex> = nodes_map
+            .values()
+            .map(|n| (n._uuid.clone(), n.node_index()))
+            .collect();
+
+        info!("inserting updated nodes");
+
+        MutinyBrowserStorage::insert_nodes(NodeStorage {
+            nodes: updated_nodes,
+        })?;
+
+        info!("inserted updated nodes");
 
         let lnurl_client = lnurl::Builder::default()
             .build_async()
@@ -460,7 +488,7 @@ impl NodeManager {
             websocket_proxy_addr,
             esplora,
             lnurl_client,
-            lsp_client,
+            lsp_clients,
         })
     }
 
@@ -1175,8 +1203,21 @@ pub(crate) async fn create_new_node_from_node_manager(
 
     // Create and save a new node using the next child index
     let next_node_uuid = Uuid::new_v4().to_string();
+
+    let lsp = if node_manager.lsp_clients.is_empty() {
+        info!("no lsp saved and no lsp clients available");
+        None
+    } else {
+        info!("no lsp saved, picking random one");
+        // If we don't have an lsp saved we should pick a random
+        // one from our client list and save it for next time
+        let rand = rand::random::<usize>() % node_manager.lsp_clients.len();
+        Some(node_manager.lsp_clients[rand].url.clone())
+    };
+
     let next_node = NodeIndex {
         child_index: next_node_index,
+        lsp,
     };
 
     existing_nodes
@@ -1200,7 +1241,7 @@ pub(crate) async fn create_new_node_from_node_manager(
         node_manager.network,
         node_manager.websocket_proxy_addr.clone(),
         node_manager.esplora.clone(),
-        node_manager.lsp_client.clone(),
+        &node_manager.lsp_clients,
     )
     .await
     {
