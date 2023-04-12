@@ -66,7 +66,10 @@ impl From<mutiny_core::nodemanager::MutinyInvoice> for MutinyInvoice {
 #[wasm_bindgen]
 pub struct MutinyPeer {
     pubkey: secp256k1::PublicKey,
-    connection_string: String,
+    connection_string: Option<String>,
+    alias: Option<String>,
+    color: Option<String>,
+    label: Option<String>,
     pub is_connected: bool,
 }
 
@@ -78,8 +81,23 @@ impl MutinyPeer {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn connection_string(&self) -> String {
+    pub fn connection_string(&self) -> Option<String> {
         self.connection_string.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn alias(&self) -> Option<String> {
+        self.alias.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn color(&self) -> Option<String> {
+        self.color.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn label(&self) -> Option<String> {
+        self.label.clone()
     }
 }
 
@@ -88,6 +106,9 @@ impl From<mutiny_core::nodemanager::MutinyPeer> for MutinyPeer {
         MutinyPeer {
             pubkey: m.pubkey,
             connection_string: m.connection_string,
+            alias: m.alias,
+            color: m.color,
+            label: m.label,
             is_connected: m.is_connected,
         }
     }

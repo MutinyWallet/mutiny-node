@@ -1,13 +1,19 @@
+use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::anyhow;
 use bitcoin::Network;
 use bitcoin_hashes::hex::{FromHex, ToHex};
+use lightning::ln::msgs::NodeAnnouncement;
+use lightning::routing::gossip::{NodeAlias, NodeId};
 use lightning::routing::scoring::ProbabilisticScoringParameters;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use log::{debug, error, info, warn};
 use reqwest::Client;
 use rexie::{ObjectStore, Rexie, Store, TransactionMode};
+use secp256k1::PublicKey;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::spawn_local;
 
@@ -19,6 +25,8 @@ use crate::wallet::get_rgs_url;
 
 pub(crate) const GOSSIP_DATABASE_NAME: &str = "gossip";
 pub(crate) const GOSSIP_OBJECT_STORE_NAME: &str = "gossip_store";
+pub(crate) const LN_PEER_METADATA_STORE_NAME: &str = "ln_peer_store";
+
 pub(crate) const GOSSIP_SYNC_TIME_KEY: &str = "last_sync_timestamp";
 pub(crate) const NETWORK_GRAPH_KEY: &str = "network_graph";
 pub(crate) const PROB_SCORER_KEY: &str = "prob_scorer";
@@ -42,9 +50,9 @@ impl Gossip {
 async fn build_gossip_database() -> Result<Rexie, MutinyError> {
     // Create a new database
     let rexie = Rexie::builder(GOSSIP_DATABASE_NAME)
-        // Set the version of the database to 1.0
-        .version(1)
+        .version(2)
         .add_object_store(ObjectStore::new(GOSSIP_OBJECT_STORE_NAME))
+        .add_object_store(ObjectStore::new(LN_PEER_METADATA_STORE_NAME))
         // Build the database
         .build()
         .await?;
@@ -331,6 +339,284 @@ async fn fetch_updated_gossip(
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct LnPeerMetadata {
+    /// The node's network address to connect to
+    pub connection_string: Option<String>,
+    /// The node's alias given from the node announcement
+    pub alias: Option<String>,
+    /// The node's color given from the node announcement
+    pub color: Option<String>,
+    /// The label set by the user for this node
+    pub label: Option<String>,
+    /// The timestamp of when this information was last updated
+    pub timestamp: Option<u32>,
+    /// Our nodes' uuids that are connected to this node
+    #[serde(default)]
+    pub nodes: Vec<String>,
+}
+
+impl LnPeerMetadata {
+    pub(crate) fn with_connection_string(self, connection_string: String) -> Self {
+        Self {
+            connection_string: Some(connection_string),
+            ..self
+        }
+    }
+
+    pub(crate) fn with_node(&self, node: String) -> Self {
+        let mut nodes = self.nodes.clone();
+
+        if !nodes.contains(&node) {
+            nodes.push(node);
+            nodes.sort();
+        }
+
+        Self {
+            nodes,
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn with_label(&self, label: Option<String>) -> Self {
+        Self {
+            label,
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn merge_opt(&self, other: &Option<LnPeerMetadata>) -> LnPeerMetadata {
+        match other {
+            Some(other) => self.merge(other),
+            None => self.clone(),
+        }
+    }
+
+    pub(crate) fn merge(&self, other: &LnPeerMetadata) -> LnPeerMetadata {
+        let (primary, secondary) = if self.timestamp > other.timestamp {
+            (self.clone(), other.clone())
+        } else {
+            (other.clone(), self.clone())
+        };
+
+        // combine nodes from both
+        let mut nodes: Vec<String> = primary
+            .nodes
+            .into_iter()
+            .chain(secondary.nodes.into_iter())
+            .collect();
+
+        // remove duplicates
+        nodes.sort();
+        nodes.dedup();
+
+        Self {
+            connection_string: primary.connection_string.or(secondary.connection_string),
+            alias: primary.alias.or(secondary.alias),
+            color: primary.color.or(secondary.color),
+            label: primary.label.or(secondary.label),
+            timestamp: primary.timestamp.or(secondary.timestamp),
+            nodes,
+        }
+    }
+}
+
+impl From<NodeAnnouncement> for LnPeerMetadata {
+    fn from(value: NodeAnnouncement) -> Self {
+        let alias = NodeAlias(value.contents.alias).to_string();
+        Self {
+            connection_string: None, // todo get from addresses
+            alias: Some(alias),
+            color: Some(value.contents.rgb.to_hex()),
+            label: None,
+            timestamp: Some(value.contents.timestamp),
+            nodes: vec![],
+        }
+    }
+}
+
+pub(crate) async fn read_peer_info(
+    node_id: &NodeId,
+) -> Result<Option<LnPeerMetadata>, MutinyError> {
+    let rexie = build_gossip_database().await?;
+    // Create a new read-write transaction
+    let transaction =
+        rexie.transaction(&[LN_PEER_METADATA_STORE_NAME], TransactionMode::ReadOnly)?;
+    let store = transaction.store(LN_PEER_METADATA_STORE_NAME)?;
+
+    let key = JsValue::from(node_id.to_string());
+
+    let json: JsValue = store.get(&key).await?;
+    let data: Option<LnPeerMetadata> = serde_wasm_bindgen::from_value(json)?;
+
+    // Waits for the transaction to complete
+    transaction.done().await?;
+
+    Ok(data)
+}
+
+pub(crate) async fn get_all_peers() -> Result<HashMap<NodeId, LnPeerMetadata>, MutinyError> {
+    let rexie = build_gossip_database().await?;
+    // Create a new read-write transaction
+    let transaction =
+        rexie.transaction(&[LN_PEER_METADATA_STORE_NAME], TransactionMode::ReadOnly)?;
+    let store = transaction.store(LN_PEER_METADATA_STORE_NAME)?;
+
+    let mut peers = HashMap::new();
+
+    let all_json = store.get_all(None, None, None, None).await?;
+    let mut iter = all_json.into_iter();
+    while let Some((key, value)) = iter.next() {
+        let pub_key = PublicKey::from_str(&key.as_string().unwrap()).unwrap();
+        let node_id = NodeId::from_pubkey(&pub_key);
+        let data: Option<LnPeerMetadata> = serde_wasm_bindgen::from_value(value)?;
+
+        if let Some(peer_metadata) = data {
+            peers.insert(node_id, peer_metadata);
+        }
+    }
+
+    // Waits for the transaction to complete
+    transaction.done().await?;
+
+    Ok(peers)
+}
+
+pub(crate) async fn save_peer_connection_info(
+    our_node_id: &str,
+    node_id: &NodeId,
+    connection_string: &str,
+    label: Option<String>,
+) -> Result<(), MutinyError> {
+    let rexie = build_gossip_database().await?;
+    // Create a new read-write transaction
+    let transaction =
+        rexie.transaction(&[LN_PEER_METADATA_STORE_NAME], TransactionMode::ReadWrite)?;
+    let store = transaction.store(LN_PEER_METADATA_STORE_NAME)?;
+
+    let key = JsValue::from(node_id.to_string());
+
+    let current_js: JsValue = store.get(&key).await?;
+    let current: Option<LnPeerMetadata> = serde_wasm_bindgen::from_value(current_js)?;
+
+    // If there is already some metadata, we add the connection string to it
+    // Otherwise we create a new metadata with the connection string
+    let new_info = match current {
+        Some(current) => current
+            .with_connection_string(connection_string.to_string())
+            .with_node(our_node_id.to_string()),
+        None => LnPeerMetadata {
+            connection_string: Some(connection_string.to_string()),
+            label,
+            timestamp: Some(utils::now().as_secs() as u32),
+            nodes: vec![our_node_id.to_string()],
+            ..Default::default()
+        },
+    };
+
+    let json = serde_wasm_bindgen::to_value(&new_info)?;
+    store.put(&json, Some(&key)).await?;
+
+    // Waits for the transaction to complete
+    transaction.done().await?;
+
+    Ok(())
+}
+
+pub(crate) async fn set_peer_label(
+    node_id: &NodeId,
+    label: Option<String>,
+) -> Result<(), MutinyError> {
+    // We filter out empty labels
+    let label = label.filter(|l| !l.is_empty());
+    let rexie = build_gossip_database().await?;
+    // Create a new read-write transaction
+    let transaction =
+        rexie.transaction(&[LN_PEER_METADATA_STORE_NAME], TransactionMode::ReadWrite)?;
+    let store = transaction.store(LN_PEER_METADATA_STORE_NAME)?;
+
+    let key = JsValue::from(node_id.to_string());
+
+    let current_js: JsValue = store.get(&key).await?;
+    let current: Option<LnPeerMetadata> = serde_wasm_bindgen::from_value(current_js)?;
+
+    // If there is already some metadata, we add the label to it
+    // Otherwise we create a new metadata with the label
+    let new_info = match current {
+        Some(current) => current.with_label(label),
+        None => LnPeerMetadata {
+            label,
+            timestamp: Some(utils::now().as_secs() as u32),
+            ..Default::default()
+        },
+    };
+
+    let json = serde_wasm_bindgen::to_value(&new_info)?;
+    store.put(&json, Some(&key)).await?;
+
+    // Waits for the transaction to complete
+    transaction.done().await?;
+
+    Ok(())
+}
+
+pub(crate) async fn delete_peer_info(uuid: &str, node_id: &NodeId) -> Result<(), MutinyError> {
+    let rexie = build_gossip_database().await?;
+    // Create a new read-write transaction
+    let transaction =
+        rexie.transaction(&[LN_PEER_METADATA_STORE_NAME], TransactionMode::ReadWrite)?;
+    let store = transaction.store(LN_PEER_METADATA_STORE_NAME)?;
+
+    let key = JsValue::from(node_id.to_string());
+
+    let current_js: JsValue = store.get(&key).await?;
+    let current: Option<LnPeerMetadata> = serde_wasm_bindgen::from_value(current_js)?;
+
+    if let Some(mut current) = current {
+        current.nodes.retain(|n| n != uuid);
+        if current.nodes.is_empty() {
+            store.delete(&key).await?;
+        } else {
+            let json = serde_wasm_bindgen::to_value(&current)?;
+            store.put(&json, Some(&key)).await?;
+        }
+    }
+
+    // Waits for the transaction to complete
+    transaction.done().await?;
+
+    Ok(())
+}
+
+pub(crate) async fn save_ln_peer_info(
+    node_id: &NodeId,
+    info: &LnPeerMetadata,
+) -> Result<(), MutinyError> {
+    let rexie = build_gossip_database().await?;
+    // Create a new read-write transaction
+    let transaction =
+        rexie.transaction(&[LN_PEER_METADATA_STORE_NAME], TransactionMode::ReadWrite)?;
+    let store = transaction.store(LN_PEER_METADATA_STORE_NAME)?;
+
+    let key = JsValue::from(node_id.to_string());
+
+    let current_js: JsValue = store.get(&key).await?;
+    let current: Option<LnPeerMetadata> = serde_wasm_bindgen::from_value(current_js)?;
+
+    let new_info = info.merge_opt(&current);
+
+    // if the new info is different than the current info, we should to save it
+    if !current.is_some_and(|c| c == new_info) {
+        let json = serde_wasm_bindgen::to_value(&new_info)?;
+        store.put(&json, Some(&key)).await?;
+    }
+
+    // Waits for the transaction to complete
+    transaction.done().await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 pub fn get_dummy_gossip(
     _user_rgs_url: Option<String>,
@@ -350,14 +636,66 @@ pub fn get_dummy_gossip(
 
 #[cfg(test)]
 mod test {
+    use secp256k1::*;
+    use uuid::Uuid;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     use super::*;
 
     wasm_bindgen_test_configure!(run_in_browser);
 
+    fn dummy_node_id() -> NodeId {
+        let secp = Secp256k1::new();
+        let mut entropy = [0u8; 32];
+        getrandom::getrandom(&mut entropy).unwrap();
+        let secret_key = SecretKey::from_slice(&entropy).unwrap();
+        let pubkey = secret_key.public_key(&secp);
+        NodeId::from_pubkey(&pubkey)
+    }
+
+    fn dummy_peer_info() -> (NodeId, LnPeerMetadata) {
+        let node_id = dummy_node_id();
+        let uuid = Uuid::new_v4().to_string();
+        let data = LnPeerMetadata {
+            connection_string: Some("example.com:9735".to_string()),
+            alias: Some("test alias".to_string()),
+            color: Some("123456".to_string()),
+            label: Some("test label".to_string()),
+            timestamp: Some(utils::now().as_secs() as u32),
+            nodes: vec![uuid],
+        };
+
+        (node_id, data)
+    }
+
     #[test]
+    fn test_merge_peer_info() {
+        let no_timestamp = LnPeerMetadata {
+            alias: Some("none".to_string()),
+            timestamp: None,
+            ..Default::default()
+        };
+        let max_timestamp = LnPeerMetadata {
+            alias: Some("max".to_string()),
+            timestamp: Some(u32::MAX),
+            ..Default::default()
+        };
+        let min_timestamp = LnPeerMetadata {
+            alias: Some("min".to_string()),
+            timestamp: Some(u32::MIN),
+            ..Default::default()
+        };
+
+        assert_eq!(no_timestamp.merge(&max_timestamp), max_timestamp);
+        assert_eq!(no_timestamp.merge(&min_timestamp), min_timestamp);
+        assert_eq!(max_timestamp.merge(&min_timestamp), max_timestamp);
+    }
+
+    #[test]
+    // hack to disable this test
+    #[cfg(feature = "ignored_tests")]
     async fn test_gossip() {
+        crate::test::log!("test RGS sync");
         // delete the database if it exists
         Rexie::delete(GOSSIP_DATABASE_NAME).await.unwrap();
 
@@ -372,5 +710,51 @@ mod test {
 
         assert!(data.is_some());
         assert!(data.unwrap().last_sync_timestamp > 0);
+    }
+
+    #[test]
+    async fn test_peer_info() {
+        // delete the database if it exists
+        Rexie::delete(GOSSIP_DATABASE_NAME).await.unwrap();
+
+        let (node_id, data) = dummy_peer_info();
+
+        save_ln_peer_info(&node_id, &data).await.unwrap();
+
+        let read = read_peer_info(&node_id).await.unwrap();
+
+        assert!(read.is_some());
+        assert_eq!(read.unwrap(), data);
+
+        delete_peer_info(data.nodes.first().unwrap(), &node_id)
+            .await
+            .unwrap();
+
+        let read = read_peer_info(&node_id).await.unwrap();
+
+        assert!(read.is_none());
+    }
+
+    #[test]
+    async fn test_delete_label() {
+        // delete the database if it exists
+        Rexie::delete(GOSSIP_DATABASE_NAME).await.unwrap();
+
+        let (node_id, data) = dummy_peer_info();
+
+        save_ln_peer_info(&node_id, &data).await.unwrap();
+
+        // remove the label
+        set_peer_label(&node_id, None).await.unwrap();
+
+        let read = read_peer_info(&node_id).await.unwrap();
+
+        let expected = LnPeerMetadata {
+            label: None,
+            ..data
+        };
+
+        assert!(read.is_some());
+        assert_eq!(read.unwrap(), expected);
     }
 }

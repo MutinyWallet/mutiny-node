@@ -189,10 +189,11 @@ impl NodeManager {
         &self,
         self_node_pubkey: String,
         connection_string: String,
+        label: Option<String>,
     ) -> Result<(), MutinyJsError> {
         Ok(self
             .inner
-            .connect_to_peer(self_node_pubkey, connection_string)
+            .connect_to_peer(self_node_pubkey, connection_string, label)
             .await?)
     }
 
