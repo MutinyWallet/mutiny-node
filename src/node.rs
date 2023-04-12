@@ -57,6 +57,7 @@ use lightning_invoice::{
     Invoice,
 };
 use log::{debug, error, info, trace};
+use secp256k1::rand;
 use std::{net::SocketAddr, str::FromStr, sync::Arc};
 use wasm_bindgen_futures::spawn_local;
 
@@ -127,6 +128,7 @@ impl PubkeyConnectionInfo {
 
 pub(crate) struct Node {
     pub _uuid: String,
+    pub child_index: u32,
     pub pubkey: PublicKey,
     pub peer_manager: Arc<dyn PeerManager>,
     pub keys_manager: Arc<PhantomKeysManager>,
@@ -155,7 +157,7 @@ impl Node {
         network: Network,
         websocket_proxy_addr: String,
         esplora: Arc<EsploraBlockchain>,
-        lsp_client: Option<LspClient>,
+        lsp_clients: &[LspClient],
     ) -> Result<Self, MutinyError> {
         info!("initialized a new node: {uuid}");
 
@@ -215,6 +217,23 @@ impl Node {
             chan_handler: channel_manager.clone(),
             route_handler: Arc::new(IgnoringMessageHandler {}),
             onion_message_handler: Arc::new(IgnoringMessageHandler {}),
+        };
+
+        info!("creating lsp client");
+        let lsp_client: Option<LspClient> = match node_index.lsp {
+            None => {
+                if lsp_clients.is_empty() {
+                    info!("no lsp saved and no lsp clients available");
+                    None
+                } else {
+                    info!("no lsp saved, picking random one");
+                    // If we don't have an lsp saved we should pick a random
+                    // one from our client list and save it for next time
+                    let rand = rand::random::<usize>() % lsp_clients.len();
+                    Some(lsp_clients[rand].clone())
+                }
+            }
+            Some(lsp) => lsp_clients.iter().find(|c| c.url == lsp).cloned(),
         };
 
         let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.pubkey);
@@ -430,6 +449,7 @@ impl Node {
 
         Ok(Node {
             _uuid: uuid,
+            child_index: node_index.child_index,
             pubkey,
             peer_manager: peer_man,
             keys_manager,
@@ -442,6 +462,13 @@ impl Node {
             multi_socket,
             lsp_client,
         })
+    }
+
+    pub fn node_index(&self) -> NodeIndex {
+        NodeIndex {
+            child_index: self.child_index,
+            lsp: self.lsp_client.clone().map(|l| l.url),
+        }
     }
 
     pub async fn connect_peer(

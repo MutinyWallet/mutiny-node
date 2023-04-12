@@ -337,6 +337,12 @@ impl From<MutinyError> for MutinyJsError {
     }
 }
 
+impl From<MutinyStorageError> for MutinyJsError {
+    fn from(e: MutinyStorageError) -> Self {
+        MutinyError::from(e).into()
+    }
+}
+
 impl From<serde_wasm_bindgen::Error> for MutinyJsError {
     fn from(_: serde_wasm_bindgen::Error) -> Self {
         Self::JsonReadWriteError
