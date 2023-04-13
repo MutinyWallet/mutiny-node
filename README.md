@@ -16,7 +16,11 @@ Both of those current web frontends import the NPM package that this project cre
 See the discussion here:
 https://github.com/rust-bitcoin/rust-secp256k1/issues/283
 
-I installed llvm, and then use `just pack-mac` instead of `just pack` (so that wasm-pack will use the homebrew installed version of llvm stuff, instead of the system default)
+You may have to either prefix some environment variables or set them in your env or shell file:
+
+```
+AR=/opt/homebrew/opt/llvm/bin/llvm-ar CC=/opt/homebrew/opt/llvm/bin/clang
+```
 
 ### Dependencies
 
@@ -46,12 +50,6 @@ Build the rust wasm stuff:
 
 ```
 just pack
-```
-
-or on mac:
-
-```
-just pack-mac
 ```
 
 ### Websocket proxy
@@ -93,7 +91,7 @@ Right now publishing is manual.
 First change the version of node-manager in `./node-manager/Cargo.toml`.
 
 ```
-just login #or login-mac
-just release # or release-mac
-just publish # or publish-mac
+just login
+just release
+just publish
 ```

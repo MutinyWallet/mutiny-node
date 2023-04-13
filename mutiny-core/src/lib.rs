@@ -1,3 +1,4 @@
+#![crate_name = "mutiny_core"]
 // wasm_bindgen uses improper casing and it needs to be turned off:
 // https://github.com/rustwasm/wasm-bindgen/issues/2882
 // wasm is also considered "extra_unused_type_parameters"
@@ -11,14 +12,13 @@
 #![feature(async_fn_in_trait)]
 // background file is mostly an LDK copy paste
 #![allow(clippy::all)]
-
 mod background;
 
 mod bdkstorage;
 mod chain;
 mod encrypt;
-mod error;
-mod esplora;
+pub mod error;
+pub mod esplora;
 mod event;
 mod fees;
 mod gossip;
@@ -28,22 +28,12 @@ mod localstorage;
 mod logging;
 mod lspclient;
 mod node;
-mod nodemanager;
+pub mod nodemanager;
 mod peermanager;
 mod proxy;
 mod socket;
 mod utils;
 mod wallet;
-
-use log::{debug, Level};
-use wasm_bindgen::prelude::*;
-
-#[wasm_bindgen(start)]
-pub async fn main_js() -> Result<(), JsValue> {
-    wasm_logger::init(wasm_logger::Config::new(Level::Debug).message_on_new_line());
-    debug!("Main function begins and ends");
-    Ok(())
-}
 
 #[cfg(test)]
 mod test {

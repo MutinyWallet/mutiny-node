@@ -3,9 +3,13 @@ resolver="2"
 
 members = [
     "mutiny-core",
+    "mutiny-wasm",
 ]
 
 
-[profile.release.package.mutiny-core]
 # Tell `rustc` to optimize for small code size.
+[profile.release.package.mutiny-core]
+opt-level = "s"
+
+[profile.release.package.mutiny-wasm]
 opt-level = "s"

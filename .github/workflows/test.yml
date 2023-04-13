@@ -17,9 +17,8 @@ jobs:
           override: true
           profile: minimal
 
-      - uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          version: 'latest'
+      - name: Install wasm-pack
+        run: cargo install wasm-pack
 
       - uses: actions/cache@v2
         with:
@@ -27,13 +26,15 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-browser-tests-${{ hashFiles('**/Cargo.toml') }}
+          key: cargo-${{ runner.os }}-browser-tests-v2-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: |
-            cargo-${{ runner.os }}-browser-tests-
+            cargo-${{ runner.os }}-browser-tests-v2-
             cargo-${{ runner.os }}-
 
-      - name: Build wasm
-        run: wasm-pack build ./mutiny-core --release --target web
+      - name: Build wasm package
+        env:
+          RUSTUP_TOOLCHAIN: nightly
+        run: wasm-pack build ./mutiny-wasm --release --target web
 
   browser_tests:
     name: Browser Tests
@@ -48,9 +49,8 @@ jobs:
           override: true
           profile: minimal
 
-      - uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          version: 'latest'
+      - name: Install wasm-pack
+        run: cargo install wasm-pack
 
       - name: Setup trunk
         uses: jetli/trunk-action@v0.1.0
@@ -63,13 +63,20 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-browser-tests-${{ hashFiles('**/Cargo.toml') }}
+          key: cargo-${{ runner.os }}-browser-tests-v2-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: |
-            cargo-${{ runner.os }}-browser-tests-
+            cargo-${{ runner.os }}-browser-tests-v2-
             cargo-${{ runner.os }}-
 
-      - name: Run node-manager wasm tests
+      - name: Run mutiny-core wasm tests
+        env:
+          RUSTUP_TOOLCHAIN: nightly
         run: wasm-pack test --headless --firefox --chrome ./mutiny-core
+
+      - name: Run mutiny-wasm wasm tests
+        env:
+          RUSTUP_TOOLCHAIN: nightly
+        run: wasm-pack test --headless --firefox --chrome ./mutiny-wasm
 
   rust_tests:
     name: Rust Tests
@@ -95,9 +102,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-rust-tests-${{ hashFiles('**/Cargo.toml') }}
+          key: cargo-${{ runner.os }}-rust-tests-v2-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: |
-            cargo-${{ runner.os }}-rust-tests-
+            cargo-${{ runner.os }}-rust-tests-v2-
             cargo-${{ runner.os }}-
 
       - name: Check formatting
@@ -105,3 +112,6 @@ jobs:
 
       - name: Check clippy mutiny-core
         run: cargo clippy --package mutiny-core -- -D warnings -Aclippy::drop_non_drop #wasm-bindgen pr #3089
+
+      - name: Check clippy mutiny-wasm
+        run: cargo clippy --package mutiny-wasm -- -D warnings -Aclippy::drop_non_drop #wasm-bindgen pr #3089

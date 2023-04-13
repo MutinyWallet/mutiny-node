@@ -37,7 +37,7 @@ jobs:
           version: 'latest'
 
       - name: Build wasm
-        run: wasm-pack build ./mutiny-core --release --target web --scope mutinywallet
+        run: wasm-pack build ./mutiny-wasm --release --target web --scope mutinywallet
 
       - name: Publish wasm
         run: wasm-pack publish --access public -t web
