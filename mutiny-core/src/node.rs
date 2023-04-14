@@ -558,7 +558,7 @@ impl Node {
                     description,
                     now,
                     1500,
-                    None,
+                    Some(40),
                 )
             }
             Some(r) => create_phantom_invoice::<
@@ -575,7 +575,7 @@ impl Node {
                 self.keys_manager.clone(),
                 self.logger.clone(),
                 currency_from_network(self.network),
-                None,
+                Some(40),
                 crate::utils::now(),
             ),
         };
