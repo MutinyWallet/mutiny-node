@@ -18,5 +18,5 @@ test:
     wasm-pack test --headless --chrome ./mutiny-wasm
 
 clippy:
-    cargo clippy --package mutiny-core -- -Aclippy::drop_non_drop
+    cargo clippy --package mutiny-core
     cargo clippy --package mutiny-wasm -- -Aclippy::drop_non_drop

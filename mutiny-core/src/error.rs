@@ -216,8 +216,8 @@ impl From<rexie::Error> for MutinyError {
     }
 }
 
-impl From<bitcoin_hashes::hex::Error> for MutinyError {
-    fn from(_e: bitcoin_hashes::hex::Error) -> Self {
+impl From<bitcoin::hashes::hex::Error> for MutinyError {
+    fn from(_e: bitcoin::hashes::hex::Error) -> Self {
         MutinyError::ReadError {
             source: MutinyStorageError::Other(anyhow::anyhow!("Failed to decode hex")),
         }

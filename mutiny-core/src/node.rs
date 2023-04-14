@@ -10,7 +10,7 @@ use crate::{
     localstorage::MutinyBrowserStorage,
     logging::MutinyLogger,
     lspclient::LspClient,
-    nodemanager::{MutinyInvoice, MutinyInvoiceParams, NodeIndex},
+    nodemanager::{MutinyInvoice, NodeIndex},
     peermanager::{GossipMessageHandler, PeerManager, PeerManagerImpl},
     proxy::WsProxy,
     socket::{
@@ -23,9 +23,11 @@ use crate::{
 use anyhow::Context;
 use bdk::blockchain::EsploraBlockchain;
 use bip39::Mnemonic;
+use bitcoin::hashes::hex::ToHex;
+use bitcoin::hashes::sha256;
 use bitcoin::hashes::sha256::Hash as Sha256;
+use bitcoin::secp256k1::rand;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network};
-use bitcoin_hashes::hex::ToHex;
 use lightning::{
     chain::{
         chainmonitor,
@@ -59,7 +61,6 @@ use lightning_invoice::{
     Invoice,
 };
 use log::{debug, error, info, trace};
-use secp256k1::rand;
 use std::{net::SocketAddr, str::FromStr, sync::Arc};
 use wasm_bindgen_futures::spawn_local;
 
@@ -729,7 +730,7 @@ impl Node {
                     let amount_sats: Option<u64> = i.amt_msat.0.map(|s| s / 1_000);
                     let fees_paid = i.fee_paid_msat.map(|f| f / 1_000);
                     let preimage = i.preimage.map(|p| p.to_hex());
-                    let params = MutinyInvoiceParams {
+                    let params = MutinyInvoice {
                         bolt11: None,
                         description: None,
                         payment_hash: h,
@@ -741,7 +742,7 @@ impl Node {
                         fees_paid,
                         is_send: !inbound,
                     };
-                    Some(MutinyInvoice::new(params))
+                    Some(params)
                 }
             })
             .collect()
@@ -749,7 +750,7 @@ impl Node {
 
     fn get_payment_info_from_persisters(
         &self,
-        payment_hash: &bitcoin_hashes::sha256::Hash,
+        payment_hash: &bitcoin::hashes::sha256::Hash,
     ) -> Result<(PaymentInfo, bool), MutinyError> {
         // try inbound first
         if let Some(payment_info) = self.persister.read_payment_info(
@@ -868,7 +869,7 @@ impl Node {
 
         let payment_hash = PaymentHash(Sha256::hash(&preimage.0).into_inner());
 
-        let last_update = crate::utils::now().as_secs();
+        let last_update = utils::now().as_secs();
         let mut payment_info = PaymentInfo {
             preimage: Some(preimage.0),
             secret: None,
@@ -884,19 +885,18 @@ impl Node {
 
         match pay_result {
             Ok(_) => {
-                let params = MutinyInvoiceParams {
+                let mutiny_invoice = MutinyInvoice {
                     bolt11: None,
                     description: None,
-                    payment_hash: payment_hash.0.to_hex(),
+                    payment_hash: sha256::Hash::from_inner(payment_hash.0),
                     preimage: Some(preimage.0.to_hex()),
-                    payee_pubkey: Some(to_node.to_hex()),
+                    payee_pubkey: Some(to_node),
                     amount_sats: Some(amt_sats),
                     expire: payment_info.last_update,
                     paid: false,
                     fees_paid: None,
                     is_send: true,
                 };
-                let mutiny_invoice: MutinyInvoice = MutinyInvoice::new(params);
                 Ok(mutiny_invoice)
             }
             Err(_) => {
@@ -1097,11 +1097,11 @@ pub(crate) fn default_user_config() -> UserConfig {
 #[cfg(test)]
 mod tests {
     use crate::test::*;
+    use bitcoin::secp256k1::PublicKey;
     use std::str::FromStr;
 
     use crate::node::parse_peer_info;
 
-    use secp256k1::PublicKey;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);

@@ -3,8 +3,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
-use bitcoin_hashes::hex::{FromHex, ToHex};
 use lightning::ln::msgs::NodeAnnouncement;
 use lightning::routing::gossip::{NodeAlias, NodeId};
 use lightning::routing::scoring::ProbabilisticScoringParameters;
@@ -12,7 +13,6 @@ use lightning::util::ser::{ReadableArgs, Writeable};
 use log::{debug, error, info, warn};
 use reqwest::Client;
 use rexie::{ObjectStore, Rexie, Store, TransactionMode};
-use secp256k1::PublicKey;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::spawn_local;
@@ -636,7 +636,7 @@ pub fn get_dummy_gossip(
 
 #[cfg(test)]
 mod test {
-    use secp256k1::*;
+    use bitcoin::secp256k1::{Secp256k1, SecretKey};
     use uuid::Uuid;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 

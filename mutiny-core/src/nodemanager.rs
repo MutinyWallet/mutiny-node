@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::{collections::HashMap, ops::Deref, str::FromStr, sync::Arc};
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use crate::{
     chain::MutinyChain,
@@ -12,9 +12,7 @@ use crate::{
     lspclient::LspClient,
     node::{Node, ProbScorer, PubkeyConnectionInfo, RapidGossipSync},
     utils,
-    utils::is_valid_network,
-    utils::network_from_currency,
-    utils::set_panic_hook,
+    utils::{is_valid_network, network_from_currency},
     wallet::get_esplora_url,
     wallet::MutinyWallet,
 };
@@ -22,9 +20,9 @@ use bdk::{
     blockchain::EsploraBlockchain, wallet::AddressIndex, BlockTime, LocalUtxo, TransactionDetails,
 };
 use bip39::Mnemonic;
-use bitcoin::consensus::deserialize;
-use bitcoin::hashes::hex::{FromHex, ToHex};
-use bitcoin::{Address, Network, OutPoint, PublicKey, Transaction, Txid};
+use bitcoin::hashes::sha256;
+use bitcoin::secp256k1::{rand, PublicKey};
+use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
 use lightning::chain::keysinterface::{NodeSigner, Recipient};
@@ -36,7 +34,6 @@ use lnurl::lnurl::LnUrl;
 use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use log::{debug, error, info, warn};
 use reqwest::Client;
-use secp256k1::rand;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -52,7 +49,7 @@ pub struct NodeManager {
     fee_estimator: Arc<MutinyFeeEstimator>,
     storage: MutinyBrowserStorage,
     node_storage: Mutex<NodeStorage>,
-    nodes: Arc<Mutex<HashMap<String, Arc<Node>>>>,
+    nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node>>>>,
     lnurl_client: LnUrlClient,
     lsp_clients: Vec<LspClient>,
 }
@@ -74,59 +71,29 @@ pub(crate) struct NodeIndex {
 // Used for public facing identification.
 pub struct NodeIdentity {
     pub uuid: String,
-    pub pubkey: String,
+    pub pubkey: PublicKey,
 }
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct MutinyBip21RawMaterials {
-    pub address: String,
-    pub invoice: String,
+    pub address: Address,
+    pub invoice: String, // todo change to Invoice once ldk fixes the serde issue
     pub btc_amount: Option<String>,
     pub description: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct MutinyInvoice {
-    pub bolt11: Option<String>,
+    pub bolt11: Option<String>, // todo change to Invoice once ldk fixes the serde issue
     pub description: Option<String>,
-    pub payment_hash: String,
+    pub payment_hash: sha256::Hash,
     pub preimage: Option<String>,
-    pub payee_pubkey: Option<String>,
+    pub payee_pubkey: Option<PublicKey>,
     pub amount_sats: Option<u64>,
     pub expire: u64,
     pub paid: bool,
     pub fees_paid: Option<u64>,
     pub is_send: bool,
-}
-
-pub(crate) struct MutinyInvoiceParams {
-    pub bolt11: Option<String>,
-    pub description: Option<String>,
-    pub payment_hash: String,
-    pub preimage: Option<String>,
-    pub payee_pubkey: Option<String>,
-    pub amount_sats: Option<u64>,
-    pub expire: u64,
-    pub paid: bool,
-    pub fees_paid: Option<u64>,
-    pub is_send: bool,
-}
-
-impl MutinyInvoice {
-    pub(crate) fn new(p: MutinyInvoiceParams) -> Self {
-        MutinyInvoice {
-            bolt11: p.bolt11,
-            description: p.description,
-            payment_hash: p.payment_hash,
-            preimage: p.preimage,
-            payee_pubkey: p.payee_pubkey,
-            amount_sats: p.amount_sats,
-            expire: p.expire,
-            paid: p.paid,
-            fees_paid: p.fees_paid,
-            is_send: p.is_send,
-        }
-    }
 }
 
 impl From<Invoice> for MutinyInvoice {
@@ -142,9 +109,9 @@ impl From<Invoice> for MutinyInvoice {
         MutinyInvoice {
             bolt11: Some(value.to_string()),
             description,
-            payment_hash: value.payment_hash().to_owned().to_hex(),
+            payment_hash: value.payment_hash().to_owned(),
             preimage: None,
-            payee_pubkey: value.payee_pub_key().map(|p| p.to_hex()),
+            payee_pubkey: value.payee_pub_key().map(|p| p.to_owned()),
             amount_sats: value.amount_milli_satoshis().map(|m| m / 1000),
             expire: expiry,
             paid: false,
@@ -156,7 +123,7 @@ impl From<Invoice> for MutinyInvoice {
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct MutinyPeer {
-    pub pubkey: secp256k1::PublicKey,
+    pub pubkey: PublicKey,
     pub connection_string: Option<String>,
     pub alias: Option<String>,
     pub color: Option<String>,
@@ -185,8 +152,8 @@ pub struct MutinyChannel {
     pub balance: u64,
     pub size: u64,
     pub reserve: u64,
-    pub outpoint: Option<String>,
-    pub peer: String,
+    pub outpoint: Option<OutPoint>,
+    pub peer: PublicKey,
     pub confirmed: bool,
 }
 
@@ -196,8 +163,8 @@ impl From<&ChannelDetails> for MutinyChannel {
             balance: c.outbound_capacity_msat / 1_000,
             size: c.channel_value_satoshis,
             reserve: c.unspendable_punishment_reserve.unwrap_or(0),
-            outpoint: c.funding_txo.map(|f| f.into_bitcoin_outpoint().to_string()),
-            peer: c.counterparty.node_id.to_hex(),
+            outpoint: c.funding_txo.map(|f| f.into_bitcoin_outpoint()),
+            peer: c.counterparty.node_id,
             confirmed: c.is_channel_ready, // fixme not exactly correct
         }
     }
@@ -222,37 +189,23 @@ impl NodeManager {
 
     pub async fn new(
         password: String,
-        mnemonic: Option<String>,
+        mnemonic: Option<Mnemonic>,
         websocket_proxy_addr: Option<String>,
-        network_str: Option<String>,
+        network: Option<Network>,
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
     ) -> Result<NodeManager, MutinyError> {
-        set_panic_hook();
-
         let websocket_proxy_addr =
             websocket_proxy_addr.unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
 
-        let network: Network = network_str
-            .unwrap_or_else(|| String::from("testnet"))
-            .parse()
-            .expect("invalid network");
+        // todo we should eventually have default mainnet
+        let network: Network = network.unwrap_or(Network::Testnet);
 
         let storage = MutinyBrowserStorage::new(password);
 
         let mnemonic = match mnemonic {
-            Some(m) => {
-                debug!("{}", &m);
-                let seed = match Mnemonic::from_str(String::as_str(&m)) {
-                    Ok(seed) => seed,
-                    Err(e) => {
-                        error!("{}", e);
-                        return Err(MutinyError::InvalidMnemonic.into());
-                    }
-                };
-                storage.insert_mnemonic(seed)
-            }
+            Some(seed) => storage.insert_mnemonic(seed),
             None => match storage.get_mnemonic() {
                 Ok(mnemonic) => mnemonic,
                 Err(_) => {
@@ -348,7 +301,7 @@ impl NodeManager {
                 .get_node_id(Recipient::Node)
                 .expect("Failed to get node id");
 
-            nodes_map.insert(id.to_hex(), Arc::new(node));
+            nodes_map.insert(id, Arc::new(node));
         }
 
         // when we create the nodes we set the LSP if one is missing
@@ -389,29 +342,20 @@ impl NodeManager {
         })
     }
 
-    pub fn broadcast_transaction(&self, str: String) -> Result<(), MutinyError> {
-        let tx_bytes = match Vec::from_hex(str.as_str()) {
-            Ok(tx_bytes) => tx_bytes,
-            Err(_) => return Err(MutinyError::WalletOperationFailed.into()),
-        };
-        let tx: Transaction = match deserialize(&tx_bytes) {
-            Ok(tx) => tx,
-            Err(_) => return Err(MutinyError::WalletOperationFailed.into()),
-        };
-
-        self.chain.broadcast_transaction(&tx);
+    pub fn broadcast_transaction(&self, tx: &Transaction) -> Result<(), MutinyError> {
+        self.chain.broadcast_transaction(tx);
         Ok(())
     }
 
-    pub fn show_seed(&self) -> String {
-        self.mnemonic.to_string()
+    pub fn show_seed(&self) -> Mnemonic {
+        self.mnemonic.clone()
     }
 
-    pub fn get_network(&self) -> String {
-        self.network.to_string()
+    pub fn get_network(&self) -> Network {
+        self.network
     }
 
-    pub async fn get_new_address(&self) -> Result<String, MutinyError> {
+    pub async fn get_new_address(&self) -> Result<Address, MutinyError> {
         match self
             .wallet
             .wallet
@@ -419,8 +363,8 @@ impl NodeManager {
             .await
             .get_address(AddressIndex::New)
         {
-            Ok(addr) => Ok(addr.address.to_string()),
-            Err(_) => Err(MutinyError::WalletOperationFailed.into()),
+            Ok(addr) => Ok(addr.address),
+            Err(_) => Err(MutinyError::WalletOperationFailed),
         }
     }
 
@@ -459,12 +403,10 @@ impl NodeManager {
 
     pub async fn send_to_address(
         &self,
-        destination_address: String,
+        send_to: Address,
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        let send_to = Address::from_str(&destination_address)?;
-
         if !is_valid_network(self.network, send_to.network) {
             return Err(MutinyError::IncorrectNetwork(send_to.network));
         }
@@ -474,11 +416,9 @@ impl NodeManager {
 
     pub async fn sweep_wallet(
         &self,
-        destination_address: String,
+        send_to: Address,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        let send_to = Address::from_str(&destination_address)?;
-
         if !is_valid_network(self.network, send_to.network) {
             return Err(MutinyError::IncorrectNetwork(send_to.network));
         }
@@ -488,10 +428,8 @@ impl NodeManager {
 
     pub async fn check_address(
         &self,
-        address: String,
+        address: Address,
     ) -> Result<Option<TransactionDetails>, MutinyError> {
-        let address = Address::from_str(address.as_str())?;
-
         if !is_valid_network(self.network, address.network) {
             return Err(MutinyError::IncorrectNetwork(address.network));
         }
@@ -534,9 +472,8 @@ impl NodeManager {
 
     pub async fn get_transaction(
         &self,
-        txid: String,
+        txid: &Txid,
     ) -> Result<Option<TransactionDetails>, MutinyError> {
-        let txid = Txid::from_str(txid.as_str())?;
         Ok(self.wallet.get_transaction(txid, false).await?)
     }
 
@@ -616,15 +553,15 @@ impl NodeManager {
         }
     }
 
-    pub async fn list_nodes(&self) -> Result<Vec<String>, MutinyError> {
+    pub async fn list_nodes(&self) -> Result<Vec<PublicKey>, MutinyError> {
         let nodes = self.nodes.lock().await;
-        let peers: Vec<String> = nodes.iter().map(|(_, n)| n.pubkey.to_hex()).collect();
+        let peers = nodes.iter().map(|(_, n)| n.pubkey).collect();
         Ok(peers)
     }
 
     pub async fn connect_to_peer(
         &self,
-        self_node_pubkey: String,
+        self_node_pubkey: PublicKey,
         connection_string: String,
         label: Option<String>,
     ) -> Result<(), MutinyError> {
@@ -650,15 +587,11 @@ impl NodeManager {
 
     pub async fn disconnect_peer(
         &self,
-        self_node_pubkey: String,
-        peer: String,
+        self_node_pubkey: PublicKey,
+        peer: PublicKey,
     ) -> Result<(), MutinyError> {
         if let Some(node) = self.nodes.lock().await.get(&self_node_pubkey) {
-            let node_id = match PublicKey::from_str(peer.as_str()) {
-                Ok(node_id) => Ok(node_id.inner),
-                Err(_) => Err(MutinyError::PubkeyInvalid),
-            }?;
-            node.disconnect_peer(node_id);
+            node.disconnect_peer(peer);
             Ok(())
         } else {
             error!("could not find internal node {self_node_pubkey}");
@@ -668,11 +601,10 @@ impl NodeManager {
 
     pub async fn delete_peer(
         &self,
-        self_node_pubkey: String,
-        peer: String,
+        self_node_pubkey: PublicKey,
+        peer: PublicKey,
     ) -> Result<(), MutinyError> {
-        let pubkey = PublicKey::from_str(&peer).expect("invalid pubkey");
-        let node_id = NodeId::from_pubkey(&pubkey.inner);
+        let node_id = NodeId::from_pubkey(&peer);
 
         if let Some(node) = self.nodes.lock().await.get(&self_node_pubkey) {
             gossip::delete_peer_info(&node._uuid, &node_id).await?;
@@ -685,7 +617,7 @@ impl NodeManager {
 
     pub async fn label_peer(
         &self,
-        peer: secp256k1::PublicKey,
+        peer: PublicKey,
         label: Option<String>,
     ) -> Result<(), MutinyError> {
         let node_id = NodeId::from_pubkey(&peer);
@@ -731,43 +663,33 @@ impl NodeManager {
 
     pub async fn pay_invoice(
         &self,
-        from_node: String,
-        invoice_str: String,
+        from_node: PublicKey,
+        invoice: Invoice,
         amt_sats: Option<u64>,
     ) -> Result<MutinyInvoice, MutinyError> {
-        let invoice = Invoice::from_str(&invoice_str)?;
-
         let invoice_network = network_from_currency(invoice.currency());
         if !is_valid_network(invoice_network, self.network) {
             return Err(MutinyError::IncorrectNetwork(invoice_network));
         }
 
         let nodes = self.nodes.lock().await;
-        let node = nodes.get(from_node.as_str()).unwrap();
+        let node = nodes.get(&from_node).unwrap();
         node.pay_invoice(invoice, amt_sats).map_err(|e| e.into())
     }
 
     pub async fn keysend(
         &self,
-        from_node: String,
-        to_node: String,
+        from_node: PublicKey,
+        to_node: PublicKey,
         amt_sats: u64,
     ) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
         debug!("Keysending to {to_node}");
-        let node = nodes.get(from_node.as_str()).unwrap();
-
-        let node_id = match PublicKey::from_str(to_node.as_str()) {
-            Ok(node_id) => Ok(node_id.inner),
-            Err(_) => Err(MutinyError::PubkeyInvalid),
-        }?;
-
-        node.keysend(node_id, amt_sats).map_err(|e| e.into())
+        let node = nodes.get(&from_node).unwrap();
+        node.keysend(to_node, amt_sats).map_err(|e| e.into())
     }
 
-    pub async fn decode_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyError> {
-        let invoice = Invoice::from_str(&invoice)?;
-
+    pub async fn decode_invoice(&self, invoice: Invoice) -> Result<MutinyInvoice, MutinyError> {
         let invoice_network = network_from_currency(invoice.currency());
         if !is_valid_network(invoice_network, self.network) {
             return Err(MutinyError::IncorrectNetwork(invoice_network));
@@ -776,9 +698,7 @@ impl NodeManager {
         Ok(invoice.into())
     }
 
-    pub async fn decode_lnurl(&self, lnurl: String) -> Result<LnUrlParams, MutinyError> {
-        let lnurl = LnUrl::from_str(&lnurl)?;
-
+    pub async fn decode_lnurl(&self, lnurl: LnUrl) -> Result<LnUrlParams, MutinyError> {
         let response = self.lnurl_client.make_request(&lnurl.url).await?;
 
         let params = match response {
@@ -804,12 +724,10 @@ impl NodeManager {
 
     pub async fn lnurl_pay(
         &self,
-        from_node: String,
-        lnurl: String,
+        from_node: PublicKey,
+        lnurl: LnUrl,
         amount_sats: u64,
     ) -> Result<MutinyInvoice, MutinyError> {
-        let lnurl = LnUrl::from_str(&lnurl)?;
-
         let response = self.lnurl_client.make_request(&lnurl.url).await?;
 
         match response {
@@ -817,8 +735,7 @@ impl NodeManager {
                 let msats = amount_sats * 1000;
                 let invoice = self.lnurl_client.get_invoice(&pay, msats).await?;
 
-                self.pay_invoice(from_node, invoice.invoice().to_string(), None)
-                    .await
+                self.pay_invoice(from_node, invoice.invoice(), None).await
             }
             LnUrlResponse::LnUrlWithdrawResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
             LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
@@ -827,11 +744,9 @@ impl NodeManager {
 
     pub async fn lnurl_withdraw(
         &self,
-        lnurl: String,
+        lnurl: LnUrl,
         amount_sats: u64,
     ) -> Result<bool, MutinyError> {
-        let lnurl = LnUrl::from_str(&lnurl)?;
-
         let response = self.lnurl_client.make_request(&lnurl.url).await?;
 
         match response {
@@ -843,7 +758,7 @@ impl NodeManager {
                 let invoice_str = mutiny_invoice.bolt11.expect("Invoice should have bolt11");
                 let res = self
                     .lnurl_client
-                    .do_withdrawal(&withdraw, &invoice_str)
+                    .do_withdrawal(&withdraw, &invoice_str.to_string())
                     .await?;
                 match res {
                     Response::Ok { .. } => Ok(true),
@@ -853,8 +768,7 @@ impl NodeManager {
         }
     }
 
-    pub async fn get_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyError> {
-        let invoice = Invoice::from_str(&invoice)?;
+    pub async fn get_invoice(&self, invoice: Invoice) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
         let inv_opt: Option<MutinyInvoice> = nodes
             .iter()
@@ -865,7 +779,10 @@ impl NodeManager {
         }
     }
 
-    pub async fn get_invoice_by_hash(&self, hash: String) -> Result<MutinyInvoice, MutinyError> {
+    pub async fn get_invoice_by_hash(
+        &self,
+        hash: sha256::Hash,
+    ) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
         for (_, node) in nodes.iter() {
             if let Ok(invs) = node.list_invoices() {
@@ -892,19 +809,14 @@ impl NodeManager {
 
     pub async fn open_channel(
         &self,
-        from_node: String,
-        to_pubkey: String,
+        from_node: PublicKey,
+        to_pubkey: PublicKey,
         amount: u64,
     ) -> Result<MutinyChannel, MutinyError> {
         let nodes = self.nodes.lock().await;
-        let node = nodes.get(from_node.as_str()).unwrap();
+        let node = nodes.get(&from_node).unwrap();
 
-        let node_id = match PublicKey::from_str(to_pubkey.as_str()) {
-            Ok(node_id) => Ok(node_id.inner),
-            Err(_) => Err(MutinyError::PubkeyInvalid),
-        }?;
-
-        let chan_id = node.open_channel(node_id, amount).await?;
+        let chan_id = node.open_channel(to_pubkey, amount).await?;
 
         let all_channels = node.channel_manager.list_channels();
         let found_channel = all_channels.iter().find(|chan| chan.channel_id == chan_id);
@@ -915,9 +827,7 @@ impl NodeManager {
         }
     }
 
-    pub async fn close_channel(&self, outpoint: String) -> Result<(), MutinyError> {
-        let outpoint: OutPoint =
-            OutPoint::from_str(outpoint.as_str()).expect("Failed to parse outpoint");
+    pub async fn close_channel(&self, outpoint: OutPoint) -> Result<(), MutinyError> {
         let nodes = self.nodes.lock().await;
         let channel_opt: Option<(Arc<Node>, ChannelDetails)> = nodes.iter().find_map(|(_, n)| {
             n.channel_manager
@@ -960,8 +870,7 @@ impl NodeManager {
             .iter()
             .map(|(node_id, metadata)| MutinyPeer {
                 // node id should be safe here
-                pubkey: secp256k1::PublicKey::from_slice(node_id.as_slice())
-                    .expect("Invalid pubkey"),
+                pubkey: PublicKey::from_slice(node_id.as_slice()).expect("Invalid pubkey"),
                 connection_string: metadata.connection_string.clone(),
                 alias: metadata.alias.clone(),
                 color: metadata.color.clone(),
@@ -973,7 +882,7 @@ impl NodeManager {
         let nodes = self.nodes.lock().await;
 
         // get peers we are connected to
-        let connected_peers: Vec<secp256k1::PublicKey> = nodes
+        let connected_peers: Vec<PublicKey> = nodes
             .iter()
             .flat_map(|(_, n)| n.peer_manager.get_peer_node_ids())
             .collect();
@@ -1135,11 +1044,11 @@ pub(crate) async fn create_new_node_from_node_manager(
         .clone()
         .lock()
         .await
-        .insert(node_pubkey.to_string(), Arc::new(new_node));
+        .insert(node_pubkey, Arc::new(new_node));
 
     Ok(NodeIdentity {
         uuid: next_node_uuid.clone(),
-        pubkey: node_pubkey.to_string(),
+        pubkey: node_pubkey,
     })
 }
 
@@ -1147,6 +1056,7 @@ pub(crate) async fn create_new_node_from_node_manager(
 mod tests {
     use crate::keymanager::generate_seed;
     use crate::nodemanager::NodeManager;
+    use bitcoin::Network;
 
     use crate::test::*;
 
@@ -1163,7 +1073,7 @@ mod tests {
             "password".to_string(),
             None,
             None,
-            Some("testnet".to_owned()),
+            Some(Network::Testnet),
             None,
             None,
             None,
@@ -1182,9 +1092,9 @@ mod tests {
         let seed = generate_seed(12).expect("Failed to gen seed");
         let nm = NodeManager::new(
             "password".to_string(),
-            Some(seed.to_string()),
+            Some(seed.clone()),
             None,
-            Some("testnet".to_owned()),
+            Some(Network::Testnet),
             None,
             None,
             None,
@@ -1193,7 +1103,7 @@ mod tests {
         .unwrap();
 
         assert!(NodeManager::has_node_manager());
-        assert_eq!(seed.to_string(), nm.show_seed());
+        assert_eq!(seed, nm.show_seed());
 
         cleanup_test();
     }
@@ -1205,9 +1115,9 @@ mod tests {
         let seed = generate_seed(12).expect("Failed to gen seed");
         let nm = NodeManager::new(
             "password".to_string(),
-            Some(seed.to_string()),
+            Some(seed),
             None,
-            Some("testnet".to_owned()),
+            Some(Network::Testnet),
             None,
             None,
             None,
@@ -1219,7 +1129,7 @@ mod tests {
             let node_identity = nm.new_node().await.expect("should create new node");
             let node_storage = nm.node_storage.lock().await;
             assert_ne!("", node_identity.uuid);
-            assert_ne!("", node_identity.pubkey);
+            assert_ne!("", node_identity.pubkey.to_string());
             assert_eq!(1, node_storage.nodes.len());
 
             let retrieved_node = node_storage.nodes.get(&node_identity.uuid).unwrap();
@@ -1231,7 +1141,7 @@ mod tests {
             let node_storage = nm.node_storage.lock().await;
 
             assert_ne!("", node_identity.uuid);
-            assert_ne!("", node_identity.pubkey);
+            assert_ne!("", node_identity.pubkey.to_string());
             assert_eq!(2, node_storage.nodes.len());
 
             let retrieved_node = node_storage.nodes.get(&node_identity.uuid).unwrap();

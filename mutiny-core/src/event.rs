@@ -5,9 +5,9 @@ use crate::utils::sleep;
 use crate::wallet::MutinyWallet;
 use bdk::blockchain::Blockchain;
 use bdk::wallet::AddressIndex;
+use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
-use bitcoin_hashes::hex::ToHex;
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
     chain::keysinterface::PhantomKeysManager,

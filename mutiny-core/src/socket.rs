@@ -1,7 +1,7 @@
 use crate::peermanager::PeerManager;
 use crate::proxy::Proxy;
 use crate::utils;
-use bitcoin_hashes::hex::ToHex;
+use bitcoin::hashes::hex::ToHex;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use futures::lock::Mutex;
 use gloo_net::websocket::events::CloseEvent;

@@ -10,13 +10,17 @@ use crate::node::{NetworkGraph, Router};
 use crate::{error, utils};
 use anyhow::anyhow;
 use bdk::blockchain::EsploraBlockchain;
+use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::hashes::sha256;
 use bitcoin::BlockHash;
 use bitcoin::Network;
-use bitcoin_hashes::hex::ToHex;
 use futures::{try_join, TryFutureExt};
+use lightning::chain;
+use lightning::chain::chainmonitor::{MonitorUpdateId, Persist};
 use lightning::chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate};
 use lightning::chain::keysinterface::PhantomKeysManager;
 use lightning::chain::keysinterface::{InMemorySigner, WriteableEcdsaChannelSigner};
+use lightning::chain::transaction::OutPoint;
 use lightning::chain::BestBlock;
 use lightning::ln::channelmanager::{
     self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
@@ -28,11 +32,6 @@ use lightning::util::persist::Persister;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use std::collections::HashMap;
 use std::io;
-
-use lightning::chain;
-use lightning::chain::chainmonitor::{MonitorUpdateId, Persist};
-use lightning::chain::transaction::OutPoint;
-use lightning::io::Error;
 use std::sync::Arc;
 
 const CHANNEL_MANAGER_KEY: &str = "manager";
@@ -71,7 +70,11 @@ impl MutinyNodePersister {
         format!("{}_{}", key, self.node_id)
     }
 
-    fn persist_local_storage<W: Writeable>(&self, key: &str, object: &W) -> Result<(), Error> {
+    fn persist_local_storage<W: Writeable>(
+        &self,
+        key: &str,
+        object: &W,
+    ) -> Result<(), lightning::io::Error> {
         let key_with_node = self.get_key(key);
         self.storage
             .set(key_with_node, object.encode())
@@ -165,10 +168,10 @@ impl MutinyNodePersister {
 
                 let height_future = esplora
                     .get_height()
-                    .map_err(|_| error::MutinyError::ChainAccessFailed);
+                    .map_err(|_| MutinyError::ChainAccessFailed);
                 let hash_future = esplora
                     .get_tip_hash()
-                    .map_err(|_| error::MutinyError::ChainAccessFailed);
+                    .map_err(|_| MutinyError::ChainAccessFailed);
                 let (height, hash) = try_join!(height_future, hash_future)?;
                 let chain_params = ChainParameters {
                     network,
@@ -229,14 +232,20 @@ impl MutinyNodePersister {
         deserialized_value.ok()
     }
 
-    pub(crate) fn list_payment_info(&self, inbound: bool) -> Vec<(String, PaymentInfo)> {
+    pub(crate) fn list_payment_info(&self, inbound: bool) -> Vec<(sha256::Hash, PaymentInfo)> {
         let prefix = match inbound {
             true => PAYMENT_INBOUND_PREFIX_KEY,
             false => PAYMENT_OUTBOUND_PREFIX_KEY,
         };
         let map: HashMap<String, PaymentInfo> = self.storage.scan(prefix, None);
 
-        map.into_iter().collect()
+        // convert keys to sha256::Hash
+        map.into_iter()
+            .map(|(key, value)| {
+                let hash = sha256::Hash::from_hex(&key).expect("key should be a sha256 hash");
+                (hash, value)
+            })
+            .collect()
     }
 }
 
@@ -270,15 +279,21 @@ impl
         utils::Mutex<ProbScorer>,
     > for MutinyNodePersister
 {
-    fn persist_manager(&self, channel_manager: &PhantomChannelManager) -> Result<(), Error> {
+    fn persist_manager(
+        &self,
+        channel_manager: &PhantomChannelManager,
+    ) -> Result<(), lightning::io::Error> {
         self.persist_local_storage(CHANNEL_MANAGER_KEY, channel_manager)
     }
 
-    fn persist_graph(&self, network_graph: &NetworkGraph) -> Result<(), Error> {
+    fn persist_graph(&self, network_graph: &NetworkGraph) -> Result<(), lightning::io::Error> {
         gossip::persist_network_graph(network_graph)
     }
 
-    fn persist_scorer(&self, scorer: &utils::Mutex<ProbScorer>) -> Result<(), Error> {
+    fn persist_scorer(
+        &self,
+        scorer: &utils::Mutex<ProbScorer>,
+    ) -> Result<(), lightning::io::Error> {
         gossip::persist_scorer(scorer)
     }
 }
