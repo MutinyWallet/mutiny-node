@@ -39,6 +39,8 @@ jobs:
   browser_tests:
     name: Browser Tests
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
@@ -68,15 +70,11 @@ jobs:
             cargo-${{ runner.os }}-browser-tests-v2-
             cargo-${{ runner.os }}-
 
-      - name: Run mutiny-core wasm tests
-        env:
-          RUSTUP_TOOLCHAIN: nightly
-        run: wasm-pack test --headless --firefox --chrome ./mutiny-core
+      - run: wasm-pack test --headless --firefox ./mutiny-core
+      - run: wasm-pack test --headless --chrome ./mutiny-core
 
-      - name: Run mutiny-wasm wasm tests
-        env:
-          RUSTUP_TOOLCHAIN: nightly
-        run: wasm-pack test --headless --firefox --chrome ./mutiny-wasm
+      - run: wasm-pack test --headless --firefox ./mutiny-wasm
+      - run: wasm-pack test --headless --chrome ./mutiny-wasm
 
   rust_tests:
     name: Rust Tests
