@@ -97,7 +97,7 @@ pub fn mutiny_conn_proxy_to_url(proxy_url: String, peer_pubkey: String) -> Strin
 
 #[cfg(test)]
 mod tests {
-    use crate::proxy::PubkeyConnectionInfo;
+    use crate::proxy::{Proxy, PubkeyConnectionInfo};
     use crate::test::*;
 
     use crate::proxy::{mutiny_conn_proxy_to_url, tcp_proxy_to_url, WsProxy};
@@ -113,11 +113,14 @@ mod tests {
         log!("test websocket proxy");
 
         // TODO do something useful
-        let _proxy = WsProxy::new(
+        let proxy = WsProxy::new(
             "ws://127.0.0.1:3001".to_string(),
             PubkeyConnectionInfo::new(format!("{}@{}", PEER_PUBKEY, "127.0.0.1:4000")).unwrap(),
         )
-        .await;
+        .await
+        .unwrap();
+
+        proxy.close().await;
     }
 
     #[test]

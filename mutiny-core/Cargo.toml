@@ -69,6 +69,7 @@ mockall = "0.11.2"
 
 [features]
 default = ["console_error_panic_hook"]
+ignored_tests = []
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = true

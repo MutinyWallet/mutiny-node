@@ -26,7 +26,6 @@ use lightning::util::logger::Logger;
 use lightning::util::logger::Record;
 use lightning::util::persist::Persister;
 use lightning::util::ser::{ReadableArgs, Writeable};
-use secp256k1::PublicKey;
 use std::collections::HashMap;
 use std::io;
 
@@ -34,14 +33,12 @@ use lightning::chain;
 use lightning::chain::chainmonitor::{MonitorUpdateId, Persist};
 use lightning::chain::transaction::OutPoint;
 use lightning::io::Error;
-use std::str::FromStr;
 use std::sync::Arc;
 
 const CHANNEL_MANAGER_KEY: &str = "manager";
 const MONITORS_PREFIX_KEY: &str = "monitors/";
 const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
 const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
-const PEER_PREFIX_KEY: &str = "peer/";
 
 pub(crate) type PhantomChannelManager = LdkChannelManager<
     Arc<ChainMonitor>,
@@ -241,48 +238,6 @@ impl MutinyNodePersister {
 
         map.into_iter().collect()
     }
-
-    pub(crate) fn read_peer_connection_info(&self, peer_pubkey: String) -> Option<String> {
-        let key = self.get_key(peer_key(peer_pubkey).as_str());
-        let deserialized_value: Result<String, MutinyError> =
-            self.storage.get(key).map_err(MutinyError::read_err);
-        deserialized_value.ok()
-    }
-
-    pub(crate) fn persist_peer_connection_info(
-        &self,
-        peer_pubkey: String,
-        connection_string: &str,
-    ) -> io::Result<()> {
-        let key = self.get_key(peer_key(peer_pubkey).as_str());
-        self.storage
-            .set(key, connection_string)
-            .map_err(io::Error::other)
-    }
-
-    // FIXME: Useful to keep around until we use it
-    #[allow(dead_code)]
-    pub(crate) fn delete_peer_connection_info(&self, peer_pubkey: String) {
-        let key = self.get_key(peer_key(peer_pubkey).as_str());
-        MutinyBrowserStorage::delete(key)
-    }
-
-    pub(crate) fn list_peer_connection_info(&self) -> Vec<(PublicKey, String)> {
-        let suffix = self.node_id.as_str();
-        let map: HashMap<String, String> = self.storage.scan(PEER_PREFIX_KEY, Some(suffix));
-        map.into_iter()
-            .map(|(k, v)| {
-                let k = String::from(k.strip_prefix(PEER_PREFIX_KEY).unwrap());
-                let k = k.strip_suffix(suffix).unwrap().strip_suffix('_').unwrap();
-                let pubkey = PublicKey::from_str(k).unwrap();
-                (pubkey, v)
-            })
-            .collect()
-    }
-}
-
-fn peer_key(pubkey: String) -> String {
-    format!("{PEER_PREFIX_KEY}{pubkey}")
 }
 
 fn payment_key(inbound: bool, payment_hash: PaymentHash) -> String {

@@ -30,6 +30,7 @@ use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget,
 use lightning::chain::keysinterface::{NodeSigner, Recipient};
 use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
+use lightning::routing::gossip::NodeId;
 use lightning_invoice::{Invoice, InvoiceDescription};
 use lnurl::lnurl::LnUrl;
 use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
@@ -156,7 +157,10 @@ impl From<Invoice> for MutinyInvoice {
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct MutinyPeer {
     pub pubkey: secp256k1::PublicKey,
-    pub connection_string: String,
+    pub connection_string: Option<String>,
+    pub alias: Option<String>,
+    pub color: Option<String>,
+    pub label: Option<String>,
     pub is_connected: bool,
 }
 
@@ -170,6 +174,7 @@ impl Ord for MutinyPeer {
     fn cmp(&self, other: &Self) -> Ordering {
         self.is_connected
             .cmp(&other.is_connected)
+            .then_with(|| self.alias.cmp(&other.alias))
             .then_with(|| self.pubkey.cmp(&other.pubkey))
             .then_with(|| self.connection_string.cmp(&other.connection_string))
     }
@@ -621,10 +626,12 @@ impl NodeManager {
         &self,
         self_node_pubkey: String,
         connection_string: String,
+        label: Option<String>,
     ) -> Result<(), MutinyError> {
         if let Some(node) = self.nodes.lock().await.get(&self_node_pubkey) {
             let connect_info = PubkeyConnectionInfo::new(connection_string.clone())?;
-            let res = node.connect_peer(connect_info).await;
+            let label_opt = label.filter(|s| !s.is_empty()); // filter out empty strings
+            let res = node.connect_peer(connect_info, label_opt).await;
             match res {
                 Ok(_) => {
                     info!("connected to peer: {connection_string}");
@@ -664,13 +671,26 @@ impl NodeManager {
         self_node_pubkey: String,
         peer: String,
     ) -> Result<(), MutinyError> {
+        let pubkey = PublicKey::from_str(&peer).expect("invalid pubkey");
+        let node_id = NodeId::from_pubkey(&pubkey.inner);
+
         if let Some(node) = self.nodes.lock().await.get(&self_node_pubkey) {
-            node.persister.delete_peer_connection_info(peer);
+            gossip::delete_peer_info(&node._uuid, &node_id).await?;
             Ok(())
         } else {
             error!("could not find internal node {self_node_pubkey}");
             Err(MutinyError::WalletOperationFailed.into())
         }
+    }
+
+    pub async fn label_peer(
+        &self,
+        peer: secp256k1::PublicKey,
+        label: Option<String>,
+    ) -> Result<(), MutinyError> {
+        let node_id = NodeId::from_pubkey(&peer);
+        gossip::set_peer_label(&node_id, label).await?;
+        Ok(())
     }
 
     // all values in sats
@@ -933,18 +953,24 @@ impl NodeManager {
     }
 
     pub async fn list_peers(&self) -> Result<Vec<MutinyPeer>, MutinyError> {
-        let nodes = self.nodes.lock().await;
+        let peer_data = gossip::get_all_peers().await?;
 
         // get peers saved in storage
-        let mut storage_peers: Vec<MutinyPeer> = nodes
+        let mut storage_peers: Vec<MutinyPeer> = peer_data
             .iter()
-            .flat_map(|(_, n)| n.persister.list_peer_connection_info())
-            .map(|(pubkey, connection_string)| MutinyPeer {
-                pubkey,
-                connection_string,
+            .map(|(node_id, metadata)| MutinyPeer {
+                // node id should be safe here
+                pubkey: secp256k1::PublicKey::from_slice(node_id.as_slice())
+                    .expect("Invalid pubkey"),
+                connection_string: metadata.connection_string.clone(),
+                alias: metadata.alias.clone(),
+                color: metadata.color.clone(),
+                label: metadata.label.clone(),
                 is_connected: false,
             })
             .collect();
+
+        let nodes = self.nodes.lock().await;
 
         // get peers we are connected to
         let connected_peers: Vec<secp256k1::PublicKey> = nodes
@@ -966,7 +992,10 @@ impl NodeManager {
             if !storage_peers.iter().any(|p| p.pubkey == peer) {
                 let new = MutinyPeer {
                     pubkey: peer,
-                    connection_string: "unknown".to_string(),
+                    connection_string: None,
+                    alias: None,
+                    color: None,
+                    label: None,
                     is_connected: true,
                 };
                 missing.push(new);

@@ -4,13 +4,14 @@ use crate::{
     error::{MutinyError, MutinyStorageError},
     event::{EventHandler, HTLCStatus, MillisatAmount, PaymentInfo},
     fees::MutinyFeeEstimator,
+    gossip::{get_all_peers, read_peer_info, save_peer_connection_info},
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
     ldkstorage::{MutinyNodePersister, PhantomChannelManager},
     localstorage::MutinyBrowserStorage,
     logging::MutinyLogger,
     lspclient::LspClient,
     nodemanager::{MutinyInvoice, MutinyInvoiceParams, NodeIndex},
-    peermanager::{PeerManager, PeerManagerImpl},
+    peermanager::{GossipMessageHandler, PeerManager, PeerManagerImpl},
     proxy::WsProxy,
     socket::{
         schedule_descriptor_read, MultiWsSocketDescriptor, WsSocketDescriptor,
@@ -42,6 +43,7 @@ use lightning::{
     },
     routing::{
         gossip,
+        gossip::NodeId,
         router::{DefaultRouter, PaymentParameters, RouteParameters},
         scoring::ProbabilisticScorer,
     },
@@ -68,7 +70,7 @@ pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
 pub(crate) type MessageHandler = LdkMessageHandler<
     Arc<PhantomChannelManager>,
-    Arc<IgnoringMessageHandler>,
+    Arc<GossipMessageHandler>,
     Arc<IgnoringMessageHandler>,
 >;
 
@@ -212,10 +214,14 @@ impl Node {
         let channel_manager: Arc<PhantomChannelManager> =
             Arc::new(read_channel_manager.channel_manager);
 
+        let route_handler = Arc::new(GossipMessageHandler {
+            network_graph: gossip_sync.network_graph().clone(),
+        });
+
         // init peer manager
         let ln_msg_handler = MessageHandler {
             chan_handler: channel_manager.clone(),
-            route_handler: Arc::new(IgnoringMessageHandler {}),
+            route_handler,
             onion_message_handler: Arc::new(IgnoringMessageHandler {}),
         };
 
@@ -240,10 +246,11 @@ impl Node {
 
         // save connection info peer connection list to auto connect
         if let Some(lsp) = lsp_client.clone() {
-            if let Err(e) = persister.persist_peer_connection_info(
-                lsp_client_pubkey.unwrap().to_string(),
-                &lsp.connection_string,
-            ) {
+            let node_id = NodeId::from_pubkey(&lsp.pubkey);
+
+            if let Err(e) =
+                save_peer_connection_info(&uuid, &node_id, &lsp.connection_string, None).await
+            {
                 error!("could not save connection to lsp: {e}");
             }
         }
@@ -372,10 +379,10 @@ impl Node {
 
         // try to connect to peers we already have a channel with
         let connect_peer_man = peer_man.clone();
-        let connect_persister = persister.clone();
         let connect_proxy = websocket_proxy_addr.clone();
         let connect_logger = logger.clone();
         let connect_multi_socket = multi_socket.clone();
+        let connect_uuid = uuid.clone();
         spawn_local(async move {
             loop {
                 // if we aren't connected to master socket
@@ -385,15 +392,24 @@ impl Node {
                     continue;
                 }
 
-                let peer_connections = connect_persister.list_peer_connection_info();
+                let peer_connections = get_all_peers().await.unwrap_or_default();
                 let current_connections = connect_peer_man.get_peer_node_ids();
 
-                let not_connected: Vec<&(PublicKey, String)> = peer_connections
-                    .iter()
-                    .filter(|(p, _)| !current_connections.iter().any(|c| &c.0 == p))
+                let not_connected: Vec<(NodeId, String)> = peer_connections
+                    .into_iter()
+                    .filter(|(_, d)| {
+                        d.connection_string.is_some()
+                            && d.nodes.binary_search(&connect_uuid).is_ok()
+                    })
+                    .map(|(n, d)| (n, d.connection_string.unwrap()))
+                    .filter(|(n, _)| {
+                        !current_connections
+                            .iter()
+                            .any(|c| &NodeId::from_pubkey(&c.0) == n)
+                    })
                     .collect();
 
-                for (pubkey, conn_str) in not_connected.iter() {
+                for (pubkey, conn_str) in not_connected.into_iter() {
                     connect_logger.log(&Record::new(
                         lightning::util::logger::Level::Debug,
                         format_args!("DEBUG: going to auto connect to peer: {pubkey}"),
@@ -401,8 +417,7 @@ impl Node {
                         "",
                         0,
                     ));
-                    let peer_connection_info = match PubkeyConnectionInfo::new(conn_str.to_string())
-                    {
+                    let peer_connection_info = match PubkeyConnectionInfo::new(conn_str) {
                         Ok(p) => p,
                         Err(e) => {
                             connect_logger.log(&Record::new(
@@ -474,6 +489,7 @@ impl Node {
     pub async fn connect_peer(
         &self,
         peer_connection_info: PubkeyConnectionInfo,
+        label: Option<String>,
     ) -> Result<(), MutinyError> {
         match connect_peer_if_necessary(
             self.multi_socket.clone(),
@@ -484,17 +500,24 @@ impl Node {
         .await
         {
             Ok(_) => {
-                let pubkey = peer_connection_info.pubkey.to_string();
+                let node_id = NodeId::from_pubkey(&peer_connection_info.pubkey);
 
                 // if we have the connection info saved in storage, update it if we need to
                 // otherwise cache it in temp_peer_connection_map so we can later save it
                 // if we open a channel in the future.
-                if let Some(saved) = self.persister.read_peer_connection_info(pubkey.clone()) {
+                if let Some(saved) = read_peer_info(&node_id)
+                    .await?
+                    .and_then(|p| p.connection_string)
+                {
                     if saved != peer_connection_info.original_connection_string {
-                        match self.persister.persist_peer_connection_info(
-                            pubkey,
+                        match save_peer_connection_info(
+                            &self._uuid,
+                            &node_id,
                             &peer_connection_info.original_connection_string,
-                        ) {
+                            label,
+                        )
+                        .await
+                        {
                             Ok(_) => (),
                             Err(_) => self.logger.log(&Record::new(
                                 lightning::util::logger::Level::Warn,
@@ -507,13 +530,14 @@ impl Node {
                     }
                 } else {
                     // store this so we can reconnect later
-                    if self
-                        .persister
-                        .persist_peer_connection_info(
-                            pubkey,
-                            &peer_connection_info.original_connection_string,
-                        )
-                        .is_err()
+                    if save_peer_connection_info(
+                        &self._uuid,
+                        &node_id,
+                        &peer_connection_info.original_connection_string,
+                        label,
+                    )
+                    .await
+                    .is_err()
                     {
                         self.logger.log(&Record::new(
                             lightning::util::logger::Level::Warn,
@@ -623,8 +647,11 @@ impl Node {
         ));
 
         if let Some(lsp) = self.lsp_client.clone() {
-            self.connect_peer(PubkeyConnectionInfo::new(lsp.clone().connection_string)?)
-                .await?;
+            self.connect_peer(
+                PubkeyConnectionInfo::new(lsp.clone().connection_string)?,
+                None,
+            )
+            .await?;
             let lsp_invoice_str = lsp.get_lsp_invoice(invoice.to_string()).await?;
             let lsp_invoice = Invoice::from_str(&lsp_invoice_str)?;
 
