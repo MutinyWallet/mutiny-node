@@ -1,13 +1,6 @@
 #![crate_name = "mutiny_core"]
-// wasm_bindgen uses improper casing and it needs to be turned off:
-// https://github.com/rustwasm/wasm-bindgen/issues/2882
-// wasm is also considered "extra_unused_type_parameters"
-#![allow(
-    incomplete_features,
-    non_snake_case,
-    non_upper_case_globals,
-    clippy::extra_unused_type_parameters
-)]
+// wasm is considered "extra_unused_type_parameters"
+#![allow(incomplete_features, clippy::extra_unused_type_parameters)]
 #![feature(io_error_other)]
 #![feature(async_fn_in_trait)]
 // background file is mostly an LDK copy paste
