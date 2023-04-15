@@ -31,10 +31,10 @@ pub(crate) struct PaymentInfo {
     pub last_update: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct MillisatAmount(pub Option<u64>);
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum HTLCStatus {
     Pending,
     InFlight,

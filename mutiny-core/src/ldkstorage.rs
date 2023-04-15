@@ -11,7 +11,6 @@ use crate::{error, utils};
 use anyhow::anyhow;
 use bdk::blockchain::EsploraBlockchain;
 use bitcoin::hashes::hex::{FromHex, ToHex};
-use bitcoin::hashes::sha256;
 use bitcoin::BlockHash;
 use bitcoin::Network;
 use futures::{try_join, TryFutureExt};
@@ -232,18 +231,22 @@ impl MutinyNodePersister {
         deserialized_value.ok()
     }
 
-    pub(crate) fn list_payment_info(&self, inbound: bool) -> Vec<(sha256::Hash, PaymentInfo)> {
+    pub(crate) fn list_payment_info(&self, inbound: bool) -> Vec<(PaymentHash, PaymentInfo)> {
         let prefix = match inbound {
             true => PAYMENT_INBOUND_PREFIX_KEY,
             false => PAYMENT_OUTBOUND_PREFIX_KEY,
         };
         let map: HashMap<String, PaymentInfo> = self.storage.scan(prefix, None);
 
-        // convert keys to sha256::Hash
+        // convert keys to PaymentHash
         map.into_iter()
             .map(|(key, value)| {
-                let hash = sha256::Hash::from_hex(&key).expect("key should be a sha256 hash");
-                (hash, value)
+                let payment_hash_str = key
+                    .trim_start_matches(prefix)
+                    .trim_end_matches(&format!("_{}", self.node_id));
+                let hash: [u8; 32] =
+                    FromHex::from_hex(payment_hash_str).expect("key should be a sha256 hash");
+                (PaymentHash(hash), value)
             })
             .collect()
     }
@@ -332,5 +335,53 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner> Persist<ChannelSigner> for Muti
             Ok(()) => chain::ChannelMonitorUpdateStatus::Completed,
             Err(_) => chain::ChannelMonitorUpdateStatus::PermanentFailure,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::event::{HTLCStatus, MillisatAmount};
+    use bitcoin::secp256k1::{Secp256k1, SecretKey};
+    use lightning::ln::PaymentPreimage;
+    use uuid::Uuid;
+    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+
+    use super::*;
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    fn get_test_persister() -> MutinyNodePersister {
+        let id = Uuid::new_v4().to_string();
+        MutinyNodePersister::new(id, MutinyBrowserStorage::new("".to_string()))
+    }
+
+    #[test]
+    fn test_persist_payment_info() {
+        let persister = get_test_persister();
+        let preimage = [1; 32];
+        let payment_hash = PaymentHash([0; 32]);
+        let payment_info = PaymentInfo {
+            preimage: Some(preimage),
+            status: HTLCStatus::Succeeded,
+            amt_msat: MillisatAmount(Some(420)),
+            fee_paid_msat: None,
+            bolt11: None,
+            secret: None,
+            last_update: utils::now().as_secs(),
+        };
+        let result = persister.persist_payment_info(payment_hash, payment_info, true);
+        assert!(result.is_ok());
+
+        let result =
+            persister.read_payment_info(payment_hash, true, Arc::new(MutinyLogger::default()));
+
+        assert!(result.is_some());
+        assert_eq!(result.clone().unwrap().preimage, Some(preimage));
+        assert_eq!(result.clone().unwrap().status, HTLCStatus::Succeeded);
+
+        let list = persister.list_payment_info(true);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].0, payment_hash);
+        assert_eq!(list[0].1.preimage, Some(preimage));
     }
 }

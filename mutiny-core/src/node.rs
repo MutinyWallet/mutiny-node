@@ -733,7 +733,7 @@ impl Node {
                     let params = MutinyInvoice {
                         bolt11: None,
                         description: None,
-                        payment_hash: h,
+                        payment_hash: sha256::Hash::from_inner(h.0),
                         preimage,
                         payee_pubkey: None,
                         amount_sats,
