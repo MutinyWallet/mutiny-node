@@ -9,7 +9,8 @@
     "prefs": {
       "media.navigator.streams.fake": true,
       "media.navigator.permission.disabled": true,
-      "media.webaudio.enabled": false
+      "media.webaudio.enabled": false,
+      "datareporting.healthreport.uploadEnabled": false
     },
     "args": []
   }
