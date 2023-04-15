@@ -1,11 +1,5 @@
-// wasm_bindgen uses improper casing and it needs to be turned off:
-// https://github.com/rustwasm/wasm-bindgen/issues/2882
-// wasm is also considered "extra_unused_type_parameters"
-#![allow(
-    non_snake_case,
-    non_upper_case_globals,
-    clippy::extra_unused_type_parameters
-)]
+// wasm is considered "extra_unused_type_parameters"
+#![allow(clippy::extra_unused_type_parameters)]
 
 extern crate mutiny_core;
 

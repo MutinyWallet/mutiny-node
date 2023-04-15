@@ -12,9 +12,9 @@ use crate::encrypt::*;
 use crate::error::MutinyStorageError;
 use crate::nodemanager::NodeStorage;
 
-const mnemonic_key: &str = "mnemonic";
-const nodes_key: &str = "nodes";
-const fee_estimates_key: &str = "fee_estimates";
+const MNEMONIC_KEY: &str = "mnemonic";
+const NODES_KEY: &str = "nodes";
+const FEE_ESTIMATES_KEY: &str = "fee_estimates";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MutinyBrowserStorage {
@@ -84,7 +84,7 @@ impl MutinyBrowserStorage {
     }
 
     pub(crate) fn insert_mnemonic(&self, mnemonic: Mnemonic) -> Mnemonic {
-        self.set(mnemonic_key, mnemonic.to_string())
+        self.set(MNEMONIC_KEY, mnemonic.to_string())
             .expect("Failed to write to storage");
         mnemonic
     }
@@ -92,14 +92,14 @@ impl MutinyBrowserStorage {
     pub(crate) fn get_mnemonic(&self) -> anyhow::Result<Mnemonic> {
         // TODO: here's another way to write this... but the error conversions end up being a pain in the ass
         //
-        // self.get(mnemonic_key)
+        // self.get(MNEMONIC_KEY)
         //     .and_then(|raw_mnemonic| {
         //         Ok(Mnemonic::from_str(raw_mnemonic)
         //             .with_context(|| format!("BIP 39 parse error"))?)
         //     })
         //     .with_context(|| format!("storage error"))
 
-        let res: Result<String, MutinyStorageError> = self.get(mnemonic_key);
+        let res: Result<String, MutinyStorageError> = self.get(MNEMONIC_KEY);
         match res {
             Ok(str) => Ok(Mnemonic::from_str(&str).expect("could not parse specified mnemonic")),
             Err(e) => Err(e)?,
@@ -112,11 +112,11 @@ impl MutinyBrowserStorage {
 
     #[allow(dead_code)]
     pub(crate) fn delete_mnemonic() {
-        LocalStorage::delete(mnemonic_key);
+        LocalStorage::delete(MNEMONIC_KEY);
     }
 
     pub(crate) fn get_nodes() -> Result<NodeStorage, MutinyStorageError> {
-        let res: gloo_storage::Result<NodeStorage> = LocalStorage::get(nodes_key);
+        let res: gloo_storage::Result<NodeStorage> = LocalStorage::get(NODES_KEY);
         match res {
             Ok(k) => Ok(k),
             Err(e) => match e {
@@ -129,16 +129,16 @@ impl MutinyBrowserStorage {
     }
 
     pub(crate) fn insert_nodes(nodes: NodeStorage) -> Result<(), MutinyStorageError> {
-        Ok(LocalStorage::set(nodes_key, nodes)?)
+        Ok(LocalStorage::set(NODES_KEY, nodes)?)
     }
 
     pub(crate) fn get_fee_estimates() -> Result<HashMap<String, f64>, MutinyStorageError> {
-        Ok(LocalStorage::get(fee_estimates_key)?)
+        Ok(LocalStorage::get(FEE_ESTIMATES_KEY)?)
     }
 
     pub(crate) fn insert_fee_estimates(
         fees: HashMap<String, f64>,
     ) -> Result<(), MutinyStorageError> {
-        Ok(LocalStorage::set(fee_estimates_key, fees)?)
+        Ok(LocalStorage::set(FEE_ESTIMATES_KEY, fees)?)
     }
 }

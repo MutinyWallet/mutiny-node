@@ -20,8 +20,8 @@ impl FeeEstimator for MutinyFeeEstimator {
                 match found {
                     Some(num) => {
                         trace!("Got fee rate from saved cache!");
-                        let satsVbyte = num.to_owned() as f32;
-                        let fee_rate = FeeRate::from_sat_per_vb(satsVbyte);
+                        let sats_vbyte = num.to_owned() as f32;
+                        let fee_rate = FeeRate::from_sat_per_vb(sats_vbyte);
                         (fee_rate.fee_wu(1000) as u32).max(FEERATE_FLOOR_SATS_PER_KW)
                     }
                     None => fallback_fee,
