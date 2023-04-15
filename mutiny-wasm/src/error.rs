@@ -1,8 +1,5 @@
-use bdk::esplora_client;
 use bitcoin::Network;
-use lightning_invoice::payment::PaymentError;
 use lightning_invoice::ParseOrSemanticError;
-use lightning_rapid_gossip_sync::GraphSyncError;
 use mutiny_core::error::{MutinyError, MutinyStorageError};
 use thiserror::Error;
 use wasm_bindgen::JsValue;
@@ -152,27 +149,8 @@ impl From<bitcoin::util::address::Error> for MutinyJsError {
     }
 }
 
-impl From<PaymentError> for MutinyJsError {
-    fn from(e: PaymentError) -> Self {
-        MutinyError::from(e).into()
-    }
-}
-
 impl From<lnurl::Error> for MutinyJsError {
     fn from(e: lnurl::Error) -> Self {
-        MutinyError::from(e).into()
-    }
-}
-
-impl From<esplora_client::Error> for MutinyJsError {
-    fn from(_e: esplora_client::Error) -> Self {
-        // This is most likely a chain access failure
-        Self::ChainAccessFailed
-    }
-}
-
-impl From<GraphSyncError> for MutinyJsError {
-    fn from(e: GraphSyncError) -> Self {
         MutinyError::from(e).into()
     }
 }
@@ -183,15 +161,15 @@ impl From<ParseOrSemanticError> for MutinyJsError {
     }
 }
 
-impl From<reqwest::Error> for MutinyJsError {
-    fn from(_e: reqwest::Error) -> Self {
-        Self::BitcoinPriceError
+impl From<bitcoin::hashes::hex::Error> for MutinyJsError {
+    fn from(_e: bitcoin::hashes::hex::Error) -> Self {
+        Self::JsonReadWriteError
     }
 }
 
-impl From<bitcoin_hashes::hex::Error> for MutinyJsError {
-    fn from(_e: bitcoin_hashes::hex::Error) -> Self {
-        Self::JsonReadWriteError
+impl From<bitcoin::secp256k1::Error> for MutinyJsError {
+    fn from(_e: bitcoin::secp256k1::Error) -> Self {
+        Self::PubkeyInvalid
     }
 }
 

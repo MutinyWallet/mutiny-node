@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use bitcoin::secp256k1::PublicKey;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -14,7 +12,7 @@ pub(crate) struct LspClient {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct GetInfoResponse {
-    pub pubkey: String,
+    pub pubkey: PublicKey,
     pub connection_methods: Vec<GetInfoAddress>,
 }
 
@@ -65,7 +63,6 @@ impl LspClient {
             .json()
             .await?;
 
-        let pubkey = PublicKey::from_str(&get_info_response.pubkey)?;
         let connection_string = get_info_response
             .connection_methods
             .iter()
@@ -86,7 +83,7 @@ impl LspClient {
             .map(|address| {
                 format!(
                     "{}@{}:{}",
-                    pubkey.to_string(),
+                    get_info_response.pubkey.to_string(),
                     address.address,
                     address.port
                 )
@@ -94,7 +91,7 @@ impl LspClient {
             .ok_or_else(|| anyhow::anyhow!("No suitable connection method found"))?;
 
         Ok(LspClient {
-            pubkey,
+            pubkey: get_info_response.pubkey,
             url: String::from(url),
             connection_string,
             http_client,

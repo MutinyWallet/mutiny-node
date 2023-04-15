@@ -14,15 +14,12 @@ lnurl-rs = { version = "0.2", default-features = false, features = ["async", "as
 cfg-if = "1.0.0"
 wasm-bindgen = "0.2.83"
 serde-wasm-bindgen = "0.5.0"
-bip39 = { version = "1.0.1" }
+bip39 = { version = "2.0.0" }
 bip32 = "0.4.0"
 bitcoin-bech32 = "0.12"
 js-sys = "0.3.60"
-secp256k1 = "0.24.0"
-bitcoin_hashes = { version = "0.11", default-features = false }
 bitcoin = { version = "0.29.2", default-features = false, features = ["serde", "secp-recovery"] }
-# TODO waiting for esplora version 0.4.0
-bdk = { git = "https://github.com/mutinywallet/bdk", branch = "esplora-tmp", default-features = false, features = ["keys-bip39", "esplora", "use-esplora-reqwest", "async-interface"] }
+bdk = { version = "0.28.0", default-features = false, features = ["keys-bip39", "esplora", "use-esplora-reqwest", "async-interface"] }
 bdk-macros = "0.6.0"
 getrandom = { version = "0.2", features = ["js"] }
 serde = { version = "^1.0", features = ["derive"] }

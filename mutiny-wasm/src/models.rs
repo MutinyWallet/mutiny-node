@@ -1,4 +1,6 @@
 use bitcoin::hashes::hex::ToHex;
+use bitcoin::secp256k1::PublicKey;
+use mutiny_core::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -45,14 +47,14 @@ impl MutinyInvoice {
     }
 }
 
-impl From<mutiny_core::nodemanager::MutinyInvoice> for MutinyInvoice {
-    fn from(m: mutiny_core::nodemanager::MutinyInvoice) -> Self {
+impl From<nodemanager::MutinyInvoice> for MutinyInvoice {
+    fn from(m: nodemanager::MutinyInvoice) -> Self {
         MutinyInvoice {
             bolt11: m.bolt11,
             description: m.description,
-            payment_hash: m.payment_hash,
+            payment_hash: m.payment_hash.to_hex(),
             preimage: m.preimage,
-            payee_pubkey: m.payee_pubkey,
+            payee_pubkey: m.payee_pubkey.map(|p| p.to_hex()),
             amount_sats: m.amount_sats,
             expire: m.expire,
             paid: m.paid,
@@ -65,7 +67,7 @@ impl From<mutiny_core::nodemanager::MutinyInvoice> for MutinyInvoice {
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
 pub struct MutinyPeer {
-    pubkey: secp256k1::PublicKey,
+    pubkey: PublicKey,
     connection_string: Option<String>,
     alias: Option<String>,
     color: Option<String>,
@@ -101,8 +103,8 @@ impl MutinyPeer {
     }
 }
 
-impl From<mutiny_core::nodemanager::MutinyPeer> for MutinyPeer {
-    fn from(m: mutiny_core::nodemanager::MutinyPeer) -> Self {
+impl From<nodemanager::MutinyPeer> for MutinyPeer {
+    fn from(m: nodemanager::MutinyPeer) -> Self {
         MutinyPeer {
             pubkey: m.pubkey,
             connection_string: m.connection_string,
@@ -138,14 +140,14 @@ impl MutinyChannel {
     }
 }
 
-impl From<mutiny_core::nodemanager::MutinyChannel> for MutinyChannel {
-    fn from(m: mutiny_core::nodemanager::MutinyChannel) -> Self {
+impl From<nodemanager::MutinyChannel> for MutinyChannel {
+    fn from(m: nodemanager::MutinyChannel) -> Self {
         MutinyChannel {
             balance: m.balance,
             size: m.size,
             reserve: m.reserve,
-            outpoint: m.outpoint,
-            peer: m.peer,
+            outpoint: m.outpoint.map(|o| o.to_string()),
+            peer: m.peer.to_hex(),
             confirmed: m.confirmed,
         }
     }
@@ -158,8 +160,8 @@ pub struct MutinyBalance {
     pub lightning: u64,
 }
 
-impl From<mutiny_core::nodemanager::MutinyBalance> for MutinyBalance {
-    fn from(m: mutiny_core::nodemanager::MutinyBalance) -> Self {
+impl From<nodemanager::MutinyBalance> for MutinyBalance {
+    fn from(m: nodemanager::MutinyBalance) -> Self {
         MutinyBalance {
             confirmed: m.confirmed,
             unconfirmed: m.unconfirmed,
@@ -183,8 +185,8 @@ impl LnUrlParams {
     }
 }
 
-impl From<mutiny_core::nodemanager::LnUrlParams> for LnUrlParams {
-    fn from(m: mutiny_core::nodemanager::LnUrlParams) -> Self {
+impl From<nodemanager::LnUrlParams> for LnUrlParams {
+    fn from(m: nodemanager::LnUrlParams) -> Self {
         LnUrlParams {
             max: m.max,
             min: m.min,
@@ -198,7 +200,7 @@ impl From<mutiny_core::nodemanager::LnUrlParams> for LnUrlParams {
 #[wasm_bindgen]
 pub struct NodeIdentity {
     uuid: String,
-    pubkey: String,
+    pubkey: PublicKey,
 }
 
 #[wasm_bindgen]
@@ -210,12 +212,12 @@ impl NodeIdentity {
 
     #[wasm_bindgen(getter)]
     pub fn pubkey(&self) -> String {
-        self.pubkey.clone()
+        self.pubkey.to_string()
     }
 }
 
-impl From<mutiny_core::nodemanager::NodeIdentity> for NodeIdentity {
-    fn from(m: mutiny_core::nodemanager::NodeIdentity) -> Self {
+impl From<nodemanager::NodeIdentity> for NodeIdentity {
+    fn from(m: nodemanager::NodeIdentity) -> Self {
         NodeIdentity {
             uuid: m.uuid,
             pubkey: m.pubkey,
@@ -255,11 +257,11 @@ impl MutinyBip21RawMaterials {
     }
 }
 
-impl From<mutiny_core::nodemanager::MutinyBip21RawMaterials> for MutinyBip21RawMaterials {
-    fn from(m: mutiny_core::nodemanager::MutinyBip21RawMaterials) -> Self {
+impl From<nodemanager::MutinyBip21RawMaterials> for MutinyBip21RawMaterials {
+    fn from(m: nodemanager::MutinyBip21RawMaterials) -> Self {
         MutinyBip21RawMaterials {
-            address: m.address,
-            invoice: m.invoice,
+            address: m.address.to_string(),
+            invoice: m.invoice.to_string(),
             btc_amount: m.btc_amount,
             description: m.description,
         }

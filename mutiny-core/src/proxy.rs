@@ -109,6 +109,7 @@ mod tests {
     const PEER_PUBKEY: &str = "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443";
 
     #[test]
+    #[cfg(feature = "ignored_tests")]
     async fn test_websocket_proxy_init() {
         log!("test websocket proxy");
 

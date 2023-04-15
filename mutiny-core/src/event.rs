@@ -5,9 +5,9 @@ use crate::utils::sleep;
 use crate::wallet::MutinyWallet;
 use bdk::blockchain::Blockchain;
 use bdk::wallet::AddressIndex;
+use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
-use bitcoin_hashes::hex::ToHex;
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
     chain::keysinterface::PhantomKeysManager,
@@ -31,10 +31,10 @@ pub(crate) struct PaymentInfo {
     pub last_update: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct MillisatAmount(pub Option<u64>);
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum HTLCStatus {
     Pending,
     InFlight,

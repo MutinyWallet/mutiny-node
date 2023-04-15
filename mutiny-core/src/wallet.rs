@@ -87,7 +87,7 @@ impl MutinyWallet {
 
     pub async fn get_transaction(
         &self,
-        txid: Txid,
+        txid: &Txid,
         include_raw: bool,
     ) -> Result<Option<TransactionDetails>, MutinyError> {
         Ok(self
@@ -96,7 +96,7 @@ impl MutinyWallet {
             .await
             .list_transactions(include_raw)?
             .into_iter()
-            .find(|tx| tx.txid == txid))
+            .find(|tx| &tx.txid == txid))
     }
 
     pub async fn create_signed_psbt(
