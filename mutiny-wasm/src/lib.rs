@@ -378,12 +378,12 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub fn convert_btc_to_sats(&self, btc: f64) -> Result<u64, MutinyJsError> {
+    pub fn convert_btc_to_sats(btc: f64) -> Result<u64, MutinyJsError> {
         Ok(nodemanager::NodeManager::convert_btc_to_sats(btc)?)
     }
 
     #[wasm_bindgen]
-    pub fn convert_sats_to_btc(&self, sats: u64) -> f64 {
+    pub fn convert_sats_to_btc(sats: u64) -> f64 {
         nodemanager::NodeManager::convert_sats_to_btc(sats)
     }
 }
