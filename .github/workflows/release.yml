@@ -67,9 +67,12 @@ jobs:
           version: 'latest'
 
       - name: Build wasm
+        env:
+          RUSTUP_TOOLCHAIN: nightly
         run: wasm-pack build ./mutiny-wasm --release --target web --scope mutinywallet
 
       - name: Publish wasm
         run: wasm-pack publish --access public -t web
         env:
+          RUSTUP_TOOLCHAIN: nightly
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
