@@ -17,6 +17,7 @@ pub struct MutinyInvoice {
     pub paid: bool,
     pub fees_paid: Option<u64>,
     pub is_send: bool,
+    pub last_updated: u64,
 }
 
 #[wasm_bindgen]
@@ -60,6 +61,7 @@ impl From<nodemanager::MutinyInvoice> for MutinyInvoice {
             paid: m.paid,
             fees_paid: m.fees_paid,
             is_send: m.is_send,
+            last_updated: m.last_updated,
         }
     }
 }
