@@ -696,58 +696,19 @@ impl Node {
         self.persister
             .list_payment_info(inbound)
             .into_iter()
-            .filter_map(|(h, i)| match i.bolt11 {
-                Some(bolt11) => {
-                    // Construct an invoice from a bolt11, easy
-                    let invoice_res = Invoice::from_str(&bolt11).map_err(Into::<MutinyError>::into);
-                    match invoice_res {
-                        Ok(invoice) => {
-                            if invoice.would_expire(now)
-                                && !matches!(i.status, HTLCStatus::Succeeded | HTLCStatus::InFlight)
-                            {
-                                None
-                            } else {
-                                let mut mutiny_invoice: MutinyInvoice = invoice.clone().into();
-                                mutiny_invoice.is_send = !inbound;
-                                mutiny_invoice.last_updated = i.last_update;
-                                mutiny_invoice.paid = matches!(i.status, HTLCStatus::Succeeded);
-                                mutiny_invoice.amount_sats =
-                                    if let Some(inv_amt) = invoice.amount_milli_satoshis() {
-                                        if inv_amt == 0 {
-                                            i.amt_msat.0.map(|a| a / 1_000)
-                                        } else {
-                                            Some(inv_amt / 1_000)
-                                        }
-                                    } else {
-                                        i.amt_msat.0.map(|a| a / 1_000)
-                                    };
-                                Some(mutiny_invoice)
-                            }
-                        }
-                        Err(_) => None,
-                    }
-                }
-                None => {
-                    // Constructing MutinyInvoice from no invoice, harder
-                    let paid = matches!(i.status, HTLCStatus::Succeeded);
-                    let amount_sats: Option<u64> = i.amt_msat.0.map(|s| s / 1_000);
-                    let fees_paid = i.fee_paid_msat.map(|f| f / 1_000);
-                    let preimage = i.preimage.map(|p| p.to_hex());
-                    let params = MutinyInvoice {
-                        bolt11: None,
-                        description: None,
-                        payment_hash: sha256::Hash::from_inner(h.0),
-                        preimage,
-                        payee_pubkey: None,
-                        amount_sats,
-                        expire: i.last_update,
-                        paid,
-                        fees_paid,
-                        is_send: !inbound,
-                        last_updated: i.last_update,
-                    };
-                    Some(params)
-                }
+            .filter_map(|(h, i)| {
+                let mutiny_invoice = MutinyInvoice::from(i.clone(), h, inbound).ok();
+
+                // filter out expired invoices
+                mutiny_invoice.filter(|invoice| {
+                    // can remove this parsing after LDK 0.0.115
+                    let inv = invoice
+                        .bolt11
+                        .clone()
+                        .and_then(|b| Invoice::from_str(&b).ok());
+                    !inv.is_some_and(|b| b.would_expire(now))
+                        || matches!(i.status, HTLCStatus::Succeeded | HTLCStatus::InFlight)
+                })
             })
             .collect()
     }
@@ -870,7 +831,7 @@ impl Node {
                 }
             }
 
-            sleep(500).await;
+            sleep(250).await;
         }
     }
 
