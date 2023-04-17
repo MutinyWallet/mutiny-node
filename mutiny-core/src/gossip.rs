@@ -640,6 +640,8 @@ mod test {
     use uuid::Uuid;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
+    use crate::test::*;
+
     use super::*;
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -710,6 +712,9 @@ mod test {
 
         assert!(data.is_some());
         assert!(data.unwrap().last_sync_timestamp > 0);
+
+        cleanup_indexdb_test().await;
+        cleanup_test();
     }
 
     #[test]
@@ -735,6 +740,9 @@ mod test {
         let read = read_peer_info(&node_id).await.unwrap();
 
         assert!(read.is_none());
+
+        cleanup_indexdb_test().await;
+        cleanup_test();
     }
 
     #[test]
@@ -758,5 +766,8 @@ mod test {
 
         assert!(read.is_some());
         assert_eq!(read.unwrap(), expected);
+
+        cleanup_indexdb_test().await;
+        cleanup_test();
     }
 }

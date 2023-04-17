@@ -17,8 +17,9 @@ jobs:
           override: true
           profile: minimal
 
-      - name: Install wasm-pack
-        run: cargo install wasm-pack
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'latest'
 
       - uses: actions/cache@v2
         with:
@@ -41,6 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RUSTUP_TOOLCHAIN: nightly
+      WASM_BINDGEN_TEST_TIMEOUT: 60
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
@@ -51,8 +53,9 @@ jobs:
           override: true
           profile: minimal
 
-      - name: Install wasm-pack
-        run: cargo install wasm-pack
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'latest'
 
       - name: Setup trunk
         uses: jetli/trunk-action@v0.1.0

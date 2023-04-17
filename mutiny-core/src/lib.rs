@@ -38,8 +38,15 @@ mod test {
         }
     }
     pub(crate) use log;
+    use rexie::Rexie;
+
+    use crate::gossip::GOSSIP_DATABASE_NAME;
 
     pub(crate) fn cleanup_test() {
         LocalStorage::clear();
+    }
+
+    pub(crate) async fn cleanup_indexdb_test() {
+        Rexie::delete(GOSSIP_DATABASE_NAME).await.unwrap();
     }
 }

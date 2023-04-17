@@ -3,7 +3,37 @@ on:
   release:
     types: [published]
 jobs:
-  build:
+  mutiny-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          components: clippy
+          target: wasm32-unknown-unknown
+          override: true
+          profile: minimal
+
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-release-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-release-
+            cargo-${{ runner.os }}-
+
+      - name: Cargo Publish
+        run: cargo publish -p mutiny-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+
+  mutiny-wasm:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
