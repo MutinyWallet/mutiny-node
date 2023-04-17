@@ -707,6 +707,7 @@ impl Node {
                             } else {
                                 let mut mutiny_invoice: MutinyInvoice = invoice.clone().into();
                                 mutiny_invoice.is_send = !inbound;
+                                mutiny_invoice.last_updated = i.last_update;
                                 mutiny_invoice.paid = matches!(i.status, HTLCStatus::Succeeded);
                                 mutiny_invoice.amount_sats =
                                     if let Some(inv_amt) = invoice.amount_milli_satoshis() {
@@ -741,6 +742,7 @@ impl Node {
                         paid,
                         fees_paid,
                         is_send: !inbound,
+                        last_updated: i.last_update,
                     };
                     Some(params)
                 }
@@ -896,6 +898,7 @@ impl Node {
                     paid: false,
                     fees_paid: None,
                     is_send: true,
+                    last_updated: payment_info.last_update,
                 };
                 Ok(mutiny_invoice)
             }

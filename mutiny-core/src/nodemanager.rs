@@ -94,6 +94,7 @@ pub struct MutinyInvoice {
     pub paid: bool,
     pub fees_paid: Option<u64>,
     pub is_send: bool,
+    pub last_updated: u64,
 }
 
 impl From<Invoice> for MutinyInvoice {
@@ -117,6 +118,7 @@ impl From<Invoice> for MutinyInvoice {
             paid: false,
             fees_paid: None,
             is_send: false, // todo this could be bad
+            last_updated: timestamp,
         }
     }
 }
