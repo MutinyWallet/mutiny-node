@@ -6,6 +6,12 @@ version = "0.2.4"
 edition = "2021"
 authors = ["Tony Giorgio <tony@mutinywallet.com>", "benthecarman <ben@mutinywallet.com>"]
 forced-target = "wasm32-unknown-unknown"
+description = "The core SDK for the mutiny node"
+license = "MIT"
+documentation = "https://docs.rs/mutiny-core"
+homepage = "https://mutinywallet.com"
+repository = "https://github.com/mutinywallet/mutiny-core"
+
 
 [dependencies]
 ln-websocket-proxy = "0.3.0"
