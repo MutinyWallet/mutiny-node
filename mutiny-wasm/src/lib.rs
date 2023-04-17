@@ -6,6 +6,7 @@ extern crate mutiny_core;
 mod error;
 mod models;
 mod utils;
+pub mod waila;
 
 use crate::error::MutinyJsError;
 use crate::models::*;
