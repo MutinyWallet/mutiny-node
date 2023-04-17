@@ -348,6 +348,8 @@ mod test {
 
     use super::*;
 
+    use crate::test::*;
+
     wasm_bindgen_test_configure!(run_in_browser);
 
     fn get_test_persister() -> MutinyNodePersister {
@@ -356,7 +358,7 @@ mod test {
     }
 
     #[test]
-    fn test_persist_payment_info() {
+    async fn test_persist_payment_info() {
         let persister = get_test_persister();
         let preimage = [1; 32];
         let payment_hash = PaymentHash([0; 32]);
@@ -383,5 +385,8 @@ mod test {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].0, payment_hash);
         assert_eq!(list[0].1.preimage, Some(preimage));
+
+        cleanup_indexdb_test().await;
+        cleanup_test();
     }
 }
