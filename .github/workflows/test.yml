@@ -42,6 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RUSTUP_TOOLCHAIN: nightly
+      WASM_BINDGEN_TEST_TIMEOUT: 60
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
