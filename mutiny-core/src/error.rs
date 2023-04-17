@@ -30,6 +30,9 @@ pub enum MutinyError {
     /// Payment of the given invoice has already been initiated.
     #[error("An invoice must not get payed twice.")]
     NonUniquePaymentHash,
+    /// Payment Timed out
+    #[error("Payment timed out.")]
+    PaymentTimeout,
     /// The given invoice is invalid.
     #[error("The given invoice is invalid.")]
     InvoiceInvalid,

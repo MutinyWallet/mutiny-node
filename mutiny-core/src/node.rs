@@ -64,6 +64,8 @@ use log::{debug, error, info, trace};
 use std::{net::SocketAddr, str::FromStr, sync::Arc};
 use wasm_bindgen_futures::spawn_local;
 
+const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
+
 pub(crate) type RapidGossipSync =
     lightning_rapid_gossip_sync::RapidGossipSync<Arc<NetworkGraph>, Arc<MutinyLogger>>;
 
@@ -774,8 +776,9 @@ impl Node {
         }
     }
 
-    /// pay_invoice sends off the payment but does not wait for results
-    pub fn pay_invoice(
+    /// init_invoice_payment sends off the payment but does not wait for results
+    /// use pay_invoice_with_timeout to wait for results
+    pub fn init_invoice_payment(
         &self,
         invoice: Invoice,
         amt_sats: Option<u64>,
@@ -844,8 +847,55 @@ impl Node {
         }
     }
 
-    /// keysend sends off the payment but does not wait for results
-    pub fn keysend(&self, to_node: PublicKey, amt_sats: u64) -> Result<MutinyInvoice, MutinyError> {
+    async fn await_payment(
+        &self,
+        payment_hash: PaymentHash,
+        timeout: u64,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        let start = utils::now().as_secs();
+        loop {
+            let now = utils::now().as_secs();
+            if now - start > timeout {
+                return Err(MutinyError::PaymentTimeout);
+            }
+
+            let payment_info =
+                self.persister
+                    .read_payment_info(payment_hash, false, self.logger.clone());
+
+            if let Some(info) = payment_info {
+                if matches!(info.status, HTLCStatus::Succeeded | HTLCStatus::Failed) {
+                    let mutiny_invoice = MutinyInvoice::from(info, payment_hash, false)?;
+                    return Ok(mutiny_invoice);
+                }
+            }
+
+            sleep(500).await;
+        }
+    }
+
+    pub async fn pay_invoice_with_timeout(
+        &self,
+        invoice: Invoice,
+        amt_sats: Option<u64>,
+        timeout_secs: Option<u64>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        // initiate payment
+        let pay = self.init_invoice_payment(invoice, amt_sats)?;
+
+        let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
+        let payment_hash = PaymentHash(pay.payment_hash.into_inner());
+
+        self.await_payment(payment_hash, timeout).await
+    }
+
+    /// init_keysend_payment sends off the payment but does not wait for results
+    /// use keysend_with_timeout to wait for results
+    pub fn init_keysend_payment(
+        &self,
+        to_node: PublicKey,
+        amt_sats: u64,
+    ) -> Result<MutinyInvoice, MutinyError> {
         let mut entropy = [0u8; 32];
         getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
         let payment_id = PaymentId(entropy);
@@ -909,6 +959,21 @@ impl Node {
                 Err(MutinyError::RoutingFailed)
             }
         }
+    }
+
+    pub async fn keysend_with_timeout(
+        &self,
+        to_node: PublicKey,
+        amt_sats: u64,
+        timeout_secs: Option<u64>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        // initiate payment
+        let pay = self.init_keysend_payment(to_node, amt_sats)?;
+
+        let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
+        let payment_hash = PaymentHash(pay.payment_hash.into_inner());
+
+        self.await_payment(payment_hash, timeout).await
     }
 
     pub async fn open_channel(

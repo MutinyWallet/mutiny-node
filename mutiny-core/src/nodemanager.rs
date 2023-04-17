@@ -1,6 +1,8 @@
 use std::cmp::Ordering;
+use std::str::FromStr;
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
+use crate::event::{HTLCStatus, PaymentInfo};
 use crate::{
     chain::MutinyChain,
     error::MutinyError,
@@ -20,7 +22,8 @@ use bdk::{
     blockchain::EsploraBlockchain, wallet::AddressIndex, BlockTime, LocalUtxo, TransactionDetails,
 };
 use bip39::Mnemonic;
-use bitcoin::hashes::sha256;
+use bitcoin::hashes::hex::ToHex;
+use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{rand, PublicKey};
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use futures::lock::Mutex;
@@ -28,6 +31,7 @@ use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget,
 use lightning::chain::keysinterface::{NodeSigner, Recipient};
 use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
+use lightning::ln::PaymentHash;
 use lightning::routing::gossip::NodeId;
 use lightning_invoice::{Invoice, InvoiceDescription};
 use lnurl::lnurl::LnUrl;
@@ -119,6 +123,59 @@ impl From<Invoice> for MutinyInvoice {
             fees_paid: None,
             is_send: false, // todo this could be bad
             last_updated: timestamp,
+        }
+    }
+}
+
+impl MutinyInvoice {
+    pub(crate) fn from(
+        i: PaymentInfo,
+        payment_hash: PaymentHash,
+        inbound: bool,
+    ) -> Result<Self, MutinyError> {
+        match i.bolt11 {
+            Some(bolt11) => {
+                // Construct an invoice from a bolt11, easy
+                let invoice = Invoice::from_str(&bolt11)?;
+                let amount_sats = if let Some(inv_amt) = invoice.amount_milli_satoshis() {
+                    if inv_amt == 0 {
+                        i.amt_msat.0.map(|a| a / 1_000)
+                    } else {
+                        Some(inv_amt / 1_000)
+                    }
+                } else {
+                    i.amt_msat.0.map(|a| a / 1_000)
+                };
+                let mut mutiny_invoice: MutinyInvoice = invoice.into();
+                mutiny_invoice.is_send = !inbound;
+                mutiny_invoice.last_updated = i.last_update;
+                mutiny_invoice.paid = i.status == HTLCStatus::Succeeded;
+                mutiny_invoice.amount_sats = amount_sats;
+                mutiny_invoice.preimage = i.preimage.map(|p| p.to_hex());
+                mutiny_invoice.fees_paid = i.fee_paid_msat.map(|f| f / 1_000);
+                Ok(mutiny_invoice)
+            }
+            None => {
+                let paid = i.status == HTLCStatus::Succeeded;
+                let amount_sats: Option<u64> = i.amt_msat.0.map(|s| s / 1_000);
+                let fees_paid = i.fee_paid_msat.map(|f| f / 1_000);
+                let preimage = i.preimage.map(|p| p.to_hex());
+                let payment_hash = sha256::Hash::from_inner(payment_hash.0);
+                let invoice = MutinyInvoice {
+                    bolt11: None,
+                    description: None,
+                    payment_hash,
+                    preimage,
+                    payee_pubkey: None,
+                    amount_sats,
+                    expire: i.last_update,
+                    paid,
+                    fees_paid,
+                    is_send: !inbound,
+                    last_updated: i.last_update,
+                };
+                Ok(invoice)
+            }
         }
     }
 }
@@ -676,7 +733,7 @@ impl NodeManager {
 
         let nodes = self.nodes.lock().await;
         let node = nodes.get(&from_node).unwrap();
-        node.pay_invoice(invoice, amt_sats).map_err(|e| e.into())
+        node.pay_invoice_with_timeout(invoice, amt_sats, None).await
     }
 
     pub async fn keysend(
@@ -688,7 +745,7 @@ impl NodeManager {
         let nodes = self.nodes.lock().await;
         debug!("Keysending to {to_node}");
         let node = nodes.get(&from_node).unwrap();
-        node.keysend(to_node, amt_sats).map_err(|e| e.into())
+        node.keysend_with_timeout(to_node, amt_sats, None).await
     }
 
     pub async fn decode_invoice(&self, invoice: Invoice) -> Result<MutinyInvoice, MutinyError> {
