@@ -626,6 +626,7 @@ impl Node {
             amt_msat: MillisatAmount(amount_msat),
             fee_paid_msat: None,
             bolt11: Some(invoice.to_string()),
+            payee_pubkey: None,
             last_update,
         };
         self.persister
@@ -776,6 +777,7 @@ impl Node {
             amt_msat: MillisatAmount(Some(amt_msat)),
             fee_paid_msat: None,
             bolt11: Some(invoice.to_string()),
+            payee_pubkey: None,
             last_update,
         };
         self.persister.persist_payment_info(
@@ -890,6 +892,7 @@ impl Node {
             amt_msat: MillisatAmount(Some(amt_msats)),
             fee_paid_msat: None,
             bolt11: None,
+            payee_pubkey: Some(to_node),
             last_update,
         };
 

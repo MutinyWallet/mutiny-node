@@ -86,7 +86,7 @@ pub struct MutinyBip21RawMaterials {
     pub description: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct MutinyInvoice {
     pub bolt11: Option<String>, // todo change to Invoice once ldk fixes the serde issue
     pub description: Option<String>,
@@ -153,6 +153,7 @@ impl MutinyInvoice {
                 mutiny_invoice.amount_sats = amount_sats;
                 mutiny_invoice.preimage = i.preimage.map(|p| p.to_hex());
                 mutiny_invoice.fees_paid = i.fee_paid_msat.map(|f| f / 1_000);
+                mutiny_invoice.payee_pubkey = i.payee_pubkey;
                 Ok(mutiny_invoice)
             }
             None => {
@@ -166,7 +167,7 @@ impl MutinyInvoice {
                     description: None,
                     payment_hash,
                     preimage,
-                    payee_pubkey: None,
+                    payee_pubkey: i.payee_pubkey,
                     amount_sats,
                     expire: i.last_update,
                     paid,
@@ -1114,14 +1115,22 @@ pub(crate) async fn create_new_node_from_node_manager(
 #[cfg(test)]
 mod tests {
     use crate::keymanager::generate_seed;
-    use crate::nodemanager::NodeManager;
+    use crate::nodemanager::{MutinyInvoice, NodeManager};
+    use bitcoin::hashes::hex::{FromHex, ToHex};
+    use bitcoin::hashes::{sha256, Hash};
+    use bitcoin::secp256k1::PublicKey;
     use bitcoin::Network;
+    use lightning::ln::PaymentHash;
+    use std::str::FromStr;
 
     use crate::test::*;
 
+    use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
+
+    const BOLT_11: &str = "lntbs1m1pjrmuu3pp52hk0j956d7s8azaps87amadshnrcvqtkvk06y2nue2w69g6e5vasdqqcqzpgxqyz5vqsp5wu3py6257pa3yzarw0et2200c08r5fu6k3u94yfwmlnc8skdkc9s9qyyssqc783940p82c64qq9pu3xczt4tdxzex9wpjn54486y866aayft2cxxusl9eags4cs3kcmuqdrvhvs0gudpj5r2a6awu4wcq29crpesjcqhdju55";
 
     #[test]
     async fn create_node_manager() {
@@ -1208,5 +1217,99 @@ mod tests {
         }
 
         cleanup_test();
+    }
+
+    #[test]
+    fn test_bolt11_payment_info_into_mutiny_invoice() {
+        let preimage: [u8; 32] =
+            FromHex::from_hex("7600f5a9ad72452dea7ad86dabbc9cb46be96a1a2fcd961e041d066b38d93008")
+                .unwrap();
+        let secret: [u8; 32] =
+            FromHex::from_hex("7722126954f07b120ba373f2b529efc3ce3a279ab4785a912edfe783c2cdb60b")
+                .unwrap();
+
+        let payment_hash = sha256::Hash::from_hex(
+            "55ecf9169a6fa07e8ba181fdddf5b0bcc7860176659fa22a7cca9da2a359a33b",
+        )
+        .unwrap();
+
+        let payment_info = PaymentInfo {
+            preimage: Some(preimage),
+            secret: Some(secret),
+            status: HTLCStatus::Succeeded,
+            amt_msat: MillisatAmount(Some(100_000_000)),
+            fee_paid_msat: None,
+            bolt11: Some(BOLT_11.to_string()),
+            payee_pubkey: None,
+            last_update: 1681781585,
+        };
+
+        let expected: MutinyInvoice = MutinyInvoice {
+            bolt11: Some(BOLT_11.to_string()),
+            description: Some("".to_string()),
+            payment_hash,
+            preimage: Some(preimage.to_hex()),
+            payee_pubkey: None,
+            amount_sats: Some(100_000),
+            expire: 1681781649 + 86400,
+            paid: true,
+            fees_paid: None,
+            is_send: false,
+            last_updated: 1681781585,
+        };
+
+        let actual =
+            MutinyInvoice::from(payment_info, PaymentHash(payment_hash.into_inner()), true)
+                .unwrap();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_keysend_payment_info_into_mutiny_invoice() {
+        let preimage: [u8; 32] =
+            FromHex::from_hex("7600f5a9ad72452dea7ad86dabbc9cb46be96a1a2fcd961e041d066b38d93008")
+                .unwrap();
+
+        let payment_hash = sha256::Hash::from_hex(
+            "55ecf9169a6fa07e8ba181fdddf5b0bcc7860176659fa22a7cca9da2a359a33b",
+        )
+        .unwrap();
+
+        let pubkey = PublicKey::from_str(
+            "02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b",
+        )
+        .unwrap();
+
+        let payment_info = PaymentInfo {
+            preimage: Some(preimage),
+            secret: None,
+            status: HTLCStatus::Succeeded,
+            amt_msat: MillisatAmount(Some(100_000)),
+            fee_paid_msat: Some(1_000),
+            bolt11: None,
+            payee_pubkey: Some(pubkey),
+            last_update: 1681781585,
+        };
+
+        let expected: MutinyInvoice = MutinyInvoice {
+            bolt11: None,
+            description: None,
+            payment_hash,
+            preimage: Some(preimage.to_hex()),
+            payee_pubkey: Some(pubkey),
+            amount_sats: Some(100),
+            expire: 1681781585,
+            paid: true,
+            fees_paid: Some(1),
+            is_send: true,
+            last_updated: 1681781585,
+        };
+
+        let actual =
+            MutinyInvoice::from(payment_info, PaymentHash(payment_hash.into_inner()), false)
+                .unwrap();
+
+        assert_eq!(actual, expected);
     }
 }

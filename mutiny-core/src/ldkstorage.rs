@@ -341,8 +341,9 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner> Persist<ChannelSigner> for Muti
 #[cfg(test)]
 mod test {
     use crate::event::{HTLCStatus, MillisatAmount};
-    use bitcoin::secp256k1::{Secp256k1, SecretKey};
+    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
     use lightning::ln::PaymentPreimage;
+    use std::str::FromStr;
     use uuid::Uuid;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
@@ -362,12 +363,18 @@ mod test {
         let persister = get_test_persister();
         let preimage = [1; 32];
         let payment_hash = PaymentHash([0; 32]);
+        let pubkey = PublicKey::from_str(
+            "02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b",
+        )
+        .unwrap();
+
         let payment_info = PaymentInfo {
             preimage: Some(preimage),
             status: HTLCStatus::Succeeded,
             amt_msat: MillisatAmount(Some(420)),
             fee_paid_msat: None,
             bolt11: None,
+            payee_pubkey: Some(pubkey),
             secret: None,
             last_update: utils::now().as_secs(),
         };
