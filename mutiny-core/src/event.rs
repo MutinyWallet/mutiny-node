@@ -28,6 +28,7 @@ pub(crate) struct PaymentInfo {
     pub amt_msat: MillisatAmount,
     pub fee_paid_msat: Option<u64>,
     pub bolt11: Option<String>,
+    pub payee_pubkey: Option<PublicKey>,
     pub last_update: u64,
 }
 
@@ -176,7 +177,7 @@ impl EventHandler {
                 self.channel_manager.claim_funds(payment_preimage);
             }
             Event::PaymentClaimed {
-                receiver_node_id: _,
+                receiver_node_id,
                 payment_hash,
                 purpose,
                 amount_msat,
@@ -241,6 +242,7 @@ impl EventHandler {
                             status: HTLCStatus::Succeeded,
                             amt_msat: MillisatAmount(Some(amount_msat)),
                             fee_paid_msat: None,
+                            payee_pubkey: receiver_node_id,
                             bolt11: None,
                             last_update,
                         };

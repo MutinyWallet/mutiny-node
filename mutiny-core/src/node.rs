@@ -64,6 +64,8 @@ use log::{debug, error, info, trace};
 use std::{net::SocketAddr, str::FromStr, sync::Arc};
 use wasm_bindgen_futures::spawn_local;
 
+const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
+
 pub(crate) type RapidGossipSync =
     lightning_rapid_gossip_sync::RapidGossipSync<Arc<NetworkGraph>, Arc<MutinyLogger>>;
 
@@ -624,6 +626,7 @@ impl Node {
             amt_msat: MillisatAmount(amount_msat),
             fee_paid_msat: None,
             bolt11: Some(invoice.to_string()),
+            payee_pubkey: None,
             last_update,
         };
         self.persister
@@ -694,58 +697,19 @@ impl Node {
         self.persister
             .list_payment_info(inbound)
             .into_iter()
-            .filter_map(|(h, i)| match i.bolt11 {
-                Some(bolt11) => {
-                    // Construct an invoice from a bolt11, easy
-                    let invoice_res = Invoice::from_str(&bolt11).map_err(Into::<MutinyError>::into);
-                    match invoice_res {
-                        Ok(invoice) => {
-                            if invoice.would_expire(now)
-                                && !matches!(i.status, HTLCStatus::Succeeded | HTLCStatus::InFlight)
-                            {
-                                None
-                            } else {
-                                let mut mutiny_invoice: MutinyInvoice = invoice.clone().into();
-                                mutiny_invoice.is_send = !inbound;
-                                mutiny_invoice.last_updated = i.last_update;
-                                mutiny_invoice.paid = matches!(i.status, HTLCStatus::Succeeded);
-                                mutiny_invoice.amount_sats =
-                                    if let Some(inv_amt) = invoice.amount_milli_satoshis() {
-                                        if inv_amt == 0 {
-                                            i.amt_msat.0.map(|a| a / 1_000)
-                                        } else {
-                                            Some(inv_amt / 1_000)
-                                        }
-                                    } else {
-                                        i.amt_msat.0.map(|a| a / 1_000)
-                                    };
-                                Some(mutiny_invoice)
-                            }
-                        }
-                        Err(_) => None,
-                    }
-                }
-                None => {
-                    // Constructing MutinyInvoice from no invoice, harder
-                    let paid = matches!(i.status, HTLCStatus::Succeeded);
-                    let amount_sats: Option<u64> = i.amt_msat.0.map(|s| s / 1_000);
-                    let fees_paid = i.fee_paid_msat.map(|f| f / 1_000);
-                    let preimage = i.preimage.map(|p| p.to_hex());
-                    let params = MutinyInvoice {
-                        bolt11: None,
-                        description: None,
-                        payment_hash: sha256::Hash::from_inner(h.0),
-                        preimage,
-                        payee_pubkey: None,
-                        amount_sats,
-                        expire: i.last_update,
-                        paid,
-                        fees_paid,
-                        is_send: !inbound,
-                        last_updated: i.last_update,
-                    };
-                    Some(params)
-                }
+            .filter_map(|(h, i)| {
+                let mutiny_invoice = MutinyInvoice::from(i.clone(), h, inbound).ok();
+
+                // filter out expired invoices
+                mutiny_invoice.filter(|invoice| {
+                    // can remove this parsing after LDK 0.0.115
+                    let inv = invoice
+                        .bolt11
+                        .clone()
+                        .and_then(|b| Invoice::from_str(&b).ok());
+                    !inv.is_some_and(|b| b.would_expire(now))
+                        || matches!(i.status, HTLCStatus::Succeeded | HTLCStatus::InFlight)
+                })
             })
             .collect()
     }
@@ -774,8 +738,9 @@ impl Node {
         }
     }
 
-    /// pay_invoice sends off the payment but does not wait for results
-    pub fn pay_invoice(
+    /// init_invoice_payment sends off the payment but does not wait for results
+    /// use pay_invoice_with_timeout to wait for results
+    pub fn init_invoice_payment(
         &self,
         invoice: Invoice,
         amt_sats: Option<u64>,
@@ -812,6 +777,7 @@ impl Node {
             amt_msat: MillisatAmount(Some(amt_msat)),
             fee_paid_msat: None,
             bolt11: Some(invoice.to_string()),
+            payee_pubkey: None,
             last_update,
         };
         self.persister.persist_payment_info(
@@ -844,8 +810,55 @@ impl Node {
         }
     }
 
-    /// keysend sends off the payment but does not wait for results
-    pub fn keysend(&self, to_node: PublicKey, amt_sats: u64) -> Result<MutinyInvoice, MutinyError> {
+    async fn await_payment(
+        &self,
+        payment_hash: PaymentHash,
+        timeout: u64,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        let start = utils::now().as_secs();
+        loop {
+            let now = utils::now().as_secs();
+            if now - start > timeout {
+                return Err(MutinyError::PaymentTimeout);
+            }
+
+            let payment_info =
+                self.persister
+                    .read_payment_info(payment_hash, false, self.logger.clone());
+
+            if let Some(info) = payment_info {
+                if matches!(info.status, HTLCStatus::Succeeded | HTLCStatus::Failed) {
+                    let mutiny_invoice = MutinyInvoice::from(info, payment_hash, false)?;
+                    return Ok(mutiny_invoice);
+                }
+            }
+
+            sleep(250).await;
+        }
+    }
+
+    pub async fn pay_invoice_with_timeout(
+        &self,
+        invoice: Invoice,
+        amt_sats: Option<u64>,
+        timeout_secs: Option<u64>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        // initiate payment
+        let pay = self.init_invoice_payment(invoice, amt_sats)?;
+
+        let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
+        let payment_hash = PaymentHash(pay.payment_hash.into_inner());
+
+        self.await_payment(payment_hash, timeout).await
+    }
+
+    /// init_keysend_payment sends off the payment but does not wait for results
+    /// use keysend_with_timeout to wait for results
+    pub fn init_keysend_payment(
+        &self,
+        to_node: PublicKey,
+        amt_sats: u64,
+    ) -> Result<MutinyInvoice, MutinyError> {
         let mut entropy = [0u8; 32];
         getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
         let payment_id = PaymentId(entropy);
@@ -879,6 +892,7 @@ impl Node {
             amt_msat: MillisatAmount(Some(amt_msats)),
             fee_paid_msat: None,
             bolt11: None,
+            payee_pubkey: Some(to_node),
             last_update,
         };
 
@@ -909,6 +923,21 @@ impl Node {
                 Err(MutinyError::RoutingFailed)
             }
         }
+    }
+
+    pub async fn keysend_with_timeout(
+        &self,
+        to_node: PublicKey,
+        amt_sats: u64,
+        timeout_secs: Option<u64>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        // initiate payment
+        let pay = self.init_keysend_payment(to_node, amt_sats)?;
+
+        let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
+        let payment_hash = PaymentHash(pay.payment_hash.into_inner());
+
+        self.await_payment(payment_hash, timeout).await
     }
 
     pub async fn open_channel(
