@@ -24,7 +24,7 @@ AR=/opt/homebrew/opt/llvm/bin/llvm-ar CC=/opt/homebrew/opt/llvm/bin/clang
 
 ### Dependencies
 
-- [rust](https://www.rust-lang.org/)
+- [rust](https://www.rust-lang.org/) (specifically, nightly: `rustup toolchain install nightly`)
 
 - [node](https://nodejs.org/en/)
 
