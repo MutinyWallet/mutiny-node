@@ -6,6 +6,11 @@ version = "0.2.5"
 edition = "2021"
 authors = ["Tony Giorgio <tony@mutinywallet.com>", "benthecarman <ben@mutinywallet.com>"]
 forced-target = "wasm32-unknown-unknown"
+description = "A wasm-bindgen wrapper around mutiny-core"
+license = "MIT"
+documentation = "https://docs.rs/mutiny-wasm"
+homepage = "https://mutinywallet.com"
+repository = "https://github.com/mutinywallet/mutiny-node"
 
 [lib]
 crate-type = ["cdylib"]
