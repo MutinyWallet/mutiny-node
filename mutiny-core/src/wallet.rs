@@ -14,12 +14,13 @@ use bitcoin::{Address, Network, Script, Txid};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::error::MutinyError;
+use crate::indexed_db::MutinyStorage;
 use crate::localstorage::MutinyBrowserStorage;
 use crate::utils::is_valid_network;
 
 #[derive(Debug)]
 pub struct MutinyWallet {
-    pub wallet: Mutex<Wallet<MutinyBrowserStorage>>,
+    pub wallet: Mutex<Wallet<MutinyStorage>>,
     network: Network,
     pub blockchain: Arc<EsploraBlockchain>,
 }
@@ -27,7 +28,7 @@ pub struct MutinyWallet {
 impl MutinyWallet {
     pub fn new(
         mnemonic: &Mnemonic,
-        database: MutinyBrowserStorage,
+        database: MutinyStorage,
         network: Network,
         esplora: Arc<EsploraBlockchain>,
     ) -> MutinyWallet {

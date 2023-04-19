@@ -1,5 +1,6 @@
 use std::str;
 
+use crate::indexed_db::MutinyStorage;
 use bdk::database::{BatchDatabase, BatchOperations, Database, SyncTime};
 use bdk::{KeychainKind, LocalUtxo, TransactionDetails};
 use bitcoin::consensus::deserialize;
@@ -7,10 +8,9 @@ use bitcoin::consensus::encode::serialize;
 use bitcoin::hash_types::Txid;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::{OutPoint, Script, Transaction};
-use gloo_storage::{LocalStorage, Storage};
+use gloo_storage::Storage;
 use serde::{Deserialize, Serialize};
-
-use crate::localstorage::MutinyBrowserStorage;
+use serde_json::json;
 
 // path -> script       p{i,e}<path> -> script
 // script -> path       s<script> -> {i,e}<path>
@@ -72,13 +72,13 @@ impl MapKey<'_> {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ScriptPubKeyInfo {
     pub keychain: KeychainKind,
     pub path: u32,
 }
 
-impl BatchOperations for MutinyBrowserStorage {
+impl BatchOperations for MutinyStorage {
     fn set_script_pubkey(
         &mut self,
         script: &Script,
@@ -86,27 +86,30 @@ impl BatchOperations for MutinyBrowserStorage {
         path: u32,
     ) -> Result<(), bdk::Error> {
         let key = MapKey::Path((Some(keychain), Some(path))).as_map_key();
-        self.set(key, script.clone())?;
+        self.batch_map.insert(key, serde_json::to_value(script)?);
 
         let key = MapKey::Script(Some(script)).as_map_key();
-        let spk_info = ScriptPubKeyInfo { keychain, path };
-        self.set(key, spk_info)?;
+        let info = ScriptPubKeyInfo { keychain, path };
+        self.batch_map.insert(key, serde_json::to_value(info)?);
 
         Ok(())
     }
 
     fn set_utxo(&mut self, utxo: &LocalUtxo) -> Result<(), bdk::Error> {
         let key = MapKey::Utxo(Some(&utxo.outpoint)).as_map_key();
-        self.set(key, utxo)?;
+        self.batch_map.insert(key, serde_json::to_value(utxo)?);
 
         Ok(())
     }
+
     fn set_raw_tx(&mut self, transaction: &Transaction) -> Result<(), bdk::Error> {
         let key = MapKey::RawTx(Some(&transaction.txid())).as_map_key();
-        self.set(key, transaction.clone())?;
+        self.batch_map
+            .insert(key, serde_json::to_value(transaction)?);
 
         Ok(())
     }
+
     fn set_tx(&mut self, transaction: &TransactionDetails) -> Result<(), bdk::Error> {
         let key = MapKey::Transaction(Some(&transaction.txid)).as_map_key();
 
@@ -119,19 +122,22 @@ impl BatchOperations for MutinyBrowserStorage {
         let mut transaction = transaction.clone();
         transaction.transaction = None;
 
-        self.set(key, transaction)?;
+        self.batch_map
+            .insert(key, serde_json::to_value(transaction)?);
 
         Ok(())
     }
+
     fn set_last_index(&mut self, keychain: KeychainKind, value: u32) -> Result<(), bdk::Error> {
         let key = MapKey::LastIndex(keychain).as_map_key();
-        self.set(key, value)?;
+        self.batch_map.insert(key, serde_json::to_value(value)?);
 
         Ok(())
     }
+
     fn set_sync_time(&mut self, data: SyncTime) -> Result<(), bdk::Error> {
         let key = MapKey::SyncTime.as_map_key();
-        self.set(key, data)?;
+        self.batch_map.insert(key, serde_json::to_value(data)?);
 
         Ok(())
     }
@@ -142,37 +148,49 @@ impl BatchOperations for MutinyBrowserStorage {
         path: u32,
     ) -> Result<Option<Script>, bdk::Error> {
         let key = MapKey::Path((Some(keychain), Some(path))).as_map_key();
-        let res: Option<Script> = self.get(&key).ok();
-        LocalStorage::delete(&key);
+        let res = self.batch_map.remove(&key);
+        self.batch_deleted_keys.push(key);
 
-        Ok(res)
+        Ok(res.map(|x| serde_json::from_value(x).unwrap()))
     }
     fn del_path_from_script_pubkey(
         &mut self,
         script: &Script,
     ) -> Result<Option<(KeychainKind, u32)>, bdk::Error> {
         let key = MapKey::Script(Some(script)).as_map_key();
-        let res: Option<ScriptPubKeyInfo> = self.get(&key).ok();
-        LocalStorage::delete(&key);
+        let res = self.batch_map.remove(&key);
+        self.batch_deleted_keys.push(key);
 
         match res {
             None => Ok(None),
-            Some(spk_info) => Ok(Some((spk_info.keychain, spk_info.path))),
+            Some(b) => {
+                let mut val: serde_json::Value = serde_json::from_value(b).unwrap();
+                let st = serde_json::from_value(val["t"].take())?;
+                let path = serde_json::from_value(val["p"].take())?;
+
+                Ok(Some((st, path)))
+            }
         }
     }
     fn del_utxo(&mut self, outpoint: &OutPoint) -> Result<Option<LocalUtxo>, bdk::Error> {
         let key = MapKey::Utxo(Some(outpoint)).as_map_key();
-        let res: Option<LocalUtxo> = self.get(&key).ok();
-        LocalStorage::delete(&key);
+        let res = self.batch_map.remove(&key);
+        self.batch_deleted_keys.push(key);
 
-        Ok(res)
+        match res {
+            None => Ok(None),
+            Some(b) => {
+                let utxo: LocalUtxo = serde_json::from_value(b).unwrap();
+                Ok(Some(utxo))
+            }
+        }
     }
     fn del_raw_tx(&mut self, txid: &Txid) -> Result<Option<Transaction>, bdk::Error> {
         let key = MapKey::RawTx(Some(txid)).as_map_key();
-        let res: Option<Transaction> = self.get(&key).ok();
-        LocalStorage::delete(&key);
+        let res = self.batch_map.remove(&key);
+        self.batch_deleted_keys.push(key);
 
-        Ok(res)
+        Ok(res.map(|x| serde_json::from_value(x).unwrap()))
     }
     fn del_tx(
         &mut self,
@@ -186,35 +204,44 @@ impl BatchOperations for MutinyBrowserStorage {
         };
 
         let key = MapKey::Transaction(Some(txid)).as_map_key();
-        let res: Option<TransactionDetails> = self.get(&key).ok();
-        LocalStorage::delete(&key);
+        let res = self.batch_map.remove(&key);
+        self.batch_deleted_keys.push(key);
 
         match res {
             None => Ok(None),
-            Some(mut val) => {
+            Some(b) => {
+                let mut val: TransactionDetails = serde_json::from_value(b).unwrap();
                 val.transaction = raw_tx;
 
                 Ok(Some(val))
             }
         }
     }
+
     fn del_last_index(&mut self, keychain: KeychainKind) -> Result<Option<u32>, bdk::Error> {
         let key = MapKey::LastIndex(keychain).as_map_key();
-        let res: Option<u32> = self.get(&key).ok();
-        LocalStorage::delete(&key);
+        let res = self.batch_map.remove(&key);
+        self.batch_deleted_keys.push(key);
 
-        Ok(res)
+        match res {
+            None => Ok(None),
+            Some(b) => {
+                let value = serde_json::from_value(b).unwrap();
+                Ok(Some(value))
+            }
+        }
     }
+
     fn del_sync_time(&mut self) -> Result<Option<SyncTime>, bdk::Error> {
         let key = MapKey::SyncTime.as_map_key();
-        let res: Option<SyncTime> = self.get(&key).ok();
-        LocalStorage::delete(&key);
+        let res = self.batch_map.remove(&key);
+        self.batch_deleted_keys.push(key);
 
-        Ok(res)
+        Ok(res.map(|b| serde_json::from_value(b).unwrap()))
     }
 }
 
-impl Database for MutinyBrowserStorage {
+impl Database for MutinyStorage {
     fn check_descriptor_checksum<B: AsRef<[u8]>>(
         &mut self,
         keychain: KeychainKind,
@@ -222,7 +249,7 @@ impl Database for MutinyBrowserStorage {
     ) -> Result<(), bdk::Error> {
         let key = MapKey::DescriptorChecksum(keychain).as_map_key();
 
-        let prev = self.get::<Vec<u8>>(&key).ok();
+        let prev = self.get::<Vec<u8>>(&key)?;
         if let Some(val) = prev {
             if val == bytes.as_ref().to_vec() {
                 Ok(())
@@ -241,7 +268,7 @@ impl Database for MutinyBrowserStorage {
     ) -> Result<Vec<Script>, bdk::Error> {
         let key = MapKey::Path((keychain, None)).as_map_key();
         Ok(self
-            .scan::<Script>(key.as_str(), None)
+            .scan::<Script>(key.as_str(), None)?
             .into_values()
             .collect())
     }
@@ -249,7 +276,7 @@ impl Database for MutinyBrowserStorage {
     fn iter_utxos(&self) -> Result<Vec<LocalUtxo>, bdk::Error> {
         let key = MapKey::Utxo(None).as_map_key();
         Ok(self
-            .scan::<LocalUtxo>(key.as_str(), None)
+            .scan::<LocalUtxo>(key.as_str(), None)?
             .into_values()
             .collect())
     }
@@ -257,33 +284,22 @@ impl Database for MutinyBrowserStorage {
     fn iter_raw_txs(&self) -> Result<Vec<Transaction>, bdk::Error> {
         let key = MapKey::RawTx(None).as_map_key();
         Ok(self
-            .scan::<Transaction>(key.as_str(), None)
+            .scan::<Transaction>(key.as_str(), None)?
             .into_values()
             .collect())
     }
 
     fn iter_txs(&self, include_raw: bool) -> Result<Vec<TransactionDetails>, bdk::Error> {
         let key = MapKey::Transaction(None).as_map_key();
-        self.scan::<TransactionDetails>(key.as_str(), None)
+        self.scan::<TransactionDetails>(key.as_str(), None)?
             .into_iter()
-            .map(|(key, mut tx_details)| -> Result<_, bdk::Error> {
+            .map(|(k, mut txdetails)| {
                 if include_raw {
-                    // first byte is prefix for the map, need to drop it
-                    let rm_prefix_opt = key.get(2..key.len());
-                    match rm_prefix_opt {
-                        Some(rm_prefix) => {
-                            let k_bytes = Vec::from_hex(rm_prefix)?;
-                            let txid = deserialize(k_bytes.as_slice())?;
-                            tx_details.transaction = self.get_raw_tx(&txid)?;
-                            Ok(tx_details)
-                        }
-                        None => Err(bdk::Error::Generic(String::from(
-                            "Error parsing txid from json",
-                        ))),
-                    }
-                } else {
-                    Ok(tx_details)
+                    let txid = Txid::from_hex(&k[2..])?;
+                    txdetails.transaction = self.get_raw_tx(&txid)?;
                 }
+
+                Ok(txdetails)
             })
             .collect()
     }
@@ -294,7 +310,7 @@ impl Database for MutinyBrowserStorage {
         path: u32,
     ) -> Result<Option<Script>, bdk::Error> {
         let key = MapKey::Path((Some(keychain), Some(path))).as_map_key();
-        Ok(self.get::<Script>(key).ok())
+        Ok(self.get::<Script>(key)?)
     }
 
     fn get_path_from_script_pubkey(
@@ -303,21 +319,18 @@ impl Database for MutinyBrowserStorage {
     ) -> Result<Option<(KeychainKind, u32)>, bdk::Error> {
         let key = MapKey::Script(Some(script)).as_map_key();
         Ok(self
-            .get::<ScriptPubKeyInfo>(key)
-            .ok()
+            .get::<ScriptPubKeyInfo>(key)?
             .map(|info| (info.keychain, info.path)))
     }
 
     fn get_utxo(&self, outpoint: &OutPoint) -> Result<Option<LocalUtxo>, bdk::Error> {
         let key = MapKey::Utxo(Some(outpoint)).as_map_key();
-        let res: Option<LocalUtxo> = self.get(key).ok();
-
-        Ok(res)
+        Ok(self.get(key)?)
     }
 
     fn get_raw_tx(&self, txid: &Txid) -> Result<Option<Transaction>, bdk::Error> {
         let key = MapKey::RawTx(Some(txid)).as_map_key();
-        Ok(self.get::<Transaction>(key).ok())
+        Ok(self.get::<Transaction>(key)?)
     }
 
     fn get_tx(
@@ -326,47 +339,46 @@ impl Database for MutinyBrowserStorage {
         include_raw: bool,
     ) -> Result<Option<TransactionDetails>, bdk::Error> {
         let key = MapKey::Transaction(Some(txid)).as_map_key();
-        Ok(self
-            .get::<TransactionDetails>(key)
-            .ok()
-            .map(|mut txdetails| {
-                if include_raw {
-                    txdetails.transaction = self.get_raw_tx(txid).unwrap();
-                }
+        Ok(self.get::<TransactionDetails>(key)?.map(|mut txdetails| {
+            if include_raw {
+                txdetails.transaction = self.get_raw_tx(txid).unwrap();
+            }
 
-                txdetails
-            }))
+            txdetails
+        }))
     }
 
     fn get_last_index(&self, keychain: KeychainKind) -> Result<Option<u32>, bdk::Error> {
         let key = MapKey::LastIndex(keychain).as_map_key();
-        Ok(self.get::<u32>(key).ok())
+        Ok(self.get::<u32>(key)?)
     }
 
     fn get_sync_time(&self) -> Result<Option<SyncTime>, bdk::Error> {
         let key = MapKey::SyncTime.as_map_key();
-        Ok(self.get::<SyncTime>(key).ok())
+        Ok(self.get::<SyncTime>(key)?)
     }
 
     // inserts 0 if not present
     fn increment_last_index(&mut self, keychain: KeychainKind) -> Result<u32, bdk::Error> {
         let key = MapKey::LastIndex(keychain).as_map_key();
-        let current_opt = self.get::<u32>(&key).ok();
+        let current_opt = self.get::<u32>(&key)?;
         let value = current_opt.map(|s| s + 1).unwrap_or_else(|| 0);
-        self.set(key, value)?;
+        self.set(&key, &value)?;
+        self.batch_map.insert(key, serde_json::to_value(value)?);
 
         Ok(value)
     }
 }
 
-impl BatchDatabase for MutinyBrowserStorage {
-    type Batch = Self;
+impl BatchDatabase for MutinyStorage {
+    type Batch = MutinyStorage;
 
     fn begin_batch(&self) -> Self::Batch {
-        MutinyBrowserStorage::new(self.clone().password)
+        self.new_batch()
     }
 
-    fn commit_batch(&mut self, mut _batch: Self::Batch) -> Result<(), bdk::Error> {
+    fn commit_batch(&mut self, batch: Self::Batch) -> Result<(), bdk::Error> {
+        self.complete_batch(batch)?;
         Ok(())
     }
 }
@@ -383,14 +395,11 @@ mod tests {
     use bitcoin::*;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
-    use crate::localstorage::MutinyBrowserStorage;
     use crate::test_utils::*;
 
     use super::*;
 
     wasm_bindgen_test_configure!(run_in_browser);
-
-    // todo this is copied from bdk::database::test, can we pull it from dependency?
 
     pub fn test_script_pubkey<D: Database>(mut db: D) {
         let script =
@@ -410,7 +419,6 @@ mod tests {
         );
     }
 
-    #[allow(dead_code)]
     pub fn test_batch_script_pubkey<D: BatchDatabase>(mut db: D) {
         let mut batch = db.begin_batch();
 
@@ -814,99 +822,100 @@ mod tests {
         assert!(res.is_err());
     }
 
-    fn get_tree() -> MutinyBrowserStorage {
-        cleanup_test();
-        MutinyBrowserStorage::new("very_secure_password".to_string())
+    async fn get_tree() -> MutinyStorage {
+        cleanup_wallet_test().await;
+        MutinyStorage::new("very_secure_password".to_string())
+            .await
+            .unwrap()
     }
 
     #[test]
-    fn script_pubkey_test() {
-        test_script_pubkey(get_tree());
-    }
-
-    // fixme, we don't actually batch, is that okay?
-    // #[test]
-    // fn script_pubkey_test_batch() {
-    //     test_batch_script_pubkey(get_tree());
-    // }
-
-    #[test]
-    fn script_pubkey_test_iter() {
-        test_iter_script_pubkey(get_tree());
+    async fn script_pubkey_test() {
+        test_script_pubkey(get_tree().await);
     }
 
     #[test]
-    fn script_pubkey_test_del() {
-        test_del_script_pubkey(get_tree());
+    async fn script_pubkey_test_batch() {
+        test_batch_script_pubkey(get_tree().await);
     }
 
     #[test]
-    fn utxo_test() {
-        test_utxo(get_tree());
+    async fn script_pubkey_test_iter() {
+        test_iter_script_pubkey(get_tree().await);
     }
 
     #[test]
-    fn raw_tx_test() {
-        test_raw_tx(get_tree());
+    async fn script_pubkey_test_del() {
+        test_del_script_pubkey(get_tree().await);
     }
 
     #[test]
-    fn tx_test() {
-        test_tx(get_tree());
+    async fn utxo_test() {
+        test_utxo(get_tree().await);
     }
 
     #[test]
-    fn last_index_test() {
-        test_last_index(get_tree());
+    async fn raw_tx_test() {
+        test_raw_tx(get_tree().await);
     }
 
     #[test]
-    fn sync_time_test() {
-        test_sync_time(get_tree());
+    async fn tx_test() {
+        test_tx(get_tree().await);
     }
 
     #[test]
-    fn iter_raw_txs_test() {
-        test_iter_raw_txs(get_tree());
+    async fn last_index_test() {
+        test_last_index(get_tree().await);
     }
 
     #[test]
-    fn list_txs_test() {
-        test_list_transaction(get_tree());
+    async fn sync_time_test() {
+        test_sync_time(get_tree().await);
     }
 
     #[test]
-    fn del_path_from_script_pubkey_test() {
-        test_del_path_from_script_pubkey(get_tree());
+    async fn iter_raw_txs_test() {
+        test_iter_raw_txs(get_tree().await);
     }
 
     #[test]
-    fn iter_script_pubkeys_test() {
-        test_iter_script_pubkeys(get_tree());
+    async fn list_txs_test() {
+        test_list_transaction(get_tree().await);
     }
 
     #[test]
-    fn del_utxo_test() {
-        test_del_utxo(get_tree());
+    async fn del_path_from_script_pubkey_test() {
+        test_del_path_from_script_pubkey(get_tree().await);
     }
 
     #[test]
-    fn del_raw_tx_test() {
-        test_del_raw_tx(get_tree());
+    async fn iter_script_pubkeys_test() {
+        test_iter_script_pubkeys(get_tree().await);
     }
 
     #[test]
-    fn del_tx_test() {
-        test_del_tx(get_tree());
+    async fn del_utxo_test() {
+        test_del_utxo(get_tree().await);
     }
 
     #[test]
-    fn del_last_index_test() {
-        test_del_last_index(get_tree());
+    async fn del_raw_tx_test() {
+        test_del_raw_tx(get_tree().await);
     }
 
     #[test]
-    fn check_descriptor_checksum_test() {
-        test_check_descriptor_checksum(get_tree());
+    async fn del_tx_test() {
+        test_del_tx(get_tree().await);
+    }
+
+    #[test]
+    async fn del_last_index_test() {
+        test_del_last_index(get_tree().await);
+    }
+
+    #[test]
+    async fn check_descriptor_checksum_test() {
+        test_check_descriptor_checksum(get_tree().await);
     }
 }

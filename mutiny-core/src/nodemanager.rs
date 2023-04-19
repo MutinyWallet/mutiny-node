@@ -282,10 +282,9 @@ impl NodeManager {
         let tx_sync = Arc::new(EsploraSyncClient::new(esplora_server_url, logger.clone()));
 
         let esplora = Arc::new(EsploraBlockchain::from_client(tx_sync.client().clone(), 5));
-        let database = MutinyBrowserStorage::new(password);
         let wallet = Arc::new(MutinyWallet::new(
             &mnemonic,
-            database,
+            storage.clone(),
             network,
             esplora.clone(),
         ));

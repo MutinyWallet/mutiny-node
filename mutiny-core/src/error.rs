@@ -187,6 +187,12 @@ impl From<PaymentError> for MutinyError {
     }
 }
 
+impl From<MutinyError> for bdk::Error {
+    fn from(e: MutinyError) -> Self {
+        bdk::Error::Generic(format!("Error: {e}"))
+    }
+}
+
 impl From<MutinyStorageError> for bdk::Error {
     fn from(e: MutinyStorageError) -> Self {
         match e {

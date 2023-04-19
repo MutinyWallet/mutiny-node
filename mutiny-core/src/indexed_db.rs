@@ -3,10 +3,12 @@ use crate::error::{MutinyError, MutinyStorageError};
 use crate::ldkstorage::CHANNEL_MANAGER_KEY;
 use anyhow::anyhow;
 use bip39::Mnemonic;
+
 use gloo_utils::format::JsValueSerdeExt;
 use rexie::{ObjectStore, Rexie, TransactionMode};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+
+use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use wasm_bindgen::JsValue;
@@ -25,6 +27,8 @@ pub struct MutinyStorage {
     /// This is a RwLock because we want to be able to read from it without blocking
     memory: Arc<RwLock<HashMap<String, serde_json::Value>>>,
     indexed_db: Arc<Rexie>,
+    pub(crate) batch_map: BTreeMap<String, serde_json::Value>,
+    pub(crate) batch_deleted_keys: Vec<String>,
 }
 
 impl MutinyStorage {
@@ -41,7 +45,30 @@ impl MutinyStorage {
             password,
             memory,
             indexed_db,
+            batch_map: BTreeMap::new(),
+            batch_deleted_keys: vec![],
         })
+    }
+
+    pub(crate) fn new_batch(&self) -> MutinyStorage {
+        MutinyStorage {
+            batch_map: BTreeMap::new(),
+            batch_deleted_keys: Vec::new(),
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn complete_batch(&self, batch: MutinyStorage) -> Result<(), MutinyError> {
+        // delete keys
+        self.delete(batch.batch_deleted_keys)?;
+
+        // set keys
+        // todo make set take multiple values so this is safer
+        for (key, value) in batch.batch_map.iter() {
+            self.set(key, value)?;
+        }
+
+        Ok(())
     }
 
     pub(crate) fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
@@ -107,7 +134,13 @@ impl MutinyStorage {
             .read()
             .map_err(|e| MutinyError::read_err(e.into()))?;
         match map.get(key.as_ref()) {
-            None => Ok(None),
+            None => match self.batch_map.get(key.as_ref()) {
+                None => Ok(None),
+                Some(value) => {
+                    let data: T = serde_json::from_value(value.to_owned())?;
+                    Ok(Some(data))
+                }
+            },
             Some(value) => {
                 let data: T = serde_json::from_value(value.to_owned())?;
                 Ok(Some(data))
@@ -140,6 +173,40 @@ impl MutinyStorage {
                     .map(|value: T| (key.to_owned(), value))
             })
             .collect())
+    }
+
+    fn delete(&self, keys: Vec<String>) -> Result<(), MutinyError> {
+        let mut map = self
+            .memory
+            .write()
+            .map_err(|e| MutinyError::write_err(e.into()))?;
+
+        // delete from memory
+        for key in keys.iter() {
+            map.remove(key);
+        }
+
+        let indexed_db = self.indexed_db.clone();
+        spawn_local(async move {
+            let tx = indexed_db
+                .as_ref()
+                .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)
+                .unwrap();
+            let store = tx.store(WALLET_OBJECT_STORE_NAME).unwrap();
+
+            // delete from indexed db
+            let js_keys: Vec<JsValue> = keys.iter().map(JsValue::from).collect();
+            let mut futures = vec![];
+            for key in js_keys.iter() {
+                let fut = store.delete(key);
+                futures.push(fut);
+            }
+            futures::future::join_all(futures).await;
+
+            tx.done().await.unwrap();
+        });
+
+        Ok(())
     }
 
     pub(crate) async fn insert_mnemonic(
