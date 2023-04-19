@@ -4,7 +4,6 @@
 #![feature(io_error_other)]
 #![feature(async_fn_in_trait)]
 // background file is mostly an LDK copy paste
-#![allow(clippy::all)]
 mod background;
 
 mod bdkstorage;

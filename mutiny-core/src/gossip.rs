@@ -329,9 +329,9 @@ async fn fetch_updated_gossip(
     // save the network graph if has been updated
     if new_last_sync_timestamp_result != last_sync_timestamp {
         write_gossip_data(
-            &rexie,
+            rexie,
             new_last_sync_timestamp_result,
-            &gossip_sync.network_graph(),
+            gossip_sync.network_graph(),
         )
         .await?;
     }
@@ -465,8 +465,7 @@ pub(crate) async fn get_all_peers() -> Result<HashMap<NodeId, LnPeerMetadata>, M
     let mut peers = HashMap::new();
 
     let all_json = store.get_all(None, None, None, None).await?;
-    let mut iter = all_json.into_iter();
-    while let Some((key, value)) = iter.next() {
+    for (key, value) in all_json {
         let pub_key = PublicKey::from_str(&key.as_string().unwrap()).unwrap();
         let node_id = NodeId::from_pubkey(&pub_key);
         let data: Option<LnPeerMetadata> = serde_wasm_bindgen::from_value(value)?;

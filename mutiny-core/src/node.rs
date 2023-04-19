@@ -262,7 +262,7 @@ impl Node {
             wallet.clone(),
             keys_manager.clone(),
             persister.clone(),
-            lsp_client_pubkey.clone(),
+            lsp_client_pubkey,
             logger.clone(),
         );
         let peer_man = Arc::new(create_peer_manager(
@@ -754,7 +754,7 @@ impl Node {
                 return Err(MutinyError::InvoiceInvalid);
             }
             (
-                pay_invoice(&invoice, Retry::Attempts(5), self.channel_manager.as_ref()),
+                pay_invoice(invoice, Retry::Attempts(5), self.channel_manager.as_ref()),
                 invoice.amount_milli_satoshis().unwrap(),
             )
         };

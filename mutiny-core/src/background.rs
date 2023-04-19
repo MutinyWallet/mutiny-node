@@ -9,6 +9,7 @@
 #![deny(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![allow(dead_code)]
+#![allow(clippy::all)]
 
 #[cfg(any(test, feature = "std"))]
 extern crate core;
