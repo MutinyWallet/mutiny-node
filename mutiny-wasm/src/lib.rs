@@ -139,7 +139,7 @@ impl NodeManager {
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
         let address = Address::from_str(&address)?;
         Ok(serde_wasm_bindgen::to_value(
-            &self.inner.check_address(address).await?,
+            &self.inner.check_address(&address).await?,
         )?)
     }
 
@@ -212,7 +212,7 @@ impl NodeManager {
         let self_node_pubkey = PublicKey::from_str(&self_node_pubkey)?;
         Ok(self
             .inner
-            .connect_to_peer(self_node_pubkey, connection_string, label)
+            .connect_to_peer(&self_node_pubkey, &connection_string, label)
             .await?)
     }
 
@@ -224,7 +224,7 @@ impl NodeManager {
     ) -> Result<(), MutinyJsError> {
         let self_node_pubkey = PublicKey::from_str(&self_node_pubkey)?;
         let peer = PublicKey::from_str(&peer)?;
-        Ok(self.inner.disconnect_peer(self_node_pubkey, peer).await?)
+        Ok(self.inner.disconnect_peer(&self_node_pubkey, peer).await?)
     }
 
     #[wasm_bindgen]
@@ -235,7 +235,7 @@ impl NodeManager {
     ) -> Result<(), MutinyJsError> {
         let self_node_pubkey = PublicKey::from_str(&self_node_pubkey)?;
         let peer = PublicKey::from_str(&peer)?;
-        Ok(self.inner.delete_peer(self_node_pubkey, peer).await?)
+        Ok(self.inner.delete_peer(&self_node_pubkey, peer).await?)
     }
 
     #[wasm_bindgen]
@@ -258,7 +258,7 @@ impl NodeManager {
         let invoice = Invoice::from_str(&invoice_str)?;
         Ok(self
             .inner
-            .pay_invoice(from_node, invoice, amt_sats)
+            .pay_invoice(&from_node, &invoice, amt_sats)
             .await?
             .into())
     }
@@ -274,7 +274,7 @@ impl NodeManager {
         let to_node = PublicKey::from_str(&to_node)?;
         Ok(self
             .inner
-            .keysend(from_node, to_node, amt_sats)
+            .keysend(&from_node, to_node, amt_sats)
             .await?
             .into())
     }
@@ -302,7 +302,7 @@ impl NodeManager {
         let lnurl = LnUrl::from_str(&lnurl)?;
         Ok(self
             .inner
-            .lnurl_pay(from_node, lnurl, amount_sats)
+            .lnurl_pay(&from_node, &lnurl, amount_sats)
             .await?
             .into())
     }
@@ -314,19 +314,19 @@ impl NodeManager {
         amount_sats: u64,
     ) -> Result<bool, MutinyJsError> {
         let lnurl = LnUrl::from_str(&lnurl)?;
-        Ok(self.inner.lnurl_withdraw(lnurl, amount_sats).await?)
+        Ok(self.inner.lnurl_withdraw(&lnurl, amount_sats).await?)
     }
 
     #[wasm_bindgen]
     pub async fn get_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
         let invoice = Invoice::from_str(&invoice)?;
-        Ok(self.inner.get_invoice(invoice).await?.into())
+        Ok(self.inner.get_invoice(&invoice).await?.into())
     }
 
     #[wasm_bindgen]
     pub async fn get_invoice_by_hash(&self, hash: String) -> Result<MutinyInvoice, MutinyJsError> {
         let hash: sha256::Hash = sha256::Hash::from_str(&hash)?;
-        Ok(self.inner.get_invoice_by_hash(hash).await?.into())
+        Ok(self.inner.get_invoice_by_hash(&hash).await?.into())
     }
 
     #[wasm_bindgen]
@@ -347,7 +347,7 @@ impl NodeManager {
         let to_pubkey = PublicKey::from_str(&to_pubkey)?;
         Ok(self
             .inner
-            .open_channel(from_node, to_pubkey, amount)
+            .open_channel(&from_node, to_pubkey, amount)
             .await?
             .into())
     }
@@ -355,7 +355,7 @@ impl NodeManager {
     #[wasm_bindgen]
     pub async fn close_channel(&self, outpoint: String) -> Result<(), MutinyJsError> {
         let outpoint: OutPoint = OutPoint::from_str(outpoint.as_str()).expect("invalid outpoint");
-        Ok(self.inner.close_channel(outpoint).await?)
+        Ok(self.inner.close_channel(&outpoint).await?)
     }
 
     #[wasm_bindgen]

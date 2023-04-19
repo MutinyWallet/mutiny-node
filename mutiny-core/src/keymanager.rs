@@ -31,7 +31,7 @@ fn generate_12_word_seed() -> Result<Mnemonic, MutinyError> {
 // A node private key will be derived from `m/0'/X'`, where its node pubkey will
 // be derived from the LDK default being `m/0'/X'/0'`. The PhantomKeysManager shared
 // key secret will be derived from `m/0'`.
-pub(crate) fn create_keys_manager(mnemonic: Mnemonic, child_index: u32) -> PhantomKeysManager {
+pub(crate) fn create_keys_manager(mnemonic: &Mnemonic, child_index: u32) -> PhantomKeysManager {
     let shared_key = XPrv::new(mnemonic.to_seed(""))
         .unwrap()
         .derive_child(bip32::ChildNumber::new(0, true).unwrap())
@@ -78,21 +78,21 @@ mod tests {
 
         let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
 
-        let km = create_keys_manager(mnemonic.clone(), 1);
+        let km = create_keys_manager(&mnemonic, 1);
         let pubkey = pubkey_from_keys_manager(&km);
         assert_eq!(
             "02cae09cf2c8842ace44068a5bf3117a494ebbf69a99e79712483c36f97cdb7b54",
             pubkey.to_string()
         );
 
-        let km = create_keys_manager(mnemonic.clone(), 2);
+        let km = create_keys_manager(&mnemonic, 2);
         let second_pubkey = pubkey_from_keys_manager(&km);
         assert_eq!(
             "03fcc9eaaf0b84946ea7935e3bc4f2b498893c2f53e5d2994d6877d149601ce553",
             second_pubkey.to_string()
         );
 
-        let km = create_keys_manager(mnemonic, 2);
+        let km = create_keys_manager(&mnemonic, 2);
         let second_pubkey_again = pubkey_from_keys_manager(&km);
 
         assert_eq!(second_pubkey, second_pubkey_again);
