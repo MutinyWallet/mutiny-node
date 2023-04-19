@@ -234,7 +234,7 @@ impl MutinyStorage {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) async fn clear() -> Result<(), MutinyError> {
         let indexed_db = Self::build_indexed_db_database().await?;
         let tx = indexed_db.transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)?;

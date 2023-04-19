@@ -1121,7 +1121,7 @@ mod tests {
     use lightning::ln::PaymentHash;
     use std::str::FromStr;
 
-    use crate::test::*;
+    use crate::test_utils::*;
 
     use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};

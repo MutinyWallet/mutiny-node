@@ -390,9 +390,9 @@ impl NodeManager {
 
 #[cfg(test)]
 mod tests {
-    use crate::NodeManager;
-
     use crate::utils::test::*;
+    use crate::NodeManager;
+    use mutiny_core::test_utils::*;
 
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 

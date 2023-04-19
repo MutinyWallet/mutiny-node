@@ -359,7 +359,7 @@ mod test {
 
     use super::*;
 
-    use crate::test::*;
+    use crate::test_utils::*;
 
     wasm_bindgen_test_configure!(run_in_browser);
 

@@ -30,7 +30,6 @@ lnurl-rs = { version = "0.2", default-features = false }
 wasm-logger = "0.2.0"
 log = "0.4.17"
 gloo-storage = "0.2.2"
-rexie = "0.4"
 web-sys = { version = "0.3.60", features = ["console"] }
 bip39 = { version = "2.0.0" }
 getrandom = { version = "0.2", features = ["js"] }
@@ -42,6 +41,7 @@ getrandom = { version = "0.2", features = ["js"] }
 console_error_panic_hook = { version = "0.1.6", optional = true }
 
 [dev-dependencies]
+mutiny-core = { path = "../mutiny-core", features = ["test-utils"] }
 wasm-bindgen-test = "0.3.33"
 mockall = "0.11.2"
 

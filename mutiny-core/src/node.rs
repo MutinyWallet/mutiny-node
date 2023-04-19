@@ -1099,7 +1099,7 @@ pub(crate) fn default_user_config() -> UserConfig {
 
 #[cfg(test)]
 mod tests {
-    use crate::test::*;
+    use crate::test_utils::*;
     use bitcoin::secp256k1::PublicKey;
     use std::str::FromStr;
 

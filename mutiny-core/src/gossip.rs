@@ -639,7 +639,7 @@ mod test {
     use uuid::Uuid;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
-    use crate::test::*;
+    use crate::test_utils::*;
 
     use super::*;
 
@@ -696,7 +696,7 @@ mod test {
     // hack to disable this test
     #[cfg(feature = "ignored_tests")]
     async fn test_gossip() {
-        crate::test::log!("test RGS sync");
+        crate::test_utils::log!("test RGS sync");
         // delete the database if it exists
         Rexie::delete(GOSSIP_DATABASE_NAME).await.unwrap();
 

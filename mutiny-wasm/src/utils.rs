@@ -21,22 +21,10 @@ pub async fn main_js() -> Result<(), JsValue> {
 
 #[cfg(test)]
 pub(crate) mod test {
-    use gloo_storage::{LocalStorage, Storage};
-    use rexie::Rexie;
-
     macro_rules! log {
         ( $( $t:tt )* ) => {
             web_sys::console::log_1(&format!( $( $t )* ).into());
         }
     }
     pub(crate) use log;
-
-    pub(crate) fn cleanup_test() {
-        LocalStorage::clear();
-    }
-
-    pub(crate) async fn cleanup_wallet_test() {
-        cleanup_test();
-        Rexie::delete("wallet").await.unwrap();
-    }
 }
