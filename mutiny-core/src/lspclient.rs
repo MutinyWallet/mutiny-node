@@ -28,12 +28,12 @@ pub(crate) struct GetInfoAddress {
 #[derive(Copy, Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum GetInfoAddressType {
-    DNS,
+    Dns,
     IPV4,
     IPV6,
     TORV2,
     TORV3,
-    WEBSOCKET,
+    Websocket,
 }
 
 #[derive(Serialize, Deserialize)]

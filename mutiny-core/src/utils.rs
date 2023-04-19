@@ -95,7 +95,7 @@ impl<'a, T: 'a + Score> LockableScore<'a> for Mutex<T> {
     }
 }
 
-impl<'a, S: Writeable> Writeable for Mutex<S> {
+impl<S: Writeable> Writeable for Mutex<S> {
     fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
         self.lock()
             .expect("Failed to lock mutex for write")
@@ -114,13 +114,13 @@ impl<'a, S: Writeable> Writeable for MutexGuard<'a, S> {
 /// We can't just compare the network directly because signet and testnet
 /// have conflicting address prefixes.
 pub(crate) fn is_valid_network(my_network: Network, dest_network: Network) -> bool {
-    match (my_network, dest_network) {
-        (Network::Bitcoin, Network::Bitcoin) => true,
-        (Network::Testnet, Network::Testnet) => true,
-        (Network::Signet, Network::Testnet) => true,
-        (Network::Testnet, Network::Signet) => true,
-        (Network::Signet, Network::Signet) => true,
-        (Network::Regtest, Network::Regtest) => true,
-        _ => false,
-    }
+    matches!(
+        (my_network, dest_network),
+        (Network::Bitcoin, Network::Bitcoin)
+            | (Network::Testnet, Network::Testnet)
+            | (Network::Signet, Network::Testnet)
+            | (Network::Testnet, Network::Signet)
+            | (Network::Signet, Network::Signet)
+            | (Network::Regtest, Network::Regtest)
+    )
 }

@@ -332,7 +332,7 @@ impl NodeManager {
         let node_storage = match MutinyBrowserStorage::get_nodes() {
             Ok(node_storage) => node_storage,
             Err(e) => {
-                return Err(MutinyError::ReadError { source: e }.into());
+                return Err(MutinyError::ReadError { source: e });
             }
         };
 
@@ -441,16 +441,16 @@ impl NodeManager {
         description: Option<String>,
     ) -> Result<MutinyBip21RawMaterials, MutinyError> {
         let Ok(address) = self.get_new_address().await else {
-            return Err(MutinyError::WalletOperationFailed.into());
+            return Err(MutinyError::WalletOperationFailed);
         };
 
         // TODO if there's no description should be something random I guess
         let Ok(invoice) = self.create_invoice(amount, description.clone().unwrap_or_else(|| "".into())).await else {
-            return Err(MutinyError::WalletOperationFailed.into());
+            return Err(MutinyError::WalletOperationFailed);
         };
 
         let Some(bolt11) = invoice.bolt11 else {
-            return Err(MutinyError::WalletOperationFailed.into());
+            return Err(MutinyError::WalletOperationFailed);
         };
 
         Ok(MutinyBip21RawMaterials {
@@ -534,7 +534,7 @@ impl NodeManager {
         &self,
         txid: &Txid,
     ) -> Result<Option<TransactionDetails>, MutinyError> {
-        Ok(self.wallet.get_transaction(txid, false).await?)
+        self.wallet.get_transaction(txid, false).await
     }
 
     pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyError> {
@@ -558,7 +558,7 @@ impl NodeManager {
     }
 
     pub async fn list_utxos(&self) -> Result<Vec<LocalUtxo>, MutinyError> {
-        Ok(self.wallet.list_utxos().await?)
+        self.wallet.list_utxos().await
     }
 
     async fn sync_ldk(&self) -> Result<(), MutinyError> {
@@ -592,7 +592,7 @@ impl NodeManager {
         // sync bdk wallet
         match self.wallet.sync().await {
             Ok(()) => Ok(info!("We are synced!")),
-            Err(e) => Err(e.into()),
+            Err(e) => Err(e),
         }
     }
 
@@ -607,10 +607,7 @@ impl NodeManager {
     }
 
     pub async fn new_node(&self) -> Result<NodeIdentity, MutinyError> {
-        match create_new_node_from_node_manager(self).await {
-            Ok(node_identity) => Ok(node_identity),
-            Err(e) => Err(e.into()),
-        }
+        create_new_node_from_node_manager(self).await
     }
 
     pub async fn list_nodes(&self) -> Result<Vec<PublicKey>, MutinyError> {
@@ -636,13 +633,13 @@ impl NodeManager {
                 }
                 Err(e) => {
                     error!("could not connect to peer: {connection_string} - {e}");
-                    return Err(e.into());
+                    return Err(e);
                 }
             };
         }
 
         error!("could not find internal node {self_node_pubkey}");
-        Err(MutinyError::WalletOperationFailed.into())
+        Err(MutinyError::WalletOperationFailed)
     }
 
     pub async fn disconnect_peer(
@@ -655,7 +652,7 @@ impl NodeManager {
             Ok(())
         } else {
             error!("could not find internal node {self_node_pubkey}");
-            Err(MutinyError::WalletOperationFailed.into())
+            Err(MutinyError::WalletOperationFailed)
         }
     }
 
@@ -671,7 +668,7 @@ impl NodeManager {
             Ok(())
         } else {
             error!("could not find internal node {self_node_pubkey}");
-            Err(MutinyError::WalletOperationFailed.into())
+            Err(MutinyError::WalletOperationFailed)
         }
     }
 

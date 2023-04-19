@@ -1,5 +1,7 @@
 // --- lightning_transaction_sync::common
 
+#![allow(clippy::all)]
+
 use bitcoin::{BlockHeader, OutPoint, Transaction};
 
 use std::collections::HashMap;
