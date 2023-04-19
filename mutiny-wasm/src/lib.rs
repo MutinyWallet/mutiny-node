@@ -61,8 +61,8 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub fn has_node_manager() -> bool {
-        nodemanager::NodeManager::has_node_manager()
+    pub async fn has_node_manager() -> bool {
+        nodemanager::NodeManager::has_node_manager().await
     }
 
     #[wasm_bindgen]
@@ -402,7 +402,7 @@ mod tests {
     async fn create_node_manager() {
         log!("creating node manager!");
 
-        assert!(!NodeManager::has_node_manager());
+        assert!(!NodeManager::has_node_manager().await);
         NodeManager::new(
             "password".to_string(),
             None,
@@ -414,9 +414,9 @@ mod tests {
         )
         .await
         .expect("node manager should initialize");
-        assert!(NodeManager::has_node_manager());
+        assert!(NodeManager::has_node_manager().await);
 
-        cleanup_test();
+        cleanup_wallet_test().await;
     }
 
     #[test]
@@ -439,10 +439,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(NodeManager::has_node_manager());
+        assert!(NodeManager::has_node_manager().await);
         assert_eq!(seed.to_string(), nm.show_seed());
 
-        cleanup_test();
+        cleanup_wallet_test().await;
     }
 
     #[test]
@@ -474,6 +474,6 @@ mod tests {
         assert_ne!("", node_identity.uuid());
         assert_ne!("", node_identity.pubkey());
 
-        cleanup_test();
+        cleanup_wallet_test().await;
     }
 }

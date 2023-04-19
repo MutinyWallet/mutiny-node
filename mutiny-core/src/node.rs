@@ -1,3 +1,4 @@
+use crate::indexed_db::MutinyStorage;
 use crate::{
     background::process_events_async,
     chain::MutinyChain,
@@ -7,7 +8,6 @@ use crate::{
     gossip::{get_all_peers, read_peer_info, save_peer_connection_info},
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
     ldkstorage::{MutinyNodePersister, PhantomChannelManager},
-    localstorage::MutinyBrowserStorage,
     logging::MutinyLogger,
     lspclient::LspClient,
     nodemanager::{MutinyInvoice, NodeIndex},
@@ -20,7 +20,7 @@ use crate::{
     utils::{self, currency_from_network, is_valid_network, network_from_currency, sleep},
     wallet::MutinyWallet,
 };
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use bdk::blockchain::EsploraBlockchain;
 use bip39::Mnemonic;
 use bitcoin::hashes::sha256::Hash as Sha256;
@@ -150,7 +150,7 @@ impl Node {
         uuid: String,
         node_index: &NodeIndex,
         mnemonic: &Mnemonic,
-        storage: MutinyBrowserStorage,
+        storage: MutinyStorage,
         gossip_sync: Arc<RapidGossipSync>,
         scorer: Arc<utils::Mutex<ProbScorer>>,
         chain: Arc<MutinyChain>,
@@ -184,7 +184,7 @@ impl Node {
         let channel_monitors = persister
             .read_channel_monitors(keys_manager.clone())
             .map_err(|e| MutinyError::ReadError {
-                source: MutinyStorageError::Other(e.into()),
+                source: MutinyStorageError::Other(anyhow!("failed to read channel monitors: {e}")),
             })?;
 
         let network_graph = gossip_sync.network_graph().clone();
@@ -677,16 +677,20 @@ impl Node {
     }
 
     pub fn list_invoices(&self) -> Result<Vec<MutinyInvoice>, MutinyError> {
-        let mut inbound_invoices = self.list_payment_info_from_persisters(true);
-        let mut outbound_invoices = self.list_payment_info_from_persisters(false);
+        let mut inbound_invoices = self.list_payment_info_from_persisters(true)?;
+        let mut outbound_invoices = self.list_payment_info_from_persisters(false)?;
         inbound_invoices.append(&mut outbound_invoices);
         Ok(inbound_invoices)
     }
 
-    fn list_payment_info_from_persisters(&self, inbound: bool) -> Vec<MutinyInvoice> {
+    fn list_payment_info_from_persisters(
+        &self,
+        inbound: bool,
+    ) -> Result<Vec<MutinyInvoice>, MutinyError> {
         let now = utils::now();
-        self.persister
-            .list_payment_info(inbound)
+        Ok(self
+            .persister
+            .list_payment_info(inbound)?
             .into_iter()
             .filter_map(|(h, i)| {
                 let mutiny_invoice = MutinyInvoice::from(i.clone(), h, inbound).ok();
@@ -702,7 +706,7 @@ impl Node {
                         || matches!(i.status, HTLCStatus::Succeeded | HTLCStatus::InFlight)
                 })
             })
-            .collect()
+            .collect())
     }
 
     fn get_payment_info_from_persisters(

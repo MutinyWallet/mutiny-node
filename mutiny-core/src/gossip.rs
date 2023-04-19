@@ -712,8 +712,7 @@ mod test {
         assert!(data.is_some());
         assert!(data.unwrap().last_sync_timestamp > 0);
 
-        cleanup_indexdb_test().await;
-        cleanup_test();
+        cleanup_gossip_test().await;
     }
 
     #[test]
@@ -740,8 +739,7 @@ mod test {
 
         assert!(read.is_none());
 
-        cleanup_indexdb_test().await;
-        cleanup_test();
+        cleanup_gossip_test().await;
     }
 
     #[test]
@@ -766,7 +764,6 @@ mod test {
         assert!(read.is_some());
         assert_eq!(read.unwrap(), expected);
 
-        cleanup_indexdb_test().await;
-        cleanup_test();
+        cleanup_gossip_test().await;
     }
 }

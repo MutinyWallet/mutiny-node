@@ -14,6 +14,7 @@ pub mod esplora;
 mod event;
 mod fees;
 mod gossip;
+mod indexed_db;
 mod keymanager;
 mod ldkstorage;
 mod localstorage;
@@ -40,12 +41,19 @@ mod test {
     use rexie::Rexie;
 
     use crate::gossip::GOSSIP_DATABASE_NAME;
+    use crate::indexed_db::MutinyStorage;
 
     pub(crate) fn cleanup_test() {
         LocalStorage::clear();
     }
 
-    pub(crate) async fn cleanup_indexdb_test() {
+    pub(crate) async fn cleanup_gossip_test() {
+        cleanup_test();
         Rexie::delete(GOSSIP_DATABASE_NAME).await.unwrap();
+    }
+
+    pub(crate) async fn cleanup_wallet_test() {
+        cleanup_test();
+        MutinyStorage::clear().await.unwrap();
     }
 }

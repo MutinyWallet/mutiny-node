@@ -1,13 +1,13 @@
 use crate::chain::MutinyChain;
-use crate::error::MutinyError;
+use crate::error::{MutinyError, MutinyStorageError};
 use crate::event::PaymentInfo;
 use crate::fees::MutinyFeeEstimator;
 use crate::gossip;
-use crate::localstorage::MutinyBrowserStorage;
+use crate::indexed_db::MutinyStorage;
 use crate::logging::MutinyLogger;
 use crate::node::{default_user_config, ChainMonitor, ProbScorer};
 use crate::node::{NetworkGraph, Router};
-use crate::{error, utils};
+use crate::utils;
 use anyhow::anyhow;
 use bdk::blockchain::EsploraBlockchain;
 use bitcoin::hashes::hex::{FromHex, ToHex};
@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 
-const CHANNEL_MANAGER_KEY: &str = "manager";
+pub(crate) const CHANNEL_MANAGER_KEY: &str = "manager";
 const MONITORS_PREFIX_KEY: &str = "monitors/";
 const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
 const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
@@ -51,7 +51,7 @@ pub(crate) type PhantomChannelManager = LdkChannelManager<
 
 pub struct MutinyNodePersister {
     node_id: String,
-    storage: MutinyBrowserStorage,
+    storage: MutinyStorage,
 }
 
 pub(crate) struct ReadChannelManager {
@@ -61,7 +61,7 @@ pub(crate) struct ReadChannelManager {
 }
 
 impl MutinyNodePersister {
-    pub fn new(node_id: String, storage: MutinyBrowserStorage) -> Self {
+    pub fn new(node_id: String, storage: MutinyStorage) -> Self {
         MutinyNodePersister { node_id, storage }
     }
 
@@ -84,7 +84,13 @@ impl MutinyNodePersister {
     // that has the concatenated node_id
     fn read_value(&self, _key: &str) -> Result<Vec<u8>, MutinyError> {
         let key = self.get_key(_key);
-        self.storage.get(key).map_err(MutinyError::read_err)
+        match self.storage.get(&key) {
+            Ok(Some(value)) => Ok(value),
+            Ok(None) => Err(MutinyError::read_err(MutinyStorageError::Other(anyhow!(
+                "No value found for key: {key}"
+            )))),
+            Err(e) => Err(e),
+        }
     }
 
     pub fn read_channel_monitors(
@@ -93,8 +99,10 @@ impl MutinyNodePersister {
     ) -> Result<Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>, io::Error> {
         // Get all the channel monitor buffers that exist for this node
         let suffix = self.node_id.as_str();
-        let channel_monitor_list: HashMap<String, Vec<u8>> =
-            self.storage.scan(MONITORS_PREFIX_KEY, Some(suffix));
+        let channel_monitor_list: HashMap<String, Vec<u8>> = self
+            .storage
+            .scan(MONITORS_PREFIX_KEY, Some(suffix))
+            .map_err(|_| io::ErrorKind::Other)?;
 
         let res = channel_monitor_list
             .iter()
@@ -154,7 +162,7 @@ impl MutinyNodePersister {
                 );
                 let mut readable_kv_value = lightning::io::Cursor::new(kv_value);
                 let Ok((_, channel_manager)) = <(BlockHash, PhantomChannelManager)>::read(&mut readable_kv_value, read_args) else {
-                    return Err(MutinyError::ReadError { source: error::MutinyStorageError::Other(anyhow!("could not read manager")) })
+                    return Err(MutinyError::ReadError { source: MutinyStorageError::Other(anyhow!("could not read manager")) })
                 };
                 Ok(ReadChannelManager {
                     channel_manager,
@@ -226,20 +234,23 @@ impl MutinyNodePersister {
             "",
             0,
         ));
-        let deserialized_value: Result<PaymentInfo, MutinyError> =
-            self.storage.get(key).map_err(MutinyError::read_err);
-        deserialized_value.ok()
+        let deserialized_value: Result<Option<PaymentInfo>, MutinyError> = self.storage.get(key);
+        deserialized_value.ok().flatten()
     }
 
-    pub(crate) fn list_payment_info(&self, inbound: bool) -> Vec<(PaymentHash, PaymentInfo)> {
+    pub(crate) fn list_payment_info(
+        &self,
+        inbound: bool,
+    ) -> Result<Vec<(PaymentHash, PaymentInfo)>, MutinyError> {
         let prefix = match inbound {
             true => PAYMENT_INBOUND_PREFIX_KEY,
             false => PAYMENT_OUTBOUND_PREFIX_KEY,
         };
-        let map: HashMap<String, PaymentInfo> = self.storage.scan(prefix, None);
+        let map: HashMap<String, PaymentInfo> = self.storage.scan(prefix, None)?;
 
         // convert keys to PaymentHash
-        map.into_iter()
+        Ok(map
+            .into_iter()
             .map(|(key, value)| {
                 let payment_hash_str = key
                     .trim_start_matches(prefix)
@@ -248,7 +259,7 @@ impl MutinyNodePersister {
                     FromHex::from_hex(payment_hash_str).expect("key should be a sha256 hash");
                 (PaymentHash(hash), value)
             })
-            .collect()
+            .collect())
     }
 }
 
@@ -352,14 +363,15 @@ mod test {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
-    fn get_test_persister() -> MutinyNodePersister {
+    async fn get_test_persister() -> MutinyNodePersister {
         let id = Uuid::new_v4().to_string();
-        MutinyNodePersister::new(id, MutinyBrowserStorage::new("".to_string()))
+        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        MutinyNodePersister::new(id, storage)
     }
 
     #[test]
     async fn test_persist_payment_info() {
-        let persister = get_test_persister();
+        let persister = get_test_persister().await;
         let preimage = [1; 32];
         let payment_hash = PaymentHash([0; 32]);
         let pubkey = PublicKey::from_str(
@@ -387,12 +399,11 @@ mod test {
         assert_eq!(result.clone().unwrap().preimage, Some(preimage));
         assert_eq!(result.clone().unwrap().status, HTLCStatus::Succeeded);
 
-        let list = persister.list_payment_info(true);
+        let list = persister.list_payment_info(true).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].0, payment_hash);
         assert_eq!(list[0].1.preimage, Some(preimage));
 
-        cleanup_indexdb_test().await;
-        cleanup_test();
+        cleanup_gossip_test().await;
     }
 }
