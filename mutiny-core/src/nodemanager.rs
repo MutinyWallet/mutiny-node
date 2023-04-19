@@ -1214,7 +1214,6 @@ mod tests {
             assert_eq!(1, retrieved_node.child_index);
         }
 
-        cleanup_test();
         cleanup_wallet_test().await;
     }
 
