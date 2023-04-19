@@ -212,7 +212,7 @@ impl MutinyStorage {
                 .ok_or(MutinyError::read_err(MutinyStorageError::Other(anyhow!(
                     "key from indexedDB is not a string"
                 ))))?;
-            let json: serde_json::Value = match password {
+            let json: Option<serde_json::Value> = match password {
                 Some(pw) if Self::needs_encryption(&key) => {
                     let str: String = serde_wasm_bindgen::from_value(value)?;
                     let ciphertext = decrypt(&str, pw);
@@ -220,7 +220,10 @@ impl MutinyStorage {
                 }
                 _ => serde_wasm_bindgen::from_value(value)?,
             };
-            map.insert(key, json);
+
+            if let Some(json) = json {
+                map.insert(key, json);
+            }
         }
 
         Ok(map)
