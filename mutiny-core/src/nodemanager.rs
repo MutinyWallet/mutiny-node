@@ -282,7 +282,7 @@ impl NodeManager {
 
         let esplora = Arc::new(EsploraBlockchain::from_client(tx_sync.client().clone(), 5));
         let wallet = Arc::new(MutinyWallet::new(
-            mnemonic.clone(),
+            &mnemonic,
             storage.clone(),
             network,
             esplora.clone(),
@@ -341,8 +341,8 @@ impl NodeManager {
         for node_item in node_storage.clone().nodes {
             let node = Node::new(
                 node_item.0,
-                node_item.1,
-                mnemonic.clone(),
+                &node_item.1,
+                &mnemonic,
                 storage.clone(),
                 gossip_sync.clone(),
                 scorer.clone(),
@@ -488,7 +488,7 @@ impl NodeManager {
 
     pub async fn check_address(
         &self,
-        address: Address,
+        address: &Address,
     ) -> Result<Option<TransactionDetails>, MutinyError> {
         if !is_valid_network(self.network, address.network) {
             return Err(MutinyError::IncorrectNetwork(address.network));
@@ -621,12 +621,12 @@ impl NodeManager {
 
     pub async fn connect_to_peer(
         &self,
-        self_node_pubkey: PublicKey,
-        connection_string: String,
+        self_node_pubkey: &PublicKey,
+        connection_string: &str,
         label: Option<String>,
     ) -> Result<(), MutinyError> {
-        if let Some(node) = self.nodes.lock().await.get(&self_node_pubkey) {
-            let connect_info = PubkeyConnectionInfo::new(connection_string.clone())?;
+        if let Some(node) = self.nodes.lock().await.get(self_node_pubkey) {
+            let connect_info = PubkeyConnectionInfo::new(connection_string)?;
             let label_opt = label.filter(|s| !s.is_empty()); // filter out empty strings
             let res = node.connect_peer(connect_info, label_opt).await;
             match res {
@@ -647,10 +647,10 @@ impl NodeManager {
 
     pub async fn disconnect_peer(
         &self,
-        self_node_pubkey: PublicKey,
+        self_node_pubkey: &PublicKey,
         peer: PublicKey,
     ) -> Result<(), MutinyError> {
-        if let Some(node) = self.nodes.lock().await.get(&self_node_pubkey) {
+        if let Some(node) = self.nodes.lock().await.get(self_node_pubkey) {
             node.disconnect_peer(peer);
             Ok(())
         } else {
@@ -661,12 +661,12 @@ impl NodeManager {
 
     pub async fn delete_peer(
         &self,
-        self_node_pubkey: PublicKey,
+        self_node_pubkey: &PublicKey,
         peer: PublicKey,
     ) -> Result<(), MutinyError> {
         let node_id = NodeId::from_pubkey(&peer);
 
-        if let Some(node) = self.nodes.lock().await.get(&self_node_pubkey) {
+        if let Some(node) = self.nodes.lock().await.get(self_node_pubkey) {
             gossip::delete_peer_info(&node._uuid, &node_id).await?;
             Ok(())
         } else {
@@ -677,10 +677,10 @@ impl NodeManager {
 
     pub async fn label_peer(
         &self,
-        peer: PublicKey,
+        peer: &PublicKey,
         label: Option<String>,
     ) -> Result<(), MutinyError> {
-        let node_id = NodeId::from_pubkey(&peer);
+        let node_id = NodeId::from_pubkey(peer);
         gossip::set_peer_label(&node_id, label).await?;
         Ok(())
     }
@@ -723,8 +723,8 @@ impl NodeManager {
 
     pub async fn pay_invoice(
         &self,
-        from_node: PublicKey,
-        invoice: Invoice,
+        from_node: &PublicKey,
+        invoice: &Invoice,
         amt_sats: Option<u64>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let invoice_network = network_from_currency(invoice.currency());
@@ -733,19 +733,19 @@ impl NodeManager {
         }
 
         let nodes = self.nodes.lock().await;
-        let node = nodes.get(&from_node).unwrap();
+        let node = nodes.get(from_node).unwrap();
         node.pay_invoice_with_timeout(invoice, amt_sats, None).await
     }
 
     pub async fn keysend(
         &self,
-        from_node: PublicKey,
+        from_node: &PublicKey,
         to_node: PublicKey,
         amt_sats: u64,
     ) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
         debug!("Keysending to {to_node}");
-        let node = nodes.get(&from_node).unwrap();
+        let node = nodes.get(from_node).unwrap();
         node.keysend_with_timeout(to_node, amt_sats, None).await
     }
 
@@ -784,8 +784,8 @@ impl NodeManager {
 
     pub async fn lnurl_pay(
         &self,
-        from_node: PublicKey,
-        lnurl: LnUrl,
+        from_node: &PublicKey,
+        lnurl: &LnUrl,
         amount_sats: u64,
     ) -> Result<MutinyInvoice, MutinyError> {
         let response = self.lnurl_client.make_request(&lnurl.url).await?;
@@ -795,7 +795,7 @@ impl NodeManager {
                 let msats = amount_sats * 1000;
                 let invoice = self.lnurl_client.get_invoice(&pay, msats).await?;
 
-                self.pay_invoice(from_node, invoice.invoice(), None).await
+                self.pay_invoice(from_node, &invoice.invoice(), None).await
             }
             LnUrlResponse::LnUrlWithdrawResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
             LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
@@ -804,7 +804,7 @@ impl NodeManager {
 
     pub async fn lnurl_withdraw(
         &self,
-        lnurl: LnUrl,
+        lnurl: &LnUrl,
         amount_sats: u64,
     ) -> Result<bool, MutinyError> {
         let response = self.lnurl_client.make_request(&lnurl.url).await?;
@@ -828,11 +828,10 @@ impl NodeManager {
         }
     }
 
-    pub async fn get_invoice(&self, invoice: Invoice) -> Result<MutinyInvoice, MutinyError> {
+    pub async fn get_invoice(&self, invoice: &Invoice) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
-        let inv_opt: Option<MutinyInvoice> = nodes
-            .iter()
-            .find_map(|(_, n)| n.get_invoice(invoice.clone()).ok());
+        let inv_opt: Option<MutinyInvoice> =
+            nodes.iter().find_map(|(_, n)| n.get_invoice(invoice).ok());
         match inv_opt {
             Some(i) => Ok(i),
             None => Err(MutinyError::InvoiceInvalid),
@@ -841,13 +840,13 @@ impl NodeManager {
 
     pub async fn get_invoice_by_hash(
         &self,
-        hash: sha256::Hash,
+        hash: &sha256::Hash,
     ) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
         for (_, node) in nodes.iter() {
             if let Ok(invs) = node.list_invoices() {
                 let inv_opt: Option<MutinyInvoice> =
-                    invs.into_iter().find(|i| i.payment_hash == hash);
+                    invs.into_iter().find(|i| i.payment_hash == *hash);
                 if let Some(i) = inv_opt {
                     return Ok(i);
                 }
@@ -869,12 +868,12 @@ impl NodeManager {
 
     pub async fn open_channel(
         &self,
-        from_node: PublicKey,
+        from_node: &PublicKey,
         to_pubkey: PublicKey,
         amount: u64,
     ) -> Result<MutinyChannel, MutinyError> {
         let nodes = self.nodes.lock().await;
-        let node = nodes.get(&from_node).unwrap();
+        let node = nodes.get(from_node).unwrap();
 
         let chan_id = node.open_channel(to_pubkey, amount).await?;
 
@@ -887,13 +886,13 @@ impl NodeManager {
         }
     }
 
-    pub async fn close_channel(&self, outpoint: OutPoint) -> Result<(), MutinyError> {
+    pub async fn close_channel(&self, outpoint: &OutPoint) -> Result<(), MutinyError> {
         let nodes = self.nodes.lock().await;
         let channel_opt: Option<(Arc<Node>, ChannelDetails)> = nodes.iter().find_map(|(_, n)| {
             n.channel_manager
                 .list_channels()
                 .iter()
-                .find(|c| c.funding_txo.map(|f| f.into_bitcoin_outpoint()) == Some(outpoint))
+                .find(|c| c.funding_txo.map(|f| f.into_bitcoin_outpoint()) == Some(*outpoint))
                 .map(|c| (n.clone(), c.clone()))
         });
 
@@ -1079,8 +1078,8 @@ pub(crate) async fn create_new_node_from_node_manager(
     // now create the node process and init it
     let new_node = match Node::new(
         next_node_uuid.clone(),
-        next_node.clone(),
-        node_manager.mnemonic.clone(),
+        &next_node,
+        &node_manager.mnemonic,
         node_manager.storage.clone(),
         node_manager.gossip_sync.clone(),
         node_manager.scorer.clone(),

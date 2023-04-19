@@ -23,8 +23,6 @@ use crate::{
 use anyhow::Context;
 use bdk::blockchain::EsploraBlockchain;
 use bip39::Mnemonic;
-use bitcoin::hashes::hex::ToHex;
-use bitcoin::hashes::sha256;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::secp256k1::rand;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network};
@@ -105,7 +103,7 @@ pub(crate) struct PubkeyConnectionInfo {
 }
 
 impl PubkeyConnectionInfo {
-    pub fn new(connection: String) -> Result<Self, MutinyError> {
+    pub fn new(connection: &str) -> Result<Self, MutinyError> {
         if connection.is_empty() {
             return Err(MutinyError::PeerInfoParseFailed)
                 .context("connect_peer requires peer connection info")?;
@@ -113,15 +111,14 @@ impl PubkeyConnectionInfo {
         let connection = connection.to_lowercase();
         if connection.starts_with("mutiny:") {
             let stripped_connection = connection.strip_prefix("mutiny:").expect("should strip");
-            let (pubkey, peer_addr_str) =
-                split_peer_connection_string(stripped_connection.to_string())?;
+            let (pubkey, peer_addr_str) = split_peer_connection_string(stripped_connection)?;
             Ok(Self {
                 pubkey,
                 connection_type: ConnectionType::Mutiny(peer_addr_str),
                 original_connection_string: connection.to_string(),
             })
         } else {
-            let (pubkey, peer_addr_str) = parse_peer_info(connection.clone())?;
+            let (pubkey, peer_addr_str) = parse_peer_info(&connection)?;
             Ok(Self {
                 pubkey,
                 connection_type: ConnectionType::Tcp(peer_addr_str),
@@ -151,8 +148,8 @@ impl Node {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
         uuid: String,
-        node_index: NodeIndex,
-        mnemonic: Mnemonic,
+        node_index: &NodeIndex,
+        mnemonic: &Mnemonic,
         storage: MutinyBrowserStorage,
         gossip_sync: Arc<RapidGossipSync>,
         scorer: Arc<utils::Mutex<ProbScorer>>,
@@ -242,7 +239,7 @@ impl Node {
                     Some(lsp_clients[rand].clone())
                 }
             }
-            Some(lsp) => lsp_clients.iter().find(|c| c.url == lsp).cloned(),
+            Some(ref lsp) => lsp_clients.iter().find(|c| &c.url == lsp).cloned(),
         };
 
         let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.pubkey);
@@ -344,8 +341,7 @@ impl Node {
             connection_type: ConnectionType::Mutiny(websocket_proxy_addr.to_string()),
             original_connection_string: format!("mutiny:{pubkey}@{websocket_proxy_addr}"),
         };
-        let main_proxy =
-            WsProxy::new(websocket_proxy_addr.to_string(), self_connection.clone()).await?;
+        let main_proxy = WsProxy::new(&websocket_proxy_addr, self_connection.clone()).await?;
         let multi_socket = MultiWsSocketDescriptor::new(
             Arc::new(main_proxy),
             peer_man.clone(),
@@ -361,11 +357,8 @@ impl Node {
             loop {
                 if !multi_socket_reconnect.connected() {
                     debug!("got disconnected from multi socket proxy, going to reconnect");
-                    match WsProxy::new(
-                        websocket_proxy_addr_copy.to_string(),
-                        self_connection_copy.clone(),
-                    )
-                    .await
+                    match WsProxy::new(&websocket_proxy_addr_copy, self_connection_copy.clone())
+                        .await
                     {
                         Ok(main_proxy) => {
                             multi_socket_reconnect.reconnect(Arc::new(main_proxy)).await;
@@ -420,7 +413,7 @@ impl Node {
                         "",
                         0,
                     ));
-                    let peer_connection_info = match PubkeyConnectionInfo::new(conn_str) {
+                    let peer_connection_info = match PubkeyConnectionInfo::new(&conn_str) {
                         Ok(p) => p,
                         Err(e) => {
                             connect_logger.log(&Record::new(
@@ -435,8 +428,8 @@ impl Node {
                     };
                     match connect_peer(
                         connect_multi_socket.clone(),
-                        connect_proxy.clone(),
-                        peer_connection_info,
+                        &connect_proxy,
+                        &peer_connection_info,
                         connect_peer_man.clone(),
                     )
                     .await
@@ -496,8 +489,8 @@ impl Node {
     ) -> Result<(), MutinyError> {
         match connect_peer_if_necessary(
             self.multi_socket.clone(),
-            self.websocket_proxy_addr.clone(),
-            peer_connection_info.clone(),
+            &self.websocket_proxy_addr,
+            &peer_connection_info,
             self.peer_manager.clone(),
         )
         .await
@@ -630,7 +623,7 @@ impl Node {
             last_update,
         };
         self.persister
-            .persist_payment_info(payment_hash, payment_info, true)
+            .persist_payment_info(&payment_hash, &payment_info, true)
             .map_err(|e| {
                 self.logger.log(&Record::new(
                     lightning::util::logger::Level::Error,
@@ -651,11 +644,8 @@ impl Node {
         ));
 
         if let Some(lsp) = self.lsp_client.clone() {
-            self.connect_peer(
-                PubkeyConnectionInfo::new(lsp.clone().connection_string)?,
-                None,
-            )
-            .await?;
+            self.connect_peer(PubkeyConnectionInfo::new(&lsp.connection_string)?, None)
+                .await?;
             let lsp_invoice_str = lsp.get_lsp_invoice(invoice.to_string()).await?;
             let lsp_invoice = Invoice::from_str(&lsp_invoice_str)?;
 
@@ -676,13 +666,14 @@ impl Node {
         }
     }
 
-    pub fn get_invoice(&self, invoice: Invoice) -> Result<MutinyInvoice, MutinyError> {
+    pub fn get_invoice(&self, invoice: &Invoice) -> Result<MutinyInvoice, MutinyError> {
         let payment_hash = invoice.payment_hash();
         let (payment_info, inbound) = self.get_payment_info_from_persisters(payment_hash)?;
-        let mut mutiny_invoice: MutinyInvoice = invoice.into();
-        mutiny_invoice.is_send = !inbound;
-        mutiny_invoice.paid = matches!(payment_info.status, HTLCStatus::Succeeded);
-        Ok(mutiny_invoice)
+        MutinyInvoice::from(
+            payment_info,
+            PaymentHash(payment_hash.into_inner()),
+            inbound,
+        )
     }
 
     pub fn list_invoices(&self) -> Result<Vec<MutinyInvoice>, MutinyError> {
@@ -693,7 +684,7 @@ impl Node {
     }
 
     fn list_payment_info_from_persisters(&self, inbound: bool) -> Vec<MutinyInvoice> {
-        let now = crate::utils::now();
+        let now = utils::now();
         self.persister
             .list_payment_info(inbound)
             .into_iter()
@@ -719,20 +710,19 @@ impl Node {
         payment_hash: &bitcoin::hashes::sha256::Hash,
     ) -> Result<(PaymentInfo, bool), MutinyError> {
         // try inbound first
-        if let Some(payment_info) = self.persister.read_payment_info(
-            PaymentHash(payment_hash.into_inner()),
-            true,
-            self.logger.clone(),
-        ) {
+        let payment_hash = PaymentHash(payment_hash.into_inner());
+        if let Some(payment_info) =
+            self.persister
+                .read_payment_info(&payment_hash, true, self.logger.clone())
+        {
             return Ok((payment_info, true));
         }
 
         // if no inbound check outbound
-        match self.persister.read_payment_info(
-            PaymentHash(payment_hash.into_inner()),
-            false,
-            self.logger.clone(),
-        ) {
+        match self
+            .persister
+            .read_payment_info(&payment_hash, false, self.logger.clone())
+        {
             Some(payment_info) => Ok((payment_info, false)),
             None => Err(MutinyError::InvoiceInvalid),
         }
@@ -742,9 +732,9 @@ impl Node {
     /// use pay_invoice_with_timeout to wait for results
     pub fn init_invoice_payment(
         &self,
-        invoice: Invoice,
+        invoice: &Invoice,
         amt_sats: Option<u64>,
-    ) -> Result<MutinyInvoice, MutinyError> {
+    ) -> Result<PaymentHash, MutinyError> {
         let (pay_result, amt_msat) = if invoice.amount_milli_satoshis().is_none() {
             if amt_sats.is_none() {
                 return Err(MutinyError::InvoiceInvalid);
@@ -752,7 +742,7 @@ impl Node {
             let amt_msats = amt_sats.unwrap() * 1_000;
             (
                 pay_zero_value_invoice(
-                    &invoice,
+                    invoice,
                     amt_msats,
                     Retry::Attempts(5),
                     self.channel_manager.as_ref(),
@@ -769,7 +759,7 @@ impl Node {
             )
         };
 
-        let last_update = crate::utils::now().as_secs();
+        let last_update = utils::now().as_secs();
         let mut payment_info = PaymentInfo {
             preimage: None,
             secret: None,
@@ -780,19 +770,13 @@ impl Node {
             payee_pubkey: None,
             last_update,
         };
-        self.persister.persist_payment_info(
-            PaymentHash(invoice.payment_hash().into_inner()),
-            payment_info.clone(),
-            false,
-        )?;
+
+        let payment_hash = PaymentHash(invoice.payment_hash().into_inner());
+        self.persister
+            .persist_payment_info(&payment_hash, &payment_info, false)?;
 
         match pay_result {
-            Ok(_) => {
-                let mut mutiny_invoice: MutinyInvoice = invoice.into();
-                mutiny_invoice.paid = false;
-                mutiny_invoice.is_send = true;
-                Ok(mutiny_invoice)
-            }
+            Ok(_) => Ok(payment_hash),
             Err(e) => {
                 error!("failed to make payment: {:?}", e);
                 // call list channels to see what our channels are
@@ -800,11 +784,8 @@ impl Node {
                 debug!("current channel details: {:?}", current_channels);
 
                 payment_info.status = HTLCStatus::Failed;
-                self.persister.persist_payment_info(
-                    PaymentHash(invoice.payment_hash().into_inner()),
-                    payment_info,
-                    false,
-                )?;
+                self.persister
+                    .persist_payment_info(&payment_hash, &payment_info, false)?;
                 Err(MutinyError::RoutingFailed)
             }
         }
@@ -824,7 +805,7 @@ impl Node {
 
             let payment_info =
                 self.persister
-                    .read_payment_info(payment_hash, false, self.logger.clone());
+                    .read_payment_info(&payment_hash, false, self.logger.clone());
 
             if let Some(info) = payment_info {
                 if matches!(info.status, HTLCStatus::Succeeded | HTLCStatus::Failed) {
@@ -839,15 +820,13 @@ impl Node {
 
     pub async fn pay_invoice_with_timeout(
         &self,
-        invoice: Invoice,
+        invoice: &Invoice,
         amt_sats: Option<u64>,
         timeout_secs: Option<u64>,
     ) -> Result<MutinyInvoice, MutinyError> {
         // initiate payment
-        let pay = self.init_invoice_payment(invoice, amt_sats)?;
-
+        let payment_hash = self.init_invoice_payment(invoice, amt_sats)?;
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
-        let payment_hash = PaymentHash(pay.payment_hash.into_inner());
 
         self.await_payment(payment_hash, timeout).await
     }
@@ -897,29 +876,17 @@ impl Node {
         };
 
         self.persister
-            .persist_payment_info(payment_hash, payment_info.clone(), false)?;
+            .persist_payment_info(&payment_hash, &payment_info, false)?;
 
         match pay_result {
             Ok(_) => {
-                let mutiny_invoice = MutinyInvoice {
-                    bolt11: None,
-                    description: None,
-                    payment_hash: sha256::Hash::from_inner(payment_hash.0),
-                    preimage: Some(preimage.0.to_hex()),
-                    payee_pubkey: Some(to_node),
-                    amount_sats: Some(amt_sats),
-                    expire: payment_info.last_update,
-                    paid: false,
-                    fees_paid: None,
-                    is_send: true,
-                    last_updated: payment_info.last_update,
-                };
+                let mutiny_invoice = MutinyInvoice::from(payment_info, payment_hash, false)?;
                 Ok(mutiny_invoice)
             }
             Err(_) => {
                 payment_info.status = HTLCStatus::Failed;
                 self.persister
-                    .persist_payment_info(payment_hash, payment_info, false)?;
+                    .persist_payment_info(&payment_hash, &payment_info, false)?;
                 Err(MutinyError::RoutingFailed)
             }
         }
@@ -976,8 +943,8 @@ impl Node {
 
 pub(crate) async fn connect_peer_if_necessary(
     multi_socket: MultiWsSocketDescriptor,
-    websocket_proxy_addr: String,
-    peer_connection_info: PubkeyConnectionInfo,
+    websocket_proxy_addr: &str,
+    peer_connection_info: &PubkeyConnectionInfo,
     peer_manager: Arc<dyn PeerManager>,
 ) -> Result<(), MutinyError> {
     if peer_manager
@@ -998,8 +965,8 @@ pub(crate) async fn connect_peer_if_necessary(
 
 pub(crate) async fn connect_peer(
     multi_socket: MultiWsSocketDescriptor,
-    websocket_proxy_addr: String,
-    peer_connection_info: PubkeyConnectionInfo,
+    websocket_proxy_addr: &str,
+    peer_connection_info: &PubkeyConnectionInfo,
     peer_manager: Arc<dyn PeerManager>,
 ) -> Result<(), MutinyError> {
     // first make a connection to the node
@@ -1075,7 +1042,7 @@ pub(crate) fn create_peer_manager(
 }
 
 pub(crate) fn parse_peer_info(
-    peer_pubkey_and_ip_addr: String,
+    peer_pubkey_and_ip_addr: &str,
 ) -> Result<(PublicKey, String), MutinyError> {
     let (pubkey, peer_addr_str) = split_peer_connection_string(peer_pubkey_and_ip_addr)?;
 
@@ -1089,7 +1056,7 @@ pub(crate) fn parse_peer_info(
 }
 
 pub(crate) fn split_peer_connection_string(
-    peer_pubkey_and_ip_addr: String,
+    peer_pubkey_and_ip_addr: &str,
 ) -> Result<(PublicKey, String), MutinyError> {
     let mut pubkey_and_addr = peer_pubkey_and_ip_addr.split('@');
     let pubkey = pubkey_and_addr.next().ok_or_else(|| {
@@ -1148,7 +1115,7 @@ mod tests {
         .unwrap();
         let addr = "127.0.0.1:4000";
 
-        let (peer_pubkey, peer_addr) = parse_peer_info(format!("{pub_key}@{addr}")).unwrap();
+        let (peer_pubkey, peer_addr) = parse_peer_info(&format!("{pub_key}@{addr}")).unwrap();
 
         assert_eq!(pub_key, peer_pubkey);
         assert_eq!(addr, peer_addr);
@@ -1165,7 +1132,7 @@ mod tests {
         let addr = "127.0.0.1";
         let port = "9735";
 
-        let (peer_pubkey, peer_addr) = parse_peer_info(format!("{pub_key}@{addr}")).unwrap();
+        let (peer_pubkey, peer_addr) = parse_peer_info(&format!("{pub_key}@{addr}")).unwrap();
 
         assert_eq!(pub_key, peer_pubkey);
         assert_eq!(format!("{addr}:{port}"), peer_addr);

@@ -30,16 +30,14 @@ type ReadSplit = Arc<Mutex<SplitStream<WebSocket>>>;
 
 impl WsProxy {
     pub async fn new(
-        proxy_url: String,
+        proxy_url: &str,
         peer_connection_info: PubkeyConnectionInfo,
     ) -> Result<Self, MutinyError> {
         let ws = match peer_connection_info.connection_type {
-            ConnectionType::Tcp(s) => {
-                WebSocket::open(String::as_str(&tcp_proxy_to_url(proxy_url.clone(), s)?))
-                    .map_err(|_| MutinyError::ConnectionFailed)?
-            }
+            ConnectionType::Tcp(s) => WebSocket::open(&tcp_proxy_to_url(proxy_url, &s)?)
+                .map_err(|_| MutinyError::ConnectionFailed)?,
             ConnectionType::Mutiny(url) => WebSocket::open(String::as_str(
-                &mutiny_conn_proxy_to_url(url, peer_connection_info.pubkey.to_string()),
+                &mutiny_conn_proxy_to_url(&url, &peer_connection_info.pubkey.to_string()),
             ))
             .map_err(|_| MutinyError::ConnectionFailed)?,
         };
@@ -80,7 +78,7 @@ impl Proxy for WsProxy {
     }
 }
 
-pub fn tcp_proxy_to_url(proxy_url: String, peer_addr: String) -> Result<String, MutinyError> {
+pub fn tcp_proxy_to_url(proxy_url: &str, peer_addr: &str) -> Result<String, MutinyError> {
     let mut parts = peer_addr.split(':');
     let host = parts.next().ok_or(MutinyError::PeerInfoParseFailed)?;
     let port = parts.next().ok_or(MutinyError::PeerInfoParseFailed)?;
@@ -91,7 +89,7 @@ pub fn tcp_proxy_to_url(proxy_url: String, peer_addr: String) -> Result<String, 
     ))
 }
 
-pub fn mutiny_conn_proxy_to_url(proxy_url: String, peer_pubkey: String) -> String {
+pub fn mutiny_conn_proxy_to_url(proxy_url: &str, peer_pubkey: &str) -> String {
     format!("{proxy_url}/v1/mutiny/{peer_pubkey}",)
 }
 
@@ -115,8 +113,8 @@ mod tests {
 
         // TODO do something useful
         let proxy = WsProxy::new(
-            "ws://127.0.0.1:3001".to_string(),
-            PubkeyConnectionInfo::new(format!("{}@{}", PEER_PUBKEY, "127.0.0.1:4000")).unwrap(),
+            "ws://127.0.0.1:3001",
+            PubkeyConnectionInfo::new(&format!("{}@{}", PEER_PUBKEY, "127.0.0.1:4000")).unwrap(),
         )
         .await
         .unwrap();
@@ -130,16 +128,12 @@ mod tests {
 
         assert_eq!(
             "ws://127.0.0.1:3001/v1/127_0_0_1/4000".to_string(),
-            tcp_proxy_to_url(
-                "ws://127.0.0.1:3001".to_string(),
-                "127.0.0.1:4000".parse().unwrap(),
-            )
-            .unwrap()
+            tcp_proxy_to_url("ws://127.0.0.1:3001", "127.0.0.1:4000").unwrap()
         );
 
         assert_eq!(
-            ("ws://127.0.0.1:3001/v1/mutiny/".to_owned() + PEER_PUBKEY),
-            mutiny_conn_proxy_to_url("ws://127.0.0.1:3001".to_string(), PEER_PUBKEY.to_string(),)
+            format!("ws://127.0.0.1:3001/v1/mutiny/{PEER_PUBKEY}"),
+            mutiny_conn_proxy_to_url("ws://127.0.0.1:3001", PEER_PUBKEY,)
         )
     }
 }

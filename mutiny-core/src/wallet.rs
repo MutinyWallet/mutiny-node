@@ -26,7 +26,7 @@ pub struct MutinyWallet {
 
 impl MutinyWallet {
     pub fn new(
-        mnemonic: Mnemonic,
+        mnemonic: &Mnemonic,
         database: MutinyBrowserStorage,
         network: Network,
         esplora: Arc<EsploraBlockchain>,

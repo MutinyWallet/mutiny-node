@@ -202,8 +202,8 @@ impl MutinyNodePersister {
 
     pub(crate) fn persist_payment_info(
         &self,
-        payment_hash: PaymentHash,
-        payment_info: PaymentInfo,
+        payment_hash: &PaymentHash,
+        payment_info: &PaymentInfo,
         inbound: bool,
     ) -> io::Result<()> {
         let key = self.get_key(payment_key(inbound, payment_hash).as_str());
@@ -214,7 +214,7 @@ impl MutinyNodePersister {
 
     pub(crate) fn read_payment_info(
         &self,
-        payment_hash: PaymentHash,
+        payment_hash: &PaymentHash,
         inbound: bool,
         logger: Arc<MutinyLogger>,
     ) -> Option<PaymentInfo> {
@@ -252,7 +252,7 @@ impl MutinyNodePersister {
     }
 }
 
-fn payment_key(inbound: bool, payment_hash: PaymentHash) -> String {
+fn payment_key(inbound: bool, payment_hash: &PaymentHash) -> String {
     if inbound {
         format!(
             "{}{}",
@@ -341,8 +341,7 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner> Persist<ChannelSigner> for Muti
 #[cfg(test)]
 mod test {
     use crate::event::{HTLCStatus, MillisatAmount};
-    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
-    use lightning::ln::PaymentPreimage;
+    use bitcoin::secp256k1::PublicKey;
     use std::str::FromStr;
     use uuid::Uuid;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
@@ -378,11 +377,11 @@ mod test {
             secret: None,
             last_update: utils::now().as_secs(),
         };
-        let result = persister.persist_payment_info(payment_hash, payment_info, true);
+        let result = persister.persist_payment_info(&payment_hash, &payment_info, true);
         assert!(result.is_ok());
 
         let result =
-            persister.read_payment_info(payment_hash, true, Arc::new(MutinyLogger::default()));
+            persister.read_payment_info(&payment_hash, true, Arc::new(MutinyLogger::default()));
 
         assert!(result.is_some());
         assert_eq!(result.clone().unwrap().preimage, Some(preimage));

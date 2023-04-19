@@ -204,7 +204,7 @@ impl EventHandler {
                 };
                 match self
                     .persister
-                    .read_payment_info(payment_hash, true, self.logger.clone())
+                    .read_payment_info(&payment_hash, true, self.logger.clone())
                 {
                     Some(mut saved_payment_info) => {
                         let payment_preimage = payment_preimage.map(|p| p.0);
@@ -215,8 +215,8 @@ impl EventHandler {
                         saved_payment_info.amt_msat = MillisatAmount(Some(amount_msat));
                         saved_payment_info.last_update = crate::utils::now().as_secs();
                         match self.persister.persist_payment_info(
-                            payment_hash,
-                            saved_payment_info,
+                            &payment_hash,
+                            &saved_payment_info,
                             true,
                         ) {
                             Ok(_) => (),
@@ -246,10 +246,11 @@ impl EventHandler {
                             bolt11: None,
                             last_update,
                         };
-                        match self
-                            .persister
-                            .persist_payment_info(payment_hash, payment_info, true)
-                        {
+                        match self.persister.persist_payment_info(
+                            &payment_hash,
+                            &payment_info,
+                            true,
+                        ) {
                             Ok(_) => (),
                             Err(e) => {
                                 self.logger.log(&Record::new(
@@ -280,7 +281,7 @@ impl EventHandler {
 
                 match self
                     .persister
-                    .read_payment_info(payment_hash, false, self.logger.clone())
+                    .read_payment_info(&payment_hash, false, self.logger.clone())
                 {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Succeeded;
@@ -288,8 +289,8 @@ impl EventHandler {
                         saved_payment_info.fee_paid_msat = fee_paid_msat;
                         saved_payment_info.last_update = crate::utils::now().as_secs();
                         match self.persister.persist_payment_info(
-                            payment_hash,
-                            saved_payment_info,
+                            &payment_hash,
+                            &saved_payment_info,
                             false,
                         ) {
                             Ok(_) => (),
@@ -429,14 +430,14 @@ impl EventHandler {
 
                 match self
                     .persister
-                    .read_payment_info(payment_hash, false, self.logger.clone())
+                    .read_payment_info(&payment_hash, false, self.logger.clone())
                 {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Failed;
                         saved_payment_info.last_update = crate::utils::now().as_secs();
                         match self.persister.persist_payment_info(
-                            payment_hash,
-                            saved_payment_info,
+                            &payment_hash,
+                            &saved_payment_info,
                             false,
                         ) {
                             Ok(_) => (),
