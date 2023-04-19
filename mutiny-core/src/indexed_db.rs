@@ -218,8 +218,7 @@ impl MutinyStorage {
 
         let mut map = HashMap::new();
         let all_json = store.get_all(None, None, None, None).await?;
-        let mut iter = all_json.into_iter();
-        while let Some((key, value)) = iter.next() {
+        for (key, value) in all_json {
             let key = key
                 .as_string()
                 .ok_or(MutinyError::read_err(MutinyStorageError::Other(anyhow!(
