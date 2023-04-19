@@ -215,14 +215,6 @@ impl From<std::io::Error> for MutinyError {
     }
 }
 
-impl From<serde_wasm_bindgen::Error> for MutinyError {
-    fn from(_: serde_wasm_bindgen::Error) -> Self {
-        Self::ReadError {
-            source: MutinyStorageError::Other(anyhow::anyhow!("Failed to deserialize")),
-        }
-    }
-}
-
 impl From<serde_json::Error> for MutinyError {
     fn from(_: serde_json::Error) -> Self {
         Self::ReadError {

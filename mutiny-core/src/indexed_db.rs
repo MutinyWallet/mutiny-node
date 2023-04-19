@@ -3,6 +3,7 @@ use crate::error::{MutinyError, MutinyStorageError};
 use crate::ldkstorage::CHANNEL_MANAGER_KEY;
 use anyhow::anyhow;
 use bip39::Mnemonic;
+use gloo_utils::format::JsValueSerdeExt;
 use rexie::{ObjectStore, Rexie, TransactionMode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -83,9 +84,10 @@ impl MutinyStorage {
             Some(pw) if Self::needs_encryption(key) => {
                 let str = serde_json::to_string(data)?;
                 let ciphertext = encrypt(&str, pw);
-                serde_wasm_bindgen::to_value(&ciphertext)?
+                let json = serde_json::Value::String(ciphertext);
+                JsValue::from_serde(&json)?
             }
-            _ => serde_wasm_bindgen::to_value(data)?,
+            _ => JsValue::from_serde(&data)?,
         };
 
         // save to indexed db
@@ -107,7 +109,7 @@ impl MutinyStorage {
         match map.get(key.as_ref()) {
             None => Ok(None),
             Some(value) => {
-                let data: T = serde_json::from_value(value.clone())?;
+                let data: T = serde_json::from_value(value.to_owned())?;
                 Ok(Some(data))
             }
         }
@@ -161,7 +163,7 @@ impl MutinyStorage {
 
         let key = JsValue::from(MNEMONIC_KEY);
         let json = store.get(&key).await?;
-        let value: Option<String> = serde_wasm_bindgen::from_value(json)?;
+        let value: Option<String> = json.into_serde()?;
 
         let mnemonic = match value {
             Some(mnemonic) => Mnemonic::from_str(&mnemonic)?,
@@ -173,6 +175,17 @@ impl MutinyStorage {
         Ok(mnemonic)
     }
 
+    #[cfg(test)]
+    pub(crate) async fn reload_from_indexed_db(&self) -> Result<(), MutinyError> {
+        let map = Self::read_all(&self.indexed_db, &self.password).await?;
+        let mut memory = self
+            .memory
+            .write()
+            .map_err(|e| MutinyError::write_err(e.into()))?;
+        *memory = map;
+        Ok(())
+    }
+
     pub(crate) async fn has_mnemonic() -> Result<bool, MutinyError> {
         let indexed_db = Self::build_indexed_db_database().await?;
         let tx = indexed_db.transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadOnly)?;
@@ -180,7 +193,7 @@ impl MutinyStorage {
 
         let key = JsValue::from(MNEMONIC_KEY);
         let json = store.get(&key).await?;
-        let value: Option<String> = serde_wasm_bindgen::from_value(json)?;
+        let value: Option<String> = json.into_serde()?;
 
         Ok(value.is_some())
     }
@@ -214,11 +227,11 @@ impl MutinyStorage {
                 ))))?;
             let json: Option<serde_json::Value> = match password {
                 Some(pw) if Self::needs_encryption(&key) => {
-                    let str: String = serde_wasm_bindgen::from_value(value)?;
+                    let str: String = value.into_serde()?;
                     let ciphertext = decrypt(&str, pw);
                     serde_json::from_str(&ciphertext)?
                 }
-                _ => serde_wasm_bindgen::from_value(value)?,
+                _ => value.into_serde()?,
             };
 
             if let Some(json) = json {

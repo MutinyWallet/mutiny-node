@@ -15,6 +15,7 @@ use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
+use gloo_utils::format::JsValueSerdeExt;
 use lightning_invoice::Invoice;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::nodemanager;
@@ -138,7 +139,7 @@ impl NodeManager {
         address: String,
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
         let address = Address::from_str(&address)?;
-        Ok(serde_wasm_bindgen::to_value(
+        Ok(JsValue::from_serde(
             &self.inner.check_address(&address).await?,
         )?)
     }
@@ -147,9 +148,7 @@ impl NodeManager {
     pub async fn list_onchain(
         &self,
     ) -> Result<JsValue /* Vec<TransactionDetails> */, MutinyJsError> {
-        Ok(serde_wasm_bindgen::to_value(
-            &self.inner.list_onchain().await?,
-        )?)
+        Ok(JsValue::from_serde(&self.inner.list_onchain().await?)?)
     }
 
     #[wasm_bindgen]
@@ -158,7 +157,7 @@ impl NodeManager {
         txid: String,
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
         let txid = Txid::from_str(&txid)?;
-        Ok(serde_wasm_bindgen::to_value(
+        Ok(JsValue::from_serde(
             &self.inner.get_transaction(&txid).await?,
         )?)
     }
@@ -170,9 +169,7 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub async fn list_utxos(&self) -> Result<JsValue, MutinyJsError> {
-        Ok(serde_wasm_bindgen::to_value(
-            &self.inner.list_utxos().await?,
-        )?)
+        Ok(JsValue::from_serde(&self.inner.list_utxos().await?)?)
     }
 
     #[wasm_bindgen]
@@ -197,9 +194,7 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub async fn list_nodes(&self) -> Result<JsValue /* Vec<String> */, MutinyJsError> {
-        Ok(serde_wasm_bindgen::to_value(
-            &self.inner.list_nodes().await?,
-        )?)
+        Ok(JsValue::from_serde(&self.inner.list_nodes().await?)?)
     }
 
     #[wasm_bindgen]
@@ -331,9 +326,7 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub async fn list_invoices(&self) -> Result<JsValue /* Vec<MutinyInvoice> */, MutinyJsError> {
-        Ok(serde_wasm_bindgen::to_value(
-            &self.inner.list_invoices().await?,
-        )?)
+        Ok(JsValue::from_serde(&self.inner.list_invoices().await?)?)
     }
 
     #[wasm_bindgen]
@@ -360,16 +353,12 @@ impl NodeManager {
 
     #[wasm_bindgen]
     pub async fn list_channels(&self) -> Result<JsValue /* Vec<MutinyChannel> */, MutinyJsError> {
-        Ok(serde_wasm_bindgen::to_value(
-            &self.inner.list_channels().await?,
-        )?)
+        Ok(JsValue::from_serde(&self.inner.list_channels().await?)?)
     }
 
     #[wasm_bindgen]
     pub async fn list_peers(&self) -> Result<JsValue /* Vec<MutinyPeer> */, MutinyJsError> {
-        Ok(serde_wasm_bindgen::to_value(
-            &self.inner.list_peers().await?,
-        )?)
+        Ok(JsValue::from_serde(&self.inner.list_peers().await?)?)
     }
 
     #[wasm_bindgen]

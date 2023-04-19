@@ -49,6 +49,7 @@ pub(crate) type PhantomChannelManager = LdkChannelManager<
     Arc<MutinyLogger>,
 >;
 
+#[derive(Clone)]
 pub struct MutinyNodePersister {
     node_id: String,
     storage: MutinyStorage,
@@ -360,6 +361,7 @@ mod test {
     use super::*;
 
     use crate::test_utils::*;
+    use crate::utils::sleep;
 
     wasm_bindgen_test_configure!(run_in_browser);
 
@@ -391,6 +393,25 @@ mod test {
         };
         let result = persister.persist_payment_info(&payment_hash, &payment_info, true);
         assert!(result.is_ok());
+
+        let result =
+            persister.read_payment_info(&payment_hash, true, Arc::new(MutinyLogger::default()));
+
+        assert!(result.is_some());
+        assert_eq!(result.clone().unwrap().preimage, Some(preimage));
+        assert_eq!(result.clone().unwrap().status, HTLCStatus::Succeeded);
+
+        let list = persister.list_payment_info(true).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].0, payment_hash);
+        assert_eq!(list[0].1.preimage, Some(preimage));
+
+        // now test reading it from indexedDB
+
+        // sleep to make sure the write is done
+        sleep(500).await;
+        // reload from indexedDB so we can read it
+        persister.storage.reload_from_indexed_db().await.unwrap();
 
         let result =
             persister.read_payment_info(&payment_hash, true, Arc::new(MutinyLogger::default()));
