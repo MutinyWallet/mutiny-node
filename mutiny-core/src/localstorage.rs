@@ -1,8 +1,5 @@
 use std::collections::HashMap;
 use std::str;
-use std::str::FromStr;
-
-use bip39::Mnemonic;
 
 use gloo_storage::errors::StorageError;
 use gloo_storage::{LocalStorage, Storage};
@@ -12,7 +9,6 @@ use crate::encrypt::*;
 use crate::error::MutinyStorageError;
 use crate::nodemanager::NodeStorage;
 
-const MNEMONIC_KEY: &str = "mnemonic";
 const NODES_KEY: &str = "nodes";
 const FEE_ESTIMATES_KEY: &str = "fee_estimates";
 
@@ -81,38 +77,6 @@ impl MutinyBrowserStorage {
         }
 
         map
-    }
-
-    pub(crate) fn insert_mnemonic(&self, mnemonic: Mnemonic) -> Mnemonic {
-        self.set(MNEMONIC_KEY, mnemonic.to_string())
-            .expect("Failed to write to storage");
-        mnemonic
-    }
-
-    pub(crate) fn get_mnemonic(&self) -> anyhow::Result<Mnemonic> {
-        // TODO: here's another way to write this... but the error conversions end up being a pain in the ass
-        //
-        // self.get(MNEMONIC_KEY)
-        //     .and_then(|raw_mnemonic| {
-        //         Ok(Mnemonic::from_str(raw_mnemonic)
-        //             .with_context(|| format!("BIP 39 parse error"))?)
-        //     })
-        //     .with_context(|| format!("storage error"))
-
-        let res: Result<String, MutinyStorageError> = self.get(MNEMONIC_KEY);
-        match res {
-            Ok(str) => Ok(Mnemonic::from_str(&str).expect("could not parse specified mnemonic")),
-            Err(e) => Err(e)?,
-        }
-    }
-
-    pub(crate) fn has_mnemonic() -> bool {
-        LocalStorage::get::<String>("mnemonic").is_ok()
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn delete_mnemonic() {
-        LocalStorage::delete(MNEMONIC_KEY);
     }
 
     pub(crate) fn get_nodes() -> Result<NodeStorage, MutinyStorageError> {

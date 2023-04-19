@@ -93,6 +93,9 @@ pub enum MutinyJsError {
     /// A error with DLCs
     #[error("Failed to execute a dlc function")]
     DLCManagerError,
+    /// A error with WasmBindgen
+    #[error("Failed to execute a wasm_bindgen function")]
+    WasmBindgenError,
     /// Unknown error.
     #[error("Unknown Error")]
     UnknownError,
@@ -141,12 +144,6 @@ impl From<MutinyStorageError> for MutinyJsError {
     }
 }
 
-impl From<serde_wasm_bindgen::Error> for MutinyJsError {
-    fn from(_: serde_wasm_bindgen::Error) -> Self {
-        Self::JsonReadWriteError
-    }
-}
-
 impl From<bitcoin::util::address::Error> for MutinyJsError {
     fn from(_: bitcoin::util::address::Error) -> Self {
         Self::JsonReadWriteError
@@ -174,6 +171,12 @@ impl From<bitcoin::hashes::hex::Error> for MutinyJsError {
 impl From<bitcoin::secp256k1::Error> for MutinyJsError {
     fn from(_e: bitcoin::secp256k1::Error) -> Self {
         Self::PubkeyInvalid
+    }
+}
+
+impl From<serde_json::error::Error> for MutinyJsError {
+    fn from(_e: serde_json::error::Error) -> Self {
+        Self::WasmBindgenError
     }
 }
 

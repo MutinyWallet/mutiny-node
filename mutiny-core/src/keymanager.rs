@@ -66,7 +66,7 @@ mod tests {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
-    use crate::{keymanager::pubkey_from_keys_manager, test::*};
+    use crate::{keymanager::pubkey_from_keys_manager, test_utils::*};
 
     use super::create_keys_manager;
     use bip39::Mnemonic;

@@ -18,7 +18,6 @@ lnurl-rs = { version = "0.2", default-features = false, features = ["async", "as
 
 cfg-if = "1.0.0"
 wasm-bindgen = "0.2.84"
-serde-wasm-bindgen = "0.5.0"
 bip39 = { version = "2.0.0" }
 bip32 = "0.4.0"
 bitcoin-bech32 = "0.12"
@@ -59,6 +58,7 @@ wasm-bindgen-futures = "0.4.33"
 wasm-logger = "0.2.0"
 log = "0.4.17"
 gloo-net = "0.2.4"
+gloo-utils = { version = "0.1.6", features = ["serde"] }
 futures = "0.3.25"
 thiserror = "1.0"
 web-sys = { version = "0.3.60", features = ["console"] }
@@ -71,7 +71,8 @@ mockall = "0.11.2"
 
 [features]
 default = ["console_error_panic_hook"]
-ignored_tests = []
+ignored_tests = ["test-utils"]
+test-utils = []
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = true

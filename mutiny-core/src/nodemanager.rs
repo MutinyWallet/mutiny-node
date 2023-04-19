@@ -3,6 +3,7 @@ use std::str::FromStr;
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use crate::event::{HTLCStatus, PaymentInfo};
+use crate::indexed_db::MutinyStorage;
 use crate::{
     chain::MutinyChain,
     error::MutinyError,
@@ -51,7 +52,7 @@ pub struct NodeManager {
     scorer: Arc<utils::Mutex<ProbScorer>>,
     chain: Arc<MutinyChain>,
     fee_estimator: Arc<MutinyFeeEstimator>,
-    storage: MutinyBrowserStorage,
+    storage: MutinyStorage,
     node_storage: Mutex<NodeStorage>,
     nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node>>>>,
     lnurl_client: LnUrlClient,
@@ -243,8 +244,8 @@ pub struct LnUrlParams {
 }
 
 impl NodeManager {
-    pub fn has_node_manager() -> bool {
-        MutinyBrowserStorage::has_mnemonic()
+    pub async fn has_node_manager() -> bool {
+        MutinyStorage::has_mnemonic().await.unwrap_or(false)
     }
 
     pub async fn new(
@@ -262,15 +263,15 @@ impl NodeManager {
         // todo we should eventually have default mainnet
         let network: Network = network.unwrap_or(Network::Testnet);
 
-        let storage = MutinyBrowserStorage::new(password);
+        let storage = MutinyStorage::new(password.clone()).await?;
 
         let mnemonic = match mnemonic {
-            Some(seed) => storage.insert_mnemonic(seed),
-            None => match storage.get_mnemonic() {
+            Some(seed) => storage.insert_mnemonic(seed).await?,
+            None => match storage.get_mnemonic().await {
                 Ok(mnemonic) => mnemonic,
                 Err(_) => {
                     let seed = keymanager::generate_seed(12)?;
-                    storage.insert_mnemonic(seed)
+                    storage.insert_mnemonic(seed).await?
                 }
             },
         };
@@ -281,9 +282,10 @@ impl NodeManager {
         let tx_sync = Arc::new(EsploraSyncClient::new(esplora_server_url, logger.clone()));
 
         let esplora = Arc::new(EsploraBlockchain::from_client(tx_sync.client().clone(), 5));
+        let database = MutinyBrowserStorage::new(password);
         let wallet = Arc::new(MutinyWallet::new(
             &mnemonic,
-            storage.clone(),
+            database,
             network,
             esplora.clone(),
         ));
@@ -1119,7 +1121,7 @@ mod tests {
     use lightning::ln::PaymentHash;
     use std::str::FromStr;
 
-    use crate::test::*;
+    use crate::test_utils::*;
 
     use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
@@ -1132,7 +1134,7 @@ mod tests {
     async fn create_node_manager() {
         log!("creating node manager!");
 
-        assert!(!NodeManager::has_node_manager());
+        assert!(!NodeManager::has_node_manager().await);
         NodeManager::new(
             "password".to_string(),
             None,
@@ -1144,9 +1146,9 @@ mod tests {
         )
         .await
         .expect("node manager should initialize");
-        assert!(NodeManager::has_node_manager());
+        assert!(NodeManager::has_node_manager().await);
 
-        cleanup_test();
+        cleanup_wallet_test().await;
     }
 
     #[test]
@@ -1166,10 +1168,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(NodeManager::has_node_manager());
+        assert!(NodeManager::has_node_manager().await);
         assert_eq!(seed, nm.show_seed());
 
-        cleanup_test();
+        cleanup_wallet_test().await;
     }
 
     #[test]
@@ -1212,7 +1214,7 @@ mod tests {
             assert_eq!(1, retrieved_node.child_index);
         }
 
-        cleanup_test();
+        cleanup_wallet_test().await;
     }
 
     #[test]

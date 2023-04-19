@@ -114,6 +114,8 @@ pub enum MutinyStorageError {
         #[from]
         source: serde_json::Error,
     },
+    #[error("Failed to get lock on memory storage")]
+    LockError,
     #[error("Failed to use indexeddb storage")]
     IndexedDBError,
     #[error(transparent)]
@@ -124,6 +126,10 @@ impl MutinyError {
     pub fn read_err(e: MutinyStorageError) -> Self {
         MutinyError::ReadError { source: e }
     }
+
+    pub fn write_err(e: MutinyStorageError) -> Self {
+        MutinyError::PersistenceFailed { source: e }
+    }
 }
 
 impl From<bdk::Error> for MutinyError {
@@ -132,6 +138,12 @@ impl From<bdk::Error> for MutinyError {
             bdk::Error::Signer(_) => Self::WalletSigningFailed,
             _ => Self::WalletOperationFailed,
         }
+    }
+}
+
+impl From<bip39::Error> for MutinyError {
+    fn from(_e: bip39::Error) -> Self {
+        Self::InvalidMnemonic
     }
 }
 
@@ -203,8 +215,8 @@ impl From<std::io::Error> for MutinyError {
     }
 }
 
-impl From<serde_wasm_bindgen::Error> for MutinyError {
-    fn from(_: serde_wasm_bindgen::Error) -> Self {
+impl From<serde_json::Error> for MutinyError {
+    fn from(_: serde_json::Error) -> Self {
         Self::ReadError {
             source: MutinyStorageError::Other(anyhow::anyhow!("Failed to deserialize")),
         }
@@ -216,6 +228,12 @@ impl From<rexie::Error> for MutinyError {
         MutinyError::PersistenceFailed {
             source: MutinyStorageError::IndexedDBError,
         }
+    }
+}
+
+impl<G> From<std::sync::PoisonError<G>> for MutinyStorageError {
+    fn from(_e: std::sync::PoisonError<G>) -> Self {
+        MutinyStorageError::LockError
     }
 }
 

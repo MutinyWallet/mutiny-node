@@ -6,6 +6,7 @@ use anyhow::anyhow;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
+use gloo_utils::format::JsValueSerdeExt;
 use lightning::ln::msgs::NodeAnnouncement;
 use lightning::routing::gossip::{NodeAlias, NodeId};
 use lightning::routing::scoring::ProbabilisticScoringParameters;
@@ -95,7 +96,7 @@ async fn get_gossip_data(
         return Ok(None);
     }
 
-    let network_graph_str: String = serde_wasm_bindgen::from_value(network_graph_js)?;
+    let network_graph_str: String = network_graph_js.into_serde()?;
     let network_graph_bytes: Vec<u8> = Vec::from_hex(&network_graph_str)?;
     let mut readable_bytes = lightning::io::Cursor::new(network_graph_bytes);
     let network_graph = Arc::new(NetworkGraph::read(&mut readable_bytes, logger.clone())?);
@@ -113,7 +114,7 @@ async fn get_gossip_data(
         return Ok(Some(gossip));
     }
 
-    let prob_scorer_str: String = serde_wasm_bindgen::from_value(prob_scorer_js)?;
+    let prob_scorer_str: String = network_graph_js.into_serde()?;
     let prob_scorer_bytes: Vec<u8> = Vec::from_hex(&prob_scorer_str)?;
     let mut readable_bytes = lightning::io::Cursor::new(prob_scorer_bytes);
     let params = ProbabilisticScoringParameters::default();
@@ -217,7 +218,7 @@ async fn write_network_graph_to_store(
     store: &Store,
     network_graph_str: &str,
 ) -> Result<(), MutinyError> {
-    let network_graph_js = serde_wasm_bindgen::to_value(network_graph_str)?;
+    let network_graph_js = JsValue::from_serde(network_graph_str)?;
     store
         .put(&network_graph_js, Some(&JsValue::from(NETWORK_GRAPH_KEY)))
         .await?;
@@ -226,7 +227,7 @@ async fn write_network_graph_to_store(
 }
 
 async fn write_scorer_to_store(store: &Store, scorer_str: &str) -> Result<(), MutinyError> {
-    let scorer_js = serde_wasm_bindgen::to_value(scorer_str)?;
+    let scorer_js = JsValue::from_serde(scorer_str)?;
     store
         .put(&scorer_js, Some(&JsValue::from(PROB_SCORER_KEY)))
         .await?;
@@ -447,7 +448,7 @@ pub(crate) async fn read_peer_info(
     let key = JsValue::from(node_id.to_string());
 
     let json: JsValue = store.get(&key).await?;
-    let data: Option<LnPeerMetadata> = serde_wasm_bindgen::from_value(json)?;
+    let data: Option<LnPeerMetadata> = json.into_serde()?;
 
     // Waits for the transaction to complete
     transaction.done().await?;
@@ -468,7 +469,7 @@ pub(crate) async fn get_all_peers() -> Result<HashMap<NodeId, LnPeerMetadata>, M
     for (key, value) in all_json {
         let pub_key = PublicKey::from_str(&key.as_string().unwrap()).unwrap();
         let node_id = NodeId::from_pubkey(&pub_key);
-        let data: Option<LnPeerMetadata> = serde_wasm_bindgen::from_value(value)?;
+        let data: Option<LnPeerMetadata> = value.into_serde()?;
 
         if let Some(peer_metadata) = data {
             peers.insert(node_id, peer_metadata);
@@ -496,7 +497,7 @@ pub(crate) async fn save_peer_connection_info(
     let key = JsValue::from(node_id.to_string());
 
     let current_js: JsValue = store.get(&key).await?;
-    let current: Option<LnPeerMetadata> = serde_wasm_bindgen::from_value(current_js)?;
+    let current: Option<LnPeerMetadata> = current_js.into_serde()?;
 
     // If there is already some metadata, we add the connection string to it
     // Otherwise we create a new metadata with the connection string
@@ -513,7 +514,7 @@ pub(crate) async fn save_peer_connection_info(
         },
     };
 
-    let json = serde_wasm_bindgen::to_value(&new_info)?;
+    let json = JsValue::from_serde(&new_info)?;
     store.put(&json, Some(&key)).await?;
 
     // Waits for the transaction to complete
@@ -537,7 +538,7 @@ pub(crate) async fn set_peer_label(
     let key = JsValue::from(node_id.to_string());
 
     let current_js: JsValue = store.get(&key).await?;
-    let current: Option<LnPeerMetadata> = serde_wasm_bindgen::from_value(current_js)?;
+    let current: Option<LnPeerMetadata> = current_js.into_serde()?;
 
     // If there is already some metadata, we add the label to it
     // Otherwise we create a new metadata with the label
@@ -550,7 +551,7 @@ pub(crate) async fn set_peer_label(
         },
     };
 
-    let json = serde_wasm_bindgen::to_value(&new_info)?;
+    let json = JsValue::from_serde(&new_info)?;
     store.put(&json, Some(&key)).await?;
 
     // Waits for the transaction to complete
@@ -569,14 +570,14 @@ pub(crate) async fn delete_peer_info(uuid: &str, node_id: &NodeId) -> Result<(),
     let key = JsValue::from(node_id.to_string());
 
     let current_js: JsValue = store.get(&key).await?;
-    let current: Option<LnPeerMetadata> = serde_wasm_bindgen::from_value(current_js)?;
+    let current: Option<LnPeerMetadata> = current_js.into_serde()?;
 
     if let Some(mut current) = current {
         current.nodes.retain(|n| n != uuid);
         if current.nodes.is_empty() {
             store.delete(&key).await?;
         } else {
-            let json = serde_wasm_bindgen::to_value(&current)?;
+            let json = JsValue::from_serde(&current)?;
             store.put(&json, Some(&key)).await?;
         }
     }
@@ -600,13 +601,13 @@ pub(crate) async fn save_ln_peer_info(
     let key = JsValue::from(node_id.to_string());
 
     let current_js: JsValue = store.get(&key).await?;
-    let current: Option<LnPeerMetadata> = serde_wasm_bindgen::from_value(current_js)?;
+    let current: Option<LnPeerMetadata> = current_js.into_serde()?;
 
     let new_info = info.merge_opt(&current);
 
     // if the new info is different than the current info, we should to save it
     if !current.is_some_and(|c| c == new_info) {
-        let json = serde_wasm_bindgen::to_value(&new_info)?;
+        let json = JsValue::from_serde(&new_info)?;
         store.put(&json, Some(&key)).await?;
     }
 
@@ -639,7 +640,7 @@ mod test {
     use uuid::Uuid;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
-    use crate::test::*;
+    use crate::test_utils::*;
 
     use super::*;
 
@@ -696,7 +697,7 @@ mod test {
     // hack to disable this test
     #[cfg(feature = "ignored_tests")]
     async fn test_gossip() {
-        crate::test::log!("test RGS sync");
+        crate::test_utils::log!("test RGS sync");
         // delete the database if it exists
         Rexie::delete(GOSSIP_DATABASE_NAME).await.unwrap();
 
@@ -712,8 +713,7 @@ mod test {
         assert!(data.is_some());
         assert!(data.unwrap().last_sync_timestamp > 0);
 
-        cleanup_indexdb_test().await;
-        cleanup_test();
+        cleanup_gossip_test().await;
     }
 
     #[test]
@@ -740,8 +740,7 @@ mod test {
 
         assert!(read.is_none());
 
-        cleanup_indexdb_test().await;
-        cleanup_test();
+        cleanup_gossip_test().await;
     }
 
     #[test]
@@ -766,7 +765,6 @@ mod test {
         assert!(read.is_some());
         assert_eq!(read.unwrap(), expected);
 
-        cleanup_indexdb_test().await;
-        cleanup_test();
+        cleanup_gossip_test().await;
     }
 }

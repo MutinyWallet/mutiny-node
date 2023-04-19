@@ -20,20 +20,32 @@ use lightning::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct PaymentInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub preimage: Option<[u8; 32]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub secret: Option<[u8; 32]>,
     pub status: HTLCStatus,
+    #[serde(skip_serializing_if = "MillisatAmount::is_none")]
     pub amt_msat: MillisatAmount,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_paid_msat: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bolt11: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub payee_pubkey: Option<PublicKey>,
     pub last_update: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct MillisatAmount(pub Option<u64>);
+
+impl MillisatAmount {
+    pub fn is_none(&self) -> bool {
+        self.0.is_none()
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum HTLCStatus {
@@ -575,5 +587,45 @@ impl EventHandler {
             }
             Event::HTLCIntercepted { .. } => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
+    use crate::utils;
+    use bitcoin::secp256k1::PublicKey;
+    use lightning::ln::PaymentHash;
+    use std::str::FromStr;
+
+    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test]
+    fn test_payment_info_serialization_symmetry() {
+        let preimage = [1; 32];
+        let pubkey = PublicKey::from_str(
+            "02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b",
+        )
+        .unwrap();
+
+        let payment_info = PaymentInfo {
+            preimage: Some(preimage),
+            status: HTLCStatus::Succeeded,
+            amt_msat: MillisatAmount(Some(420)),
+            fee_paid_msat: None,
+            bolt11: None,
+            payee_pubkey: Some(pubkey),
+            secret: None,
+            last_update: utils::now().as_secs(),
+        };
+
+        let serialized = serde_json::to_string(&payment_info).unwrap();
+        let deserialized: PaymentInfo = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(payment_info, deserialized);
+
+        let serialized = serde_json::to_value(&payment_info).unwrap();
+        let deserialized: PaymentInfo = serde_json::from_value(serialized).unwrap();
+        assert_eq!(payment_info, deserialized);
     }
 }

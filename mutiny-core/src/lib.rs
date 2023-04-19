@@ -14,6 +14,7 @@ pub mod esplora;
 mod event;
 mod fees;
 mod gossip;
+mod indexed_db;
 mod keymanager;
 mod ldkstorage;
 mod localstorage;
@@ -24,28 +25,7 @@ pub mod nodemanager;
 mod peermanager;
 mod proxy;
 mod socket;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
 mod utils;
 mod wallet;
-
-#[cfg(test)]
-mod test {
-    use gloo_storage::{LocalStorage, Storage};
-
-    macro_rules! log {
-        ( $( $t:tt )* ) => {
-            web_sys::console::log_1(&format!( $( $t )* ).into());
-        }
-    }
-    pub(crate) use log;
-    use rexie::Rexie;
-
-    use crate::gossip::GOSSIP_DATABASE_NAME;
-
-    pub(crate) fn cleanup_test() {
-        LocalStorage::clear();
-    }
-
-    pub(crate) async fn cleanup_indexdb_test() {
-        Rexie::delete(GOSSIP_DATABASE_NAME).await.unwrap();
-    }
-}

@@ -384,7 +384,7 @@ mod tests {
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     use crate::localstorage::MutinyBrowserStorage;
-    use crate::test::*;
+    use crate::test_utils::*;
 
     use super::*;
 

@@ -21,16 +21,10 @@ pub async fn main_js() -> Result<(), JsValue> {
 
 #[cfg(test)]
 pub(crate) mod test {
-    use gloo_storage::{LocalStorage, Storage};
-
     macro_rules! log {
         ( $( $t:tt )* ) => {
             web_sys::console::log_1(&format!( $( $t )* ).into());
         }
     }
     pub(crate) use log;
-
-    pub(crate) fn cleanup_test() {
-        LocalStorage::clear();
-    }
 }
