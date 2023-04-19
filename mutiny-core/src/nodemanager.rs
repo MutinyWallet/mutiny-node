@@ -1134,7 +1134,6 @@ mod tests {
     async fn create_node_manager() {
         log!("creating node manager!");
 
-        cleanup_wallet_test().await;
         assert!(!NodeManager::has_node_manager().await);
         NodeManager::new(
             "password".to_string(),
