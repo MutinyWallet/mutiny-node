@@ -19,9 +19,9 @@ use crate::{
     wallet::get_esplora_url,
     wallet::MutinyWallet,
 };
-use bdk::{
-    blockchain::EsploraBlockchain, wallet::AddressIndex, BlockTime, LocalUtxo, TransactionDetails,
-};
+use bdk::chain::ConfirmationTime;
+use bdk::{wallet::AddressIndex, LocalUtxo, TransactionDetails};
+use bdk_esplora::esplora_client::AsyncClient;
 use bip39::Mnemonic;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::hashes::{sha256, Hash};
@@ -41,12 +41,13 @@ use log::{debug, error, info, warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use wasm_bindgen_futures::spawn_local;
 
 pub struct NodeManager {
     mnemonic: Mnemonic,
     network: Network,
     websocket_proxy_addr: String,
-    esplora: Arc<EsploraBlockchain>,
+    esplora: Arc<AsyncClient>,
     wallet: Arc<MutinyWallet>,
     gossip_sync: Arc<RapidGossipSync>,
     scorer: Arc<utils::Mutex<ProbScorer>>,
@@ -281,11 +282,10 @@ impl NodeManager {
         let esplora_server_url = get_esplora_url(network, user_esplora_url);
         let tx_sync = Arc::new(EsploraSyncClient::new(esplora_server_url, logger.clone()));
 
-        let esplora = Arc::new(EsploraBlockchain::from_client(tx_sync.client().clone(), 5));
-        let database = MutinyBrowserStorage::new(password);
+        let esplora = Arc::new(tx_sync.client().clone());
         let wallet = Arc::new(MutinyWallet::new(
             &mnemonic,
-            database,
+            storage.clone(),
             network,
             esplora.clone(),
         ));
@@ -418,23 +418,17 @@ impl NodeManager {
     }
 
     pub async fn get_new_address(&self) -> Result<Address, MutinyError> {
-        match self
+        Ok(self
             .wallet
             .wallet
             .lock()
             .await
             .get_address(AddressIndex::New)
-        {
-            Ok(addr) => Ok(addr.address),
-            Err(_) => Err(MutinyError::WalletOperationFailed),
-        }
+            .address)
     }
 
     pub async fn get_wallet_balance(&self) -> Result<u64, MutinyError> {
-        match self.wallet.wallet.lock().await.get_balance() {
-            Ok(balance) => Ok(balance.get_total()),
-            Err(_) => Err(MutinyError::WalletOperationFailed),
-        }
+        Ok(self.wallet.wallet.lock().await.get_balance().total())
     }
 
     pub async fn create_bip21(
@@ -507,10 +501,13 @@ impl NodeManager {
                 .map(|v| v.value)
                 .sum();
 
-            let confirmation_time = tx.confirmation_time().map(|c| BlockTime {
-                height: c.height,
-                timestamp: c.timestamp,
-            });
+            let confirmation_time = tx
+                .confirmation_time()
+                .map(|c| ConfirmationTime::Confirmed {
+                    height: c.height,
+                    time: c.timestamp,
+                })
+                .unwrap_or(ConfirmationTime::Unconfirmed);
 
             TransactionDetails {
                 transaction: Some(tx.to_tx()),
@@ -521,6 +518,22 @@ impl NodeManager {
                 confirmation_time,
             }
         });
+
+        // if we found a tx we should try to import it into the wallet
+        if let Some(details) = details_opt.clone() {
+            let wallet = self.wallet.clone();
+            spawn_local(async move {
+                wallet
+                    .wallet
+                    .lock()
+                    .await
+                    .insert_tx(
+                        details.transaction.clone().unwrap(),
+                        details.confirmation_time,
+                    )
+                    .expect("Failed to import tx");
+            });
+        }
 
         Ok(details_opt)
     }
@@ -534,29 +547,26 @@ impl NodeManager {
 
     pub async fn get_transaction(
         &self,
-        txid: &Txid,
+        txid: Txid,
     ) -> Result<Option<TransactionDetails>, MutinyError> {
         self.wallet.get_transaction(txid, false).await
     }
 
     pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyError> {
-        match self.wallet.wallet.lock().await.get_balance() {
-            Ok(onchain) => {
-                let nodes = self.nodes.lock().await;
-                let lightning_msats: u64 = nodes
-                    .iter()
-                    .flat_map(|(_, n)| n.channel_manager.list_usable_channels())
-                    .map(|c| c.outbound_capacity_msat)
-                    .sum();
+        let onchain = self.wallet.wallet.lock().await.get_balance();
 
-                Ok(MutinyBalance {
-                    confirmed: onchain.confirmed + onchain.trusted_pending,
-                    unconfirmed: onchain.untrusted_pending + onchain.immature,
-                    lightning: lightning_msats / 1000,
-                })
-            }
-            Err(_) => Err(MutinyError::WalletOperationFailed),
-        }
+        let nodes = self.nodes.lock().await;
+        let lightning_msats: u64 = nodes
+            .iter()
+            .flat_map(|(_, n)| n.channel_manager.list_usable_channels())
+            .map(|c| c.outbound_capacity_msat)
+            .sum();
+
+        Ok(MutinyBalance {
+            confirmed: onchain.confirmed + onchain.trusted_pending,
+            unconfirmed: onchain.untrusted_pending + onchain.immature,
+            lightning: lightning_msats / 1000,
+        })
     }
 
     pub async fn list_utxos(&self) -> Result<Vec<LocalUtxo>, MutinyError> {

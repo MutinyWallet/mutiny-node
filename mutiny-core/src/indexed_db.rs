@@ -2,6 +2,8 @@ use crate::encrypt::{decrypt, encrypt};
 use crate::error::{MutinyError, MutinyStorageError};
 use crate::ldkstorage::CHANNEL_MANAGER_KEY;
 use anyhow::anyhow;
+use bdk::chain::keychain::{KeychainChangeSet, KeychainTracker, PersistBackend};
+use bdk::chain::sparse_chain::ChainPosition;
 use bip39::Mnemonic;
 use gloo_utils::format::JsValueSerdeExt;
 use rexie::{ObjectStore, Rexie, TransactionMode};
@@ -15,6 +17,7 @@ use wasm_bindgen_futures::spawn_local;
 pub(crate) const WALLET_DATABASE_NAME: &str = "wallet";
 pub(crate) const WALLET_OBJECT_STORE_NAME: &str = "wallet_store";
 
+const KEYCHAIN_STORE_KEY: &str = "keychain_store";
 const MNEMONIC_KEY: &str = "mnemonic";
 
 #[derive(Clone)]
@@ -258,6 +261,44 @@ impl MutinyStorage {
         store.clear().await?;
 
         tx.done().await?;
+
+        Ok(())
+    }
+}
+
+impl<K, P> PersistBackend<K, P> for MutinyStorage
+where
+    K: Ord + Clone + core::fmt::Debug,
+    P: ChainPosition,
+    KeychainChangeSet<K, P>: serde::Serialize + serde::de::DeserializeOwned,
+{
+    type WriteError = MutinyError;
+    type LoadError = MutinyError;
+
+    fn append_changeset(
+        &mut self,
+        changeset: &KeychainChangeSet<K, P>,
+    ) -> Result<(), Self::WriteError> {
+        if changeset.is_empty() {
+            return Ok(());
+        }
+
+        match self.get::<KeychainChangeSet<K, P>>(KEYCHAIN_STORE_KEY)? {
+            Some(mut keychain_store) => {
+                keychain_store.append(changeset.clone());
+                self.set(KEYCHAIN_STORE_KEY, keychain_store)
+            }
+            None => self.set(KEYCHAIN_STORE_KEY, changeset),
+        }
+    }
+
+    fn load_into_keychain_tracker(
+        &mut self,
+        tracker: &mut KeychainTracker<K, P>,
+    ) -> Result<(), Self::LoadError> {
+        if let Some(k) = self.get(KEYCHAIN_STORE_KEY)? {
+            tracker.apply_changeset(k);
+        }
 
         Ok(())
     }

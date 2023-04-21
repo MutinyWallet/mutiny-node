@@ -1,35 +1,37 @@
-use futures::lock::Mutex;
-use log::{debug, info};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use bdk::blockchain::{Blockchain, EsploraBlockchain};
 use bdk::keys::ExtendedKey;
 use bdk::template::DescriptorTemplateOut;
-use bdk::{FeeRate, LocalUtxo, SignOptions, SyncOptions, TransactionDetails, Wallet};
+use bdk::{FeeRate, LocalUtxo, SignOptions, TransactionDetails, Wallet};
+use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_macros::maybe_await;
 use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, Script, Txid};
+use esplora_client::AsyncClient;
+use futures::lock::Mutex;
+use log::{debug, info};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::error::MutinyError;
+use crate::indexed_db::MutinyStorage;
 use crate::localstorage::MutinyBrowserStorage;
 use crate::utils::is_valid_network;
 
 #[derive(Debug)]
 pub struct MutinyWallet {
-    pub wallet: Mutex<Wallet<MutinyBrowserStorage>>,
+    pub wallet: Mutex<Wallet<MutinyStorage>>,
     network: Network,
-    pub blockchain: Arc<EsploraBlockchain>,
+    pub blockchain: Arc<AsyncClient>,
 }
 
 impl MutinyWallet {
     pub fn new(
         mnemonic: &Mnemonic,
-        database: MutinyBrowserStorage,
+        db: MutinyStorage,
         network: Network,
-        esplora: Arc<EsploraBlockchain>,
+        esplora: Arc<AsyncClient>,
     ) -> MutinyWallet {
         let entropy = mnemonic.to_entropy();
         let xprivkey = ExtendedPrivKey::new_master(network, &entropy).unwrap();
@@ -41,8 +43,8 @@ impl MutinyWallet {
         let wallet = Wallet::new(
             receive_descriptor_template,
             Some(change_descriptor_template),
+            db,
             network,
-            database,
         )
         .expect("Error creating wallet");
 
@@ -54,8 +56,6 @@ impl MutinyWallet {
     }
 
     pub async fn sync(&self) -> Result<(), MutinyError> {
-        let wallet = self.wallet.lock().await;
-
         let blockchain_clone = self.blockchain.clone();
         spawn_local(async move {
             let estimates = blockchain_clone
@@ -69,34 +69,48 @@ impl MutinyWallet {
             info!("Updated cached fees!");
         });
 
-        maybe_await!(wallet.sync(&self.blockchain, SyncOptions::default()))?;
+        let mut wallet = self.wallet.lock().await;
+        let checkpoints = wallet.checkpoints();
+        let spks = wallet
+            .spks_of_all_keychains()
+            .into_iter()
+            .map(|(k, spks)| (k, spks))
+            .collect();
+        let update = self
+            .blockchain
+            .scan(
+                checkpoints,
+                spks,
+                core::iter::empty(),
+                core::iter::empty(),
+                50,
+                5,
+            )
+            .await?;
+        wallet.apply_update(update)?;
+        wallet.commit()?;
 
         Ok(())
     }
 
     pub async fn list_utxos(&self) -> Result<Vec<LocalUtxo>, MutinyError> {
-        Ok(self.wallet.lock().await.list_unspent()?)
+        Ok(self.wallet.lock().await.list_unspent())
     }
 
     pub async fn list_transactions(
         &self,
         include_raw: bool,
     ) -> Result<Vec<TransactionDetails>, MutinyError> {
-        Ok(self.wallet.lock().await.list_transactions(include_raw)?)
+        #[allow(deprecated)]
+        Ok(self.wallet.lock().await.list_transactions(include_raw))
     }
 
     pub async fn get_transaction(
         &self,
-        txid: &Txid,
+        txid: Txid,
         include_raw: bool,
     ) -> Result<Option<TransactionDetails>, MutinyError> {
-        Ok(self
-            .wallet
-            .lock()
-            .await
-            .list_transactions(include_raw)?
-            .into_iter()
-            .find(|tx| &tx.txid == txid))
+        Ok(self.wallet.lock().await.get_tx(txid, include_raw))
     }
 
     pub async fn create_signed_psbt(
@@ -119,12 +133,14 @@ impl MutinyWallet {
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
-        let wallet = self.wallet.lock().await;
+        let mut wallet = self.wallet.lock().await;
 
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
         } else {
-            self.blockchain.estimate_fee(1).await?
+            // self.blockchain.estimate_fee(1).await?
+            // todo get from esplora
+            FeeRate::from_sat_per_vb(5.0)
         };
         let (mut psbt, details) = {
             let mut builder = wallet.build_tx();
@@ -168,12 +184,14 @@ impl MutinyWallet {
             return Err(MutinyError::IncorrectNetwork(destination_address.network));
         }
 
-        let wallet = self.wallet.lock().await;
+        let mut wallet = self.wallet.lock().await;
 
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
         } else {
-            self.blockchain.estimate_fee(1).await?
+            // self.blockchain.estimate_fee(1).await?
+            // todo get from esplora
+            FeeRate::from_sat_per_vb(5.0)
         };
         let (mut psbt, details) = {
             let mut builder = wallet.build_tx();

@@ -158,7 +158,7 @@ impl NodeManager {
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
         let txid = Txid::from_str(&txid)?;
         Ok(JsValue::from_serde(
-            &self.inner.get_transaction(&txid).await?,
+            &self.inner.get_transaction(txid).await?,
         )?)
     }
 

@@ -3,7 +3,6 @@ use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::logging::MutinyLogger;
 use crate::utils::sleep;
 use crate::wallet::MutinyWallet;
-use bdk::blockchain::Blockchain;
 use bdk::wallet::AddressIndex;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
@@ -523,7 +522,7 @@ impl EventHandler {
                     .lock()
                     .await
                     .get_internal_address(AddressIndex::New)
-                    .expect("could not get new address");
+                    .address;
 
                 let output_descriptors = &outputs.iter().collect::<Vec<_>>();
                 let tx_feerate = fee_thread.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);

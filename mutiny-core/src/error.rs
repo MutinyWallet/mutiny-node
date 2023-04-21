@@ -1,5 +1,4 @@
 use crate::esplora::TxSyncError;
-use bdk::esplora_client;
 use bitcoin::Network;
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning_invoice::payment::PaymentError;
@@ -187,20 +186,6 @@ impl From<PaymentError> for MutinyError {
     }
 }
 
-impl From<MutinyStorageError> for bdk::Error {
-    fn from(e: MutinyStorageError) -> Self {
-        match e {
-            MutinyStorageError::StorageError { source } => {
-                bdk::Error::Generic(format!("Storage error: {source}"))
-            }
-            MutinyStorageError::SerdeError { source } => {
-                bdk::Error::Generic(format!("Serde error: {source}"))
-            }
-            _ => bdk::Error::Generic("Unexpected Mutiny storage Error".to_string()),
-        }
-    }
-}
-
 impl From<GraphSyncError> for MutinyError {
     fn from(_e: GraphSyncError) -> Self {
         MutinyError::RapidGossipSyncError
@@ -256,6 +241,13 @@ impl From<bitcoin::util::address::Error> for MutinyError {
 impl From<esplora_client::Error> for MutinyError {
     fn from(_e: esplora_client::Error) -> Self {
         // This is most likely a chain access failure
+        Self::ChainAccessFailed
+    }
+}
+
+impl<T> From<bdk::chain::chain_graph::UpdateError<T>> for MutinyError {
+    fn from(_e: bdk::chain::chain_graph::UpdateError<T>) -> Self {
+        // This is a syncing error
         Self::ChainAccessFailed
     }
 }

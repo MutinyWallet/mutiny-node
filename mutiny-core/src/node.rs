@@ -21,7 +21,7 @@ use crate::{
     wallet::MutinyWallet,
 };
 use anyhow::{anyhow, Context};
-use bdk::blockchain::EsploraBlockchain;
+use bdk_esplora::esplora_client::AsyncClient;
 use bip39::Mnemonic;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::secp256k1::rand;
@@ -158,7 +158,7 @@ impl Node {
         wallet: Arc<MutinyWallet>,
         network: Network,
         websocket_proxy_addr: String,
-        esplora: Arc<EsploraBlockchain>,
+        esplora: Arc<AsyncClient>,
         lsp_clients: &[LspClient],
     ) -> Result<Self, MutinyError> {
         info!("initialized a new node: {uuid}");
