@@ -86,13 +86,13 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub async fn get_new_address(&self) -> Result<String, MutinyJsError> {
-        Ok(self.inner.get_new_address().await?.to_string())
+    pub fn get_new_address(&self) -> Result<String, MutinyJsError> {
+        Ok(self.inner.get_new_address()?.to_string())
     }
 
     #[wasm_bindgen]
-    pub async fn get_wallet_balance(&self) -> Result<u64, MutinyJsError> {
-        Ok(self.inner.get_wallet_balance().await?)
+    pub fn get_wallet_balance(&self) -> Result<u64, MutinyJsError> {
+        Ok(self.inner.get_wallet_balance()?)
     }
 
     #[wasm_bindgen]
@@ -145,21 +145,17 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub async fn list_onchain(
-        &self,
-    ) -> Result<JsValue /* Vec<TransactionDetails> */, MutinyJsError> {
-        Ok(JsValue::from_serde(&self.inner.list_onchain().await?)?)
+    pub fn list_onchain(&self) -> Result<JsValue /* Vec<TransactionDetails> */, MutinyJsError> {
+        Ok(JsValue::from_serde(&self.inner.list_onchain()?)?)
     }
 
     #[wasm_bindgen]
-    pub async fn get_transaction(
+    pub fn get_transaction(
         &self,
         txid: String,
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
         let txid = Txid::from_str(&txid)?;
-        Ok(JsValue::from_serde(
-            &self.inner.get_transaction(&txid).await?,
-        )?)
+        Ok(JsValue::from_serde(&self.inner.get_transaction(txid)?)?)
     }
 
     #[wasm_bindgen]
@@ -168,8 +164,8 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
-    pub async fn list_utxos(&self) -> Result<JsValue, MutinyJsError> {
-        Ok(JsValue::from_serde(&self.inner.list_utxos().await?)?)
+    pub fn list_utxos(&self) -> Result<JsValue, MutinyJsError> {
+        Ok(JsValue::from_serde(&self.inner.list_utxos()?)?)
     }
 
     #[wasm_bindgen]

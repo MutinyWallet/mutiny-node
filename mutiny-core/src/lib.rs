@@ -6,7 +6,6 @@
 // background file is mostly an LDK copy paste
 mod background;
 
-mod bdkstorage;
 mod chain;
 mod encrypt;
 pub mod error;

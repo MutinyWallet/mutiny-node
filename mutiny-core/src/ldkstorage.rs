@@ -9,7 +9,7 @@ use crate::node::{default_user_config, ChainMonitor, ProbScorer};
 use crate::node::{NetworkGraph, Router};
 use crate::utils;
 use anyhow::anyhow;
-use bdk::blockchain::EsploraBlockchain;
+use bdk_esplora::esplora_client::AsyncClient;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::BlockHash;
 use bitcoin::Network;
@@ -141,7 +141,7 @@ impl MutinyNodePersister {
         keys_manager: Arc<PhantomKeysManager>,
         router: Arc<Router>,
         mut channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
-        esplora: Arc<EsploraBlockchain>,
+        esplora: Arc<AsyncClient>,
     ) -> Result<ReadChannelManager, MutinyError> {
         match self.read_value(CHANNEL_MANAGER_KEY) {
             Ok(kv_value) => {

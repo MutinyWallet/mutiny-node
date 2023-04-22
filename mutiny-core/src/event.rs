@@ -3,7 +3,6 @@ use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::logging::MutinyLogger;
 use crate::utils::sleep;
 use crate::wallet::MutinyWallet;
-use bdk::blockchain::Blockchain;
 use bdk::wallet::AddressIndex;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
@@ -104,11 +103,11 @@ impl EventHandler {
                     0,
                 ));
 
-                let psbt = match self
-                    .wallet
-                    .create_signed_psbt_to_spk(output_script, channel_value_satoshis, None)
-                    .await
-                {
+                let psbt = match self.wallet.create_signed_psbt_to_spk(
+                    output_script,
+                    channel_value_satoshis,
+                    None,
+                ) {
                     Ok(psbt) => psbt,
                     Err(e) => {
                         self.logger.log(&Record::new(
@@ -515,23 +514,26 @@ impl EventHandler {
                     "",
                     0,
                 ));
-                let wallet_thread = self.wallet.clone();
-                let keys_manager_thread = self.keys_manager.clone();
-                let fee_thread = self.fee_estimator.clone();
-                let destination_address = wallet_thread
-                    .wallet
-                    .lock()
-                    .await
-                    .get_internal_address(AddressIndex::New)
-                    .expect("could not get new address");
+                // Do lock inside of bracket to avoid holding it for too long
+                let address = {
+                    let mut wallet = self
+                        .wallet
+                        .wallet
+                        .try_write()
+                        .expect("failed to lock wallet");
+                    wallet.get_internal_address(AddressIndex::New).address
+                };
 
                 let output_descriptors = &outputs.iter().collect::<Vec<_>>();
-                let tx_feerate = fee_thread.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
-                let spending_tx = keys_manager_thread
+                let tx_feerate = self
+                    .fee_estimator
+                    .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+                let spending_tx = self
+                    .keys_manager
                     .spend_spendable_outputs(
                         output_descriptors,
                         Vec::new(),
-                        destination_address.script_pubkey(),
+                        address.script_pubkey(),
                         tx_feerate,
                         &Secp256k1::new(),
                     )
