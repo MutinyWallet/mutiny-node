@@ -51,21 +51,24 @@ impl MutinyStorage {
     where
         T: Serialize,
     {
+        let key = key.as_ref().to_string();
         let data = serde_json::to_value(value)?;
+
+        let indexed_db = self.indexed_db.clone();
+        let password = self.password.clone();
+        let key_clone = key.clone();
+        let data_clone = data.clone();
+        spawn_local(async move {
+            Self::save_to_indexed_db(indexed_db, &password, &key_clone, &data_clone)
+                .await
+                .expect(&format!("Failed to save to indexed db: {key_clone}"))
+        });
+
         let mut map = self
             .memory
             .write()
             .map_err(|e| MutinyError::write_err(e.into()))?;
-        map.insert(key.as_ref().to_string(), data.clone());
-
-        let indexed_db = self.indexed_db.clone();
-        let password = self.password.clone();
-        let key = key.as_ref().to_string();
-        spawn_local(async move {
-            Self::save_to_indexed_db(indexed_db, &password, &key, &data)
-                .await
-                .expect(&format!("Failed to save to indexed db: {key}"))
-        });
+        map.insert(key, data);
 
         Ok(())
     }
