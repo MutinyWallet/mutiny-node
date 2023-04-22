@@ -2,7 +2,7 @@ pack:
     wasm-pack build ./mutiny-wasm --dev --target web --scope mutinywallet
 
 link:
-    wasm-pack build ./mutiny-wasm --dev --target web --scope mutinywallet && cd mutiny-wasm/pkg && npm link
+    wasm-pack build ./mutiny-wasm --dev --target web --scope mutinywallet && cd mutiny-wasm/pkg && pnpm link --global
 
 login:
     wasm-pack login --scope=@mutinywallet
