@@ -1,11 +1,11 @@
 use crate::gossip::read_peer_info;
+use crate::keymanager::PhantomKeysManager;
 use crate::node::NetworkGraph;
 use crate::{
     gossip, ldkstorage::PhantomChannelManager, logging::MutinyLogger, socket::WsSocketDescriptor,
 };
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::BlockHash;
-use lightning::chain::keysinterface::PhantomKeysManager;
 use lightning::ln::features::{InitFeatures, NodeFeatures};
 use lightning::ln::msgs;
 use lightning::ln::msgs::{LightningError, NetAddress, RoutingMessageHandler};

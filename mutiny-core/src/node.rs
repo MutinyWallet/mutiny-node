@@ -1,4 +1,5 @@
 use crate::indexed_db::MutinyStorage;
+use crate::keymanager::PhantomKeysManager;
 use crate::{
     background::process_events_async,
     chain::MutinyChain,
@@ -29,7 +30,7 @@ use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network};
 use lightning::{
     chain::{
         chainmonitor,
-        keysinterface::{EntropySource, InMemorySigner, PhantomKeysManager},
+        keysinterface::{EntropySource, InMemorySigner},
         Filter, Watch,
     },
     ln::{
@@ -165,7 +166,11 @@ impl Node {
 
         let logger = Arc::new(MutinyLogger::default());
 
-        let keys_manager = Arc::new(create_keys_manager(mnemonic, node_index.child_index));
+        let keys_manager = Arc::new(create_keys_manager(
+            wallet.clone(),
+            mnemonic,
+            node_index.child_index,
+        ));
         let pubkey = pubkey_from_keys_manager(&keys_manager);
 
         // init the persister

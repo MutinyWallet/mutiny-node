@@ -1,15 +1,14 @@
 use crate::fees::MutinyFeeEstimator;
+use crate::keymanager::PhantomKeysManager;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::logging::MutinyLogger;
 use crate::utils::sleep;
 use crate::wallet::MutinyWallet;
-use bdk::wallet::AddressIndex;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
-    chain::keysinterface::PhantomKeysManager,
     util::errors::APIError,
     util::{
         events::{Event, PaymentPurpose},
@@ -514,15 +513,6 @@ impl EventHandler {
                     "",
                     0,
                 ));
-                // Do lock inside of bracket to avoid holding it for too long
-                let address = {
-                    let mut wallet = self
-                        .wallet
-                        .wallet
-                        .try_write()
-                        .expect("failed to lock wallet");
-                    wallet.get_internal_address(AddressIndex::New).address
-                };
 
                 let output_descriptors = &outputs.iter().collect::<Vec<_>>();
                 let tx_feerate = self
@@ -533,7 +523,6 @@ impl EventHandler {
                     .spend_spendable_outputs(
                         output_descriptors,
                         Vec::new(),
-                        address.script_pubkey(),
                         tx_feerate,
                         &Secp256k1::new(),
                     )
