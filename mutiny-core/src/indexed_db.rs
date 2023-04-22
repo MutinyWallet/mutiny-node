@@ -66,7 +66,7 @@ impl MutinyStorage {
 
         let mut map = self
             .memory
-            .write()
+            .try_write()
             .map_err(|e| MutinyError::write_err(e.into()))?;
         map.insert(key, data);
 
@@ -110,7 +110,7 @@ impl MutinyStorage {
     {
         let map = self
             .memory
-            .read()
+            .try_read()
             .map_err(|e| MutinyError::read_err(e.into()))?;
         match map.get(key.as_ref()) {
             None => Ok(None),
@@ -131,7 +131,7 @@ impl MutinyStorage {
     {
         let map = self
             .memory
-            .read()
+            .try_read()
             .map_err(|e| MutinyError::read_err(e.into()))?;
 
         Ok(map
@@ -186,7 +186,7 @@ impl MutinyStorage {
         let map = Self::read_all(&self.indexed_db, &self.password).await?;
         let mut memory = self
             .memory
-            .write()
+            .try_write()
             .map_err(|e| MutinyError::write_err(e.into()))?;
         *memory = map;
         Ok(())
