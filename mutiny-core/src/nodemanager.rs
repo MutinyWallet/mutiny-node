@@ -41,7 +41,6 @@ use log::{debug, error, info, warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use wasm_bindgen_futures::spawn_local;
 
 pub struct NodeManager {
     mnemonic: Mnemonic,
@@ -417,18 +416,16 @@ impl NodeManager {
         self.network
     }
 
-    pub async fn get_new_address(&self) -> Result<Address, MutinyError> {
-        Ok(self
-            .wallet
-            .wallet
-            .lock()
-            .await
-            .get_address(AddressIndex::New)
-            .address)
+    pub fn get_new_address(&self) -> Result<Address, MutinyError> {
+        let mut wallet = self.wallet.wallet.try_write()?;
+
+        Ok(wallet.get_address(AddressIndex::New).address)
     }
 
-    pub async fn get_wallet_balance(&self) -> Result<u64, MutinyError> {
-        Ok(self.wallet.wallet.lock().await.get_balance().total())
+    pub fn get_wallet_balance(&self) -> Result<u64, MutinyError> {
+        let wallet = self.wallet.wallet.try_read()?;
+
+        Ok(wallet.get_balance().total())
     }
 
     pub async fn create_bip21(
@@ -436,7 +433,7 @@ impl NodeManager {
         amount: Option<u64>,
         description: Option<String>,
     ) -> Result<MutinyBip21RawMaterials, MutinyError> {
-        let Ok(address) = self.get_new_address().await else {
+        let Ok(address) = self.get_new_address() else {
             return Err(MutinyError::WalletOperationFailed);
         };
 
@@ -521,39 +518,32 @@ impl NodeManager {
 
         // if we found a tx we should try to import it into the wallet
         if let Some(details) = details_opt.clone() {
-            let wallet = self.wallet.clone();
-            spawn_local(async move {
-                wallet
-                    .wallet
-                    .lock()
-                    .await
-                    .insert_tx(
-                        details.transaction.clone().unwrap(),
-                        details.confirmation_time,
-                    )
-                    .expect("Failed to import tx");
-            });
+            let mut wallet = self.wallet.wallet.try_write()?;
+
+            wallet
+                .insert_tx(
+                    details.transaction.clone().unwrap(),
+                    details.confirmation_time,
+                )
+                .map_err(|_| MutinyError::ChainAccessFailed)?; // TODO better error
         }
 
         Ok(details_opt)
     }
 
-    pub async fn list_onchain(&self) -> Result<Vec<TransactionDetails>, MutinyError> {
-        let mut txs = self.wallet.list_transactions(false).await?;
+    pub fn list_onchain(&self) -> Result<Vec<TransactionDetails>, MutinyError> {
+        let mut txs = self.wallet.list_transactions(false)?;
         txs.sort();
 
         Ok(txs)
     }
 
-    pub async fn get_transaction(
-        &self,
-        txid: Txid,
-    ) -> Result<Option<TransactionDetails>, MutinyError> {
-        self.wallet.get_transaction(txid, false).await
+    pub fn get_transaction(&self, txid: Txid) -> Result<Option<TransactionDetails>, MutinyError> {
+        self.wallet.get_transaction(txid, false)
     }
 
     pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyError> {
-        let onchain = self.wallet.wallet.lock().await.get_balance();
+        let onchain = self.wallet.wallet.try_read()?.get_balance();
 
         let nodes = self.nodes.lock().await;
         let lightning_msats: u64 = nodes
@@ -569,8 +559,8 @@ impl NodeManager {
         })
     }
 
-    pub async fn list_utxos(&self) -> Result<Vec<LocalUtxo>, MutinyError> {
-        self.wallet.list_utxos().await
+    pub fn list_utxos(&self) -> Result<Vec<LocalUtxo>, MutinyError> {
+        self.wallet.list_utxos()
     }
 
     async fn sync_ldk(&self) -> Result<(), MutinyError> {
