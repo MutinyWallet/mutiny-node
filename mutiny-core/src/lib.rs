@@ -16,7 +16,6 @@ mod gossip;
 mod indexed_db;
 mod keymanager;
 mod ldkstorage;
-mod localstorage;
 mod logging;
 mod lspclient;
 mod node;

@@ -10,12 +10,10 @@ use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, Script, Txid};
 use esplora_client::AsyncClient;
-use log::{debug, info};
-use wasm_bindgen_futures::spawn_local;
+use log::debug;
 
 use crate::error::MutinyError;
 use crate::indexed_db::MutinyStorage;
-use crate::localstorage::MutinyBrowserStorage;
 use crate::utils::is_valid_network;
 
 #[derive(Clone)]
@@ -55,19 +53,6 @@ impl MutinyWallet {
     }
 
     pub async fn sync(&self) -> Result<(), MutinyError> {
-        let blockchain_clone = self.blockchain.clone();
-        spawn_local(async move {
-            let estimates = blockchain_clone
-                .get_fee_estimates()
-                .await
-                .expect("Failed to get fee estimates from esplora");
-
-            MutinyBrowserStorage::insert_fee_estimates(estimates)
-                .expect("Failed to set fee estimates in local storage");
-
-            info!("Updated cached fees!");
-        });
-
         // get first wallet lock that only needs to read
         let (checkpoints, spks) = {
             let wallet = self.wallet.try_read()?;
