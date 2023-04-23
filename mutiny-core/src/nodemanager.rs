@@ -275,6 +275,8 @@ impl NodeManager {
             },
         };
 
+        let fee_estimator = Arc::new(MutinyFeeEstimator::new(storage.clone()));
+
         let logger = Arc::new(MutinyLogger::default());
 
         let esplora_server_url = get_esplora_url(network, user_esplora_url);
@@ -286,6 +288,7 @@ impl NodeManager {
             storage.clone(),
             network,
             esplora.clone(),
+            fee_estimator.clone(),
         ));
 
         let chain = Arc::new(MutinyChain::new(tx_sync));
@@ -302,8 +305,6 @@ impl NodeManager {
         let scorer = Arc::new(utils::Mutex::new(scorer));
 
         let gossip_sync = Arc::new(gossip_sync);
-
-        let fee_estimator = Arc::new(MutinyFeeEstimator::new(storage.clone()));
 
         // load lsp clients, if any
         let lsp_clients: Vec<LspClient> = match lsp_url.clone() {

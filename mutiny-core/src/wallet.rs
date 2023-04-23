@@ -10,9 +10,11 @@ use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, Script, Txid};
 use esplora_client::AsyncClient;
+use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use log::debug;
 
 use crate::error::MutinyError;
+use crate::fees::MutinyFeeEstimator;
 use crate::indexed_db::MutinyStorage;
 use crate::utils::is_valid_network;
 
@@ -21,6 +23,7 @@ pub struct MutinyWallet {
     pub wallet: Arc<RwLock<Wallet<MutinyStorage>>>,
     network: Network,
     pub blockchain: Arc<AsyncClient>,
+    fees: Arc<MutinyFeeEstimator>,
 }
 
 impl MutinyWallet {
@@ -29,6 +32,7 @@ impl MutinyWallet {
         db: MutinyStorage,
         network: Network,
         esplora: Arc<AsyncClient>,
+        fees: Arc<MutinyFeeEstimator>,
     ) -> MutinyWallet {
         let entropy = mnemonic.to_entropy();
         let xprivkey = ExtendedPrivKey::new_master(network, &entropy).unwrap();
@@ -49,6 +53,7 @@ impl MutinyWallet {
             wallet: Arc::new(RwLock::new(wallet)),
             network,
             blockchain: esplora,
+            fees,
         }
     }
 
@@ -129,9 +134,10 @@ impl MutinyWallet {
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
         } else {
-            // self.blockchain.estimate_fee(1).await?
-            // todo get from esplora
-            FeeRate::from_sat_per_vb(5.0)
+            let sat_per_kwu = self
+                .fees
+                .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+            FeeRate::from_sat_per_kwu(sat_per_kwu as f32)
         };
         let (mut psbt, details) = {
             let mut builder = wallet.build_tx();
@@ -178,9 +184,10 @@ impl MutinyWallet {
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
         } else {
-            // self.blockchain.estimate_fee(1).await?
-            // todo get from esplora
-            FeeRate::from_sat_per_vb(5.0)
+            let sat_per_kwu = self
+                .fees
+                .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+            FeeRate::from_sat_per_kwu(sat_per_kwu as f32)
         };
         let (mut psbt, details) = {
             let mut builder = wallet.build_tx();

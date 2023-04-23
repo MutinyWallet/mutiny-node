@@ -210,6 +210,7 @@ mod tests {
     use crate::{keymanager::pubkey_from_keys_manager, test_utils::*};
 
     use super::create_keys_manager;
+    use crate::fees::MutinyFeeEstimator;
     use crate::indexed_db::MutinyStorage;
     use crate::wallet::MutinyWallet;
     use bip39::Mnemonic;
@@ -227,12 +228,14 @@ mod tests {
             .build_async()
             .unwrap();
         let db = MutinyStorage::new("".to_string()).await.unwrap();
+        let fees = Arc::new(MutinyFeeEstimator::new(db.clone()));
 
         let wallet = Arc::new(MutinyWallet::new(
             &mnemonic,
             db,
             Network::Testnet,
             Arc::new(esplora),
+            fees,
         ));
 
         let km = create_keys_manager(wallet.clone(), &mnemonic, 1);
