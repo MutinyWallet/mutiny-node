@@ -1,6 +1,7 @@
 use crate::encrypt::{decrypt, encrypt};
 use crate::error::{MutinyError, MutinyStorageError};
 use crate::ldkstorage::CHANNEL_MANAGER_KEY;
+use crate::nodemanager::NodeStorage;
 use anyhow::anyhow;
 use bdk::chain::keychain::{KeychainChangeSet, KeychainTracker, PersistBackend};
 use bdk::chain::sparse_chain::ChainPosition;
@@ -19,6 +20,8 @@ pub(crate) const WALLET_OBJECT_STORE_NAME: &str = "wallet_store";
 
 const KEYCHAIN_STORE_KEY: &str = "keychain_store";
 const MNEMONIC_KEY: &str = "mnemonic";
+const NODES_KEY: &str = "nodes";
+const FEE_ESTIMATES_KEY: &str = "fee_estimates";
 
 #[derive(Clone)]
 pub struct MutinyStorage {
@@ -179,6 +182,29 @@ impl MutinyStorage {
         tx.done().await?;
 
         Ok(mnemonic)
+    }
+
+    pub(crate) fn get_nodes(&self) -> Result<NodeStorage, MutinyError> {
+        let res: Option<NodeStorage> = self.get(NODES_KEY)?;
+        match res {
+            Some(nodes) => Ok(nodes),
+            None => Ok(NodeStorage::default()),
+        }
+    }
+
+    pub(crate) fn insert_nodes(&self, nodes: NodeStorage) -> Result<(), MutinyError> {
+        self.set(NODES_KEY, nodes)
+    }
+
+    pub(crate) fn get_fee_estimates(&self) -> Result<Option<HashMap<String, f64>>, MutinyError> {
+        self.get(FEE_ESTIMATES_KEY)
+    }
+
+    pub(crate) fn insert_fee_estimates(
+        &self,
+        fees: HashMap<String, f64>,
+    ) -> Result<(), MutinyError> {
+        self.set(FEE_ESTIMATES_KEY, fees)
     }
 
     #[cfg(test)]

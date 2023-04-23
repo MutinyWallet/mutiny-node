@@ -1,21 +1,29 @@
-use crate::localstorage::MutinyBrowserStorage;
+use crate::indexed_db::MutinyStorage;
 use bdk::FeeRate;
 use lightning::chain::chaininterface::{
     ConfirmationTarget, FeeEstimator, FEERATE_FLOOR_SATS_PER_KW,
 };
 use log::trace;
 
-#[derive(Debug, Clone, Default)]
-pub struct MutinyFeeEstimator {}
+#[derive(Clone)]
+pub struct MutinyFeeEstimator {
+    storage: MutinyStorage,
+}
+
+impl MutinyFeeEstimator {
+    pub fn new(storage: MutinyStorage) -> MutinyFeeEstimator {
+        MutinyFeeEstimator { storage }
+    }
+}
 
 impl FeeEstimator for MutinyFeeEstimator {
     fn get_est_sat_per_1000_weight(&self, confirmation_target: ConfirmationTarget) -> u32 {
         let num_blocks = num_blocks_from_conf_target(confirmation_target);
         let fallback_fee = fallback_fee_from_conf_target(confirmation_target);
 
-        match MutinyBrowserStorage::get_fee_estimates() {
-            Err(_) => fallback_fee,
-            Ok(estimates) => {
+        match self.storage.get_fee_estimates() {
+            Err(_) | Ok(None) => fallback_fee,
+            Ok(Some(estimates)) => {
                 let found = estimates.get(num_blocks.to_string().as_str());
                 match found {
                     Some(num) => {

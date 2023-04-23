@@ -10,7 +10,6 @@ use crate::{
     esplora::EsploraSyncClient,
     fees::MutinyFeeEstimator,
     gossip, keymanager,
-    localstorage::MutinyBrowserStorage,
     logging::MutinyLogger,
     lspclient::LspClient,
     node::{Node, ProbScorer, PubkeyConnectionInfo, RapidGossipSync},
@@ -60,7 +59,7 @@ pub struct NodeManager {
 }
 
 // This is the NodeStorage object saved to the DB
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub(crate) struct NodeStorage {
     pub nodes: HashMap<String, NodeIndex>,
 }
@@ -304,7 +303,7 @@ impl NodeManager {
 
         let gossip_sync = Arc::new(gossip_sync);
 
-        let fee_estimator = Arc::new(MutinyFeeEstimator::default());
+        let fee_estimator = Arc::new(MutinyFeeEstimator::new(storage.clone()));
 
         // load lsp clients, if any
         let lsp_clients: Vec<LspClient> = match lsp_url.clone() {
@@ -330,12 +329,7 @@ impl NodeManager {
             _ => Vec::new(),
         };
 
-        let node_storage = match MutinyBrowserStorage::get_nodes() {
-            Ok(node_storage) => node_storage,
-            Err(e) => {
-                return Err(MutinyError::ReadError { source: e });
-            }
-        };
+        let node_storage = storage.get_nodes()?;
 
         let mut nodes_map = HashMap::new();
 
@@ -375,7 +369,7 @@ impl NodeManager {
 
         info!("inserting updated nodes");
 
-        MutinyBrowserStorage::insert_nodes(NodeStorage {
+        storage.insert_nodes(NodeStorage {
             nodes: updated_nodes,
         })?;
 
@@ -585,6 +579,12 @@ impl NodeManager {
     }
 
     pub async fn sync(&self) -> Result<(), MutinyError> {
+        // update fee estimates before sync in case we need to
+        // broadcast a transaction
+        let estimates = self.esplora.get_fee_estimates().await?;
+        self.storage.insert_fee_estimates(estimates)?;
+        info!("Updated cached fees!");
+
         // Sync ldk first because it may broadcast transactions
         // to addresses that are in our bdk wallet. This way
         // they are found on this iteration of syncing instead
@@ -1035,10 +1035,7 @@ pub(crate) async fn create_new_node_from_node_manager(
     // so that we can create another node with the next.
     // Always get it from our storage, the node_mutex is
     // mostly for read only and locking.
-    let mut existing_nodes = match MutinyBrowserStorage::get_nodes() {
-        Ok(existing_nodes) => existing_nodes,
-        Err(e) => return Err(MutinyError::ReadError { source: e }),
-    };
+    let mut existing_nodes = node_manager.storage.get_nodes()?;
     let next_node_index = match existing_nodes
         .nodes
         .iter()
@@ -1071,7 +1068,7 @@ pub(crate) async fn create_new_node_from_node_manager(
         .nodes
         .insert(next_node_uuid.clone(), next_node.clone());
 
-    MutinyBrowserStorage::insert_nodes(existing_nodes.clone())?;
+    node_manager.storage.insert_nodes(existing_nodes.clone())?;
     node_mutex.nodes = existing_nodes.nodes.clone();
 
     // now create the node process and init it
