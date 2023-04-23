@@ -228,6 +228,12 @@ impl<G> From<std::sync::TryLockError<G>> for MutinyError {
     }
 }
 
+impl<G> From<std::sync::TryLockError<G>> for MutinyStorageError {
+    fn from(_e: std::sync::TryLockError<G>) -> Self {
+        MutinyStorageError::LockError
+    }
+}
+
 impl From<bitcoin::hashes::hex::Error> for MutinyError {
     fn from(_e: bitcoin::hashes::hex::Error) -> Self {
         MutinyError::ReadError {
