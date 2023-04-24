@@ -30,7 +30,7 @@ pub struct MutinyStorage {
     /// This is used to avoid having to read from IndexedDB on every get.
     /// This is a RwLock because we want to be able to read from it without blocking
     memory: Arc<RwLock<HashMap<String, serde_json::Value>>>,
-    indexed_db: Arc<Rexie>,
+    pub(crate) indexed_db: Arc<Rexie>,
 }
 
 impl MutinyStorage {
@@ -240,7 +240,7 @@ impl MutinyStorage {
         Ok(rexie)
     }
 
-    async fn read_all(
+    pub(crate) async fn read_all(
         indexed_db: &Rexie,
         password: &Option<String>,
     ) -> Result<HashMap<String, serde_json::Value>, MutinyError> {
@@ -281,7 +281,29 @@ impl MutinyStorage {
         }
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    pub(crate) async fn import(json: serde_json::Value) -> Result<(), MutinyError> {
+        Self::clear().await?;
+        let indexed_db = Self::build_indexed_db_database().await?;
+        let tx = indexed_db.transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)?;
+        let store = tx.store(WALLET_OBJECT_STORE_NAME)?;
+
+        let map = json
+            .as_object()
+            .ok_or(MutinyError::write_err(MutinyStorageError::Other(anyhow!(
+                "json is not an object"
+            ))))?;
+
+        for (key, value) in map {
+            let key = JsValue::from(key);
+            let value = JsValue::from_serde(&value)?;
+            store.put(&value, Some(&key)).await?;
+        }
+
+        tx.done().await?;
+
+        Ok(())
+    }
+
     pub(crate) async fn clear() -> Result<(), MutinyError> {
         let indexed_db = Self::build_indexed_db_database().await?;
         let tx = indexed_db.transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)?;

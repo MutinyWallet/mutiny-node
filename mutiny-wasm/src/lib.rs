@@ -363,6 +363,19 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
+    pub async fn export_json(&self) -> Result<String, MutinyJsError> {
+        let json = self.inner.export_json().await?;
+        Ok(serde_json::to_string(&json)?)
+    }
+
+    #[wasm_bindgen]
+    pub async fn import_json(json: String) -> Result<(), MutinyJsError> {
+        let json: serde_json::Value = serde_json::from_str(&json)?;
+        nodemanager::NodeManager::import_json(json).await?;
+        Ok(())
+    }
+
+    #[wasm_bindgen]
     pub fn convert_btc_to_sats(btc: f64) -> Result<u64, MutinyJsError> {
         Ok(nodemanager::NodeManager::convert_btc_to_sats(btc)?)
     }

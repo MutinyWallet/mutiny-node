@@ -994,6 +994,17 @@ impl NodeManager {
         Ok(response.bitcoin.usd)
     }
 
+    pub async fn export_json(&self) -> Result<serde_json::Value, MutinyError> {
+        let map = MutinyStorage::read_all(&self.storage.indexed_db, &self.storage.password).await?;
+        let serde_map = serde_json::map::Map::from_iter(map.into_iter());
+        Ok(serde_json::Value::Object(serde_map))
+    }
+
+    pub async fn import_json(json: serde_json::Value) -> Result<(), MutinyError> {
+        MutinyStorage::import(json).await?;
+        Ok(())
+    }
+
     pub fn convert_btc_to_sats(btc: f64) -> Result<u64, MutinyError> {
         // rust bitcoin doesn't like extra precision in the float
         // so we round to the nearest satoshi
