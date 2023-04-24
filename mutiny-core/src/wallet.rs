@@ -268,12 +268,9 @@ pub(crate) fn get_rgs_url(
     last_sync_time: Option<u32>,
 ) -> String {
     let last_sync_time = last_sync_time.unwrap_or(0);
-    if let Some(url) = user_provided_url {
-        if url.is_empty() {
-            get_rgs_url(network, None, Some(last_sync_time))
-        } else {
-            url
-        }
+    if let Some(url) = user_provided_url.filter(|url| !url.is_empty()) {
+        let url = url.strip_suffix('/').unwrap_or(&url);
+        format!("{url}/{last_sync_time}")
     } else {
         // todo - handle regtest
         match network {
@@ -284,7 +281,7 @@ pub(crate) fn get_rgs_url(
                 format!("https://rapidsync.lightningdevkit.org/testnet/snapshot/{last_sync_time}")
             }
             Network::Signet => {
-                format!("https://rgs.mutinynet.com/snapshots/{last_sync_time}")
+                format!("https://rgs.mutinynet.com/snapshot/{last_sync_time}")
             }
             Network::Regtest => {
                 // for now use the signet rgs because it is the least amount of data
