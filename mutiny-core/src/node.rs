@@ -170,7 +170,7 @@ impl Node {
             wallet.clone(),
             mnemonic,
             node_index.child_index,
-        ));
+        )?);
         let pubkey = pubkey_from_keys_manager(&keys_manager);
 
         // init the persister

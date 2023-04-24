@@ -1,7 +1,6 @@
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
-use bdk::keys::ExtendedKey;
 use bdk::template::DescriptorTemplateOut;
 use bdk::{FeeRate, LocalUtxo, SignOptions, TransactionDetails, Wallet};
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
@@ -21,7 +20,7 @@ use crate::utils::is_valid_network;
 #[derive(Clone)]
 pub struct MutinyWallet {
     pub wallet: Arc<RwLock<Wallet<MutinyStorage>>>,
-    network: Network,
+    pub network: Network,
     pub blockchain: Arc<AsyncClient>,
     fees: Arc<MutinyFeeEstimator>,
 }
@@ -34,12 +33,11 @@ impl MutinyWallet {
         esplora: Arc<AsyncClient>,
         fees: Arc<MutinyFeeEstimator>,
     ) -> Result<MutinyWallet, MutinyError> {
-        let entropy = mnemonic.to_entropy();
-        let xprivkey = ExtendedPrivKey::new_master(network, &entropy)?;
-        let xkey = ExtendedKey::from(xprivkey);
+        let seed = mnemonic.to_seed("");
+        let xprivkey = ExtendedPrivKey::new_master(network, &seed)?;
         let account_number = 0;
         let (receive_descriptor_template, change_descriptor_template) =
-            get_tr_descriptors_for_extended_key(xkey, network, account_number)?;
+            get_tr_descriptors_for_extended_key(xprivkey, network, account_number)?;
 
         let wallet = Wallet::new(
             receive_descriptor_template,
@@ -221,13 +219,10 @@ impl MutinyWallet {
 }
 
 fn get_tr_descriptors_for_extended_key(
-    xkey: ExtendedKey,
+    master_xprv: ExtendedPrivKey,
     network: Network,
     account_number: u32,
 ) -> Result<(DescriptorTemplateOut, DescriptorTemplateOut), MutinyError> {
-    let master_xprv = xkey
-        .into_xprv(network)
-        .ok_or(MutinyError::WalletOperationFailed)?;
     let coin_type = match network {
         Network::Bitcoin => 0,
         Network::Testnet => 1,
