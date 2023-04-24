@@ -230,13 +230,9 @@ mod tests {
         let db = MutinyStorage::new("".to_string()).await.unwrap();
         let fees = Arc::new(MutinyFeeEstimator::new(db.clone()));
 
-        let wallet = Arc::new(MutinyWallet::new(
-            &mnemonic,
-            db,
-            Network::Testnet,
-            Arc::new(esplora),
-            fees,
-        ));
+        let wallet = Arc::new(
+            MutinyWallet::new(&mnemonic, db, Network::Testnet, Arc::new(esplora), fees).unwrap(),
+        );
 
         let km = create_keys_manager(wallet.clone(), &mnemonic, 1);
         let pubkey = pubkey_from_keys_manager(&km);

@@ -289,7 +289,7 @@ impl NodeManager {
             network,
             esplora.clone(),
             fee_estimator.clone(),
-        ));
+        )?);
 
         let chain = Arc::new(MutinyChain::new(tx_sync));
 

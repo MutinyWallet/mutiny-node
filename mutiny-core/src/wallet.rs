@@ -33,28 +33,27 @@ impl MutinyWallet {
         network: Network,
         esplora: Arc<AsyncClient>,
         fees: Arc<MutinyFeeEstimator>,
-    ) -> MutinyWallet {
+    ) -> Result<MutinyWallet, MutinyError> {
         let entropy = mnemonic.to_entropy();
-        let xprivkey = ExtendedPrivKey::new_master(network, &entropy).unwrap();
+        let xprivkey = ExtendedPrivKey::new_master(network, &entropy)?;
         let xkey = ExtendedKey::from(xprivkey);
         let account_number = 0;
         let (receive_descriptor_template, change_descriptor_template) =
-            get_tr_descriptors_for_extended_key(xkey, network, account_number);
+            get_tr_descriptors_for_extended_key(xkey, network, account_number)?;
 
         let wallet = Wallet::new(
             receive_descriptor_template,
             Some(change_descriptor_template),
             db,
             network,
-        )
-        .expect("Error creating wallet");
+        )?;
 
-        MutinyWallet {
+        Ok(MutinyWallet {
             wallet: Arc::new(RwLock::new(wallet)),
             network,
             blockchain: esplora,
             fees,
-        }
+        })
     }
 
     pub async fn sync(&self) -> Result<(), MutinyError> {
@@ -221,13 +220,14 @@ impl MutinyWallet {
     }
 }
 
-// mostly copied from sensei
 fn get_tr_descriptors_for_extended_key(
     xkey: ExtendedKey,
     network: Network,
     account_number: u32,
-) -> (DescriptorTemplateOut, DescriptorTemplateOut) {
-    let master_xprv = xkey.into_xprv(network).unwrap();
+) -> Result<(DescriptorTemplateOut, DescriptorTemplateOut), MutinyError> {
+    let master_xprv = xkey
+        .into_xprv(network)
+        .ok_or(MutinyError::WalletOperationFailed)?;
     let coin_type = match network {
         Network::Bitcoin => 0,
         Network::Testnet => 1,
@@ -235,24 +235,22 @@ fn get_tr_descriptors_for_extended_key(
         Network::Regtest => 1,
     };
 
-    let base_path = DerivationPath::from_str("m/86'").unwrap();
+    let base_path = DerivationPath::from_str("m/86'")?;
     let derivation_path = base_path.extend([
-        ChildNumber::from_hardened_idx(coin_type).unwrap(),
-        ChildNumber::from_hardened_idx(account_number).unwrap(),
+        ChildNumber::from_hardened_idx(coin_type)?,
+        ChildNumber::from_hardened_idx(account_number)?,
     ]);
 
     let receive_descriptor_template = bdk::descriptor!(tr((
         master_xprv,
         derivation_path.extend([ChildNumber::Normal { index: 0 }])
-    )))
-    .unwrap();
+    )))?;
     let change_descriptor_template = bdk::descriptor!(tr((
         master_xprv,
         derivation_path.extend([ChildNumber::Normal { index: 1 }])
-    )))
-    .unwrap();
+    )))?;
 
-    (receive_descriptor_template, change_descriptor_template)
+    Ok((receive_descriptor_template, change_descriptor_template))
 }
 
 pub(crate) fn get_esplora_url(network: Network, user_provided_url: Option<String>) -> String {
