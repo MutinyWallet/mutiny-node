@@ -140,8 +140,29 @@ impl From<bdk::Error> for MutinyError {
     }
 }
 
+impl From<bdk::descriptor::error::Error> for MutinyError {
+    fn from(_: bdk::descriptor::error::Error) -> Self {
+        Self::WalletOperationFailed
+    }
+}
+
+impl From<bdk::wallet::NewError<MutinyError>> for MutinyError {
+    fn from(e: bdk::wallet::NewError<MutinyError>) -> Self {
+        match e {
+            bdk::wallet::NewError::Persist(e) => e,
+            bdk::wallet::NewError::Descriptor(e) => e.into(),
+        }
+    }
+}
+
 impl From<bip39::Error> for MutinyError {
     fn from(_e: bip39::Error) -> Self {
+        Self::InvalidMnemonic
+    }
+}
+
+impl From<bitcoin::util::bip32::Error> for MutinyError {
+    fn from(_e: bitcoin::util::bip32::Error) -> Self {
         Self::InvalidMnemonic
     }
 }
