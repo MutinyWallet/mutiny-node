@@ -6,6 +6,7 @@
 // background file is mostly an LDK copy paste
 mod background;
 
+mod auth;
 mod chain;
 mod encrypt;
 pub mod error;
@@ -27,3 +28,5 @@ mod socket;
 pub mod test_utils;
 mod utils;
 mod wallet;
+
+pub use auth::AuthProfile;

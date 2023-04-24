@@ -312,3 +312,29 @@ impl From<nodemanager::MutinyBip21RawMaterials> for MutinyBip21RawMaterials {
         }
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[wasm_bindgen]
+pub struct AuthProfile {
+    pub index: u32,
+    name: String,
+    used_services: Vec<String>,
+}
+
+#[wasm_bindgen]
+impl AuthProfile {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.name.to_string()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn used_services(&self) -> JsValue /* Vec<String> */ {
+        JsValue::from_serde(&serde_json::to_value(&self.used_services).unwrap()).unwrap()
+    }
+}

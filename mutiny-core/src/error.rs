@@ -170,6 +170,12 @@ impl From<bitcoin::util::bip32::Error> for MutinyError {
     }
 }
 
+impl From<url::ParseError> for MutinyError {
+    fn from(_e: url::ParseError) -> Self {
+        Self::LnUrlFailure
+    }
+}
+
 impl From<lnurl::Error> for MutinyError {
     fn from(_e: lnurl::Error) -> Self {
         Self::LnUrlFailure
