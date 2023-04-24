@@ -50,8 +50,20 @@ pub struct ProposalResponse {
     pub jit_bolt11: String,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct FeeRequest {
+    pub pubkey: String,
+    pub amount_msat: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FeeResponse {
+    pub fee_amount_msat: u64,
+}
+
 const GET_INFO_PATH: &str = "/api/v1/info";
 const PROPOSAL_PATH: &str = "/api/v1/proposal";
+const FEE_PATH: &str = "/api/v1/fee";
 
 impl LspClient {
     pub async fn new(url: &str) -> anyhow::Result<Self> {
@@ -115,5 +127,18 @@ impl LspClient {
             .await?;
 
         Ok(proposal_response.jit_bolt11)
+    }
+
+    pub(crate) async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> anyhow::Result<u64> {
+        let fee_response: FeeResponse = self
+            .http_client
+            .post(format!("{}{}", &self.url, FEE_PATH))
+            .json(&fee_request)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        Ok(fee_response.fee_amount_msat)
     }
 }

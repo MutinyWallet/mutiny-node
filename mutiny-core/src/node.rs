@@ -1,4 +1,3 @@
-use crate::indexed_db::MutinyStorage;
 use crate::keymanager::PhantomKeysManager;
 use crate::{
     background::process_events_async,
@@ -21,10 +20,11 @@ use crate::{
     utils::{self, currency_from_network, is_valid_network, network_from_currency, sleep},
     wallet::MutinyWallet,
 };
+use crate::{indexed_db::MutinyStorage, lspclient::FeeRequest};
 use anyhow::{anyhow, Context};
 use bdk_esplora::esplora_client::AsyncClient;
 use bip39::Mnemonic;
-use bitcoin::hashes::sha256::Hash as Sha256;
+use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
 use bitcoin::secp256k1::rand;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network};
 use lightning::{
@@ -570,6 +570,28 @@ impl Node {
         description: String,
         route_hints: Option<Vec<PhantomRouteHints>>,
     ) -> Result<Invoice, MutinyError> {
+        // the amount to create for the invoice whether or not there is an lsp
+        let amount_sat = if let Some(lsp) = self.lsp_client.clone() {
+            // LSP requires an amount
+            let amount_sat = amount_sat
+                .filter(|a| a > &0)
+                .ok_or(MutinyError::BadAmountError)?;
+
+            // check the fee from the LSP
+            let lsp_fee_msat = lsp
+                .get_lsp_fee_msat(FeeRequest {
+                    pubkey: self.pubkey.to_hex(),
+                    amount_msat: amount_sat * 1000,
+                })
+                .await?;
+            let amount_minus_fee = amount_sat
+                .checked_sub(lsp_fee_msat / 1000)
+                .ok_or(MutinyError::BadAmountError)?;
+            Some(amount_minus_fee)
+        } else {
+            amount_sat
+        };
+
         let invoice = self
             .create_internal_invoice(amount_sat, description, route_hints)
             .await?;
