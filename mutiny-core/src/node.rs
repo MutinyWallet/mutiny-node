@@ -571,7 +571,7 @@ impl Node {
         route_hints: Option<Vec<PhantomRouteHints>>,
     ) -> Result<Invoice, MutinyError> {
         // the amount to create for the invoice whether or not there is an lsp
-        let amount_sat = if let Some(lsp) = self.lsp_client.clone() {
+        let (amount_sat, lsp_fee_msat) = if let Some(lsp) = self.lsp_client.clone() {
             // LSP requires an amount
             let amount_sat = amount_sat
                 .filter(|a| a > &0)
@@ -587,13 +587,13 @@ impl Node {
             let amount_minus_fee = amount_sat
                 .checked_sub(lsp_fee_msat / 1000)
                 .ok_or(MutinyError::BadAmountError)?;
-            Some(amount_minus_fee)
+            (Some(amount_minus_fee), Some(lsp_fee_msat))
         } else {
-            amount_sat
+            (amount_sat, None)
         };
 
         let invoice = self
-            .create_internal_invoice(amount_sat, description, route_hints)
+            .create_internal_invoice(amount_sat, lsp_fee_msat, description, route_hints)
             .await?;
 
         if let Some(lsp) = self.lsp_client.clone() {
@@ -622,6 +622,7 @@ impl Node {
     async fn create_internal_invoice(
         &self,
         amount_sat: Option<u64>,
+        fee_amount_msat: Option<u64>,
         description: String,
         route_hints: Option<Vec<PhantomRouteHints>>,
     ) -> Result<Invoice, MutinyError> {
@@ -677,7 +678,7 @@ impl Node {
             secret: Some(invoice.payment_secret().0),
             status: HTLCStatus::Pending,
             amt_msat: MillisatAmount(amount_msat),
-            fee_paid_msat: None,
+            fee_paid_msat: fee_amount_msat,
             bolt11: Some(invoice.to_string()),
             payee_pubkey: None,
             last_update,
