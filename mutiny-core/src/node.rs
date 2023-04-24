@@ -570,6 +570,39 @@ impl Node {
         description: String,
         route_hints: Option<Vec<PhantomRouteHints>>,
     ) -> Result<Invoice, MutinyError> {
+        let invoice = self
+            .create_internal_invoice(amount_sat, description, route_hints)
+            .await?;
+
+        if let Some(lsp) = self.lsp_client.clone() {
+            self.connect_peer(PubkeyConnectionInfo::new(&lsp.connection_string)?, None)
+                .await?;
+            let lsp_invoice_str = lsp.get_lsp_invoice(invoice.to_string()).await?;
+            let lsp_invoice = Invoice::from_str(&lsp_invoice_str)?;
+
+            let invoice_network = network_from_currency(lsp_invoice.currency());
+            if !is_valid_network(invoice_network, self.network) {
+                return Err(MutinyError::IncorrectNetwork(invoice_network));
+            }
+
+            if lsp_invoice.payment_hash() != invoice.payment_hash()
+                || lsp_invoice.recover_payee_pub_key() != lsp.pubkey
+            {
+                return Err(MutinyError::InvoiceCreationFailed);
+            }
+
+            Ok(lsp_invoice)
+        } else {
+            Ok(invoice)
+        }
+    }
+
+    async fn create_internal_invoice(
+        &self,
+        amount_sat: Option<u64>,
+        description: String,
+        route_hints: Option<Vec<PhantomRouteHints>>,
+    ) -> Result<Invoice, MutinyError> {
         let amount_msat = amount_sat.map(|s| s * 1_000);
         let invoice_res = match route_hints {
             None => {
@@ -648,27 +681,7 @@ impl Node {
             0,
         ));
 
-        if let Some(lsp) = self.lsp_client.clone() {
-            self.connect_peer(PubkeyConnectionInfo::new(&lsp.connection_string)?, None)
-                .await?;
-            let lsp_invoice_str = lsp.get_lsp_invoice(invoice.to_string()).await?;
-            let lsp_invoice = Invoice::from_str(&lsp_invoice_str)?;
-
-            let invoice_network = network_from_currency(lsp_invoice.currency());
-            if !is_valid_network(invoice_network, self.network) {
-                return Err(MutinyError::IncorrectNetwork(invoice_network));
-            }
-
-            if lsp_invoice.payment_hash() != invoice.payment_hash()
-                || lsp_invoice.recover_payee_pub_key() != lsp.pubkey
-            {
-                return Err(MutinyError::InvoiceCreationFailed);
-            }
-
-            Ok(lsp_invoice)
-        } else {
-            Ok(invoice)
-        }
+        Ok(invoice)
     }
 
     pub fn get_invoice(&self, invoice: &Invoice) -> Result<MutinyInvoice, MutinyError> {
