@@ -1,13 +1,13 @@
 use crate::error::MutinyError;
 use crate::wallet::MutinyWallet;
 use bdk::wallet::AddressIndex;
-use bip32::XPrv;
 use bip39::Mnemonic;
 use bitcoin::bech32::u5;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::RecoverableSignature;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, Signing};
+use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Script, Transaction, TxOut};
 use lightning::chain::keysinterface::{
     EntropySource, InMemorySigner, KeyMaterial, NodeSigner,
@@ -174,25 +174,30 @@ pub(crate) fn create_keys_manager(
     wallet: Arc<MutinyWallet>,
     mnemonic: &Mnemonic,
     child_index: u32,
-) -> PhantomKeysManager {
-    let shared_key = XPrv::new(mnemonic.to_seed(""))
-        .unwrap()
-        .derive_child(bip32::ChildNumber::new(0, true).unwrap())
-        .unwrap();
+) -> Result<PhantomKeysManager, MutinyError> {
+    let context = Secp256k1::new();
 
-    let xpriv = shared_key
-        .derive_child(bip32::ChildNumber::new(child_index, true).unwrap())
-        .unwrap();
+    let seed = mnemonic.to_seed("");
+    let xprivkey = ExtendedPrivKey::new_master(wallet.network, &seed)?;
+    let shared_key = xprivkey.derive_priv(
+        &context,
+        &DerivationPath::from(vec![ChildNumber::from_hardened_idx(0)?]),
+    )?;
+
+    let xpriv = shared_key.derive_priv(
+        &context,
+        &DerivationPath::from(vec![ChildNumber::from_hardened_idx(child_index)?]),
+    )?;
 
     let now = crate::utils::now();
 
-    PhantomKeysManager::new(
+    Ok(PhantomKeysManager::new(
         wallet,
-        &xpriv.to_bytes(),
+        &xpriv.private_key.secret_bytes(),
         now.as_secs(),
         now.as_nanos() as u32,
-        &shared_key.to_bytes(),
-    )
+        &shared_key.private_key.secret_bytes(),
+    ))
 }
 
 pub(crate) fn pubkey_from_keys_manager(keys_manager: &PhantomKeysManager) -> PublicKey {
@@ -234,21 +239,21 @@ mod tests {
             MutinyWallet::new(&mnemonic, db, Network::Testnet, Arc::new(esplora), fees).unwrap(),
         );
 
-        let km = create_keys_manager(wallet.clone(), &mnemonic, 1);
+        let km = create_keys_manager(wallet.clone(), &mnemonic, 1).unwrap();
         let pubkey = pubkey_from_keys_manager(&km);
         assert_eq!(
             "02cae09cf2c8842ace44068a5bf3117a494ebbf69a99e79712483c36f97cdb7b54",
             pubkey.to_string()
         );
 
-        let km = create_keys_manager(wallet.clone(), &mnemonic, 2);
+        let km = create_keys_manager(wallet.clone(), &mnemonic, 2).unwrap();
         let second_pubkey = pubkey_from_keys_manager(&km);
         assert_eq!(
             "03fcc9eaaf0b84946ea7935e3bc4f2b498893c2f53e5d2994d6877d149601ce553",
             second_pubkey.to_string()
         );
 
-        let km = create_keys_manager(wallet, &mnemonic, 2);
+        let km = create_keys_manager(wallet, &mnemonic, 2).unwrap();
         let second_pubkey_again = pubkey_from_keys_manager(&km);
 
         assert_eq!(second_pubkey, second_pubkey_again);
