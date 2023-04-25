@@ -75,6 +75,9 @@ pub enum MutinyJsError {
     /// A chain access operation failed.
     #[error("Failed to conduct chain access operation.")]
     ChainAccessFailed,
+    /// A failure to sync the on-chain wallet
+    #[error("Failed to to sync on-chain wallet.")]
+    WalletSyncError,
     /// An error with rapid gossip sync
     #[error("Failed to execute a rapid gossip sync function")]
     RapidGossipSyncError,
@@ -127,6 +130,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::InvalidMnemonic => MutinyJsError::InvalidMnemonic,
             MutinyError::WalletSigningFailed => MutinyJsError::WalletSigningFailed,
             MutinyError::ChainAccessFailed => MutinyJsError::ChainAccessFailed,
+            MutinyError::WalletSyncError => MutinyJsError::WalletSyncError,
             MutinyError::RapidGossipSyncError => MutinyJsError::RapidGossipSyncError,
             MutinyError::DLCManagerError => MutinyJsError::DLCManagerError,
             MutinyError::PubkeyInvalid => MutinyJsError::PubkeyInvalid,

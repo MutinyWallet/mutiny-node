@@ -17,7 +17,7 @@ use crate::{
     wallet::get_esplora_url,
     wallet::MutinyWallet,
 };
-use bdk::chain::ConfirmationTime;
+use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::{wallet::AddressIndex, LocalUtxo, TransactionDetails};
 use bdk_esplora::esplora_client::AsyncClient;
 use bip39::Mnemonic;
@@ -39,6 +39,7 @@ use log::{debug, error, info, warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use wasm_bindgen_futures::spawn_local;
 
 pub struct NodeManager {
     mnemonic: Mnemonic,
@@ -503,29 +504,42 @@ impl NodeManager {
                 })
                 .unwrap_or(ConfirmationTime::Unconfirmed);
 
-            TransactionDetails {
+            let details = TransactionDetails {
                 transaction: Some(tx.to_tx()),
                 txid: tx.txid,
                 received,
                 sent: 0,
                 fee: None,
                 confirmation_time,
-            }
+            };
+
+            let block_id = match tx.status.block_hash {
+                Some(hash) => {
+                    let height = tx
+                        .status
+                        .block_height
+                        .expect("block height must be present");
+                    Some(BlockId { hash, height })
+                }
+                None => None,
+            };
+
+            (details, block_id)
         });
 
         // if we found a tx we should try to import it into the wallet
-        if let Some(details) = details_opt.clone() {
-            let mut wallet = self.wallet.wallet.try_write()?;
-
-            wallet
-                .insert_tx(
-                    details.transaction.clone().unwrap(),
-                    details.confirmation_time,
-                )
-                .map_err(|_| MutinyError::ChainAccessFailed)?; // TODO better error
+        if let Some((details, block_id)) = details_opt.clone() {
+            let wallet = self.wallet.clone();
+            spawn_local(async move {
+                let tx = details.transaction.expect("tx must be present");
+                wallet
+                    .insert_tx(tx, details.confirmation_time, block_id)
+                    .await
+                    .expect("failed to insert tx");
+            });
         }
 
-        Ok(details_opt)
+        Ok(details_opt.map(|(d, _)| d))
     }
 
     pub fn list_onchain(&self) -> Result<Vec<TransactionDetails>, MutinyError> {

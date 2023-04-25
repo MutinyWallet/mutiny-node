@@ -80,6 +80,9 @@ pub enum MutinyError {
     /// A chain access operation failed.
     #[error("Failed to conduct chain access operation.")]
     ChainAccessFailed,
+    /// A failure to sync the on-chain wallet
+    #[error("Failed to to sync on-chain wallet.")]
+    WalletSyncError,
     /// An error with rapid gossip sync
     #[error("Failed to execute a rapid gossip sync function")]
     RapidGossipSyncError,
@@ -280,7 +283,18 @@ impl From<esplora_client::Error> for MutinyError {
 
 impl<T> From<bdk::chain::chain_graph::UpdateError<T>> for MutinyError {
     fn from(_e: bdk::chain::chain_graph::UpdateError<T>) -> Self {
-        // This is a syncing error
-        Self::ChainAccessFailed
+        Self::WalletSyncError
+    }
+}
+
+impl<T> From<bdk::chain::chain_graph::InsertTxError<T>> for MutinyError {
+    fn from(_e: bdk::chain::chain_graph::InsertTxError<T>) -> Self {
+        Self::WalletSyncError
+    }
+}
+
+impl From<bdk::chain::chain_graph::InsertCheckpointError> for MutinyError {
+    fn from(_e: bdk::chain::chain_graph::InsertCheckpointError) -> Self {
+        Self::WalletSyncError
     }
 }
