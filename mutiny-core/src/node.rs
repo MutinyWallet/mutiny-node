@@ -411,13 +411,7 @@ impl Node {
                     .collect();
 
                 for (pubkey, conn_str) in not_connected.into_iter() {
-                    connect_logger.log(&Record::new(
-                        lightning::util::logger::Level::Debug,
-                        format_args!("DEBUG: going to auto connect to peer: {pubkey}"),
-                        "node",
-                        "",
-                        0,
-                    ));
+                    trace!("going to auto connect to peer: {pubkey}");
                     let peer_connection_info = match PubkeyConnectionInfo::new(&conn_str) {
                         Ok(p) => p,
                         Err(e) => {
@@ -440,13 +434,7 @@ impl Node {
                     .await
                     {
                         Ok(_) => {
-                            connect_logger.log(&Record::new(
-                                lightning::util::logger::Level::Debug,
-                                format_args!("DEBUG: auto connected peer: {pubkey}"),
-                                "node",
-                                "",
-                                0,
-                            ));
+                            trace!("auto connected peer: {pubkey}");
                         }
                         Err(e) => {
                             connect_logger.log(&Record::new(

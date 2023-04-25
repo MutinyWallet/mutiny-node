@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use futures::stream::SplitStream;
 use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
-use log::debug;
+use log::{debug, trace};
 use std::sync::Arc;
 use wasm_bindgen_futures::spawn_local;
 
@@ -55,7 +55,7 @@ impl WsProxy {
 #[async_trait(?Send)]
 impl Proxy for WsProxy {
     fn send(&self, data: Message) {
-        debug!("initiating sending down websocket");
+        trace!("initiating sending down websocket");
 
         // There can only be one sender at a time
         // Cannot send and write at the same time either
@@ -64,7 +64,7 @@ impl Proxy for WsProxy {
         spawn_local(async move {
             let mut write = cloned_conn.lock().await;
             write.send(data).await.unwrap();
-            debug!("sent data down websocket");
+            trace!("sent data down websocket");
         });
     }
 
