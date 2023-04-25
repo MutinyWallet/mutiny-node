@@ -1,4 +1,3 @@
-use crate::indexed_db::MutinyStorage;
 use crate::keymanager::PhantomKeysManager;
 use crate::{
     background::process_events_async,
@@ -21,10 +20,11 @@ use crate::{
     utils::{self, currency_from_network, is_valid_network, network_from_currency, sleep},
     wallet::MutinyWallet,
 };
+use crate::{indexed_db::MutinyStorage, lspclient::FeeRequest};
 use anyhow::{anyhow, Context};
 use bdk_esplora::esplora_client::AsyncClient;
 use bip39::Mnemonic;
-use bitcoin::hashes::sha256::Hash as Sha256;
+use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
 use bitcoin::secp256k1::rand;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network};
 use lightning::{
@@ -570,6 +570,62 @@ impl Node {
         description: String,
         route_hints: Option<Vec<PhantomRouteHints>>,
     ) -> Result<Invoice, MutinyError> {
+        // the amount to create for the invoice whether or not there is an lsp
+        let (amount_sat, lsp_fee_msat) = if let Some(lsp) = self.lsp_client.clone() {
+            // LSP requires an amount
+            let amount_sat = amount_sat
+                .filter(|a| a > &0)
+                .ok_or(MutinyError::BadAmountError)?;
+
+            // check the fee from the LSP
+            let lsp_fee_msat = lsp
+                .get_lsp_fee_msat(FeeRequest {
+                    pubkey: self.pubkey.to_hex(),
+                    amount_msat: amount_sat * 1000,
+                })
+                .await?;
+            let amount_minus_fee = amount_sat
+                .checked_sub(lsp_fee_msat / 1000)
+                .ok_or(MutinyError::BadAmountError)?;
+            (Some(amount_minus_fee), Some(lsp_fee_msat))
+        } else {
+            (amount_sat, None)
+        };
+
+        let invoice = self
+            .create_internal_invoice(amount_sat, lsp_fee_msat, description, route_hints)
+            .await?;
+
+        if let Some(lsp) = self.lsp_client.clone() {
+            self.connect_peer(PubkeyConnectionInfo::new(&lsp.connection_string)?, None)
+                .await?;
+            let lsp_invoice_str = lsp.get_lsp_invoice(invoice.to_string()).await?;
+            let lsp_invoice = Invoice::from_str(&lsp_invoice_str)?;
+
+            let invoice_network = network_from_currency(lsp_invoice.currency());
+            if !is_valid_network(invoice_network, self.network) {
+                return Err(MutinyError::IncorrectNetwork(invoice_network));
+            }
+
+            if lsp_invoice.payment_hash() != invoice.payment_hash()
+                || lsp_invoice.recover_payee_pub_key() != lsp.pubkey
+            {
+                return Err(MutinyError::InvoiceCreationFailed);
+            }
+
+            Ok(lsp_invoice)
+        } else {
+            Ok(invoice)
+        }
+    }
+
+    async fn create_internal_invoice(
+        &self,
+        amount_sat: Option<u64>,
+        fee_amount_msat: Option<u64>,
+        description: String,
+        route_hints: Option<Vec<PhantomRouteHints>>,
+    ) -> Result<Invoice, MutinyError> {
         let amount_msat = amount_sat.map(|s| s * 1_000);
         let invoice_res = match route_hints {
             None => {
@@ -622,7 +678,7 @@ impl Node {
             secret: Some(invoice.payment_secret().0),
             status: HTLCStatus::Pending,
             amt_msat: MillisatAmount(amount_msat),
-            fee_paid_msat: None,
+            fee_paid_msat: fee_amount_msat,
             bolt11: Some(invoice.to_string()),
             payee_pubkey: None,
             last_update,
@@ -648,27 +704,7 @@ impl Node {
             0,
         ));
 
-        if let Some(lsp) = self.lsp_client.clone() {
-            self.connect_peer(PubkeyConnectionInfo::new(&lsp.connection_string)?, None)
-                .await?;
-            let lsp_invoice_str = lsp.get_lsp_invoice(invoice.to_string()).await?;
-            let lsp_invoice = Invoice::from_str(&lsp_invoice_str)?;
-
-            let invoice_network = network_from_currency(lsp_invoice.currency());
-            if !is_valid_network(invoice_network, self.network) {
-                return Err(MutinyError::IncorrectNetwork(invoice_network));
-            }
-
-            if lsp_invoice.payment_hash() != invoice.payment_hash()
-                || lsp_invoice.recover_payee_pub_key() != lsp.pubkey
-            {
-                return Err(MutinyError::InvoiceCreationFailed);
-            }
-
-            Ok(lsp_invoice)
-        } else {
-            Ok(invoice)
-        }
+        Ok(invoice)
     }
 
     pub fn get_invoice(&self, invoice: &Invoice) -> Result<MutinyInvoice, MutinyError> {
