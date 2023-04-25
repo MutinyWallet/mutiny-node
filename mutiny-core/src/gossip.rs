@@ -4,11 +4,10 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use bitcoin::hashes::hex::{FromHex, ToHex};
-use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
 use gloo_utils::format::JsValueSerdeExt;
 use lightning::ln::msgs::NodeAnnouncement;
-use lightning::routing::gossip::{NodeAlias, NodeId};
+use lightning::routing::gossip::NodeId;
 use lightning::routing::scoring::ProbabilisticScoringParameters;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use log::{debug, error, info, warn};
@@ -101,6 +100,8 @@ async fn get_gossip_data(
     let mut readable_bytes = lightning::io::Cursor::new(network_graph_bytes);
     let network_graph = Arc::new(NetworkGraph::read(&mut readable_bytes, logger.clone())?);
 
+    debug!("Got network graph, getting scorer...");
+
     // Get the probabilistic scorer
     let prob_scorer_js = store.get(&JsValue::from(PROB_SCORER_KEY)).await?;
 
@@ -114,18 +115,24 @@ async fn get_gossip_data(
         return Ok(Some(gossip));
     }
 
-    let prob_scorer_str: String = network_graph_js.into_serde()?;
+    let prob_scorer_str: String = prob_scorer_js.into_serde()?;
     let prob_scorer_bytes: Vec<u8> = Vec::from_hex(&prob_scorer_str)?;
     let mut readable_bytes = lightning::io::Cursor::new(prob_scorer_bytes);
     let params = ProbabilisticScoringParameters::default();
     let args = (params, Arc::clone(&network_graph), Arc::clone(&logger));
-    let scorer = ProbScorer::read(&mut readable_bytes, args)?;
+    let scorer = ProbScorer::read(&mut readable_bytes, args);
+
+    if let Err(e) = scorer.as_ref() {
+        warn!("Could not read probabilistic scorer from database: {e}");
+    }
 
     let gossip = Gossip {
         last_sync_timestamp,
         network_graph,
-        scorer: Some(scorer),
+        scorer: scorer.ok(),
     };
+
+    transaction.done().await?;
 
     Ok(Some(gossip))
 }
@@ -424,10 +431,9 @@ impl LnPeerMetadata {
 
 impl From<NodeAnnouncement> for LnPeerMetadata {
     fn from(value: NodeAnnouncement) -> Self {
-        let alias = NodeAlias(value.contents.alias).to_string();
         Self {
             connection_string: None, // todo get from addresses
-            alias: Some(alias),
+            alias: Some(value.contents.alias.to_string()),
             color: Some(value.contents.rgb.to_hex()),
             label: None,
             timestamp: Some(value.contents.timestamp),
@@ -467,8 +473,7 @@ pub(crate) async fn get_all_peers() -> Result<HashMap<NodeId, LnPeerMetadata>, M
 
     let all_json = store.get_all(None, None, None, None).await?;
     for (key, value) in all_json {
-        let pub_key = PublicKey::from_str(&key.as_string().unwrap()).unwrap();
-        let node_id = NodeId::from_pubkey(&pub_key);
+        let node_id = NodeId::from_str(&key.as_string().unwrap())?;
         let data: Option<LnPeerMetadata> = value.into_serde()?;
 
         if let Some(peer_metadata) = data {

@@ -6,6 +6,7 @@ use crate::{
 };
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::BlockHash;
+use lightning::events::{MessageSendEvent, MessageSendEventsProvider};
 use lightning::ln::features::{InitFeatures, NodeFeatures};
 use lightning::ln::msgs;
 use lightning::ln::msgs::{LightningError, NetAddress, RoutingMessageHandler};
@@ -13,7 +14,6 @@ use lightning::ln::peer_handler::PeerHandleError;
 use lightning::ln::peer_handler::{IgnoringMessageHandler, PeerManager as LdkPeerManager};
 use lightning::routing::gossip::NodeId;
 use lightning::routing::utxo::{UtxoLookup, UtxoLookupError, UtxoResult};
-use lightning::util::events::{MessageSendEvent, MessageSendEventsProvider};
 use log::warn;
 use std::sync::Arc;
 use wasm_bindgen_futures::spawn_local;

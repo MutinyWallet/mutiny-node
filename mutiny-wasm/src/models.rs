@@ -1,6 +1,7 @@
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use gloo_utils::format::JsValueSerdeExt;
+use lightning_invoice::Invoice;
 use mutiny_core::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -8,7 +9,7 @@ use wasm_bindgen::prelude::*;
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
 pub struct MutinyInvoice {
-    bolt11: Option<String>,
+    bolt11: Option<Invoice>,
     description: Option<String>,
     payment_hash: String,
     preimage: Option<String>,
@@ -30,7 +31,7 @@ impl MutinyInvoice {
 
     #[wasm_bindgen(getter)]
     pub fn bolt11(&self) -> Option<String> {
-        self.bolt11.clone()
+        self.bolt11.clone().map(|b| b.to_string())
     }
 
     #[wasm_bindgen(getter)]

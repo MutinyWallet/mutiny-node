@@ -27,6 +27,7 @@ use bip39::Mnemonic;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
 use bitcoin::secp256k1::rand;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network};
+use lightning::ln::channelmanager::RecipientOnionFields;
 use lightning::{
     chain::{
         chainmonitor,
@@ -333,6 +334,7 @@ impl Node {
                             false
                         })
                     },
+                    true,
                 )
                 .await
                 .expect("Failed to process events");
@@ -679,7 +681,7 @@ impl Node {
             status: HTLCStatus::Pending,
             amt_msat: MillisatAmount(amount_msat),
             fee_paid_msat: fee_amount_msat,
-            bolt11: Some(invoice.to_string()),
+            bolt11: Some(invoice.clone()),
             payee_pubkey: None,
             last_update,
         };
@@ -738,12 +740,7 @@ impl Node {
 
                 // filter out expired invoices
                 mutiny_invoice.filter(|invoice| {
-                    // can remove this parsing after LDK 0.0.115
-                    let inv = invoice
-                        .bolt11
-                        .clone()
-                        .and_then(|b| Invoice::from_str(&b).ok());
-                    !inv.is_some_and(|b| b.would_expire(now))
+                    !invoice.bolt11.as_ref().is_some_and(|b| b.would_expire(now))
                         || matches!(i.status, HTLCStatus::Succeeded | HTLCStatus::InFlight)
                 })
             })
@@ -811,7 +808,7 @@ impl Node {
             status: HTLCStatus::InFlight,
             amt_msat: MillisatAmount(Some(amt_msat)),
             fee_paid_msat: None,
-            bolt11: Some(invoice.to_string()),
+            bolt11: Some(invoice.clone()),
             payee_pubkey: None,
             last_update,
         };
@@ -901,6 +898,7 @@ impl Node {
 
         let pay_result = self.channel_manager.send_spontaneous_payment_with_retry(
             Some(preimage),
+            RecipientOnionFields::spontaneous_empty(),
             payment_id,
             route_params,
             Retry::Attempts(5),

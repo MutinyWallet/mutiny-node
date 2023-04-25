@@ -7,18 +7,17 @@ use crate::wallet::MutinyWallet;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
+use lightning::events::{Event, PaymentPurpose};
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
     util::errors::APIError,
-    util::{
-        events::{Event, PaymentPurpose},
-        logger::{Logger, Record},
-    },
+    util::logger::{Logger, Record},
 };
+use lightning_invoice::Invoice;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct PaymentInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preimage: Option<[u8; 32]>,
@@ -30,7 +29,7 @@ pub(crate) struct PaymentInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_paid_msat: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bolt11: Option<String>,
+    pub bolt11: Option<Invoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payee_pubkey: Option<PublicKey>,
     pub last_update: u64,
@@ -151,8 +150,7 @@ impl EventHandler {
                 payment_hash,
                 purpose,
                 amount_msat,
-                via_channel_id: _,
-                via_user_channel_id: _,
+                ..
             } => {
                 self.logger.log(&Record::new(
                     lightning::util::logger::Level::Debug,
@@ -571,6 +569,20 @@ impl EventHandler {
                 self.logger.log(&Record::new(
                     lightning::util::logger::Level::Debug,
                     format_args!("EVENT: ChannelReady channel_id: {}, user_channel_id: {}, counterparty_node_id: {}, channel_type: {}", channel_id.to_hex(), user_channel_id, counterparty_node_id.to_hex(), channel_type),
+                    "event",
+                    "",
+                    0,
+                ));
+            }
+            Event::ChannelPending {
+                channel_id,
+                user_channel_id,
+                counterparty_node_id,
+                ..
+            } => {
+                self.logger.log(&Record::new(
+                    lightning::util::logger::Level::Debug,
+                    format_args!("EVENT: ChannelPending channel_id: {}, user_channel_id: {}, counterparty_node_id: {}", channel_id.to_hex(), user_channel_id, counterparty_node_id.to_hex()),
                     "event",
                     "",
                     0,

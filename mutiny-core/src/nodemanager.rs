@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use std::str::FromStr;
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use crate::event::{HTLCStatus, PaymentInfo};
@@ -81,14 +80,14 @@ pub struct NodeIdentity {
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct MutinyBip21RawMaterials {
     pub address: Address,
-    pub invoice: String, // todo change to Invoice once ldk fixes the serde issue
+    pub invoice: Invoice,
     pub btc_amount: Option<String>,
     pub description: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct MutinyInvoice {
-    pub bolt11: Option<String>, // todo change to Invoice once ldk fixes the serde issue
+    pub bolt11: Option<Invoice>,
     pub description: Option<String>,
     pub payment_hash: sha256::Hash,
     pub preimage: Option<String>,
@@ -111,13 +110,17 @@ impl From<Invoice> for MutinyInvoice {
         let timestamp = value.duration_since_epoch().as_secs();
         let expiry = timestamp + value.expiry_time().as_secs();
 
+        let payment_hash = value.payment_hash().to_owned();
+        let payee_pubkey = value.payee_pub_key().map(|p| p.to_owned());
+        let amount_sats = value.amount_milli_satoshis().map(|m| m / 1000);
+
         MutinyInvoice {
-            bolt11: Some(value.to_string()),
+            bolt11: Some(value),
             description,
-            payment_hash: value.payment_hash().to_owned(),
+            payment_hash,
             preimage: None,
-            payee_pubkey: value.payee_pub_key().map(|p| p.to_owned()),
-            amount_sats: value.amount_milli_satoshis().map(|m| m / 1000),
+            payee_pubkey,
+            amount_sats,
             expire: expiry,
             paid: false,
             fees_paid: None,
@@ -134,9 +137,8 @@ impl MutinyInvoice {
         inbound: bool,
     ) -> Result<Self, MutinyError> {
         match i.bolt11 {
-            Some(bolt11) => {
+            Some(invoice) => {
                 // Construct an invoice from a bolt11, easy
-                let invoice = Invoice::from_str(&bolt11)?;
                 let amount_sats = if let Some(inv_amt) = invoice.amount_milli_satoshis() {
                     if inv_amt == 0 {
                         i.amt_msat.0.map(|a| a / 1_000)
@@ -662,12 +664,10 @@ impl NodeManager {
     pub async fn delete_peer(
         &self,
         self_node_pubkey: &PublicKey,
-        peer: PublicKey,
+        peer: &NodeId,
     ) -> Result<(), MutinyError> {
-        let node_id = NodeId::from_pubkey(&peer);
-
         if let Some(node) = self.nodes.lock().await.get(self_node_pubkey) {
-            gossip::delete_peer_info(&node._uuid, &node_id).await?;
+            gossip::delete_peer_info(&node._uuid, peer).await?;
             Ok(())
         } else {
             error!("could not find internal node {self_node_pubkey}");
@@ -677,11 +677,10 @@ impl NodeManager {
 
     pub async fn label_peer(
         &self,
-        peer: &PublicKey,
+        node_id: &NodeId,
         label: Option<String>,
     ) -> Result<(), MutinyError> {
-        let node_id = NodeId::from_pubkey(peer);
-        gossip::set_peer_label(&node_id, label).await?;
+        gossip::set_peer_label(node_id, label).await?;
         Ok(())
     }
 
@@ -1128,6 +1127,7 @@ mod tests {
     use bitcoin::secp256k1::PublicKey;
     use bitcoin::Network;
     use lightning::ln::PaymentHash;
+    use lightning_invoice::Invoice;
     use std::str::FromStr;
 
     use crate::test_utils::*;
@@ -1240,19 +1240,21 @@ mod tests {
         )
         .unwrap();
 
+        let invoice = Invoice::from_str(BOLT_11).unwrap();
+
         let payment_info = PaymentInfo {
             preimage: Some(preimage),
             secret: Some(secret),
             status: HTLCStatus::Succeeded,
             amt_msat: MillisatAmount(Some(100_000_000)),
             fee_paid_msat: None,
-            bolt11: Some(BOLT_11.to_string()),
+            bolt11: Some(invoice.clone()),
             payee_pubkey: None,
             last_update: 1681781585,
         };
 
         let expected: MutinyInvoice = MutinyInvoice {
-            bolt11: Some(BOLT_11.to_string()),
+            bolt11: Some(invoice),
             description: Some("".to_string()),
             payment_hash,
             preimage: Some(preimage.to_hex()),

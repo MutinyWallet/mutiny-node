@@ -16,6 +16,7 @@ use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use gloo_utils::format::JsValueSerdeExt;
+use lightning::routing::gossip::NodeId;
 use lightning_invoice::Invoice;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::nodemanager;
@@ -225,8 +226,8 @@ impl NodeManager {
         peer: String,
     ) -> Result<(), MutinyJsError> {
         let self_node_pubkey = PublicKey::from_str(&self_node_pubkey)?;
-        let peer = PublicKey::from_str(&peer)?;
-        Ok(self.inner.delete_peer(&self_node_pubkey, peer).await?)
+        let peer = NodeId::from_str(&peer)?;
+        Ok(self.inner.delete_peer(&self_node_pubkey, &peer).await?)
     }
 
     #[wasm_bindgen]
