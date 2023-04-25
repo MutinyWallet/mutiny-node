@@ -1,5 +1,6 @@
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
+use gloo_utils::format::JsValueSerdeExt;
 use mutiny_core::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -22,6 +23,11 @@ pub struct MutinyInvoice {
 
 #[wasm_bindgen]
 impl MutinyInvoice {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
     #[wasm_bindgen(getter)]
     pub fn bolt11(&self) -> Option<String> {
         self.bolt11.clone()
@@ -80,6 +86,11 @@ pub struct MutinyPeer {
 #[wasm_bindgen]
 impl MutinyPeer {
     #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
     pub fn pubkey(&self) -> String {
         self.pubkey.to_hex()
     }
@@ -132,6 +143,11 @@ pub struct MutinyChannel {
 #[wasm_bindgen]
 impl MutinyChannel {
     #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
     pub fn outpoint(&self) -> Option<String> {
         self.outpoint.clone()
     }
@@ -155,11 +171,20 @@ impl From<nodemanager::MutinyChannel> for MutinyChannel {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
 pub struct MutinyBalance {
     pub confirmed: u64,
     pub unconfirmed: u64,
     pub lightning: u64,
+}
+
+#[wasm_bindgen]
+impl MutinyBalance {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
 }
 
 impl From<nodemanager::MutinyBalance> for MutinyBalance {
@@ -172,6 +197,7 @@ impl From<nodemanager::MutinyBalance> for MutinyBalance {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
 pub struct LnUrlParams {
     pub max: u64,
@@ -181,6 +207,11 @@ pub struct LnUrlParams {
 
 #[wasm_bindgen]
 impl LnUrlParams {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
     #[wasm_bindgen(getter)]
     pub fn tag(&self) -> String {
         self.tag.clone()
@@ -199,6 +230,7 @@ impl From<nodemanager::LnUrlParams> for LnUrlParams {
 
 // This is the NodeIdentity that refer to a specific node
 // Used for public facing identification.
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
 pub struct NodeIdentity {
     uuid: String,
@@ -207,6 +239,11 @@ pub struct NodeIdentity {
 
 #[wasm_bindgen]
 impl NodeIdentity {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
     #[wasm_bindgen(getter)]
     pub fn uuid(&self) -> String {
         self.uuid.clone()
@@ -238,6 +275,11 @@ pub struct MutinyBip21RawMaterials {
 
 #[wasm_bindgen]
 impl MutinyBip21RawMaterials {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
     #[wasm_bindgen(getter)]
     pub fn address(&self) -> String {
         self.address.clone()
