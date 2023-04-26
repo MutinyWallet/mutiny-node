@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
+use crate::auth::{AuthManager, AuthProfile};
 use crate::event::{HTLCStatus, PaymentInfo};
 use crate::indexed_db::MutinyStorage;
 use crate::{
@@ -20,9 +21,10 @@ use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::{wallet::AddressIndex, LocalUtxo, TransactionDetails};
 use bdk_esplora::esplora_client::AsyncClient;
 use bip39::Mnemonic;
-use bitcoin::hashes::hex::ToHex;
+use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{rand, PublicKey};
+use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
@@ -37,6 +39,7 @@ use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use log::{debug, error, info, warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use url::Url;
 use uuid::Uuid;
 use wasm_bindgen_futures::spawn_local;
 
@@ -53,6 +56,7 @@ pub struct NodeManager {
     storage: MutinyStorage,
     node_storage: Mutex<NodeStorage>,
     nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node>>>>,
+    auth: AuthManager,
     lnurl_client: LnUrlClient,
     lsp_clients: Vec<LspClient>,
 }
@@ -378,6 +382,13 @@ impl NodeManager {
 
         info!("inserted updated nodes");
 
+        let seed = mnemonic.to_seed("");
+        let xprivkey = ExtendedPrivKey::new_master(network, &seed)?;
+        let auth = AuthManager::new(xprivkey, storage.clone())?;
+
+        // Create default profile if it doesn't exist
+        auth.create_init()?;
+
         let lnurl_client = lnurl::Builder::default()
             .build_async()
             .expect("failed to make lnurl client");
@@ -395,6 +406,7 @@ impl NodeManager {
             nodes: Arc::new(Mutex::new(nodes_map)),
             websocket_proxy_addr,
             esplora,
+            auth,
             lnurl_client,
             lsp_clients,
         })
@@ -768,7 +780,17 @@ impl NodeManager {
         Ok(invoice.into())
     }
 
+    // todo revamp LnUrlParams to be well designed
     pub async fn decode_lnurl(&self, lnurl: LnUrl) -> Result<LnUrlParams, MutinyError> {
+        // handle LNURL-AUTH
+        if lnurl.is_lnurl_auth() {
+            return Ok(LnUrlParams {
+                max: 0,
+                min: 0,
+                tag: "login".to_string(),
+            });
+        }
+
         let response = self.lnurl_client.make_request(&lnurl.url).await?;
 
         let params = match response {
@@ -835,6 +857,39 @@ impl NodeManager {
                     Response::Error { .. } => Ok(false),
                 }
             }
+        }
+    }
+
+    pub fn create_lnurl_auth_profile(&self, name: String) -> Result<u32, MutinyError> {
+        self.auth.add_profile(name)
+    }
+
+    pub fn get_lnurl_auth_profiles(&self) -> Result<Vec<AuthProfile>, MutinyError> {
+        self.auth.get_profiles()
+    }
+
+    pub async fn lnurl_auth(&self, profile_index: usize, lnurl: LnUrl) -> Result<(), MutinyError> {
+        let url = Url::parse(&lnurl.url)?;
+        let query_pairs: HashMap<String, String> = url
+            .query_pairs()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+
+        let k1 = query_pairs.get("k1").ok_or(MutinyError::LnUrlFailure)?;
+        let k1: [u8; 32] = FromHex::from_hex(k1).map_err(|_| MutinyError::LnUrlFailure)?;
+        let (sig, key) = self.auth.sign(profile_index, url.clone(), &k1)?;
+
+        let response = self.lnurl_client.lnurl_auth(lnurl, sig, key).await?;
+        match response {
+            Response::Ok { .. } => {
+                // don't fail if we just can't save the service
+                if let Err(e) = self.auth.add_used_service(profile_index, url) {
+                    error!("Failed to save used lnurl auth service: {e}");
+                }
+
+                Ok(())
+            }
+            Response::Error { .. } => Err(MutinyError::LnUrlFailure),
         }
     }
 

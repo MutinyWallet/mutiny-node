@@ -310,6 +310,26 @@ impl NodeManager {
     }
 
     #[wasm_bindgen]
+    pub fn create_lnurl_auth_profile(&self, name: String) -> Result<u32, MutinyJsError> {
+        Ok(self.inner.create_lnurl_auth_profile(name)?)
+    }
+
+    #[wasm_bindgen]
+    pub fn get_lnurl_auth_profiles(&self) -> Result<JsValue /*<Vec<AuthProfile> */, MutinyJsError> {
+        Ok(JsValue::from_serde(&self.inner.get_lnurl_auth_profiles()?)?)
+    }
+
+    #[wasm_bindgen]
+    pub async fn lnurl_auth(
+        &self,
+        profile_index: usize,
+        lnurl: String,
+    ) -> Result<(), MutinyJsError> {
+        let lnurl = LnUrl::from_str(&lnurl)?;
+        Ok(self.inner.lnurl_auth(profile_index, lnurl).await?)
+    }
+
+    #[wasm_bindgen]
     pub async fn get_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
         let invoice = Invoice::from_str(&invoice)?;
         Ok(self.inner.get_invoice(&invoice).await?.into())

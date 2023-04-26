@@ -1,3 +1,4 @@
+use crate::auth::AuthProfile;
 use crate::encrypt::{decrypt, encrypt};
 use crate::error::{MutinyError, MutinyStorageError};
 use crate::ldkstorage::CHANNEL_MANAGER_KEY;
@@ -21,6 +22,7 @@ pub(crate) const WALLET_OBJECT_STORE_NAME: &str = "wallet_store";
 const KEYCHAIN_STORE_KEY: &str = "keychain_store";
 const MNEMONIC_KEY: &str = "mnemonic";
 const NODES_KEY: &str = "nodes";
+const AUTH_PROFILES_KEY: &str = "auth_profiles";
 const FEE_ESTIMATES_KEY: &str = "fee_estimates";
 
 #[derive(Clone)]
@@ -205,6 +207,29 @@ impl MutinyStorage {
         fees: HashMap<String, f64>,
     ) -> Result<(), MutinyError> {
         self.set(FEE_ESTIMATES_KEY, fees)
+    }
+
+    pub(crate) fn get_auth_profiles(&self) -> Result<Vec<AuthProfile>, MutinyError> {
+        let res: Option<Vec<AuthProfile>> = self.get(AUTH_PROFILES_KEY)?;
+        Ok(res.unwrap_or_default()) // if no profiles exist, return an empty vec
+    }
+
+    pub(crate) fn update_auth_profiles(
+        &self,
+        profiles: Vec<AuthProfile>,
+    ) -> Result<(), MutinyError> {
+        // Check that the profiles are in the correct order
+        for (i, p) in profiles.iter().enumerate() {
+            if p.index as usize != i {
+                return Err(MutinyError::Other(anyhow!(
+                    "Auth profile index mismatch: {} != {}",
+                    p.index,
+                    i
+                )));
+            }
+        }
+
+        self.set(AUTH_PROFILES_KEY, profiles)
     }
 
     #[cfg(test)]
