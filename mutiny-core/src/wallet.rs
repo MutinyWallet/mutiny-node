@@ -1,13 +1,14 @@
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
+use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::template::DescriptorTemplateOut;
 use bdk::{FeeRate, LocalUtxo, SignOptions, TransactionDetails, Wallet};
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_macros::maybe_await;
 use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
-use bitcoin::{Address, Network, Script, Txid};
+use bitcoin::{Address, Network, Script, Transaction, Txid};
 use esplora_client::AsyncClient;
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use log::debug;
@@ -83,6 +84,37 @@ impl MutinyWallet {
         let mut wallet = self.wallet.try_write()?;
         wallet.apply_update(update)?;
         wallet.commit()?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn insert_tx(
+        &self,
+        tx: Transaction,
+        position: ConfirmationTime,
+        block_id: Option<BlockId>,
+    ) -> Result<(), MutinyError> {
+        match position {
+            ConfirmationTime::Confirmed { .. } => {
+                // if the transaction is confirmed and we have the block id,
+                // we can insert it directly
+                if let Some(block_id) = block_id {
+                    let mut wallet = self.wallet.try_write()?;
+                    wallet.insert_checkpoint(block_id)?;
+                    wallet.insert_tx(tx, position)?;
+                } else {
+                    // if the transaction is confirmed and we don't have the block id,
+                    // we should just sync the wallet otherwise we can get an error
+                    // with the wallet being behind the blockchain
+                    self.sync().await?
+                }
+            }
+            ConfirmationTime::Unconfirmed => {
+                // if the transaction is unconfirmed, we can just insert it
+                let mut wallet = self.wallet.try_write()?;
+                wallet.insert_tx(tx, position)?;
+            }
+        }
 
         Ok(())
     }
