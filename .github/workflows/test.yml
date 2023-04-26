@@ -12,7 +12,6 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: nightly-2023-04-16
-          components: clippy
           target: wasm32-unknown-unknown
           override: true
           profile: minimal
@@ -48,7 +47,6 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: nightly-2023-04-16
-          components: clippy, rustfmt
           target: wasm32-unknown-unknown
           override: true
           profile: minimal
@@ -112,7 +110,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Check clippy mutiny-core
-        run: cargo clippy --package mutiny-core -- -D warnings -Aclippy::drop_non_drop #wasm-bindgen pr #3089
+        run: cargo clippy --all-features --tests --package mutiny-core -- -D warnings
 
       - name: Check clippy mutiny-wasm
-        run: cargo clippy --package mutiny-wasm -- -D warnings -Aclippy::drop_non_drop #wasm-bindgen pr #3089
+        run: cargo clippy --all-features --tests --package mutiny-wasm -- -D warnings
