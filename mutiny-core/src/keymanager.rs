@@ -220,7 +220,7 @@ mod tests {
     use crate::wallet::MutinyWallet;
     use bip39::Mnemonic;
     use bitcoin::Network;
-    use esplora_client::{AsyncClient, Builder};
+    use esplora_client::Builder;
     use std::str::FromStr;
     use std::sync::Arc;
 
