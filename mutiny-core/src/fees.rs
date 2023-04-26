@@ -1,5 +1,4 @@
 use crate::indexed_db::MutinyStorage;
-use bdk::FeeRate;
 use lightning::chain::chaininterface::{
     ConfirmationTarget, FeeEstimator, FEERATE_FLOOR_SATS_PER_KW,
 };
@@ -24,13 +23,16 @@ impl FeeEstimator for MutinyFeeEstimator {
         match self.storage.get_fee_estimates() {
             Err(_) | Ok(None) => fallback_fee,
             Ok(Some(estimates)) => {
-                let found = estimates.get(num_blocks.to_string().as_str());
+                let found = estimates.get(&num_blocks.to_string());
                 match found {
                     Some(num) => {
                         trace!("Got fee rate from saved cache!");
-                        let sats_vbyte = num.to_owned() as f32;
-                        let fee_rate = FeeRate::from_sat_per_vb(sats_vbyte);
-                        (fee_rate.fee_wu(1000) as u32).max(FEERATE_FLOOR_SATS_PER_KW)
+                        let sats_vbyte = num.to_owned();
+                        // convert to sats per kw
+                        let fee_rate = sats_vbyte * 250.0;
+
+                        // return the fee rate, but make sure it's not lower than the floor
+                        (fee_rate as u32).max(FEERATE_FLOOR_SATS_PER_KW)
                     }
                     None => fallback_fee,
                 }
