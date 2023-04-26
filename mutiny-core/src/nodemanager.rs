@@ -13,7 +13,6 @@ use crate::{
     lspclient::LspClient,
     node::{Node, ProbScorer, PubkeyConnectionInfo, RapidGossipSync},
     utils,
-    utils::{is_valid_network, network_from_currency},
     wallet::get_esplora_url,
     wallet::MutinyWallet,
 };
@@ -458,7 +457,7 @@ impl NodeManager {
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        if !is_valid_network(self.network, send_to.network) {
+        if !send_to.is_valid_for_network(self.network) {
             return Err(MutinyError::IncorrectNetwork(send_to.network));
         }
 
@@ -470,7 +469,7 @@ impl NodeManager {
         send_to: Address,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        if !is_valid_network(self.network, send_to.network) {
+        if !send_to.is_valid_for_network(self.network) {
             return Err(MutinyError::IncorrectNetwork(send_to.network));
         }
 
@@ -481,7 +480,7 @@ impl NodeManager {
         &self,
         address: &Address,
     ) -> Result<Option<TransactionDetails>, MutinyError> {
-        if !is_valid_network(self.network, address.network) {
+        if !address.is_valid_for_network(self.network) {
             return Err(MutinyError::IncorrectNetwork(address.network));
         }
 
@@ -740,9 +739,8 @@ impl NodeManager {
         invoice: &Invoice,
         amt_sats: Option<u64>,
     ) -> Result<MutinyInvoice, MutinyError> {
-        let invoice_network = network_from_currency(invoice.currency());
-        if !is_valid_network(invoice_network, self.network) {
-            return Err(MutinyError::IncorrectNetwork(invoice_network));
+        if invoice.network() != self.network {
+            return Err(MutinyError::IncorrectNetwork(invoice.network()));
         }
 
         let nodes = self.nodes.lock().await;
@@ -763,9 +761,8 @@ impl NodeManager {
     }
 
     pub async fn decode_invoice(&self, invoice: Invoice) -> Result<MutinyInvoice, MutinyError> {
-        let invoice_network = network_from_currency(invoice.currency());
-        if !is_valid_network(invoice_network, self.network) {
-            return Err(MutinyError::IncorrectNetwork(invoice_network));
+        if invoice.network() != self.network {
+            return Err(MutinyError::IncorrectNetwork(invoice.network()));
         }
 
         Ok(invoice.into())

@@ -17,7 +17,7 @@ use crate::{
         schedule_descriptor_read, MultiWsSocketDescriptor, WsSocketDescriptor,
         WsTcpSocketDescriptor,
     },
-    utils::{self, currency_from_network, is_valid_network, network_from_currency, sleep},
+    utils::{self, sleep},
     wallet::MutinyWallet,
 };
 use crate::{indexed_db::MutinyStorage, lspclient::FeeRequest};
@@ -592,9 +592,8 @@ impl Node {
             let lsp_invoice_str = lsp.get_lsp_invoice(invoice.to_string()).await?;
             let lsp_invoice = Invoice::from_str(&lsp_invoice_str)?;
 
-            let invoice_network = network_from_currency(lsp_invoice.currency());
-            if !is_valid_network(invoice_network, self.network) {
-                return Err(MutinyError::IncorrectNetwork(invoice_network));
+            if invoice.network() != self.network {
+                return Err(MutinyError::IncorrectNetwork(invoice.network()));
             }
 
             if lsp_invoice.payment_hash() != invoice.payment_hash()
@@ -624,7 +623,7 @@ impl Node {
                     &self.channel_manager.clone(),
                     self.keys_manager.clone(),
                     self.logger.clone(),
-                    currency_from_network(self.network),
+                    self.network.into(),
                     amount_msat,
                     description,
                     now,
@@ -645,7 +644,7 @@ impl Node {
                 self.keys_manager.clone(),
                 self.keys_manager.clone(),
                 self.logger.clone(),
-                currency_from_network(self.network),
+                self.network.into(),
                 Some(40),
                 crate::utils::now(),
             ),
