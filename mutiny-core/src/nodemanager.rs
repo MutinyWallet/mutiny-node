@@ -435,9 +435,9 @@ impl NodeManager {
         };
 
         // TODO if there's no description should be something random I guess
-        let Ok(invoice) = self.create_invoice(amount, description.clone().unwrap_or_else(|| "".into())).await else {
-            return Err(MutinyError::WalletOperationFailed);
-        };
+        let invoice = self
+            .create_invoice(amount, description.clone().unwrap_or_else(|| "".into()))
+            .await?;
 
         let Some(bolt11) = invoice.bolt11 else {
             return Err(MutinyError::WalletOperationFailed);

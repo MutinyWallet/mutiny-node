@@ -562,10 +562,20 @@ impl Node {
     ) -> Result<Invoice, MutinyError> {
         // the amount to create for the invoice whether or not there is an lsp
         let (amount_sat, lsp_fee_msat) = if let Some(lsp) = self.lsp_client.clone() {
-            // LSP requires an amount
-            let amount_sat = amount_sat
-                .filter(|a| a > &0)
-                .ok_or(MutinyError::BadAmountError)?;
+            // LSP requires an amount:
+            let amount_sat = amount_sat.ok_or(MutinyError::BadAmountError)?;
+
+            // Needs any amount over 0 if channel exists
+            // Needs amount over 10k if no channel
+            let has_usable_channel = self
+                .channel_manager
+                .list_channels_with_counterparty(&lsp.pubkey)
+                .iter()
+                .any(|c| c.inbound_capacity_msat >= amount_sat * 1000);
+            let min_amount_sat = if has_usable_channel { 1 } else { 10_000 };
+            if amount_sat < min_amount_sat {
+                return Err(MutinyError::BadAmountError);
+            }
 
             // check the fee from the LSP
             let lsp_fee_msat = lsp
