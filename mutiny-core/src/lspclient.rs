@@ -2,6 +2,8 @@ use bitcoin::secp256k1::PublicKey;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+use crate::error::MutinyError;
+
 #[derive(Clone, Debug)]
 pub(crate) struct LspClient {
     pub pubkey: PublicKey,
@@ -71,9 +73,11 @@ impl LspClient {
         let get_info_response: GetInfoResponse = http_client
             .get(format!("{}{}", url, GET_INFO_PATH))
             .send()
-            .await?
+            .await
+            .map_err(|_| MutinyError::LspFailure)?
             .json()
-            .await?;
+            .await
+            .map_err(|_| MutinyError::LspFailure)?;
 
         let connection_string = get_info_response
             .connection_methods
@@ -122,9 +126,11 @@ impl LspClient {
             .post(format!("{}{}", &self.url, PROPOSAL_PATH))
             .json(&payload)
             .send()
-            .await?
+            .await
+            .map_err(|_| MutinyError::LspFailure)?
             .json()
-            .await?;
+            .await
+            .map_err(|_| MutinyError::LspFailure)?;
 
         Ok(proposal_response.jit_bolt11)
     }
@@ -135,9 +141,11 @@ impl LspClient {
             .post(format!("{}{}", &self.url, FEE_PATH))
             .json(&fee_request)
             .send()
-            .await?
+            .await
+            .map_err(|_| MutinyError::LspFailure)?
             .json()
-            .await?;
+            .await
+            .map_err(|_| MutinyError::LspFailure)?;
 
         Ok(fee_response.fee_amount_msat)
     }
