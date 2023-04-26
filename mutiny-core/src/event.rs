@@ -598,7 +598,6 @@ mod test {
     use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
     use crate::utils;
     use bitcoin::secp256k1::PublicKey;
-    use lightning::ln::PaymentHash;
     use std::str::FromStr;
 
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};

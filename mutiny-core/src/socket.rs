@@ -605,7 +605,7 @@ mod tests {
 
         let mock_proxy_3 = Arc::new(MockProxy::new());
         let tcp_ws_3 = WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(mock_proxy_3));
-        assert_eq!(tcp_ws_3, tcp_ws_3);
+        assert_eq!(tcp_ws_3.clone(), tcp_ws_3);
 
         // Test ne and eq for WsTcpSocketDescriptor
         let (send_to_multi_socket, _): (Sender<Message>, Receiver<Message>) = unbounded();
@@ -656,6 +656,6 @@ mod tests {
         )
         .await;
         let mutiny_ws_3 = WsSocketDescriptor::Mutiny(sub_ws_socket_3);
-        assert_eq!(mutiny_ws_3, mutiny_ws_3);
+        assert_eq!(mutiny_ws_3.clone(), mutiny_ws_3);
     }
 }
