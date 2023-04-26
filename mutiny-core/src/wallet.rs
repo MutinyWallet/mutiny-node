@@ -15,7 +15,6 @@ use log::debug;
 use crate::error::MutinyError;
 use crate::fees::MutinyFeeEstimator;
 use crate::indexed_db::MutinyStorage;
-use crate::utils::is_valid_network;
 
 #[derive(Clone)]
 pub struct MutinyWallet {
@@ -113,7 +112,7 @@ impl MutinyWallet {
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
-        if !is_valid_network(self.network, send_to.network) {
+        if !send_to.is_valid_for_network(self.network) {
             return Err(MutinyError::IncorrectNetwork(send_to.network));
         }
 
@@ -172,7 +171,7 @@ impl MutinyWallet {
         destination_address: Address,
         fee_rate: Option<f32>,
     ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
-        if !is_valid_network(self.network, destination_address.network) {
+        if !destination_address.is_valid_for_network(self.network) {
             return Err(MutinyError::IncorrectNetwork(destination_address.network));
         }
 

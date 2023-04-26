@@ -1,4 +1,3 @@
-use bitcoin::Network;
 use core::cell::{RefCell, RefMut};
 use core::ops::{Deref, DerefMut};
 use core::time::Duration;
@@ -7,7 +6,6 @@ use lightning::routing::scoring::LockableScore;
 use lightning::routing::scoring::Score;
 use lightning::util::ser::Writeable;
 use lightning::util::ser::Writer;
-use lightning_invoice::Currency;
 
 pub async fn sleep(millis: i32) {
     let mut cb = |resolve: js_sys::Function, _reject: js_sys::Function| {
@@ -18,25 +16,6 @@ pub async fn sleep(millis: i32) {
     };
     let p = js_sys::Promise::new(&mut cb);
     wasm_bindgen_futures::JsFuture::from(p).await.unwrap();
-}
-
-pub fn currency_from_network(network: Network) -> Currency {
-    match network {
-        Network::Bitcoin => Currency::Bitcoin,
-        Network::Testnet => Currency::BitcoinTestnet,
-        Network::Signet => Currency::Signet,
-        Network::Regtest => Currency::Regtest,
-    }
-}
-
-pub fn network_from_currency(currency: Currency) -> Network {
-    match currency {
-        Currency::Bitcoin => Network::Bitcoin,
-        Currency::BitcoinTestnet => Network::Testnet,
-        Currency::Signet => Network::Signet,
-        Currency::Regtest => Network::Regtest,
-        Currency::Simnet => Network::Regtest,
-    }
 }
 
 pub fn now() -> Duration {
@@ -107,20 +86,4 @@ impl<'a, S: Writeable> Writeable for MutexGuard<'a, S> {
     fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
         S::write(&**self, writer)
     }
-}
-
-/// Returns true if the given network is valid for the given destination network.
-/// This is used to prevent users from sending funds to the wrong network.
-/// We can't just compare the network directly because signet and testnet
-/// have conflicting address prefixes.
-pub(crate) fn is_valid_network(my_network: Network, dest_network: Network) -> bool {
-    matches!(
-        (my_network, dest_network),
-        (Network::Bitcoin, Network::Bitcoin)
-            | (Network::Testnet, Network::Testnet)
-            | (Network::Signet, Network::Testnet)
-            | (Network::Testnet, Network::Signet)
-            | (Network::Signet, Network::Signet)
-            | (Network::Regtest, Network::Regtest)
-    )
 }
