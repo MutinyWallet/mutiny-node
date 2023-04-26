@@ -234,7 +234,7 @@ impl NodeManager {
     pub async fn create_invoice(
         &self,
         amount: Option<u64>,
-        description: String,
+        description: Option<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
         Ok(self.inner.create_invoice(amount, description).await?.into())
     }
