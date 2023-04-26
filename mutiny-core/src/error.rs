@@ -95,7 +95,7 @@ pub enum MutinyError {
     #[error("Called incorrect lnurl function.")]
     IncorrectLnUrlFunction,
     /// Error converting JS f64 value to Amount
-    #[error("Failed to convert to satoshis")]
+    #[error("Satoshi amount is invalid")]
     BadAmountError,
     /// Error getting the bitcoin price
     #[error("Failed to get the bitcoin price.")]

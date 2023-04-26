@@ -91,7 +91,7 @@ pub enum MutinyJsError {
     #[error("Failed to get the bitcoin price.")]
     BitcoinPriceError,
     /// Error converting JS f64 value to Amount
-    #[error("Failed to convert to satoshis")]
+    #[error("Satoshi amount is invalid")]
     BadAmountError,
     /// A error with DLCs
     #[error("Failed to execute a dlc function")]
