@@ -17,6 +17,9 @@ pub enum MutinyError {
     /// Returned when trying to stop Mutiny while it is not running.
     #[error("Mutiny is not running.")]
     NotRunning,
+    // Returned on any resource that is not found.
+    #[error("Resource Not found.")]
+    NotFound,
     /// The funding transaction could not be created.
     #[error("Funding transaction could not be created.")]
     FundingTxCreationFailed,

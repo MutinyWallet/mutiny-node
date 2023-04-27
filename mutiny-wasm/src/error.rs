@@ -12,6 +12,9 @@ pub enum MutinyJsError {
     /// Returned when trying to stop Mutiny while it is not running.
     #[error("Mutiny is not running.")]
     NotRunning,
+    // Returned on any resource that is not found.
+    #[error("Resource Not found.")]
+    NotFound,
     /// The funding transaction could not be created.
     #[error("Funding transaction could not be created.")]
     FundingTxCreationFailed,
@@ -109,6 +112,7 @@ impl From<MutinyError> for MutinyJsError {
         match e {
             MutinyError::AlreadyRunning => MutinyJsError::AlreadyRunning,
             MutinyError::NotRunning => MutinyJsError::NotRunning,
+            MutinyError::NotFound => MutinyJsError::NotFound,
             MutinyError::FundingTxCreationFailed => MutinyJsError::FundingTxCreationFailed,
             MutinyError::ConnectionFailed => MutinyJsError::ConnectionFailed,
             MutinyError::IncorrectNetwork(net) => MutinyJsError::IncorrectNetwork(net),
