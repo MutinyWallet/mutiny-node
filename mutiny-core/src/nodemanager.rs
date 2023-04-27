@@ -281,14 +281,14 @@ impl NodeManager {
             },
         };
 
-        let fee_estimator = Arc::new(MutinyFeeEstimator::new(storage.clone()));
-
         let logger = Arc::new(MutinyLogger::default());
 
         let esplora_server_url = get_esplora_url(network, user_esplora_url);
         let tx_sync = Arc::new(EsploraSyncClient::new(esplora_server_url, logger.clone()));
 
         let esplora = Arc::new(tx_sync.client().clone());
+        let fee_estimator = Arc::new(MutinyFeeEstimator::new(storage.clone(), esplora.clone()));
+
         let wallet = Arc::new(MutinyWallet::new(
             &mnemonic,
             storage.clone(),
@@ -609,8 +609,7 @@ impl NodeManager {
     pub async fn sync(&self) -> Result<(), MutinyError> {
         // update fee estimates before sync in case we need to
         // broadcast a transaction
-        let estimates = self.esplora.get_fee_estimates().await?;
-        self.storage.insert_fee_estimates(estimates)?;
+        self.fee_estimator.update_fee_estimates().await?;
         info!("Updated cached fees!");
 
         // Sync ldk first because it may broadcast transactions
