@@ -1326,7 +1326,7 @@ mod tests {
 
         let expected: MutinyInvoice = MutinyInvoice {
             bolt11: Some(invoice),
-            description: Some("".to_string()),
+            description: None,
             payment_hash,
             preimage: Some(preimage.to_hex()),
             payee_pubkey: None,
