@@ -1,17 +1,72 @@
+use crate::error::MutinyError;
 use crate::indexed_db::MutinyStorage;
+use esplora_client::AsyncClient;
 use lightning::chain::chaininterface::{
     ConfirmationTarget, FeeEstimator, FEERATE_FLOOR_SATS_PER_KW,
 };
 use log::trace;
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct MutinyFeeEstimator {
     storage: MutinyStorage,
+    esplora: Arc<AsyncClient>,
 }
 
 impl MutinyFeeEstimator {
-    pub fn new(storage: MutinyStorage) -> MutinyFeeEstimator {
-        MutinyFeeEstimator { storage }
+    pub fn new(storage: MutinyStorage, esplora: Arc<AsyncClient>) -> MutinyFeeEstimator {
+        MutinyFeeEstimator { storage, esplora }
+    }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct MempoolFees {
+    fastest_fee: f64,
+    half_hour_fee: f64,
+    hour_fee: f64,
+    economy_fee: f64,
+    minimum_fee: f64,
+}
+
+impl MutinyFeeEstimator {
+    async fn get_mempool_recommended_fees(&self) -> anyhow::Result<HashMap<String, f64>> {
+        let fees = self
+            .esplora
+            .client()
+            .get(&format!("{}/v1/fees/recommended", self.esplora.url()))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<MempoolFees>()
+            .await?;
+
+        // convert to hashmap of num blocks -> fee rate
+        let mut fee_estimates = HashMap::new();
+        fee_estimates.insert("1".to_string(), fees.fastest_fee);
+        fee_estimates.insert("3".to_string(), fees.half_hour_fee);
+        fee_estimates.insert("6".to_string(), fees.hour_fee);
+        fee_estimates.insert("12".to_string(), fees.economy_fee);
+        fee_estimates.insert("1008".to_string(), fees.minimum_fee);
+
+        Ok(fee_estimates)
+    }
+
+    pub async fn update_fee_estimates(&self) -> Result<(), MutinyError> {
+        // first try mempool.space's API
+        let mempool_fees = self.get_mempool_recommended_fees().await;
+
+        // if that fails, fall back to esplora's API
+        let fee_estimates = match mempool_fees {
+            Ok(mempool_fees) => mempool_fees,
+            Err(_) => self.esplora.get_fee_estimates().await?,
+        };
+
+        self.storage.insert_fee_estimates(fee_estimates)?;
+
+        Ok(())
     }
 }
 
@@ -62,6 +117,7 @@ mod test {
     use super::*;
     use crate::indexed_db::MutinyStorage;
     use crate::test_utils::*;
+    use esplora_client::Builder;
     use std::collections::HashMap;
 
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
@@ -98,13 +154,40 @@ mod test {
     }
 
     #[test]
+    async fn test_update_fee_estimates() {
+        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let esplora = Arc::new(
+            Builder::new("https://mutinynet.com/api")
+                .build_async()
+                .unwrap(),
+        );
+
+        let fee_estimator = MutinyFeeEstimator::new(storage, esplora);
+
+        fee_estimator.update_fee_estimates().await.unwrap();
+
+        let fee_estimates = fee_estimator.storage.get_fee_estimates().unwrap().unwrap();
+        assert!(!fee_estimates.is_empty());
+        assert!(fee_estimates.get("3").is_some());
+        assert!(fee_estimates.get("6").is_some());
+        assert!(fee_estimates.get("12").is_some());
+
+        cleanup_wallet_test().await;
+    }
+
+    #[test]
     async fn test_get_est_sat_per_1000_weight() {
         let storage = MutinyStorage::new("".to_string()).await.unwrap();
         let mut fee_estimates = HashMap::new();
         fee_estimates.insert("6".to_string(), 10_f64);
         storage.insert_fee_estimates(fee_estimates).unwrap();
+        let esplora = Arc::new(
+            Builder::new("https://mutinynet.com/api")
+                .build_async()
+                .unwrap(),
+        );
 
-        let fee_estimator = MutinyFeeEstimator::new(storage);
+        let fee_estimator = MutinyFeeEstimator::new(storage, esplora);
 
         // test that we get the fee rate from the cache
         assert_eq!(

@@ -229,15 +229,16 @@ mod tests {
         log!("creating pubkeys from a child seed");
 
         let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
-        let esplora = Builder::new("https://blockstream.info/testnet/api/")
-            .build_async()
-            .unwrap();
-        let db = MutinyStorage::new("".to_string()).await.unwrap();
-        let fees = Arc::new(MutinyFeeEstimator::new(db.clone()));
-
-        let wallet = Arc::new(
-            MutinyWallet::new(&mnemonic, db, Network::Testnet, Arc::new(esplora), fees).unwrap(),
+        let esplora = Arc::new(
+            Builder::new("https://blockstream.info/testnet/api/")
+                .build_async()
+                .unwrap(),
         );
+        let db = MutinyStorage::new("".to_string()).await.unwrap();
+        let fees = Arc::new(MutinyFeeEstimator::new(db.clone(), esplora.clone()));
+
+        let wallet =
+            Arc::new(MutinyWallet::new(&mnemonic, db, Network::Testnet, esplora, fees).unwrap());
 
         let km = create_keys_manager(wallet.clone(), &mnemonic, 1).unwrap();
         let pubkey = pubkey_from_keys_manager(&km);
