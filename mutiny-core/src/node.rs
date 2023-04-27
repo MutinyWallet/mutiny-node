@@ -954,7 +954,16 @@ impl Node {
         pubkey: PublicKey,
         amount_sat: u64,
     ) -> Result<[u8; 32], MutinyError> {
-        let config = default_user_config();
+        let mut config = default_user_config();
+
+        // if we are opening channel to LSP, turn off SCID alias until CLN is updated
+        // LSP protects all invoice information anyways, so no UTXO leakage
+        if let Some(lsp) = self.lsp_client.clone() {
+            if pubkey == lsp.pubkey {
+                config.channel_handshake_config.negotiate_scid_privacy = false;
+            }
+        }
+
         match self
             .channel_manager
             .create_channel(pubkey, amount_sat, 0, 0, Some(config))
