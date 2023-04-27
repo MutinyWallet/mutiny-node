@@ -969,11 +969,24 @@ impl NodeManager {
             Some((node, channel)) => {
                 node.channel_manager
                     .close_channel(&channel.channel_id, &channel.counterparty.node_id)
-                    .map_err(|_| MutinyError::ChannelClosingFailed)?;
+                    .map_err(|e| {
+                        error!(
+                            "had an error closing channel {} with node {} : {e:?}",
+                            &channel.channel_id.to_hex(),
+                            &channel.counterparty.node_id.to_hex()
+                        );
+                        MutinyError::ChannelClosingFailed
+                    })?;
 
                 Ok(())
             }
-            None => Err(MutinyError::ChannelClosingFailed),
+            None => {
+                error!(
+                    "Channel not found with this transaction: {}",
+                    outpoint.to_string()
+                );
+                Err(MutinyError::NotFound)
+            }
         }
     }
 
