@@ -557,7 +557,7 @@ impl Node {
     pub async fn create_invoice(
         &self,
         amount_sat: Option<u64>,
-        description: String,
+        description: Option<String>,
         route_hints: Option<Vec<PhantomRouteHints>>,
     ) -> Result<Invoice, MutinyError> {
         // the amount to create for the invoice whether or not there is an lsp
@@ -622,10 +622,12 @@ impl Node {
         &self,
         amount_sat: Option<u64>,
         fee_amount_msat: Option<u64>,
-        description: String,
+        description: Option<String>,
         route_hints: Option<Vec<PhantomRouteHints>>,
     ) -> Result<Invoice, MutinyError> {
         let amount_msat = amount_sat.map(|s| s * 1_000);
+        // TODO if there's no description we should probably a random one
+        let description = description.unwrap_or_default();
         let invoice_res = match route_hints {
             None => {
                 let now = crate::utils::now();

@@ -107,7 +107,13 @@ pub struct MutinyInvoice {
 impl From<Invoice> for MutinyInvoice {
     fn from(value: Invoice) -> Self {
         let description = match value.description() {
-            InvoiceDescription::Direct(a) => Some(a.to_string()),
+            InvoiceDescription::Direct(a) => {
+                if a.is_empty() {
+                    None
+                } else {
+                    Some(a.to_string())
+                }
+            }
             InvoiceDescription::Hash(_) => None,
         };
 
@@ -446,10 +452,7 @@ impl NodeManager {
             return Err(MutinyError::WalletOperationFailed);
         };
 
-        // TODO if there's no description should be something random I guess
-        let invoice = self
-            .create_invoice(amount, description.clone().unwrap_or_else(|| "".into()))
-            .await?;
+        let invoice = self.create_invoice(amount, description.clone()).await?;
 
         let Some(bolt11) = invoice.bolt11 else {
             return Err(MutinyError::WalletOperationFailed);
@@ -459,7 +462,7 @@ impl NodeManager {
             address,
             invoice: bolt11,
             btc_amount: amount.map(|amount| bitcoin::Amount::from_sat(amount).to_btc().to_string()),
-            description,
+            description: invoice.description,
         })
     }
 
@@ -713,7 +716,7 @@ impl NodeManager {
     pub async fn create_invoice(
         &self,
         amount: Option<u64>,
-        description: String,
+        description: Option<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
         let use_phantom = nodes.len() > 1;
@@ -845,7 +848,9 @@ impl NodeManager {
             LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
             LnUrlResponse::LnUrlWithdrawResponse(withdraw) => {
                 let description = withdraw.default_description.clone();
-                let mutiny_invoice = self.create_invoice(Some(amount_sats), description).await?;
+                let mutiny_invoice = self
+                    .create_invoice(Some(amount_sats), Some(description))
+                    .await?;
                 let invoice_str = mutiny_invoice.bolt11.expect("Invoice should have bolt11");
                 let res = self
                     .lnurl_client
@@ -1320,7 +1325,7 @@ mod tests {
 
         let expected: MutinyInvoice = MutinyInvoice {
             bolt11: Some(invoice),
-            description: Some("".to_string()),
+            description: None,
             payment_hash,
             preimage: Some(preimage.to_hex()),
             payee_pubkey: None,
