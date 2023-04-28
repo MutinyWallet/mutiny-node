@@ -7,6 +7,7 @@ use crate::wallet::MutinyWallet;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
+use lightning::chain::keysinterface::SpendableOutputDescriptor;
 use lightning::events::{Event, PaymentPurpose};
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
@@ -504,6 +505,23 @@ impl EventHandler {
                 forwarding_channel_manager.process_pending_htlc_forwards();
             }
             Event::SpendableOutputs { outputs } => {
+                // Filter out static outputs, we don't want to spend them
+                // because they have gone to our BDK wallet.
+                // This would only be a waste in fees.
+                let output_descriptors = &outputs
+                    .iter()
+                    .filter(|d| match d {
+                        SpendableOutputDescriptor::StaticOutput { .. } => false,
+                        SpendableOutputDescriptor::DelayedPaymentOutput(_) => true,
+                        SpendableOutputDescriptor::StaticPaymentOutput(_) => true,
+                    })
+                    .collect::<Vec<_>>();
+
+                // If there are no spendable outputs, we don't need to do anything
+                if output_descriptors.is_empty() {
+                    return;
+                }
+
                 self.logger.log(&Record::new(
                     lightning::util::logger::Level::Debug,
                     format_args!("EVENT: SpendableOutputs processing"),
@@ -512,7 +530,6 @@ impl EventHandler {
                     0,
                 ));
 
-                let output_descriptors = &outputs.iter().collect::<Vec<_>>();
                 let tx_feerate = self
                     .fee_estimator
                     .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
