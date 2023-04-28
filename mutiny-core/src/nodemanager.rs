@@ -254,11 +254,23 @@ pub struct LnUrlParams {
     pub tag: String,
 }
 
+/// The [NodeManager] is the main entry point for interacting with the Mutiny Wallet.
+/// It is responsible for managing the on-chain wallet and the lightning nodes.
+///
+/// It can be used to create a new wallet, or to load an existing wallet.
+///
+/// It can be configured to use all different custom backend services, or to use the default
+/// services provided by Mutiny.
 impl NodeManager {
+    /// Returns if there is a saved wallet in storage.
+    /// This is checked by seeing if a mnemonic seed exists in storage.
     pub async fn has_node_manager() -> bool {
         MutinyStorage::has_mnemonic().await.unwrap_or(false)
     }
 
+    /// Creates a new [NodeManager] with the given parameters.
+    /// The mnemonic seed is read from storage, unless one is provided.
+    /// If no mnemonic is provided, a new one is generated and stored.
     pub async fn new(
         password: String,
         mnemonic: Option<Mnemonic>,
@@ -418,31 +430,41 @@ impl NodeManager {
         })
     }
 
+    /// Broadcast a transaction to the network.
+    /// The transaction is broadcast through the configured esplora server.
     pub fn broadcast_transaction(&self, tx: &Transaction) -> Result<(), MutinyError> {
         self.chain.broadcast_transaction(tx);
         Ok(())
     }
 
+    /// Returns the mnemonic seed phrase for the wallet.
     pub fn show_seed(&self) -> Mnemonic {
         self.mnemonic.clone()
     }
 
+    /// Returns the network of the wallet.
     pub fn get_network(&self) -> Network {
         self.network
     }
 
+    /// Gets a new bitcoin address from the wallet.
+    /// Will generate a new address on every call.
+    ///
+    /// It is recommended to create a new address for every transaction.
     pub fn get_new_address(&self) -> Result<Address, MutinyError> {
         let mut wallet = self.wallet.wallet.try_write()?;
 
         Ok(wallet.get_address(AddressIndex::New).address)
     }
 
+    /// Gets the current balance of the on-chain wallet.
     pub fn get_wallet_balance(&self) -> Result<u64, MutinyError> {
         let wallet = self.wallet.wallet.try_read()?;
 
         Ok(wallet.get_balance().total())
     }
 
+    /// Creates a BIP 21 invoice. This creates a new address and a lightning invoice.
     pub async fn create_bip21(
         &self,
         amount: Option<u64>,
@@ -466,6 +488,10 @@ impl NodeManager {
         })
     }
 
+    /// Sends an on-chain transaction to the given address.
+    /// The amount is in satoshis and the fee rate is in sat/vbyte.
+    ///
+    /// If a fee rate is not provided, one will be used from the fee estimator.
     pub async fn send_to_address(
         &self,
         send_to: Address,
@@ -479,6 +505,10 @@ impl NodeManager {
         self.wallet.send(send_to, amount, fee_rate).await
     }
 
+    /// Sweeps all the funds from the wallet to the given address.
+    /// The fee rate is in sat/vbyte.
+    ///
+    /// If a fee rate is not provided, one will be used from the fee estimator.
     pub async fn sweep_wallet(
         &self,
         send_to: Address,
@@ -491,6 +521,10 @@ impl NodeManager {
         self.wallet.sweep(send_to, fee_rate).await
     }
 
+    /// Checks if the given address has any transactions.
+    /// If it does, it returns the details of the first transaction.
+    ///
+    /// This should be used to check if a payment has been made to an address.
     pub async fn check_address(
         &self,
         address: &Address,
@@ -556,6 +590,8 @@ impl NodeManager {
         Ok(details_opt.map(|(d, _)| d))
     }
 
+    /// Lists all the on-chain transactions in the wallet.
+    /// These are sorted by confirmation time.
     pub fn list_onchain(&self) -> Result<Vec<TransactionDetails>, MutinyError> {
         let mut txs = self.wallet.list_transactions(false)?;
         txs.sort();
@@ -563,10 +599,15 @@ impl NodeManager {
         Ok(txs)
     }
 
+    /// Gets the details of a specific on-chain transaction.
     pub fn get_transaction(&self, txid: Txid) -> Result<Option<TransactionDetails>, MutinyError> {
         self.wallet.get_transaction(txid, false)
     }
 
+    /// Gets the current balance of the wallet.
+    /// This includes both on-chain and lightning funds.
+    ///
+    /// This will not include any funds in an unconfirmed lightning channel.
     pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyError> {
         let onchain = self.wallet.wallet.try_read()?.get_balance();
 
@@ -584,10 +625,17 @@ impl NodeManager {
         })
     }
 
+    /// Lists all the UTXOs in the wallet.
     pub fn list_utxos(&self) -> Result<Vec<LocalUtxo>, MutinyError> {
         self.wallet.list_utxos()
     }
 
+    /// Syncs the lightning wallet with the blockchain.
+    /// This will update the wallet with any lightning channels
+    /// that have been opened or closed.
+    ///
+    /// This should be called before syncing the on-chain wallet
+    /// to ensure that new on-chain transactions are picked up.
     async fn sync_ldk(&self) -> Result<(), MutinyError> {
         let nodes = self.nodes.lock().await;
 
@@ -609,6 +657,12 @@ impl NodeManager {
         Ok(())
     }
 
+    /// Syncs the on-chain wallet and lightning wallet.
+    /// This will update the on-chain wallet with any new
+    /// transactions and update the lightning wallet with
+    /// any channels that have been opened or closed.
+    ///
+    /// This also updates the fee estimates.
     pub async fn sync(&self) -> Result<(), MutinyError> {
         // update fee estimates before sync in case we need to
         // broadcast a transaction
@@ -628,26 +682,33 @@ impl NodeManager {
         }
     }
 
+    /// Gets a fee estimate for an average priority transaction.
+    /// Value is in sat/vbyte.
     pub fn estimate_fee_normal(&self) -> u32 {
         self.fee_estimator
             .get_est_sat_per_1000_weight(ConfirmationTarget::Normal)
     }
 
+    /// Gets a fee estimate for an high priority transaction.
+    /// Value is in sat/vbyte.
     pub fn estimate_fee_high(&self) -> u32 {
         self.fee_estimator
             .get_est_sat_per_1000_weight(ConfirmationTarget::HighPriority)
     }
 
+    /// Creates a new lightning node and adds it to the manager.
     pub async fn new_node(&self) -> Result<NodeIdentity, MutinyError> {
         create_new_node_from_node_manager(self).await
     }
 
+    /// Lists the pubkeys of the lightning node in the manager.
     pub async fn list_nodes(&self) -> Result<Vec<PublicKey>, MutinyError> {
         let nodes = self.nodes.lock().await;
         let peers = nodes.iter().map(|(_, n)| n.pubkey).collect();
         Ok(peers)
     }
 
+    /// Attempts to connect to a peer from the selected node.
     pub async fn connect_to_peer(
         &self,
         self_node_pubkey: &PublicKey,
@@ -674,6 +735,7 @@ impl NodeManager {
         Err(MutinyError::WalletOperationFailed)
     }
 
+    /// Disconnects from a peer from the selected node.
     pub async fn disconnect_peer(
         &self,
         self_node_pubkey: &PublicKey,
@@ -688,6 +750,9 @@ impl NodeManager {
         }
     }
 
+    /// Deletes a peer from the selected node.
+    /// This will make it so that the node will not attempt to
+    /// reconnect to the peer.
     pub async fn delete_peer(
         &self,
         self_node_pubkey: &PublicKey,
@@ -702,6 +767,7 @@ impl NodeManager {
         }
     }
 
+    /// Sets the label of a peer from the selected node.
     pub async fn label_peer(
         &self,
         node_id: &NodeId,
@@ -713,6 +779,12 @@ impl NodeManager {
 
     // all values in sats
 
+    /// Creates a lightning invoice. The amount should be in satoshis.
+    /// If no amount is provided, the invoice will be created with no amount.
+    /// If no description is provided, the invoice will be created with no description.
+    ///
+    /// If the manager has more than one node it will create a phantom invoice.
+    /// If there is only one node it will create an invoice just for that node.
     pub async fn create_invoice(
         &self,
         amount: Option<u64>,
@@ -747,6 +819,9 @@ impl NodeManager {
         Ok(invoice.into())
     }
 
+    /// Pays a lightning invoice from the selected node.
+    /// An amount should only be provided if the invoice does not have an amount.
+    /// The amount should be in satoshis.
     pub async fn pay_invoice(
         &self,
         from_node: &PublicKey,
@@ -762,6 +837,8 @@ impl NodeManager {
         node.pay_invoice_with_timeout(invoice, amt_sats, None).await
     }
 
+    /// Sends a spontaneous payment to a node from the selected node.
+    /// The amount should be in satoshis.
     pub async fn keysend(
         &self,
         from_node: &PublicKey,
@@ -774,6 +851,8 @@ impl NodeManager {
         node.keysend_with_timeout(to_node, amt_sats, None).await
     }
 
+    /// Decodes a lightning invoice into useful information.
+    /// Will return an error if the invoice is for a different network.
     pub async fn decode_invoice(&self, invoice: Invoice) -> Result<MutinyInvoice, MutinyError> {
         if invoice.network() != self.network {
             return Err(MutinyError::IncorrectNetwork(invoice.network()));
@@ -782,6 +861,8 @@ impl NodeManager {
         Ok(invoice.into())
     }
 
+    /// Calls upon a LNURL to get the parameters for it.
+    /// This contains what kind of LNURL it is (pay, withdrawal, auth, etc).
     // todo revamp LnUrlParams to be well designed
     pub async fn decode_lnurl(&self, lnurl: LnUrl) -> Result<LnUrlParams, MutinyError> {
         // handle LNURL-AUTH
@@ -816,6 +897,8 @@ impl NodeManager {
         Ok(params)
     }
 
+    /// Calls upon a LNURL and pays it.
+    /// This will fail if the LNURL is not a LNURL pay.
     pub async fn lnurl_pay(
         &self,
         from_node: &PublicKey,
@@ -836,6 +919,8 @@ impl NodeManager {
         }
     }
 
+    /// Calls upon a LNURL and withdraws from it.
+    /// This will fail if the LNURL is not a LNURL withdrawal.
     pub async fn lnurl_withdraw(
         &self,
         lnurl: &LnUrl,
@@ -864,14 +949,17 @@ impl NodeManager {
         }
     }
 
+    /// Creates a new LNURL-auth profile.
     pub fn create_lnurl_auth_profile(&self, name: String) -> Result<u32, MutinyError> {
         self.auth.add_profile(name)
     }
 
+    /// Gets all the LNURL-auth profiles.
     pub fn get_lnurl_auth_profiles(&self) -> Result<Vec<AuthProfile>, MutinyError> {
         self.auth.get_profiles()
     }
 
+    /// Authenticates with a LNURL-auth for the given profile.
     pub async fn lnurl_auth(&self, profile_index: usize, lnurl: LnUrl) -> Result<(), MutinyError> {
         let url = Url::parse(&lnurl.url)?;
         let query_pairs: HashMap<String, String> = url
@@ -897,6 +985,8 @@ impl NodeManager {
         }
     }
 
+    /// Gets an invoice from the node manager.
+    /// This includes sent and received invoices.
     pub async fn get_invoice(&self, invoice: &Invoice) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
         let inv_opt: Option<MutinyInvoice> =
@@ -907,6 +997,8 @@ impl NodeManager {
         }
     }
 
+    /// Gets an invoice from the node manager.
+    /// This includes sent and received invoices.
     pub async fn get_invoice_by_hash(
         &self,
         hash: &sha256::Hash,
@@ -924,6 +1016,8 @@ impl NodeManager {
         Err(MutinyError::InvoiceInvalid)
     }
 
+    /// Gets an invoice from the node manager.
+    /// This includes sent and received invoices.
     pub async fn list_invoices(&self) -> Result<Vec<MutinyInvoice>, MutinyError> {
         let mut invoices: Vec<MutinyInvoice> = vec![];
         let nodes = self.nodes.lock().await;
@@ -935,6 +1029,11 @@ impl NodeManager {
         Ok(invoices)
     }
 
+    /// Opens a channel from our selected node to the given pubkey.
+    /// The amount is in satoshis.
+    ///
+    /// The node must be online and have a connection to the peer.
+    /// The wallet much have enough funds to open the channel.
     pub async fn open_channel(
         &self,
         from_node: &PublicKey,
@@ -955,6 +1054,7 @@ impl NodeManager {
         }
     }
 
+    /// Closes a channel with the given outpoint.
     pub async fn close_channel(&self, outpoint: &OutPoint) -> Result<(), MutinyError> {
         let nodes = self.nodes.lock().await;
         let channel_opt: Option<(Arc<Node>, ChannelDetails)> = nodes.iter().find_map(|(_, n)| {
@@ -990,6 +1090,7 @@ impl NodeManager {
         }
     }
 
+    /// Lists all the channels for all the nodes in the node manager.
     pub async fn list_channels(&self) -> Result<Vec<MutinyChannel>, MutinyError> {
         let nodes = self.nodes.lock().await;
         let channels: Vec<ChannelDetails> = nodes
@@ -1003,6 +1104,7 @@ impl NodeManager {
         Ok(mutiny_channels)
     }
 
+    /// Lists all the peers for all the nodes in the node manager.
     pub async fn list_peers(&self) -> Result<Vec<MutinyPeer>, MutinyError> {
         let peer_data = gossip::get_all_peers().await?;
 
@@ -1058,6 +1160,7 @@ impl NodeManager {
         Ok(storage_peers)
     }
 
+    /// Gets the current bitcoin price in USD.
     pub async fn get_bitcoin_price(&self) -> Result<f32, MutinyError> {
         let client = Client::builder().build().unwrap();
 
@@ -1077,17 +1180,20 @@ impl NodeManager {
         Ok(response.bitcoin.usd)
     }
 
+    /// Exports the current state of the node manager to a json object.
     pub async fn export_json(&self) -> Result<serde_json::Value, MutinyError> {
         let map = MutinyStorage::read_all(&self.storage.indexed_db, &self.storage.password).await?;
         let serde_map = serde_json::map::Map::from_iter(map.into_iter());
         Ok(serde_json::Value::Object(serde_map))
     }
 
+    /// Restore a node manager from a json object.
     pub async fn import_json(json: serde_json::Value) -> Result<(), MutinyError> {
         MutinyStorage::import(json).await?;
         Ok(())
     }
 
+    /// Converts a bitcoin amount in BTC to satoshis.
     pub fn convert_btc_to_sats(btc: f64) -> Result<u64, MutinyError> {
         // rust bitcoin doesn't like extra precision in the float
         // so we round to the nearest satoshi
@@ -1101,6 +1207,7 @@ impl NodeManager {
         }
     }
 
+    /// Converts a satoshi amount to BTC.
     pub fn convert_sats_to_btc(sats: u64) -> f64 {
         bitcoin::Amount::from_sat(sats).to_btc()
     }
