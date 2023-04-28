@@ -109,6 +109,21 @@ impl MutinyStorage {
         Ok(())
     }
 
+    async fn delete_from_indexed_db(indexed_db: Arc<Rexie>, key: &str) -> Result<(), MutinyError> {
+        let tx = indexed_db
+            .as_ref()
+            .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)?;
+
+        let store = tx.store(WALLET_OBJECT_STORE_NAME)?;
+
+        // delete from indexed db
+        store.delete(&JsValue::from(key)).await?;
+
+        tx.done().await?;
+
+        Ok(())
+    }
+
     pub(crate) fn get<T>(&self, key: impl AsRef<str>) -> Result<Option<T>, MutinyError>
     where
         T: for<'de> Deserialize<'de>,
@@ -151,6 +166,26 @@ impl MutinyStorage {
                     .map(|value: T| (key.to_owned(), value))
             })
             .collect())
+    }
+
+    pub fn delete(&self, key: impl AsRef<str>) -> Result<(), MutinyError> {
+        let key = key.as_ref().to_string();
+
+        let indexed_db = self.indexed_db.clone();
+        let key_clone = key.clone();
+        spawn_local(async move {
+            Self::delete_from_indexed_db(indexed_db, &key_clone)
+                .await
+                .expect(&format!("Failed to delete from indexed db: {key_clone}"))
+        });
+
+        let mut map = self
+            .memory
+            .try_write()
+            .map_err(|e| MutinyError::write_err(e.into()))?;
+        map.remove(&key);
+
+        Ok(())
     }
 
     pub(crate) async fn insert_mnemonic(
