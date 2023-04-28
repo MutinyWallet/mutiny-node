@@ -79,6 +79,20 @@ impl MutinyWallet {
         nodemanager::NodeManager::has_node_manager().await
     }
 
+    /// Starts up all the nodes again.
+    /// Not needed after [NodeManager]'s `new()` function.
+    #[wasm_bindgen]
+    pub async fn start(&self) -> Result<(), MutinyJsError> {
+        Ok(self.inner.node_manager.start().await?)
+    }
+
+    /// Stops all of the nodes and background processes.
+    /// Returns after node has been stopped.
+    #[wasm_bindgen]
+    pub async fn stop(&self) -> Result<(), MutinyJsError> {
+        Ok(self.inner.node_manager.stop().await?)
+    }
+
     /// Broadcast a transaction to the network.
     /// The transaction is broadcast through the configured esplora server.
     #[wasm_bindgen]

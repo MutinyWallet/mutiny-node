@@ -65,7 +65,14 @@ use lightning_invoice::{
     Invoice,
 };
 use log::{debug, error, info, trace};
-use std::{net::SocketAddr, str::FromStr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    str::FromStr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
+};
 use wasm_bindgen_futures::spawn_local;
 
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
@@ -143,6 +150,7 @@ impl PubkeyConnectionInfo {
 pub(crate) struct Node {
     pub _uuid: String,
     pub child_index: u32,
+    stopped_components: Arc<RwLock<Vec<bool>>>,
     pub pubkey: PublicKey,
     pub peer_manager: Arc<dyn PeerManager>,
     pub keys_manager: Arc<PhantomKeysManager>,
@@ -162,6 +170,7 @@ impl Node {
     pub(crate) async fn new(
         uuid: String,
         node_index: &NodeIndex,
+        stop: Arc<AtomicBool>,
         mnemonic: &Mnemonic,
         storage: MutinyStorage,
         gossip_sync: Arc<RapidGossipSync>,
@@ -175,6 +184,9 @@ impl Node {
         lsp_clients: &[LspClient],
     ) -> Result<Self, MutinyError> {
         info!("initialized a new node: {uuid}");
+
+        // a list of components that need to be stopped and whether or not they are stopped
+        let stopped_components = Arc::new(RwLock::new(vec![]));
 
         let logger = Arc::new(MutinyLogger::default());
 
@@ -350,7 +362,9 @@ impl Node {
         let background_processor_channel_manager = channel_manager.clone();
         let background_chain_monitor = chain_monitor.clone();
         let background_gossip_sync = gossip_sync.clone();
-
+        let background_stop = stop.clone();
+        stopped_components.try_write()?.push(false);
+        let background_stopped_components = stopped_components.clone();
         spawn_local(async move {
             loop {
                 let gs = crate::background::GossipSync::rapid(background_gossip_sync.clone());
@@ -365,15 +379,26 @@ impl Node {
                     background_processor_logger.clone(),
                     Some(scorer.clone()),
                     |d| {
+                        let background_event_stop = background_stop.clone();
                         Box::pin(async move {
                             sleep(d.as_millis() as i32).await;
-                            false
+                            background_event_stop.load(Ordering::Relaxed)
                         })
                     },
                     true,
                 )
                 .await
                 .expect("Failed to process events");
+
+                if background_stop.load(Ordering::Relaxed) {
+                    debug!(
+                        "stopping background component for node: {}",
+                        pubkey.to_hex(),
+                    );
+                    stop_component(&background_stopped_components);
+                    debug!("stopped background component for node: {}", pubkey.to_hex());
+                    break;
+                }
             }
         });
 
@@ -393,6 +418,7 @@ impl Node {
         multi_socket.listen();
 
         start_reconnection_handling(
+            pubkey,
             &multi_socket,
             websocket_proxy_addr.clone(),
             self_connection,
@@ -400,11 +426,14 @@ impl Node {
             &logger,
             uuid.clone(),
             &lsp_client,
+            stop.clone(),
+            stopped_components.clone(),
         )
         .await?;
 
         Ok(Node {
             _uuid: uuid,
+            stopped_components,
             child_index: node_index.child_index,
             pubkey,
             peer_manager: peer_man,
@@ -419,6 +448,26 @@ impl Node {
             multi_socket,
             lsp_client,
         })
+    }
+
+    /// stopped will await until the node is fully shut down
+    pub async fn stopped(&self) -> Result<(), MutinyError> {
+        loop {
+            let all_stopped = {
+                let stopped_components = self
+                    .stopped_components
+                    .try_read()
+                    .map_err(|_| MutinyError::NotRunning)?;
+                stopped_components.iter().all(|&x| x)
+            };
+
+            if all_stopped {
+                break;
+            }
+
+            sleep(500).await;
+        }
+        Ok(())
     }
 
     pub fn node_index(&self) -> NodeIndex {
@@ -1034,7 +1083,9 @@ impl Node {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn start_reconnection_handling(
+    node_pubkey: PublicKey,
     multi_socket: &MultiWsSocketDescriptor,
     websocket_proxy_addr: String,
     self_connection: PubkeyConnectionInfo,
@@ -1042,6 +1093,8 @@ async fn start_reconnection_handling(
     logger: &Arc<MutinyLogger>,
     uuid: String,
     lsp_client: &Option<LspClient>,
+    stop: Arc<AtomicBool>,
+    stopped_components: Arc<RwLock<Vec<bool>>>,
 ) -> Result<(), MutinyError> {
     // Attempt connection to LSP first
     if let Some(lsp) = lsp_client.clone() {
@@ -1073,8 +1126,24 @@ async fn start_reconnection_handling(
     let mut multi_socket_reconnect = multi_socket.clone();
     let websocket_proxy_addr_copy = websocket_proxy_addr.clone();
     let self_connection_copy = self_connection.clone();
+    let reconnection_stop = stop.clone();
+    stopped_components.try_write()?.push(false);
+    let reconnection_stopped_components = stopped_components.clone();
     spawn_local(async move {
         loop {
+            if reconnection_stop.load(Ordering::Relaxed) {
+                debug!(
+                    "stopping reconnection component for node: {}",
+                    node_pubkey.to_hex(),
+                );
+                stop_component(&reconnection_stopped_components);
+                debug!(
+                    "stopped reconnection component for node: {}",
+                    node_pubkey.to_hex(),
+                );
+                break;
+            }
+
             if !multi_socket_reconnect.connected() {
                 debug!("got disconnected from multi socket proxy, going to reconnect");
                 match WsProxy::new(&websocket_proxy_addr_copy, self_connection_copy.clone()).await {
@@ -1087,6 +1156,19 @@ async fn start_reconnection_handling(
                     }
                 };
             }
+
+            if reconnection_stop.load(Ordering::Relaxed) {
+                debug!(
+                    "stopping reconnection component for node: {}",
+                    node_pubkey.to_hex(),
+                );
+                stop_component(&reconnection_stopped_components);
+                debug!(
+                    "stopped reconnection component for node: {}",
+                    node_pubkey.to_hex(),
+                );
+                break;
+            }
             sleep(5 * 1000).await;
         }
     });
@@ -1096,10 +1178,27 @@ async fn start_reconnection_handling(
     let connect_logger = logger.clone();
     let connect_multi_socket = multi_socket.clone();
     let connect_uuid = uuid.clone();
+    let connect_stop = stop.clone();
+    stopped_components.try_write()?.push(false);
+    let connect_stopped_components = stopped_components.clone();
     spawn_local(async move {
         // wait for things to start up first before starting reconnecting logic
         sleep(5 * 1000).await;
         loop {
+            if connect_stop.load(Ordering::Relaxed) {
+                debug!(
+                    "stopping connection component and disconnecting peers for node: {}",
+                    node_pubkey.to_hex(),
+                );
+                connect_peer_man.disconnect_all_peers();
+                stop_component(&connect_stopped_components);
+                debug!(
+                    "stopped connection component and disconnected peers for node: {}",
+                    node_pubkey.to_hex(),
+                );
+                break;
+            }
+
             // if we aren't connected to master socket
             // then don't try to connect peer
             if !connect_multi_socket.connected() {
@@ -1160,11 +1259,33 @@ async fn start_reconnection_handling(
                         ));
                     }
                 }
+                if connect_stop.load(Ordering::Relaxed) {
+                    debug!(
+                        "stopping connection component and disconnecting peers for node: {}",
+                        node_pubkey.to_hex(),
+                    );
+                    connect_peer_man.disconnect_all_peers();
+                    stop_component(&connect_stopped_components);
+                    debug!(
+                        "stopped connection component and disconnected peers for node: {}",
+                        node_pubkey.to_hex(),
+                    );
+                    break;
+                }
             }
             sleep(5 * 1000).await;
         }
     });
     Ok(())
+}
+
+fn stop_component(stopped_components: &Arc<RwLock<Vec<bool>>>) {
+    let mut stopped = stopped_components
+        .try_write()
+        .expect("can write to stopped components");
+    if let Some(first_false) = stopped.iter_mut().find(|x| !**x) {
+        *first_false = true;
+    }
 }
 
 pub(crate) async fn connect_peer_if_necessary(

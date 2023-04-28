@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use std::cmp::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use crate::auth::{AuthManager, AuthProfile};
@@ -27,7 +27,7 @@ use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{rand, PublicKey};
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
-use futures::lock::Mutex;
+use futures::{future::join_all, lock::Mutex};
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
 use lightning::chain::keysinterface::{NodeSigner, Recipient};
 use lightning::chain::Confirm;
@@ -194,13 +194,13 @@ pub struct MutinyPeer {
 }
 
 impl PartialOrd for MutinyPeer {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for MutinyPeer {
-    fn cmp(&self, other: &Self) -> Ordering {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.is_connected
             .cmp(&other.is_connected)
             .then_with(|| self.alias.cmp(&other.alias))
@@ -252,6 +252,7 @@ pub struct LnUrlParams {
 /// It can be configured to use all different custom backend services, or to use the default
 /// services provided by Mutiny.
 pub struct NodeManager {
+    stop: Arc<AtomicBool>,
     mnemonic: Mnemonic,
     network: Network,
     websocket_proxy_addr: String,
@@ -288,6 +289,8 @@ impl NodeManager {
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
     ) -> Result<NodeManager, MutinyError> {
+        let stop = Arc::new(AtomicBool::new(false));
+
         let websocket_proxy_addr =
             websocket_proxy_addr.unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
 
@@ -377,6 +380,7 @@ impl NodeManager {
             let node = Node::new(
                 node_item.0,
                 &node_item.1,
+                stop.clone(),
                 &mnemonic,
                 storage.clone(),
                 gossip_sync.clone(),
@@ -427,6 +431,7 @@ impl NodeManager {
             .expect("failed to make lnurl client");
 
         let nm = NodeManager {
+            stop,
             mnemonic,
             network,
             wallet,
@@ -452,6 +457,36 @@ impl NodeManager {
         let nodes = self.nodes.lock().await;
         let node = nodes.get(pk).ok_or(MutinyError::NotFound)?;
         Ok(node.clone())
+    }
+
+    /// Starts up all the nodes again.
+    /// Not needed after [NodeManager]'s `new()` function.
+    pub async fn start(&self) -> Result<(), MutinyError> {
+        self.stop.swap(false, Ordering::Relaxed);
+        // TODO
+        Ok(())
+    }
+
+    /// Stops all of the nodes and background processes.
+    /// Returns after node has been stopped.
+    pub async fn stop(&self) -> Result<(), MutinyError> {
+        self.stop.swap(true, Ordering::Relaxed);
+        let mut nodes = self.nodes.lock().await;
+        let node_futures = nodes.iter().map(|(_, n)| async {
+            match n.stopped().await {
+                Ok(_) => {
+                    debug!("stopped node: {}", n.pubkey.to_hex())
+                }
+                Err(e) => {
+                    error!("failed to stop node {}: {e}", n.pubkey.to_hex())
+                }
+            }
+        });
+        debug!("stopping all nodes");
+        join_all(node_futures).await;
+        nodes.clear();
+        debug!("stopped all nodes");
+        Ok(())
     }
 
     /// Broadcast a transaction to the network.
@@ -1363,6 +1398,7 @@ pub(crate) async fn create_new_node_from_node_manager(
     let new_node = match Node::new(
         next_node_uuid.clone(),
         &next_node,
+        node_manager.stop.clone(),
         &node_manager.mnemonic,
         node_manager.storage.clone(),
         node_manager.gossip_sync.clone(),
