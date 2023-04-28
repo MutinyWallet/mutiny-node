@@ -44,24 +44,6 @@ use url::Url;
 use uuid::Uuid;
 use wasm_bindgen_futures::spawn_local;
 
-pub struct NodeManager {
-    mnemonic: Mnemonic,
-    network: Network,
-    websocket_proxy_addr: String,
-    esplora: Arc<AsyncClient>,
-    wallet: Arc<OnChainWallet>,
-    gossip_sync: Arc<RapidGossipSync>,
-    scorer: Arc<utils::Mutex<ProbScorer>>,
-    chain: Arc<MutinyChain>,
-    fee_estimator: Arc<MutinyFeeEstimator>,
-    storage: MutinyStorage,
-    node_storage: Mutex<NodeStorage>,
-    nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node>>>>,
-    auth: AuthManager,
-    lnurl_client: LnUrlClient,
-    lsp_clients: Vec<LspClient>,
-}
-
 // This is the NodeStorage object saved to the DB
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub(crate) struct NodeStorage {
@@ -269,6 +251,24 @@ pub struct LnUrlParams {
 ///
 /// It can be configured to use all different custom backend services, or to use the default
 /// services provided by Mutiny.
+pub struct NodeManager {
+    mnemonic: Mnemonic,
+    network: Network,
+    websocket_proxy_addr: String,
+    esplora: Arc<AsyncClient>,
+    wallet: Arc<OnChainWallet>,
+    gossip_sync: Arc<RapidGossipSync>,
+    scorer: Arc<utils::Mutex<ProbScorer>>,
+    chain: Arc<MutinyChain>,
+    fee_estimator: Arc<MutinyFeeEstimator>,
+    storage: MutinyStorage,
+    node_storage: Mutex<NodeStorage>,
+    nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node>>>>,
+    auth: AuthManager,
+    lnurl_client: LnUrlClient,
+    lsp_clients: Vec<LspClient>,
+}
+
 impl NodeManager {
     /// Returns if there is a saved wallet in storage.
     /// This is checked by seeing if a mnemonic seed exists in storage.
