@@ -4,6 +4,7 @@ use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::logging::MutinyLogger;
 use crate::utils::sleep;
 use crate::wallet::MutinyWallet;
+use anyhow::anyhow;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
@@ -11,6 +12,7 @@ use lightning::chain::keysinterface::SpendableOutputDescriptor;
 use lightning::events::{Event, PaymentPurpose};
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
+    log_debug, log_error,
     util::errors::APIError,
     util::logger::{Logger, Record},
 };
@@ -505,49 +507,16 @@ impl EventHandler {
                 forwarding_channel_manager.process_pending_htlc_forwards();
             }
             Event::SpendableOutputs { outputs } => {
-                // Filter out static outputs, we don't want to spend them
-                // because they have gone to our BDK wallet.
-                // This would only be a waste in fees.
-                let output_descriptors = &outputs
-                    .iter()
-                    .filter(|d| match d {
-                        SpendableOutputDescriptor::StaticOutput { .. } => false,
-                        SpendableOutputDescriptor::DelayedPaymentOutput(_) => true,
-                        SpendableOutputDescriptor::StaticPaymentOutput(_) => true,
-                    })
-                    .collect::<Vec<_>>();
-
-                // If there are no spendable outputs, we don't need to do anything
-                if output_descriptors.is_empty() {
-                    return;
+                if let Err(e) = self.handle_spendable_outputs(&outputs).await {
+                    log_error!(self.logger, "Failed to handle spendable outputs: {e}");
+                    // if we have an error we should persist the outputs so we can try again later
+                    if let Err(e) = self.persister.persist_failed_spendable_outputs(outputs) {
+                        log_error!(
+                            self.logger,
+                            "Failed to persist failed spendable outputs: {e}"
+                        );
+                    }
                 }
-
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!("EVENT: SpendableOutputs processing"),
-                    "event",
-                    "",
-                    0,
-                ));
-
-                let tx_feerate = self
-                    .fee_estimator
-                    .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
-                let spending_tx = self
-                    .keys_manager
-                    .spend_spendable_outputs(
-                        output_descriptors,
-                        Vec::new(),
-                        tx_feerate,
-                        &Secp256k1::new(),
-                    )
-                    .expect("could not spend spendable outputs");
-
-                self.wallet
-                    .blockchain
-                    .broadcast(&spending_tx)
-                    .await
-                    .expect("failed to broadcast tx");
             }
             Event::ChannelClosed {
                 channel_id,
@@ -607,6 +576,54 @@ impl EventHandler {
             }
             Event::HTLCIntercepted { .. } => {}
         }
+    }
+
+    // Separate function to handle spendable outputs
+    // This is so we can return a result and handle errors
+    // without having to use a lot of nested if statements
+    pub(crate) async fn handle_spendable_outputs(
+        &self,
+        outputs: &[SpendableOutputDescriptor],
+    ) -> anyhow::Result<()> {
+        // Filter out static outputs, we don't want to spend them
+        // because they have gone to our BDK wallet.
+        // This would only be a waste in fees.
+        let output_descriptors = outputs
+            .iter()
+            .filter(|d| match d {
+                SpendableOutputDescriptor::StaticOutput { .. } => false,
+                SpendableOutputDescriptor::DelayedPaymentOutput(_) => true,
+                SpendableOutputDescriptor::StaticPaymentOutput(_) => true,
+            })
+            .collect::<Vec<_>>();
+
+        // If there are no spendable outputs, we don't need to do anything
+        if output_descriptors.is_empty() {
+            return Ok(());
+        }
+
+        log_debug!(
+            self.logger,
+            "EVENT: processing SpendableOutputs {}",
+            output_descriptors.len()
+        );
+
+        let tx_feerate = self
+            .fee_estimator
+            .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+        let spending_tx = self
+            .keys_manager
+            .spend_spendable_outputs(
+                &output_descriptors,
+                Vec::new(),
+                tx_feerate,
+                &Secp256k1::new(),
+            )
+            .map_err(|_| anyhow!("Failed to spend spendable outputs"))?;
+
+        self.wallet.blockchain.broadcast(&spending_tx).await?;
+
+        Ok(())
     }
 }
 

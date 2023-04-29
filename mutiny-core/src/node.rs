@@ -43,6 +43,7 @@ use lightning::{
         },
         PaymentHash, PaymentPreimage,
     },
+    log_info, log_warn,
     routing::{
         gossip,
         gossip::NodeId,
@@ -304,6 +305,42 @@ impl Node {
                 chain_monitor
                     .clone()
                     .watch_channel(funding_outpoint, channel_monitor);
+            }
+        }
+
+        // Before we start the background processor, retry previously failed
+        // spendable outputs. We should do this before we start the background
+        // processor so we prevent any race conditions.
+        // if we fail to read the spendable outputs, just log a warning and
+        // continue
+        let retry_spendable_outputs = persister
+            .get_failed_spendable_outputs()
+            .map_err(|e| MutinyError::ReadError {
+                source: MutinyStorageError::Other(anyhow!(
+                    "failed to read retry spendable outputs: {e}"
+                )),
+            })
+            .unwrap_or_else(|e| {
+                log_warn!(logger, "Failed to read retry spendable outputs: {e}");
+                vec![]
+            });
+
+        if !retry_spendable_outputs.is_empty() {
+            log_info!(
+                logger,
+                "Retrying {} spendable outputs",
+                retry_spendable_outputs.len()
+            );
+
+            match event_handler
+                .handle_spendable_outputs(&retry_spendable_outputs)
+                .await
+            {
+                Ok(_) => {
+                    log_info!(logger, "Successfully retried spendable outputs");
+                    persister.clear_failed_spendable_outputs().await?;
+                }
+                Err(e) => log_warn!(logger, "Failed to retry spendable outputs {e}"),
             }
         }
 

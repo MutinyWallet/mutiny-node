@@ -18,9 +18,12 @@ use futures::{try_join, TryFutureExt};
 use lightning::chain;
 use lightning::chain::chainmonitor::{MonitorUpdateId, Persist};
 use lightning::chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate};
-use lightning::chain::keysinterface::{InMemorySigner, WriteableEcdsaChannelSigner};
+use lightning::chain::keysinterface::{
+    InMemorySigner, SpendableOutputDescriptor, WriteableEcdsaChannelSigner,
+};
 use lightning::chain::transaction::OutPoint;
 use lightning::chain::BestBlock;
+use lightning::io::Cursor;
 use lightning::ln::channelmanager::{
     self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
 };
@@ -28,7 +31,7 @@ use lightning::ln::PaymentHash;
 use lightning::util::logger::Logger;
 use lightning::util::logger::Record;
 use lightning::util::persist::Persister;
-use lightning::util::ser::{ReadableArgs, Writeable};
+use lightning::util::ser::{Readable, ReadableArgs, Writeable};
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
@@ -37,6 +40,7 @@ pub(crate) const CHANNEL_MANAGER_KEY: &str = "manager";
 const MONITORS_PREFIX_KEY: &str = "monitors/";
 const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
 const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
+const FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY: &str = "failed_spendable_outputs";
 
 pub(crate) type PhantomChannelManager = LdkChannelManager<
     Arc<ChainMonitor>,
@@ -262,6 +266,64 @@ impl MutinyNodePersister {
             })
             .collect())
     }
+
+    /// Persists the failed spendable outputs to storage.
+    /// Previously failed spendable outputs are not overwritten.
+    ///
+    /// This is used to retry spending them later.
+    pub fn persist_failed_spendable_outputs(
+        &self,
+        failed: Vec<SpendableOutputDescriptor>,
+    ) -> anyhow::Result<()> {
+        let key = self.get_key(FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY);
+
+        // get the currently stored descriptors encoded as hex
+        // if there are none, use an empty vector
+        let mut descriptors: Vec<String> = self.storage.get(&key)?.unwrap_or_default();
+
+        // convert the failed descriptors to hex
+        let failed_hex: Vec<String> = failed
+            .into_iter()
+            .map(|desc| desc.encode().to_hex())
+            .collect();
+
+        // add the new descriptors
+        descriptors.extend(failed_hex);
+
+        self.storage.set(key, descriptors)?;
+
+        Ok(())
+    }
+
+    /// Retrieves the failed spendable outputs from storage
+    pub fn get_failed_spendable_outputs(&self) -> anyhow::Result<Vec<SpendableOutputDescriptor>> {
+        let key = self.get_key(FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY);
+
+        // get the currently stored descriptors encoded as hex
+        // if there are none, use an empty vector
+        let strings: Vec<String> = self.storage.get(&key)?.unwrap_or_default();
+
+        // convert the hex strings to descriptors
+        let mut descriptors = vec![];
+        for desc in strings {
+            let bytes =
+                Vec::from_hex(&desc).map_err(|_| anyhow!("failed to decode descriptor {desc}"))?;
+            let descriptor = SpendableOutputDescriptor::read(&mut Cursor::new(bytes))
+                .map_err(|_| anyhow!("failed to read descriptor from storage: {desc}"))?;
+            descriptors.push(descriptor);
+        }
+
+        Ok(descriptors)
+    }
+
+    /// Clears the failed spendable outputs from storage
+    /// This is used when the failed spendable outputs have been successfully spent
+    pub async fn clear_failed_spendable_outputs(&self) -> anyhow::Result<()> {
+        let key = self.get_key(FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY);
+        self.storage.delete(key)?;
+
+        Ok(())
+    }
 }
 
 fn payment_key(inbound: bool, payment_hash: &PaymentHash) -> String {
@@ -353,7 +415,9 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner> Persist<ChannelSigner> for Muti
 #[cfg(test)]
 mod test {
     use crate::event::{HTLCStatus, MillisatAmount};
+    use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::PublicKey;
+    use bitcoin::Txid;
     use std::str::FromStr;
     use uuid::Uuid;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
@@ -426,5 +490,44 @@ mod test {
         assert_eq!(list[0].1.preimage, Some(preimage));
 
         cleanup_gossip_test().await;
+    }
+
+    #[test]
+    async fn test_persist_spendable_output_descriptor() {
+        let persister = get_test_persister().await;
+
+        let static_output_0 = SpendableOutputDescriptor::StaticOutput {
+            outpoint: OutPoint {
+                txid: Txid::all_zeros(),
+                index: 0,
+            },
+            output: Default::default(),
+        };
+        let result = persister.persist_failed_spendable_outputs(vec![static_output_0.clone()]);
+        assert!(result.is_ok());
+
+        let result = persister.get_failed_spendable_outputs().unwrap();
+        assert_eq!(result, vec![static_output_0.clone()]);
+
+        let static_output_1 = SpendableOutputDescriptor::StaticOutput {
+            outpoint: OutPoint {
+                txid: Txid::all_zeros(),
+                index: 1,
+            },
+            output: Default::default(),
+        };
+        let result = persister.persist_failed_spendable_outputs(vec![static_output_1.clone()]);
+        assert!(result.is_ok());
+
+        let result = persister.get_failed_spendable_outputs().unwrap();
+        assert_eq!(result, vec![static_output_0, static_output_1]);
+
+        cleanup_gossip_test().await;
+
+        let result = persister.clear_failed_spendable_outputs().await;
+        assert!(result.is_ok());
+
+        let result = persister.get_failed_spendable_outputs().unwrap();
+        assert!(result.is_empty());
     }
 }
