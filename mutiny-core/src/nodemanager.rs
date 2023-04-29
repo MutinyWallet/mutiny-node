@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use std::cmp::Ordering;
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
@@ -72,6 +73,13 @@ pub(crate) struct NodeStorage {
 pub(crate) struct NodeIndex {
     pub child_index: u32,
     pub lsp: Option<String>,
+    pub archived: Option<bool>,
+}
+
+impl NodeIndex {
+    pub fn is_archived(&self) -> bool {
+        self.archived.unwrap_or(false)
+    }
 }
 
 // This is the NodeIdentity that refer to a specific node
@@ -356,9 +364,16 @@ impl NodeManager {
 
         let node_storage = storage.get_nodes()?;
 
+        // Remove the archived nodes, we don't need to start them up.
+        let unarchived_nodes = node_storage
+            .clone()
+            .nodes
+            .into_iter()
+            .filter(|(_, n)| !n.is_archived());
+
         let mut nodes_map = HashMap::new();
 
-        for node_item in node_storage.clone().nodes {
+        for node_item in unarchived_nodes {
             let node = Node::new(
                 node_item.0,
                 &node_item.1,
@@ -699,6 +714,47 @@ impl NodeManager {
     /// Creates a new lightning node and adds it to the manager.
     pub async fn new_node(&self) -> Result<NodeIdentity, MutinyError> {
         create_new_node_from_node_manager(self).await
+    }
+
+    /// Archives a node so it will not be started up next time the node manager is created.
+    ///
+    /// If the node has any active channels it will fail to archive
+    #[allow(dead_code)]
+    pub(crate) async fn archive_node(&self, pubkey: PublicKey) -> Result<(), MutinyError> {
+        if let Some(node) = self.nodes.lock().await.get(&pubkey) {
+            // disallow archiving nodes with active channels or
+            // claimable on-chain funds, so we don't lose funds
+            if node.channel_manager.list_channels().is_empty()
+                && node.chain_monitor.get_claimable_balances(&[]).is_empty()
+            {
+                self.archive_node_by_uuid(node._uuid.clone()).await
+            } else {
+                Err(anyhow!("Node has active channels, cannot archive").into())
+            }
+        } else {
+            Err(anyhow!("Could not find node to archive").into())
+        }
+    }
+
+    /// Archives a node so it will not be started up next time the node manager is created.
+    ///
+    /// If the node has any active channels it will fail to archive
+    #[allow(dead_code)]
+    pub(crate) async fn archive_node_by_uuid(&self, node_uuid: String) -> Result<(), MutinyError> {
+        let mut node_storage = self.node_storage.lock().await;
+
+        match node_storage.nodes.get(&node_uuid).map(|n| n.to_owned()) {
+            None => Err(anyhow!("Could not find node to archive").into()),
+            Some(mut node) => {
+                node.archived = Some(true);
+                let prev = node_storage.nodes.insert(node_uuid, node);
+
+                // Check that we did override the previous node index
+                debug_assert!(prev.is_some());
+
+                Ok(())
+            }
+        }
     }
 
     /// Lists the pubkeys of the lightning node in the manager.
@@ -1263,6 +1319,7 @@ pub(crate) async fn create_new_node_from_node_manager(
     let next_node = NodeIndex {
         child_index: next_node_index,
         lsp,
+        archived: Some(false),
     };
 
     existing_nodes

@@ -511,6 +511,7 @@ impl Node {
         NodeIndex {
             child_index: self.child_index,
             lsp: self.lsp_client.clone().map(|l| l.url),
+            archived: Some(false),
         }
     }
 
