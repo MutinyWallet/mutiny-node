@@ -195,6 +195,8 @@ impl RedshiftManager for NodeManager {
         // create new node
         let node = self.new_node().await?;
 
+        sleep(500).await;
+
         // connect to introduction node
         let introduction_node = match (introduction_node, connection_string) {
             (Some(i), Some(c)) => {
