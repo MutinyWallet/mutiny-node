@@ -3,6 +3,7 @@ use crate::indexed_db::MutinyStorage;
 use crate::nodemanager::NodeManager;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, OutPoint};
+use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -58,6 +59,7 @@ pub struct Redshift {
     pub output_utxo: Option<OutPoint>,
     pub introduction_channel: Option<OutPoint>,
     pub output_channel: Option<OutPoint>,
+    pub sending_node: PublicKey,
     pub introduction_node: PublicKey,
     pub amount_sats: u64,
     pub change_amt: Option<u64>,
@@ -127,6 +129,8 @@ pub trait RedshiftManager {
         recipient: RedshiftRecipient,
         introduction_node: PublicKey,
     ) -> Result<Redshift, MutinyError>;
+
+    async fn attempt_payments(&self, rs: Redshift) -> Result<(), MutinyError>;
 }
 
 impl RedshiftManager for NodeManager {
@@ -137,5 +141,62 @@ impl RedshiftManager for NodeManager {
         introduction_node: PublicKey,
     ) -> Result<Redshift, MutinyError> {
         todo!()
+    }
+
+    async fn attempt_payments(&self, mut rs: Redshift) -> Result<(), MutinyError> {
+        // TODO find the max channel reserve
+        let max_sats = (rs.amount_sats as f64 * 0.99) as u64;
+        let _min_sats = 10_000;
+
+        // get the node making the payment
+        let nodes = self.nodes.lock().await;
+        let sending_node = nodes.get(&rs.sending_node).ok_or(MutinyError::NotFound)?;
+
+        let receiving_node = match rs.recipient {
+            RedshiftRecipient::Lightning(receiving_pubkey) => {
+                nodes.get(&receiving_pubkey).ok_or(MutinyError::NotFound)?
+            }
+            RedshiftRecipient::OnChain(_) => {
+                // TODO specific address
+                let new_receiving_node = self.new_node().await?.pubkey;
+                nodes
+                    .get(&new_receiving_node)
+                    .ok_or(MutinyError::NotFound)?
+            }
+        };
+
+        // TODO for loop while max_sats is not hit
+        // TODO get the real number to attempt
+        let local_max = max_sats;
+
+        // get an invoice from the receiving node
+        let invoice = receiving_node
+            .create_invoice(Some(local_max), None, None)
+            .await?; // TODO probably should handle error
+
+        // make attempts to pay it
+        match sending_node
+            .pay_invoice_with_timeout(&invoice, None, None)
+            .await
+        {
+            Ok(i) => {
+                if i.paid {
+                    debug!("paid the redshift invoice");
+                    rs.payment_attempted(local_max);
+                } else {
+                    // TODO need to handle payments still pending
+                    debug!("payment still pending...");
+                }
+            }
+            Err(e) => {
+                // TODO keep going through loop
+                error!("could not pay: {e}");
+                return Err(MutinyError::RoutingFailed);
+            }
+        }
+
+        // TODO once completely done, close the existing channel
+
+        Ok(())
     }
 }
