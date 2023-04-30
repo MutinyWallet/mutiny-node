@@ -32,6 +32,7 @@ use lightning::util::logger::Logger;
 use lightning::util::logger::Record;
 use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
+use log::error;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
@@ -169,6 +170,7 @@ impl MutinyNodePersister {
                 );
                 let mut readable_kv_value = lightning::io::Cursor::new(kv_value);
                 let Ok((_, channel_manager)) = <(BlockHash, PhantomChannelManager)>::read(&mut readable_kv_value, read_args) else {
+                    error!("could not read manager");
                     return Err(MutinyError::ReadError { source: MutinyStorageError::Other(anyhow!("could not read manager")) })
                 };
                 Ok(ReadChannelManager {

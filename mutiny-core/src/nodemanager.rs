@@ -901,7 +901,7 @@ impl NodeManager {
         description: Option<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
-        let use_phantom = nodes.len() > 1;
+        let use_phantom = false; // TODO fix
         if nodes.len() == 0 {
             return Err(MutinyError::InvoiceCreationFailed);
         }
