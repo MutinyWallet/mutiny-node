@@ -978,6 +978,7 @@ impl Node {
 
     pub async fn sweep_utxos_to_channel(
         &self,
+        user_chan_id: Option<u128>,
         utxos: &[OutPoint],
         pubkey: PublicKey,
     ) -> Result<[u8; 32], MutinyError> {
@@ -1026,11 +1027,12 @@ impl Node {
             }
         }
 
-        // generate random user channel id
-        let mut user_channel_id_bytes = [0u8; 16];
-        getrandom::getrandom(&mut user_channel_id_bytes)
-            .map_err(|_| MutinyError::Other(anyhow!("Failed to generate user channel id")))?;
-        let user_channel_id = u128::from_be_bytes(user_channel_id_bytes);
+        let user_channel_id = user_chan_id.unwrap_or_else(|| {
+            // generate random user channel id
+            let mut user_channel_id_bytes = [0u8; 16];
+            getrandom::getrandom(&mut user_channel_id_bytes).unwrap();
+            u128::from_be_bytes(user_channel_id_bytes)
+        });
 
         // save params to db
         let params = ChannelOpenParams {
