@@ -141,6 +141,8 @@ pub trait RedshiftManager {
         connection_string: Option<&str>,
     ) -> Result<Redshift, MutinyError>;
 
+    fn get_redshift(&self, utxo: OutPoint) -> Result<Vec<Redshift>, MutinyError>;
+
     async fn attempt_payments(&self, rs: Redshift) -> Result<(), MutinyError>;
 }
 
@@ -245,6 +247,12 @@ impl RedshiftManager for NodeManager {
             fees_paid: fees,
         };
         self.storage.update_redshift(redshift.clone())?;
+
+        Ok(redshift)
+    }
+
+    fn get_redshift(&self, utxo: OutPoint) -> Result<Vec<Redshift>, MutinyError> {
+        let redshift = self.storage.get_redshifts_for_utxo(&utxo)?;
 
         Ok(redshift)
     }
