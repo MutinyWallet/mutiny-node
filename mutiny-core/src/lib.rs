@@ -24,6 +24,7 @@ pub mod nodemanager;
 mod onchain;
 mod peermanager;
 mod proxy;
+mod redshift;
 mod socket;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
