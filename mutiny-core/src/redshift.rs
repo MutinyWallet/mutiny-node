@@ -55,7 +55,7 @@ pub enum RedshiftRecipient {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Redshift {
-    pub id: u128,
+    pub id: [u8; 16],
     pub input_utxo: OutPoint,
     pub status: RedshiftStatus,
     pub sending_node: PublicKey,
@@ -235,7 +235,7 @@ impl RedshiftManager for NodeManager {
 
         // save to db
         let redshift = Redshift {
-            id: user_chan_id,
+            id: user_chan_id.to_be_bytes(),
             input_utxo: utxo,
             status: RedshiftStatus::ChannelOpening,
             sending_node: node.pubkey,
