@@ -270,7 +270,7 @@ pub struct NodeManager {
     pub(crate) nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node>>>>,
     auth: AuthManager,
     lnurl_client: LnUrlClient,
-    lsp_clients: Vec<LspClient>,
+    pub(crate) lsp_clients: Vec<LspClient>,
 }
 
 impl NodeManager {
