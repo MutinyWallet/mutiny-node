@@ -19,7 +19,8 @@ use gloo_utils::format::JsValueSerdeExt;
 use lightning::routing::gossip::NodeId;
 use lightning_invoice::Invoice;
 use lnurl::lnurl::LnUrl;
-use mutiny_core::nodemanager;
+use mutiny_core::redshift::RedshiftManager;
+use mutiny_core::{nodemanager, redshift::RedshiftRecipient};
 use std::str::FromStr;
 use wasm_bindgen::prelude::*;
 
@@ -522,8 +523,9 @@ impl MutinyWallet {
     /// Closes a channel with the given outpoint.
     #[wasm_bindgen]
     pub async fn close_channel(&self, outpoint: String) -> Result<(), MutinyJsError> {
-        let outpoint: OutPoint = OutPoint::from_str(outpoint.as_str()).expect("invalid outpoint");
-        Ok(self.inner.node_manager.close_channel(&outpoint).await?)
+        let outpoint: OutPoint =
+            OutPoint::from_str(&outpoint).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        Ok(self.inner.close_channel(&outpoint).await?)
     }
 
     /// Lists all the channels for all the nodes in the node manager.
@@ -539,6 +541,48 @@ impl MutinyWallet {
     pub async fn list_peers(&self) -> Result<JsValue /* Vec<MutinyPeer> */, MutinyJsError> {
         Ok(JsValue::from_serde(
             &self.inner.node_manager.list_peers().await?,
+        )?)
+    }
+
+    /// Initiates a redshift
+    #[wasm_bindgen]
+    pub async fn init_redshift(
+        &self,
+        outpoint: String,
+        lightning_recipient_pubkey: Option<String>,
+        lightning_recipient_connection_string: Option<String>,
+        onchain_recipient: Option<String>,
+    ) -> Result<JsValue /* Redshift */, MutinyJsError> {
+        let outpoint: OutPoint =
+            OutPoint::from_str(&outpoint).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        let introduction_node = match lightning_recipient_pubkey.clone() {
+            Some(p) => Some(PublicKey::from_str(&p)?),
+            None => None,
+        };
+        let redshift_recipient = match (lightning_recipient_pubkey.clone(), onchain_recipient) {
+            (Some(_), Some(_)) => {
+                return Err(MutinyJsError::InvalidArgumentsError);
+            }
+            (Some(l), None) => {
+                let l = PublicKey::from_str(&l)?;
+                RedshiftRecipient::Lightning(l)
+            }
+            (None, Some(o)) => {
+                let o = Address::from_str(&o)?;
+                RedshiftRecipient::OnChain(Some(o))
+            }
+            (None, None) => RedshiftRecipient::OnChain(None),
+        };
+        Ok(JsValue::from_serde(
+            &self
+                .inner
+                .init_redshift(
+                    outpoint,
+                    redshift_recipient,
+                    introduction_node,
+                    lightning_recipient_connection_string.as_deref(),
+                )
+                .await?,
         )?)
     }
 
