@@ -23,7 +23,7 @@ mod node;
 pub mod nodemanager;
 mod peermanager;
 mod proxy;
-mod redshift;
+pub mod redshift;
 mod socket;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
