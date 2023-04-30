@@ -529,6 +529,17 @@ impl NodeManager {
         )?)
     }
 
+    /// Get all redshift attempts for a given utxo
+    #[wasm_bindgen]
+    pub fn get_redshift(
+        &self,
+        outpoint: String,
+    ) -> Result<JsValue /* Vec<Redshift> */, MutinyJsError> {
+        let outpoint: OutPoint =
+            OutPoint::from_str(&outpoint).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        Ok(JsValue::from_serde(&self.inner.get_redshift(outpoint)?)?)
+    }
+
     /// Gets the current bitcoin price in USD.
     #[wasm_bindgen]
     pub async fn get_bitcoin_price(&self) -> Result<f32, MutinyJsError> {
