@@ -6,7 +6,6 @@ use crate::utils::sleep;
 use anyhow::anyhow;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, OutPoint};
-use lightning::log_error;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -328,7 +327,7 @@ impl RedshiftManager for NodeManager {
         // close introduction channel
         match rs.introduction_channel {
             Some(chan) => self.close_channel(&chan).await?,
-            None => log_error!(self.logger, "no introduction channel to close"),
+            None => debug!("no introduction channel to close"),
         }
 
         // close receiving channel
@@ -339,7 +338,7 @@ impl RedshiftManager for NodeManager {
                     self.close_channel(&chan).await?;
                     // todo send funds to address, ldk doesn't support this yet...
                 } else {
-                    log_error!(self.logger, "no output channel to close");
+                    debug!("no output channel to close");
                 }
             }
         }
