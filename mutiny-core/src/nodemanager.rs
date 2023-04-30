@@ -266,7 +266,7 @@ pub struct NodeManager {
     chain: Arc<MutinyChain>,
     fee_estimator: Arc<MutinyFeeEstimator>,
     storage: MutinyStorage,
-    node_storage: Mutex<NodeStorage>,
+    pub(crate) node_storage: Mutex<NodeStorage>,
     nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node>>>>,
     auth: AuthManager,
     lnurl_client: LnUrlClient,
