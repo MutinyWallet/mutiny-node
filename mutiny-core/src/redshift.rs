@@ -63,7 +63,6 @@ pub struct Redshift {
     pub output_utxo: Option<OutPoint>,
     pub introduction_channel: Option<OutPoint>,
     pub output_channel: Option<OutPoint>,
-    pub sending_node: PublicKey,
     pub introduction_node: PublicKey,
     pub amount_sats: u64,
     pub change_amt: Option<u64>,
