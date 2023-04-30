@@ -309,6 +309,9 @@ impl RedshiftManager for NodeManager {
             }
         }
 
+        // save to db
+        self.storage.update_redshift(rs)?;
+
         // TODO once completely done, close the existing channel
 
         Ok(())
