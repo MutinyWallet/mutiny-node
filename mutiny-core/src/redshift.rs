@@ -137,8 +137,8 @@ pub trait RedshiftManager {
         &self,
         utxo: OutPoint,
         recipient: RedshiftRecipient,
-        introduction_node: PublicKey,
-        connection_string: &str,
+        introduction_node: Option<PublicKey>,
+        connection_string: Option<&str>,
     ) -> Result<Redshift, MutinyError>;
 
     async fn attempt_payments(&self, rs: Redshift) -> Result<(), MutinyError>;
@@ -179,8 +179,8 @@ impl RedshiftManager for NodeManager {
         &self,
         utxo: OutPoint,
         recipient: RedshiftRecipient,
-        introduction_node: PublicKey,
-        connection_string: &str,
+        introduction_node: Option<PublicKey>,
+        connection_string: Option<&str>,
     ) -> Result<Redshift, MutinyError> {
         // verify utxo exists
         let utxos = self.list_utxos()?;
@@ -193,9 +193,23 @@ impl RedshiftManager for NodeManager {
         let node = self.new_node().await?;
 
         // connect to introduction node
-        let connect_string = format!("{introduction_node}@{connection_string}");
-        self.connect_to_peer(&node.pubkey, &connect_string, None)
-            .await?;
+        let introduction_node = match (introduction_node, connection_string) {
+            (Some(i), Some(c)) => {
+                let connect_string = format!("{i}@{c}");
+                self.connect_to_peer(&node.pubkey, &connect_string, None)
+                    .await?;
+                i
+            }
+            _ => {
+                // get the first LSP as the introduction node
+                // TODO allow falling back to others
+                if self.lsp_clients.is_empty() {
+                    return Err(MutinyError::LspFailure);
+                } else {
+                    self.lsp_clients.first().unwrap().pubkey
+                }
+            }
+        };
 
         // generate random user channel id
         let mut user_channel_id_bytes = [0u8; 16];
