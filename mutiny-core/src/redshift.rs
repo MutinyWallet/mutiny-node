@@ -297,6 +297,10 @@ impl RedshiftManager for NodeManager {
                 if i.paid {
                     debug!("paid the redshift invoice");
                     rs.payment_attempted(local_max);
+
+                    // TODO when running in a for loop, only
+                    // return this when it is actually done
+                    rs.status = RedshiftStatus::Completed;
                 } else {
                     // TODO need to handle payments still pending
                     debug!("payment still pending...");
@@ -305,7 +309,7 @@ impl RedshiftManager for NodeManager {
             Err(e) => {
                 // TODO keep going through loop
                 error!("could not pay: {e}");
-                return Err(MutinyError::RoutingFailed);
+                rs.status = RedshiftStatus::Failed("could not pay invoice".to_string());
             }
         }
 
