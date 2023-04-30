@@ -54,9 +54,9 @@ pub struct NodeManager {
     scorer: Arc<utils::Mutex<ProbScorer>>,
     chain: Arc<MutinyChain>,
     fee_estimator: Arc<MutinyFeeEstimator>,
-    storage: MutinyStorage,
+    pub(crate) storage: MutinyStorage,
     node_storage: Mutex<NodeStorage>,
-    nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node>>>>,
+    pub(crate) nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node>>>>,
     auth: AuthManager,
     lnurl_client: LnUrlClient,
     lsp_clients: Vec<LspClient>,
@@ -1143,6 +1143,34 @@ impl NodeManager {
                 );
                 Err(MutinyError::NotFound)
             }
+        }
+    }
+
+    /// Opens a channel from our selected node to the given pubkey.
+    /// It will spend the given utxos in full to fund the channel.
+    ///
+    /// The node must be online and have a connection to the peer.
+    /// The UTXOs must all exist in the wallet.
+    pub async fn sweep_utxos_to_channel(
+        &self,
+        user_chan_id: Option<u128>,
+        from_node: &PublicKey,
+        utxos: &[OutPoint],
+        to_pubkey: PublicKey,
+    ) -> Result<MutinyChannel, MutinyError> {
+        let nodes = self.nodes.lock().await;
+        let node = nodes.get(from_node).unwrap();
+
+        let chan_id = node
+            .sweep_utxos_to_channel(user_chan_id, utxos, to_pubkey)
+            .await?;
+
+        let all_channels = node.channel_manager.list_channels();
+        let found_channel = all_channels.iter().find(|chan| chan.channel_id == chan_id);
+
+        match found_channel {
+            Some(channel) => Ok(channel.into()),
+            None => Err(MutinyError::ChannelCreationFailed), // what should we do here?
         }
     }
 
