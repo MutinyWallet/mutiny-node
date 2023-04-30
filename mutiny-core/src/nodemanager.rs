@@ -510,7 +510,7 @@ impl NodeManager {
                             .channel_manager
                             .list_usable_channels()
                             .iter()
-                            .find(|c| c.user_channel_id == redshift.id)
+                            .find(|c| c.user_channel_id == u128::from_be_bytes(redshift.id))
                         {
                             // update redshift status and save to storage
                             redshift
