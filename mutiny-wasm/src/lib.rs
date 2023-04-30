@@ -22,11 +22,12 @@ use lnurl::lnurl::LnUrl;
 use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::{nodemanager, redshift::RedshiftRecipient};
 use std::str::FromStr;
+use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct NodeManager {
-    inner: nodemanager::NodeManager,
+    inner: Arc<nodemanager::NodeManager>,
 }
 
 /// The [NodeManager] is the main entry point for interacting with the Mutiny Wallet.

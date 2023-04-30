@@ -5,6 +5,8 @@ use std::{collections::HashMap, ops::Deref, sync::Arc};
 use crate::auth::{AuthManager, AuthProfile};
 use crate::event::{HTLCStatus, PaymentInfo};
 use crate::indexed_db::MutinyStorage;
+use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
+use crate::utils::sleep;
 use crate::{
     chain::MutinyChain,
     error::MutinyError,
@@ -33,7 +35,9 @@ use lightning::chain::keysinterface::{NodeSigner, Recipient};
 use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning::ln::PaymentHash;
+use lightning::log_error;
 use lightning::routing::gossip::NodeId;
+use lightning::util::logger::*;
 use lightning_invoice::{Invoice, InvoiceDescription};
 use lnurl::lnurl::LnUrl;
 use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
@@ -60,6 +64,7 @@ pub struct NodeManager {
     auth: AuthManager,
     lnurl_client: LnUrlClient,
     pub(crate) lsp_clients: Vec<LspClient>,
+    logger: Arc<MutinyLogger>,
 }
 
 // This is the NodeStorage object saved to the DB
@@ -287,7 +292,7 @@ impl NodeManager {
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
-    ) -> Result<NodeManager, MutinyError> {
+    ) -> Result<Arc<NodeManager>, MutinyError> {
         let websocket_proxy_addr =
             websocket_proxy_addr.unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
 
@@ -415,6 +420,8 @@ impl NodeManager {
 
         info!("inserted updated nodes");
 
+        let nodes = Arc::new(Mutex::new(nodes_map));
+
         let seed = mnemonic.to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(network, &seed)?;
         let auth = AuthManager::new(xprivkey, storage.clone())?;
@@ -426,7 +433,7 @@ impl NodeManager {
             .build_async()
             .expect("failed to make lnurl client");
 
-        Ok(NodeManager {
+        let nm = Arc::new(NodeManager {
             mnemonic,
             network,
             wallet,
@@ -436,13 +443,60 @@ impl NodeManager {
             fee_estimator,
             storage,
             node_storage: Mutex::new(node_storage),
-            nodes: Arc::new(Mutex::new(nodes_map)),
+            nodes,
             websocket_proxy_addr,
             esplora,
             auth,
             lnurl_client,
             lsp_clients,
-        })
+            logger,
+        });
+
+        // todo move to start function
+        NodeManager::start_redshifts(nm.clone());
+
+        Ok(nm)
+    }
+
+    fn start_redshifts(nm: Arc<NodeManager>) {
+        let node_manager = nm.clone();
+        spawn_local(async move {
+            loop {
+                // find redshifts with channels ready
+                let all = nm.storage.get_redshifts().unwrap();
+                for mut redshift in all {
+                    if redshift.status == RedshiftStatus::ChannelOpening {
+                        let nodes = nm.nodes.lock().await;
+                        let node = nodes.get(&redshift.sending_node).unwrap();
+
+                        // check if channel is ready
+                        // using list_usable_channels because it checks for channel status
+                        if let Some(chan) = node
+                            .channel_manager
+                            .list_usable_channels()
+                            .iter()
+                            .find(|c| c.user_channel_id == redshift.id)
+                        {
+                            // update redshift status and save to storage
+                            redshift
+                                .channel_opened(chan.funding_txo.unwrap().into_bitcoin_outpoint());
+                            nm.storage
+                                .update_redshift(redshift.clone())
+                                .expect("failed to update redshift");
+
+                            // start attempting payments
+                            // todo this might need to be in another spawn local
+                            if let Err(e) = node_manager.attempt_payments(redshift).await {
+                                log_error!(nm.logger, "Error attempting redshift payments: {e}");
+                            }
+                        }
+                    }
+                }
+
+                // sleep 10 seconds
+                sleep(10_000).await;
+            }
+        });
     }
 
     /// Broadcast a transaction to the network.
