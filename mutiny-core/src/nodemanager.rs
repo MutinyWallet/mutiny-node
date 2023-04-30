@@ -4,6 +4,8 @@ use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use crate::event::{HTLCStatus, PaymentInfo};
 use crate::indexed_db::MutinyStorage;
+use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
+use crate::utils::sleep;
 use crate::{
     auth::{AuthManager, AuthProfile},
     MutinyWalletConfig,
@@ -38,6 +40,7 @@ use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning::ln::PaymentHash;
 use lightning::routing::gossip::NodeId;
 use lightning::util::logger::Logger;
+use lightning::util::logger::*;
 use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::{Invoice, InvoiceDescription};
 use lnurl::lnurl::LnUrl;
@@ -423,6 +426,8 @@ impl NodeManager {
 
         log_info!(logger, "inserted updated nodes");
 
+        let nodes = Arc::new(Mutex::new(nodes_map));
+
         let seed = mnemonic.to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(network, &seed)?;
         let auth = AuthManager::new(xprivkey, storage.clone())?;
@@ -445,7 +450,7 @@ impl NodeManager {
             fee_estimator,
             storage,
             node_storage: Mutex::new(node_storage),
-            nodes: Arc::new(Mutex::new(nodes_map)),
+            nodes,
             websocket_proxy_addr,
             esplora,
             auth,
@@ -496,6 +501,47 @@ impl NodeManager {
         }
 
         Ok(())
+    }
+
+    fn start_redshifts(nm: Arc<NodeManager>) {
+        let node_manager = nm.clone();
+        spawn_local(async move {
+            loop {
+                // find redshifts with channels ready
+                let all = nm.storage.get_redshifts().unwrap();
+                for mut redshift in all {
+                    if redshift.status == RedshiftStatus::ChannelOpening {
+                        let nodes = nm.nodes.lock().await;
+                        let node = nodes.get(&redshift.sending_node).unwrap();
+
+                        // check if channel is ready
+                        // using list_usable_channels because it checks for channel status
+                        if let Some(chan) = node
+                            .channel_manager
+                            .list_usable_channels()
+                            .iter()
+                            .find(|c| c.user_channel_id == redshift.id)
+                        {
+                            // update redshift status and save to storage
+                            redshift
+                                .channel_opened(chan.funding_txo.unwrap().into_bitcoin_outpoint());
+                            nm.storage
+                                .update_redshift(redshift.clone())
+                                .expect("failed to update redshift");
+
+                            // start attempting payments
+                            // todo this might need to be in another spawn local
+                            if let Err(e) = node_manager.attempt_payments(redshift).await {
+                                log_error!(nm.logger, "Error attempting redshift payments: {e}");
+                            }
+                        }
+                    }
+                }
+
+                // sleep 10 seconds
+                sleep(10_000).await;
+            }
+        });
     }
 
     /// Broadcast a transaction to the network.
