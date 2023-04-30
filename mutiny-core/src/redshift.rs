@@ -1,6 +1,9 @@
 use crate::error::MutinyError;
 use crate::indexed_db::MutinyStorage;
 use crate::nodemanager::NodeManager;
+use crate::utils;
+use crate::utils::sleep;
+use anyhow::anyhow;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, OutPoint};
 use log::{debug, error};
@@ -55,11 +58,11 @@ pub struct Redshift {
     pub id: u128,
     pub input_utxo: OutPoint,
     pub status: RedshiftStatus,
+    pub sending_node: PublicKey,
     pub recipient: RedshiftRecipient,
     pub output_utxo: Option<OutPoint>,
     pub introduction_channel: Option<OutPoint>,
     pub output_channel: Option<OutPoint>,
-    pub sending_node: PublicKey,
     pub introduction_node: PublicKey,
     pub amount_sats: u64,
     pub change_amt: Option<u64>,
@@ -121,26 +124,115 @@ impl RedshiftStorage for MutinyStorage {
 }
 
 pub trait RedshiftManager {
+    async fn await_chan_funding_tx(
+        &self,
+        sending_node: &PublicKey,
+        user_channel_id: u128,
+        timeout: u64,
+    ) -> Result<OutPoint, MutinyError>;
+
     /// Initializes a redshift. Creates a new node and attempts
     /// to open a channel to the introduction node.
-    fn init_redshift(
+    async fn init_redshift(
         &self,
         utxo: OutPoint,
         recipient: RedshiftRecipient,
         introduction_node: PublicKey,
+        connection_string: &str,
     ) -> Result<Redshift, MutinyError>;
 
     async fn attempt_payments(&self, rs: Redshift) -> Result<(), MutinyError>;
 }
 
 impl RedshiftManager for NodeManager {
-    fn init_redshift(
+    async fn await_chan_funding_tx(
+        &self,
+        sending_node: &PublicKey,
+        user_channel_id: u128,
+        timeout: u64,
+    ) -> Result<OutPoint, MutinyError> {
+        let node = {
+            let nodes = self.nodes.lock().await;
+            nodes.get(sending_node).unwrap().to_owned()
+        };
+        let start = utils::now().as_secs();
+        loop {
+            let channels = node.channel_manager.list_channels();
+            let channel = channels
+                .iter()
+                .find(|c| c.user_channel_id == user_channel_id);
+
+            if let Some(outpoint) = channel.and_then(|c| c.funding_txo) {
+                return Ok(outpoint.into_bitcoin_outpoint());
+            }
+
+            let now = utils::now().as_secs();
+            if now - start > timeout {
+                return Err(MutinyError::PaymentTimeout);
+            }
+
+            sleep(250).await;
+        }
+    }
+
+    async fn init_redshift(
         &self,
         utxo: OutPoint,
         recipient: RedshiftRecipient,
         introduction_node: PublicKey,
+        connection_string: &str,
     ) -> Result<Redshift, MutinyError> {
-        todo!()
+        // verify utxo exists
+        let utxos = self.list_utxos()?;
+        let u = utxos
+            .iter()
+            .find(|u| u.outpoint == utxo)
+            .ok_or_else(|| MutinyError::Other(anyhow!("Could not find UTXO")))?;
+
+        // create new node
+        let node = self.new_node().await?;
+
+        // connect to introduction node
+        let connect_string = format!("{introduction_node}@{connection_string}");
+        self.connect_to_peer(&node.pubkey, &connect_string, None)
+            .await?;
+
+        // generate random user channel id
+        let mut user_channel_id_bytes = [0u8; 16];
+        getrandom::getrandom(&mut user_channel_id_bytes)
+            .map_err(|_| MutinyError::Other(anyhow!("Failed to generate user channel id")))?;
+        let user_chan_id = u128::from_be_bytes(user_channel_id_bytes);
+
+        // initiate channel open
+        let channel = self
+            .sweep_utxos_to_channel(Some(user_chan_id), &node.pubkey, &[utxo], introduction_node)
+            .await?;
+
+        // fees paid for opening channel.
+        let fees = u.txout.value - channel.size;
+
+        let channel_outpoint = self
+            .await_chan_funding_tx(&node.pubkey, user_chan_id, 60)
+            .await?;
+
+        // save to db
+        let redshift = Redshift {
+            id: user_chan_id,
+            input_utxo: utxo,
+            status: RedshiftStatus::ChannelOpening,
+            sending_node: node.pubkey,
+            recipient,
+            output_utxo: None,
+            introduction_channel: Some(channel_outpoint),
+            output_channel: None,
+            introduction_node,
+            amount_sats: u.txout.value,
+            change_amt: None,
+            fees_paid: fees,
+        };
+        self.storage.update_redshift(redshift.clone())?;
+
+        Ok(redshift)
     }
 
     async fn attempt_payments(&self, mut rs: Redshift) -> Result<(), MutinyError> {
