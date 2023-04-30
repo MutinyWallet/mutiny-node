@@ -8,7 +8,7 @@ use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_macros::maybe_await;
 use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
-use bitcoin::{Address, Network, Script, Transaction, Txid};
+use bitcoin::{Address, Network, OutPoint, Script, Transaction, Txid};
 use esplora_client::AsyncClient;
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use log::debug;
@@ -22,7 +22,7 @@ pub struct MutinyWallet {
     pub wallet: Arc<RwLock<Wallet<MutinyStorage>>>,
     pub network: Network,
     pub blockchain: Arc<AsyncClient>,
-    fees: Arc<MutinyFeeEstimator>,
+    pub fees: Arc<MutinyFeeEstimator>,
 }
 
 impl MutinyWallet {
@@ -246,6 +246,31 @@ impl MutinyWallet {
         maybe_await!(self.blockchain.broadcast(&raw_transaction))?;
         debug!("Transaction broadcast! TXID: {txid}");
         Ok(txid)
+    }
+
+    /// Spend all the selected utxos a given output.
+    /// A fee rate is not specified because it should be precalculated
+    /// in the output's amount.
+    pub(crate) fn spend_utxos_to_output(
+        &self,
+        utxos: &[OutPoint],
+        spk: Script,
+        amount_sats: u64,
+    ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
+        let mut wallet = self.wallet.try_write()?;
+        let (mut psbt, details) = {
+            let mut builder = wallet.build_tx();
+            builder
+                .manually_selected_only()
+                .add_utxos(utxos)?
+                .add_recipient(spk, amount_sats);
+            builder.finish()?
+        };
+        debug!("Transaction details: {:#?}", details);
+        debug!("Unsigned PSBT: {}", &psbt);
+        let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
+        debug!("{}", finalized);
+        Ok(psbt)
     }
 }
 

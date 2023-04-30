@@ -1,4 +1,5 @@
 use crate::keymanager::PhantomKeysManager;
+use crate::ldkstorage::ChannelOpenParams;
 use crate::{
     background::process_events_async,
     chain::MutinyChain,
@@ -22,11 +23,13 @@ use crate::{
 };
 use crate::{indexed_db::MutinyStorage, lspclient::FeeRequest};
 use anyhow::{anyhow, Context};
+use bdk::FeeRate;
 use bdk_esplora::esplora_client::AsyncClient;
 use bip39::Mnemonic;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
 use bitcoin::secp256k1::rand;
-use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network};
+use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint};
+use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::ln::channelmanager::RecipientOnionFields;
 use lightning::{
     chain::{
@@ -43,7 +46,7 @@ use lightning::{
         },
         PaymentHash, PaymentPreimage,
     },
-    log_info, log_warn,
+    log_error, log_info, log_warn,
     routing::{
         gossip,
         gossip::NodeId,
@@ -105,6 +108,12 @@ pub(crate) struct PubkeyConnectionInfo {
     pub original_connection_string: String,
 }
 
+// Constants for overhead, input, and output sizes
+const TX_OVERHEAD: usize = 10;
+const TAPROOT_INPUT_NON_WITNESS_SIZE: usize = 41;
+const TAPROOT_INPUT_WITNESS_SIZE: usize = 67;
+const P2WSH_OUTPUT_SIZE: usize = 43;
+
 impl PubkeyConnectionInfo {
     pub fn new(connection: &str) -> Result<Self, MutinyError> {
         if connection.is_empty() {
@@ -141,6 +150,7 @@ pub(crate) struct Node {
     pub chain_monitor: Arc<ChainMonitor>,
     network: Network,
     pub persister: Arc<MutinyNodePersister>,
+    wallet: Arc<MutinyWallet>,
     logger: Arc<MutinyLogger>,
     websocket_proxy_addr: String,
     multi_socket: MultiWsSocketDescriptor,
@@ -500,6 +510,7 @@ impl Node {
             chain_monitor,
             network,
             persister,
+            wallet,
             logger,
             websocket_proxy_addr,
             multi_socket,
@@ -1024,6 +1035,96 @@ impl Node {
                     "",
                     0,
                 ));
+                Err(MutinyError::ChannelCreationFailed)
+            }
+        }
+    }
+
+    pub async fn sweep_utxos_to_channel(
+        &self,
+        utxos: &[OutPoint],
+        pubkey: PublicKey,
+    ) -> Result<[u8; 32], MutinyError> {
+        // Calculate the total value of the selected utxos
+        let utxo_value: u64 = {
+            // find the wallet utxos
+            let wallet = self.wallet.wallet.try_read()?;
+            let all_utxos = wallet.list_unspent();
+
+            // calculate total value of utxos
+            let mut total = 0;
+            for utxo in all_utxos {
+                if utxos.contains(&utxo.outpoint) {
+                    total += utxo.txout.value;
+                }
+            }
+            total
+        };
+
+        // Calculate the expected transaction fee
+        let sats_per_kw = self
+            .wallet
+            .fees
+            .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+        let expected_weight = {
+            let num_utxos = utxos.len();
+            // Calculate the non-witness and witness data sizes
+            let non_witness_size =
+                TX_OVERHEAD + (num_utxos * TAPROOT_INPUT_NON_WITNESS_SIZE) + P2WSH_OUTPUT_SIZE;
+            let witness_size = num_utxos * TAPROOT_INPUT_WITNESS_SIZE;
+
+            // Calculate the transaction weight
+            (non_witness_size * 4) + witness_size
+        };
+        let expected_fee = FeeRate::from_sat_per_kwu(sats_per_kw as f32).fee_wu(expected_weight);
+
+        // channel size is the total value of the utxos minus the fee
+        let channel_value_satoshis = utxo_value - expected_fee;
+
+        let mut config = default_user_config();
+        // if we are opening channel to LSP, turn off SCID alias until CLN is updated
+        // LSP protects all invoice information anyways, so no UTXO leakage
+        if let Some(lsp) = self.lsp_client.clone() {
+            if pubkey == lsp.pubkey {
+                config.channel_handshake_config.negotiate_scid_privacy = false;
+            }
+        }
+
+        // generate random user channel id
+        let mut user_channel_id_bytes = [0u8; 16];
+        getrandom::getrandom(&mut user_channel_id_bytes)
+            .map_err(|_| MutinyError::Other(anyhow!("Failed to generate user channel id")))?;
+        let user_channel_id = u128::from_be_bytes(user_channel_id_bytes);
+
+        // save params to db
+        let params = ChannelOpenParams {
+            sats_per_kw,
+            utxos: utxos.to_vec(),
+        };
+        self.persister
+            .persist_channel_open_params(user_channel_id, params)?;
+
+        match self.channel_manager.create_channel(
+            pubkey,
+            channel_value_satoshis,
+            0,
+            user_channel_id,
+            Some(config),
+        ) {
+            Ok(res) => {
+                log_info!(
+                    self.logger,
+                    "SUCCESS: channel initiated with peer: {pubkey:?}"
+                );
+                Ok(res)
+            }
+            Err(e) => {
+                log_error!(
+                    self.logger,
+                    "ERROR: failed to open channel to pubkey {pubkey:?}: {e:?}"
+                );
+                // delete params from db because channel failed
+                self.persister.delete_channel_open_params(user_channel_id)?;
                 Err(MutinyError::ChannelCreationFailed)
             }
         }

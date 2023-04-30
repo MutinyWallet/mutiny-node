@@ -12,7 +12,7 @@ use lightning::chain::keysinterface::SpendableOutputDescriptor;
 use lightning::events::{Event, PaymentPurpose};
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
-    log_debug, log_error,
+    log_debug, log_error, log_info,
     util::errors::APIError,
     util::logger::{Logger, Record},
 };
@@ -94,59 +94,53 @@ impl EventHandler {
                 counterparty_node_id,
                 channel_value_satoshis,
                 output_script,
-                ..
+                user_channel_id,
             } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!("EVENT: FundingGenerationReady processing"),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_debug!(self.logger, "EVENT: FundingGenerationReady processing");
 
-                let psbt = match self.wallet.create_signed_psbt_to_spk(
-                    output_script,
-                    channel_value_satoshis,
-                    None,
-                ) {
-                    Ok(psbt) => psbt,
+                // Get the open parameters for this channel
+                let params_opt = match self.persister.get_channel_open_params(user_channel_id) {
+                    Ok(params) => params,
                     Err(e) => {
-                        self.logger.log(&Record::new(
-                                lightning::util::logger::Level::Error,
-                                format_args!("ERROR: Could not create a signed transaction to open channel with: {e}"),
-                                "node",
-                                "",
-                                0,
-                            ));
+                        log_error!(self.logger, "ERROR: Could not get channel open params: {e}");
                         return;
                     }
                 };
-                if self
-                    .channel_manager
-                    .funding_transaction_generated(
-                        &temporary_channel_id,
-                        &counterparty_node_id,
-                        psbt.extract_tx(),
-                    )
-                    .is_err()
-                {
-                    self.logger.log(&Record::new(
-                            lightning::util::logger::Level::Error,
-                            format_args!("ERROR: Channel went away before we could fund it. The peer disconnected or refused the channel."),
-                            "node",
-                            "",
-                            0,
-                        ));
+
+                let psbt_result = match params_opt {
+                    None => self.wallet.create_signed_psbt_to_spk(
+                        output_script,
+                        channel_value_satoshis,
+                        None,
+                    ),
+                    Some(params) => self.wallet.spend_utxos_to_output(
+                        &params.utxos,
+                        output_script,
+                        channel_value_satoshis,
+                    ),
+                };
+
+                let psbt = match psbt_result {
+                    Ok(psbt) => psbt,
+                    Err(e) => {
+                        log_error!(self.logger, "ERROR: Could not create a signed transaction to open channel with: {e}");
+                        return;
+                    }
+                };
+
+                if let Err(e) = self.channel_manager.funding_transaction_generated(
+                    &temporary_channel_id,
+                    &counterparty_node_id,
+                    psbt.extract_tx(),
+                ) {
+                    log_error!(
+                        self.logger,
+                        "ERROR: Could not send funding transaction to channel manager: {e:?}"
+                    );
                     return;
                 }
 
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Info,
-                    format_args!("FundingGenerationReady success"),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_info!(self.logger, "EVENT: FundingGenerationReady success");
             }
             Event::PaymentClaimable {
                 receiver_node_id,

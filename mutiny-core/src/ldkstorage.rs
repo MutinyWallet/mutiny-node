@@ -32,6 +32,7 @@ use lightning::util::logger::Logger;
 use lightning::util::logger::Record;
 use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
@@ -40,6 +41,7 @@ pub(crate) const CHANNEL_MANAGER_KEY: &str = "manager";
 const MONITORS_PREFIX_KEY: &str = "monitors/";
 const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
 const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
+const CHANNEL_OPENING_PARAMS_PREFIX: &str = "chan_open_params/";
 const FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY: &str = "failed_spendable_outputs";
 
 pub(crate) type PhantomChannelManager = LdkChannelManager<
@@ -56,7 +58,7 @@ pub(crate) type PhantomChannelManager = LdkChannelManager<
 #[derive(Clone)]
 pub struct MutinyNodePersister {
     node_id: String,
-    storage: MutinyStorage,
+    pub(crate) storage: MutinyStorage,
 }
 
 pub(crate) struct ReadChannelManager {
@@ -324,6 +326,38 @@ impl MutinyNodePersister {
 
         Ok(())
     }
+
+    pub(crate) fn persist_channel_open_params(
+        &self,
+        id: u128,
+        params: ChannelOpenParams,
+    ) -> Result<(), MutinyError> {
+        let key = self.get_key(&channel_open_params_key(id));
+        self.storage.set(&key, params)
+    }
+
+    pub(crate) fn get_channel_open_params(
+        &self,
+        id: u128,
+    ) -> Result<Option<ChannelOpenParams>, MutinyError> {
+        let key = self.get_key(&channel_open_params_key(id));
+        self.storage.get(key)
+    }
+
+    pub(crate) fn delete_channel_open_params(&self, id: u128) -> Result<(), MutinyError> {
+        let key = self.get_key(&channel_open_params_key(id));
+        self.storage.delete(key)
+    }
+}
+
+fn channel_open_params_key(id: u128) -> String {
+    format!("{CHANNEL_OPENING_PARAMS_PREFIX}{id}")
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct ChannelOpenParams {
+    pub sats_per_kw: u32,
+    pub utxos: Vec<bitcoin::OutPoint>,
 }
 
 fn payment_key(inbound: bool, payment_hash: &PaymentHash) -> String {
