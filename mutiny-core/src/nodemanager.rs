@@ -1054,6 +1054,31 @@ impl NodeManager {
         }
     }
 
+    /// Opens a channel from our selected node to the given pubkey.
+    /// It will spend the given utxos in full to fund the channel.
+    ///
+    /// The node must be online and have a connection to the peer.
+    /// The UTXOs must all exist in the wallet.
+    pub async fn sweep_utxos_to_channel(
+        &self,
+        from_node: &PublicKey,
+        utxos: &[OutPoint],
+        to_pubkey: PublicKey,
+    ) -> Result<MutinyChannel, MutinyError> {
+        let nodes = self.nodes.lock().await;
+        let node = nodes.get(from_node).unwrap();
+
+        let chan_id = node.sweep_utxos_to_channel(utxos, to_pubkey).await?;
+
+        let all_channels = node.channel_manager.list_channels();
+        let found_channel = all_channels.iter().find(|chan| chan.channel_id == chan_id);
+
+        match found_channel {
+            Some(channel) => Ok(channel.into()),
+            None => Err(MutinyError::ChannelCreationFailed), // what should we do here?
+        }
+    }
+
     /// Closes a channel with the given outpoint.
     pub async fn close_channel(&self, outpoint: &OutPoint) -> Result<(), MutinyError> {
         let nodes = self.nodes.lock().await;
