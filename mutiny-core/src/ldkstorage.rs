@@ -334,7 +334,7 @@ impl MutinyNodePersister {
         params: ChannelOpenParams,
     ) -> Result<(), MutinyError> {
         let key = self.get_key(&channel_open_params_key(id));
-        self.storage.set(&key, params)
+        self.storage.set(key, params)
     }
 
     pub(crate) fn get_channel_open_params(
