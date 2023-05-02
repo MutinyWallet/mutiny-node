@@ -416,7 +416,7 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner> Persist<ChannelSigner> for Muti
         _update_id: MonitorUpdateId,
     ) -> chain::ChannelMonitorUpdateStatus {
         let key = format!(
-            "{MONITORS_PREFIX_KEY}/{}_{}",
+            "{MONITORS_PREFIX_KEY}{}_{}",
             funding_txo.txid.to_hex(),
             funding_txo.index
         );
@@ -434,7 +434,7 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner> Persist<ChannelSigner> for Muti
         _update_id: MonitorUpdateId,
     ) -> chain::ChannelMonitorUpdateStatus {
         let key = format!(
-            "{MONITORS_PREFIX_KEY}/{}_{}",
+            "{MONITORS_PREFIX_KEY}{}_{}",
             funding_txo.txid.to_hex(),
             funding_txo.index
         );
