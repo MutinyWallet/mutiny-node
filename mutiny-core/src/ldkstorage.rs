@@ -253,15 +253,14 @@ impl MutinyNodePersister {
             true => PAYMENT_INBOUND_PREFIX_KEY,
             false => PAYMENT_OUTBOUND_PREFIX_KEY,
         };
-        let map: HashMap<String, PaymentInfo> = self.storage.scan(prefix, None)?;
+        let suffix = format!("_{}", self.node_id);
+        let map: HashMap<String, PaymentInfo> = self.storage.scan(prefix, Some(&suffix))?;
 
         // convert keys to PaymentHash
         Ok(map
             .into_iter()
             .map(|(key, value)| {
-                let payment_hash_str = key
-                    .trim_start_matches(prefix)
-                    .trim_end_matches(&format!("_{}", self.node_id));
+                let payment_hash_str = key.trim_start_matches(prefix).trim_end_matches(&suffix);
                 let hash: [u8; 32] =
                     FromHex::from_hex(payment_hash_str).expect("key should be a sha256 hash");
                 (PaymentHash(hash), value)
