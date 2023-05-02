@@ -1291,6 +1291,7 @@ pub(crate) fn default_user_config() -> UserConfig {
             minimum_depth: 1,
             announced_channel: false,
             negotiate_scid_privacy: true,
+            commit_upfront_shutdown_pubkey: false,
             max_inbound_htlc_value_in_flight_percent_of_channel: 100,
             ..Default::default()
         },
