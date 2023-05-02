@@ -261,17 +261,6 @@ impl Node {
 
         let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.pubkey);
 
-        // save connection info peer connection list to auto connect
-        if let Some(lsp) = lsp_client.clone() {
-            let node_id = NodeId::from_pubkey(&lsp.pubkey);
-
-            if let Err(e) =
-                save_peer_connection_info(&uuid, &node_id, &lsp.connection_string, None).await
-            {
-                error!("could not save connection to lsp: {e}");
-            }
-        }
-
         // init event handler
         let event_handler = EventHandler::new(
             channel_manager.clone(),
@@ -499,6 +488,34 @@ impl Node {
                 sleep(5 * 1000).await;
             }
         });
+
+        // save connection info peer connection list to auto connect
+        // also go ahead and connect to the LSP peer
+        if let Some(lsp) = lsp_client.clone() {
+            let node_id = NodeId::from_pubkey(&lsp.pubkey);
+
+            match connect_peer(
+                multi_socket.clone(),
+                &websocket_proxy_addr,
+                &PubkeyConnectionInfo::new(lsp.connection_string.as_str())?,
+                peer_man.clone(),
+            )
+            .await
+            {
+                Ok(_) => {
+                    trace!("auto connected lsp: {pubkey}");
+                }
+                Err(e) => {
+                    trace!("could not connect to lsp {pubkey}: {e}");
+                }
+            }
+
+            if let Err(e) =
+                save_peer_connection_info(&uuid, &node_id, &lsp.connection_string, None).await
+            {
+                error!("could not save connection to lsp: {e}");
+            }
+        }
 
         Ok(Node {
             _uuid: uuid,
