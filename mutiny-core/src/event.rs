@@ -12,7 +12,7 @@ use lightning::chain::keysinterface::SpendableOutputDescriptor;
 use lightning::events::{Event, PaymentPurpose};
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
-    log_debug, log_error, log_info,
+    log_debug, log_error, log_info, log_warn,
     util::errors::APIError,
     util::logger::{Logger, Record},
 };
@@ -113,11 +113,23 @@ impl EventHandler {
                         channel_value_satoshis,
                         None,
                     ),
-                    Some(params) => self.wallet.spend_utxos_to_output(
-                        &params.utxos,
-                        output_script,
-                        channel_value_satoshis,
-                    ),
+                    Some(params) => {
+                        let psbt = self.wallet.spend_utxos_to_output(
+                            &params.utxos,
+                            output_script,
+                            channel_value_satoshis,
+                        );
+
+                        // delete from storage, if it fails, it is fine, just log it.
+                        if let Err(e) = self.persister.delete_channel_open_params(user_channel_id) {
+                            log_warn!(
+                                self.logger,
+                                "ERROR: Could not delete channel open params, but continuing: {e}"
+                            );
+                        }
+
+                        psbt
+                    }
                 };
 
                 let psbt = match psbt_result {
