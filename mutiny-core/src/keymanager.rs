@@ -144,23 +144,15 @@ impl SignerProvider for PhantomKeysManager {
 }
 
 pub(crate) fn generate_seed(num_words: u8) -> Result<Mnemonic, MutinyError> {
-    match num_words {
-        12 => generate_12_word_seed(),
-        24 => generate_24_word_seed(),
-        _ => Err(MutinyError::SeedGenerationFailed),
-    }
-}
+    // the bip39 library supports 12. 15, 18, 21, and 24 word mnemonics
+    // we only support 12 & 24 for backwards compatibility with other wallets
+    let entropy_size = match num_words {
+        12 => 16,
+        24 => 32,
+        _ => return Err(MutinyError::SeedGenerationFailed),
+    };
 
-fn generate_24_word_seed() -> Result<Mnemonic, MutinyError> {
-    let mut entropy = [0u8; 32];
-    getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
-    let mnemonic =
-        Mnemonic::from_entropy(&entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
-    Ok(mnemonic)
-}
-
-fn generate_12_word_seed() -> Result<Mnemonic, MutinyError> {
-    let mut entropy = [0u8; 16];
+    let mut entropy = vec![0u8; entropy_size];
     getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
     let mnemonic =
         Mnemonic::from_entropy(&entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
