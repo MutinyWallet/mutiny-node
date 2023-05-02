@@ -95,10 +95,12 @@ pub fn mutiny_conn_proxy_to_url(proxy_url: &str, peer_pubkey: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::proxy::{Proxy, PubkeyConnectionInfo};
+    #[cfg(feature = "ignored_tests")]
+    use crate::proxy::*;
+
     use crate::test_utils::*;
 
-    use crate::proxy::{mutiny_conn_proxy_to_url, tcp_proxy_to_url, WsProxy};
+    use crate::proxy::{mutiny_conn_proxy_to_url, tcp_proxy_to_url};
 
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
