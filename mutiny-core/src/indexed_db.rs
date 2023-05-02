@@ -8,6 +8,7 @@ use bdk::chain::keychain::{KeychainChangeSet, KeychainTracker, PersistBackend};
 use bdk::chain::sparse_chain::ChainPosition;
 use bip39::Mnemonic;
 use gloo_utils::format::JsValueSerdeExt;
+use log::error;
 use rexie::{ObjectStore, Rexie, TransactionMode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -57,7 +58,12 @@ impl MutinyStorage {
         T: Serialize,
     {
         let key = key.as_ref().to_string();
-        let data = serde_json::to_value(value)?;
+        let data = serde_json::to_value(value).map_err(|e| {
+            error!("could not serde_json value from {key}: {e}");
+            MutinyError::PersistenceFailed {
+                source: MutinyStorageError::SerdeError { source: e },
+            }
+        })?;
 
         let indexed_db = self.indexed_db.clone();
         let password = self.password.clone();
