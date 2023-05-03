@@ -4,9 +4,11 @@ use crate::nodemanager::NodeManager;
 use crate::utils;
 use crate::utils::sleep;
 use anyhow::anyhow;
+use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, OutPoint};
-use log::{debug, error};
+use lightning::util::logger::Logger;
+use lightning::{log_debug, log_error, log_info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -260,6 +262,11 @@ impl RedshiftManager for NodeManager {
     }
 
     async fn attempt_payments(&self, mut rs: Redshift) -> Result<(), MutinyError> {
+        log_info!(
+            &self.logger,
+            "Attempting payments for redshift {}",
+            rs.id.to_hex()
+        );
         // TODO find the max channel reserve
         let max_sats = (rs.amount_sats as f64 * 0.99) as u64;
         let min_sats = 10_000;
@@ -298,6 +305,12 @@ impl RedshiftManager for NodeManager {
                 .create_invoice(Some(local_max_sats), None, None)
                 .await?; // TODO probably should handle error
 
+            log_debug!(
+                &self.logger,
+                "created invoice: {}",
+                invoice.payment_hash().to_hex()
+            );
+
             // make attempts to pay it
             match sending_node
                 .pay_invoice_with_timeout(&invoice, None, None)
@@ -305,7 +318,7 @@ impl RedshiftManager for NodeManager {
             {
                 Ok(i) => {
                     if i.paid {
-                        debug!("paid the redshift invoice");
+                        log_debug!(&self.logger, "successfully paid the redshift invoice!");
                         let prev_amount_paid = match rs.status {
                             RedshiftStatus::AttemptingPayments(x) => x,
                             _ => 0,
@@ -319,17 +332,21 @@ impl RedshiftManager for NodeManager {
                             break;
                         }
 
+                        // save to db, to update the frontend
+                        // do it after the if statement so we don't save the redshift twice
+                        self.storage.update_redshift(rs.clone())?;
+
                         // keep trying with the remaining amount
                         local_max_sats = max_sats.saturating_sub(local_max_sats);
                     } else {
                         // TODO need to handle payments still pending
-                        debug!("payment still pending...");
+                        log_debug!(&self.logger, "payment still pending...");
                     }
                 }
                 Err(e) => {
+                    log_error!(&self.logger, "could not pay: {e}");
                     // Keep trying to pay but go down 5% of the channel amount
-                    error!("could not pay: {e}");
-                    let decrement = (local_max_sats as f64 * 0.05) as u64;
+                    let decrement = (max_sats as f64 * 0.05) as u64;
                     local_max_sats = local_max_sats.saturating_sub(decrement);
                 }
             }
@@ -341,7 +358,7 @@ impl RedshiftManager for NodeManager {
         // close introduction channel
         match rs.introduction_channel {
             Some(chan) => self.close_channel(&chan).await?,
-            None => debug!("no introduction channel to close"),
+            None => log_debug!(&self.logger, "no introduction channel to close"),
         }
 
         // close receiving channel
@@ -352,7 +369,7 @@ impl RedshiftManager for NodeManager {
                     self.close_channel(&chan).await?;
                     // todo send funds to address, ldk doesn't support this yet...
                 } else {
-                    debug!("no output channel to close");
+                    log_debug!(&self.logger, "no output channel to close");
                 }
             }
         }
