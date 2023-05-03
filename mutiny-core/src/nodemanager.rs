@@ -315,7 +315,13 @@ impl NodeManager {
             fee_estimator.clone(),
         )?);
 
-        let chain = Arc::new(MutinyChain::new(tx_sync));
+        let network_magic = match network {
+            Network::Bitcoin => Network::Bitcoin.magic().to_le_bytes(),
+            Network::Testnet => Network::Testnet.magic().to_le_bytes(),
+            Network::Regtest => Network::Regtest.magic().to_le_bytes(),
+            Network::Signet => [0xA5, 0xDF, 0x2D, 0xCB], // mutinynet has different magic
+        };
+        let chain = Arc::new(MutinyChain::new(tx_sync, network_magic));
 
         // We don't need to actually sync gossip in tests unless we need to test gossip
         #[cfg(test)]
