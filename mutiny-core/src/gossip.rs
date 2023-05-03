@@ -20,8 +20,8 @@ use wasm_bindgen_futures::spawn_local;
 use crate::error::{MutinyError, MutinyStorageError};
 use crate::logging::MutinyLogger;
 use crate::node::{NetworkGraph, ProbScorer, RapidGossipSync};
+use crate::onchain::get_rgs_url;
 use crate::utils;
-use crate::wallet::get_rgs_url;
 
 pub(crate) const GOSSIP_DATABASE_NAME: &str = "gossip";
 pub(crate) const GOSSIP_OBJECT_STORE_NAME: &str = "gossip_store";

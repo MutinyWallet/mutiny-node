@@ -24,11 +24,11 @@ use std::str::FromStr;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
-pub struct NodeManager {
-    inner: nodemanager::NodeManager,
+pub struct MutinyWallet {
+    inner: mutiny_core::MutinyWallet,
 }
 
-/// The [NodeManager] is the main entry point for interacting with the Mutiny Wallet.
+/// The [MutinyWallet] is the main entry point for interacting with the Mutiny Wallet.
 /// It is responsible for managing the on-chain wallet and the lightning nodes.
 ///
 /// It can be used to create a new wallet, or to load an existing wallet.
@@ -36,8 +36,8 @@ pub struct NodeManager {
 /// It can be configured to use all different custom backend services, or to use the default
 /// services provided by Mutiny.
 #[wasm_bindgen]
-impl NodeManager {
-    /// Creates a new [NodeManager] with the given parameters.
+impl MutinyWallet {
+    /// Creates a new [MutinyWallet] with the given parameters.
     /// The mnemonic seed is read from storage, unless one is provided.
     /// If no mnemonic is provided, a new one is generated and stored.
     #[wasm_bindgen(constructor)]
@@ -49,7 +49,7 @@ impl NodeManager {
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
-    ) -> Result<NodeManager, MutinyJsError> {
+    ) -> Result<MutinyWallet, MutinyJsError> {
         utils::set_panic_hook();
 
         let network: Option<Network> = network_str.map(|s| s.parse().expect("Invalid network"));
@@ -59,7 +59,7 @@ impl NodeManager {
             None => None,
         };
 
-        let inner = nodemanager::NodeManager::new(
+        let inner = mutiny_core::MutinyWallet::new(
             password,
             mnemonic,
             websocket_proxy_addr,
@@ -69,7 +69,7 @@ impl NodeManager {
             lsp_url,
         )
         .await?;
-        Ok(NodeManager { inner })
+        Ok(MutinyWallet { inner })
     }
 
     /// Returns if there is a saved wallet in storage.
@@ -87,19 +87,19 @@ impl NodeManager {
             Vec::from_hex(str.as_str()).map_err(|_| MutinyJsError::WalletOperationFailed)?;
         let tx: Transaction =
             deserialize(&tx_bytes).map_err(|_| MutinyJsError::WalletOperationFailed)?;
-        Ok(self.inner.broadcast_transaction(&tx)?)
+        Ok(self.inner.node_manager.broadcast_transaction(&tx)?)
     }
 
     /// Returns the mnemonic seed phrase for the wallet.
     #[wasm_bindgen]
     pub fn show_seed(&self) -> String {
-        self.inner.show_seed().to_string()
+        self.inner.node_manager.show_seed().to_string()
     }
 
     /// Returns the network of the wallet.
     #[wasm_bindgen]
     pub fn get_network(&self) -> String {
-        self.inner.get_network().to_string()
+        self.inner.node_manager.get_network().to_string()
     }
 
     /// Gets a new bitcoin address from the wallet.
@@ -108,13 +108,13 @@ impl NodeManager {
     /// It is recommended to create a new address for every transaction.
     #[wasm_bindgen]
     pub fn get_new_address(&self) -> Result<String, MutinyJsError> {
-        Ok(self.inner.get_new_address()?.to_string())
+        Ok(self.inner.node_manager.get_new_address()?.to_string())
     }
 
     /// Gets the current balance of the on-chain wallet.
     #[wasm_bindgen]
     pub fn get_wallet_balance(&self) -> Result<u64, MutinyJsError> {
-        Ok(self.inner.get_wallet_balance()?)
+        Ok(self.inner.node_manager.get_wallet_balance()?)
     }
 
     /// Creates a BIP 21 invoice. This creates a new address and a lightning invoice.
@@ -124,7 +124,12 @@ impl NodeManager {
         amount: Option<u64>,
         description: Option<String>,
     ) -> Result<MutinyBip21RawMaterials, MutinyJsError> {
-        Ok(self.inner.create_bip21(amount, description).await?.into())
+        Ok(self
+            .inner
+            .node_manager
+            .create_bip21(amount, description)
+            .await?
+            .into())
     }
 
     /// Sends an on-chain transaction to the given address.
@@ -141,6 +146,7 @@ impl NodeManager {
         let send_to = Address::from_str(&destination_address)?;
         Ok(self
             .inner
+            .node_manager
             .send_to_address(send_to, amount, fee_rate)
             .await?
             .to_string())
@@ -159,6 +165,7 @@ impl NodeManager {
         let send_to = Address::from_str(&destination_address)?;
         Ok(self
             .inner
+            .node_manager
             .sweep_wallet(send_to, fee_rate)
             .await?
             .to_string())
@@ -175,7 +182,7 @@ impl NodeManager {
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
         let address = Address::from_str(&address)?;
         Ok(JsValue::from_serde(
-            &self.inner.check_address(&address).await?,
+            &self.inner.node_manager.check_address(&address).await?,
         )?)
     }
 
@@ -183,7 +190,9 @@ impl NodeManager {
     /// These are sorted by confirmation time.
     #[wasm_bindgen]
     pub fn list_onchain(&self) -> Result<JsValue /* Vec<TransactionDetails> */, MutinyJsError> {
-        Ok(JsValue::from_serde(&self.inner.list_onchain()?)?)
+        Ok(JsValue::from_serde(
+            &self.inner.node_manager.list_onchain()?,
+        )?)
     }
 
     /// Gets the details of a specific on-chain transaction.
@@ -193,7 +202,9 @@ impl NodeManager {
         txid: String,
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
         let txid = Txid::from_str(&txid)?;
-        Ok(JsValue::from_serde(&self.inner.get_transaction(txid)?)?)
+        Ok(JsValue::from_serde(
+            &self.inner.node_manager.get_transaction(txid)?,
+        )?)
     }
 
     /// Gets the current balance of the wallet.
@@ -202,13 +213,13 @@ impl NodeManager {
     /// This will not include any funds in an unconfirmed lightning channel.
     #[wasm_bindgen]
     pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyJsError> {
-        Ok(self.inner.get_balance().await?.into())
+        Ok(self.inner.node_manager.get_balance().await?.into())
     }
 
     /// Lists all the UTXOs in the wallet.
     #[wasm_bindgen]
     pub fn list_utxos(&self) -> Result<JsValue, MutinyJsError> {
-        Ok(JsValue::from_serde(&self.inner.list_utxos()?)?)
+        Ok(JsValue::from_serde(&self.inner.node_manager.list_utxos()?)?)
     }
 
     /// Syncs the on-chain wallet and lightning wallet.
@@ -219,33 +230,35 @@ impl NodeManager {
     /// This also updates the fee estimates.
     #[wasm_bindgen]
     pub async fn sync(&self) -> Result<(), MutinyJsError> {
-        Ok(self.inner.sync().await?)
+        Ok(self.inner.node_manager.sync().await?)
     }
 
     /// Gets a fee estimate for an average priority transaction.
     /// Value is in sat/vbyte.
     #[wasm_bindgen]
     pub fn estimate_fee_normal(&self) -> u32 {
-        self.inner.estimate_fee_normal()
+        self.inner.node_manager.estimate_fee_normal()
     }
 
     /// Gets a fee estimate for an high priority transaction.
     /// Value is in sat/vbyte.
     #[wasm_bindgen]
     pub fn estimate_fee_high(&self) -> u32 {
-        self.inner.estimate_fee_high()
+        self.inner.node_manager.estimate_fee_high()
     }
 
     /// Creates a new lightning node and adds it to the manager.
     #[wasm_bindgen]
     pub async fn new_node(&self) -> Result<NodeIdentity, MutinyJsError> {
-        Ok(self.inner.new_node().await?.into())
+        Ok(self.inner.node_manager.new_node().await?.into())
     }
 
     /// Lists the pubkeys of the lightning node in the manager.
     #[wasm_bindgen]
     pub async fn list_nodes(&self) -> Result<JsValue /* Vec<String> */, MutinyJsError> {
-        Ok(JsValue::from_serde(&self.inner.list_nodes().await?)?)
+        Ok(JsValue::from_serde(
+            &self.inner.node_manager.list_nodes().await?,
+        )?)
     }
 
     /// Attempts to connect to a peer from the selected node.
@@ -259,6 +272,7 @@ impl NodeManager {
         let self_node_pubkey = PublicKey::from_str(&self_node_pubkey)?;
         Ok(self
             .inner
+            .node_manager
             .connect_to_peer(&self_node_pubkey, &connection_string, label)
             .await?)
     }
@@ -272,7 +286,11 @@ impl NodeManager {
     ) -> Result<(), MutinyJsError> {
         let self_node_pubkey = PublicKey::from_str(&self_node_pubkey)?;
         let peer = PublicKey::from_str(&peer)?;
-        Ok(self.inner.disconnect_peer(&self_node_pubkey, peer).await?)
+        Ok(self
+            .inner
+            .node_manager
+            .disconnect_peer(&self_node_pubkey, peer)
+            .await?)
     }
 
     /// Deletes a peer from the selected node.
@@ -286,7 +304,11 @@ impl NodeManager {
     ) -> Result<(), MutinyJsError> {
         let self_node_pubkey = PublicKey::from_str(&self_node_pubkey)?;
         let peer = NodeId::from_str(&peer)?;
-        Ok(self.inner.delete_peer(&self_node_pubkey, &peer).await?)
+        Ok(self
+            .inner
+            .node_manager
+            .delete_peer(&self_node_pubkey, &peer)
+            .await?)
     }
 
     /// Sets the label of a peer from the selected node.
@@ -297,7 +319,7 @@ impl NodeManager {
         label: Option<String>,
     ) -> Result<(), MutinyJsError> {
         let node_id = NodeId::from_str(&node_id)?;
-        self.inner.label_peer(&node_id, label).await?;
+        self.inner.node_manager.label_peer(&node_id, label).await?;
         Ok(())
     }
 
@@ -313,7 +335,12 @@ impl NodeManager {
         amount: Option<u64>,
         description: Option<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
-        Ok(self.inner.create_invoice(amount, description).await?.into())
+        Ok(self
+            .inner
+            .node_manager
+            .create_invoice(amount, description)
+            .await?
+            .into())
     }
 
     /// Pays a lightning invoice from the selected node.
@@ -330,6 +357,7 @@ impl NodeManager {
         let invoice = Invoice::from_str(&invoice_str)?;
         Ok(self
             .inner
+            .node_manager
             .pay_invoice(&from_node, &invoice, amt_sats)
             .await?
             .into())
@@ -348,6 +376,7 @@ impl NodeManager {
         let to_node = PublicKey::from_str(&to_node)?;
         Ok(self
             .inner
+            .node_manager
             .keysend(&from_node, to_node, amt_sats)
             .await?
             .into())
@@ -358,7 +387,12 @@ impl NodeManager {
     #[wasm_bindgen]
     pub async fn decode_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
         let invoice = Invoice::from_str(&invoice)?;
-        Ok(self.inner.decode_invoice(invoice).await?.into())
+        Ok(self
+            .inner
+            .node_manager
+            .decode_invoice(invoice)
+            .await?
+            .into())
     }
 
     /// Calls upon a LNURL to get the parameters for it.
@@ -366,7 +400,7 @@ impl NodeManager {
     #[wasm_bindgen]
     pub async fn decode_lnurl(&self, lnurl: String) -> Result<LnUrlParams, MutinyJsError> {
         let lnurl = LnUrl::from_str(&lnurl)?;
-        Ok(self.inner.decode_lnurl(lnurl).await?.into())
+        Ok(self.inner.node_manager.decode_lnurl(lnurl).await?.into())
     }
 
     /// Calls upon a LNURL and pays it.
@@ -382,6 +416,7 @@ impl NodeManager {
         let lnurl = LnUrl::from_str(&lnurl)?;
         Ok(self
             .inner
+            .node_manager
             .lnurl_pay(&from_node, &lnurl, amount_sats)
             .await?
             .into())
@@ -396,19 +431,25 @@ impl NodeManager {
         amount_sats: u64,
     ) -> Result<bool, MutinyJsError> {
         let lnurl = LnUrl::from_str(&lnurl)?;
-        Ok(self.inner.lnurl_withdraw(&lnurl, amount_sats).await?)
+        Ok(self
+            .inner
+            .node_manager
+            .lnurl_withdraw(&lnurl, amount_sats)
+            .await?)
     }
 
     /// Creates a new LNURL-auth profile.
     #[wasm_bindgen]
     pub fn create_lnurl_auth_profile(&self, name: String) -> Result<u32, MutinyJsError> {
-        Ok(self.inner.create_lnurl_auth_profile(name)?)
+        Ok(self.inner.node_manager.create_lnurl_auth_profile(name)?)
     }
 
     /// Gets all the LNURL-auth profiles.
     #[wasm_bindgen]
     pub fn get_lnurl_auth_profiles(&self) -> Result<JsValue /*<Vec<AuthProfile> */, MutinyJsError> {
-        Ok(JsValue::from_serde(&self.inner.get_lnurl_auth_profiles()?)?)
+        Ok(JsValue::from_serde(
+            &self.inner.node_manager.get_lnurl_auth_profiles()?,
+        )?)
     }
 
     /// Authenticates with a LNURL-auth for the given profile.
@@ -419,7 +460,11 @@ impl NodeManager {
         lnurl: String,
     ) -> Result<(), MutinyJsError> {
         let lnurl = LnUrl::from_str(&lnurl)?;
-        Ok(self.inner.lnurl_auth(profile_index, lnurl).await?)
+        Ok(self
+            .inner
+            .node_manager
+            .lnurl_auth(profile_index, lnurl)
+            .await?)
     }
 
     /// Gets an invoice from the node manager.
@@ -427,7 +472,7 @@ impl NodeManager {
     #[wasm_bindgen]
     pub async fn get_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
         let invoice = Invoice::from_str(&invoice)?;
-        Ok(self.inner.get_invoice(&invoice).await?.into())
+        Ok(self.inner.node_manager.get_invoice(&invoice).await?.into())
     }
 
     /// Gets an invoice from the node manager.
@@ -435,14 +480,21 @@ impl NodeManager {
     #[wasm_bindgen]
     pub async fn get_invoice_by_hash(&self, hash: String) -> Result<MutinyInvoice, MutinyJsError> {
         let hash: sha256::Hash = sha256::Hash::from_str(&hash)?;
-        Ok(self.inner.get_invoice_by_hash(&hash).await?.into())
+        Ok(self
+            .inner
+            .node_manager
+            .get_invoice_by_hash(&hash)
+            .await?
+            .into())
     }
 
     /// Gets an invoice from the node manager.
     /// This includes sent and received invoices.
     #[wasm_bindgen]
     pub async fn list_invoices(&self) -> Result<JsValue /* Vec<MutinyInvoice> */, MutinyJsError> {
-        Ok(JsValue::from_serde(&self.inner.list_invoices().await?)?)
+        Ok(JsValue::from_serde(
+            &self.inner.node_manager.list_invoices().await?,
+        )?)
     }
 
     /// Opens a channel from our selected node to the given pubkey.
@@ -461,6 +513,7 @@ impl NodeManager {
         let to_pubkey = PublicKey::from_str(&to_pubkey)?;
         Ok(self
             .inner
+            .node_manager
             .open_channel(&from_node, to_pubkey, amount)
             .await?
             .into())
@@ -470,31 +523,35 @@ impl NodeManager {
     #[wasm_bindgen]
     pub async fn close_channel(&self, outpoint: String) -> Result<(), MutinyJsError> {
         let outpoint: OutPoint = OutPoint::from_str(outpoint.as_str()).expect("invalid outpoint");
-        Ok(self.inner.close_channel(&outpoint).await?)
+        Ok(self.inner.node_manager.close_channel(&outpoint).await?)
     }
 
     /// Lists all the channels for all the nodes in the node manager.
     #[wasm_bindgen]
     pub async fn list_channels(&self) -> Result<JsValue /* Vec<MutinyChannel> */, MutinyJsError> {
-        Ok(JsValue::from_serde(&self.inner.list_channels().await?)?)
+        Ok(JsValue::from_serde(
+            &self.inner.node_manager.list_channels().await?,
+        )?)
     }
 
     /// Lists all the peers for all the nodes in the node manager.
     #[wasm_bindgen]
     pub async fn list_peers(&self) -> Result<JsValue /* Vec<MutinyPeer> */, MutinyJsError> {
-        Ok(JsValue::from_serde(&self.inner.list_peers().await?)?)
+        Ok(JsValue::from_serde(
+            &self.inner.node_manager.list_peers().await?,
+        )?)
     }
 
     /// Gets the current bitcoin price in USD.
     #[wasm_bindgen]
     pub async fn get_bitcoin_price(&self) -> Result<f32, MutinyJsError> {
-        Ok(self.inner.get_bitcoin_price().await?)
+        Ok(self.inner.node_manager.get_bitcoin_price().await?)
     }
 
     /// Exports the current state of the node manager to a json object.
     #[wasm_bindgen]
     pub async fn export_json(&self) -> Result<String, MutinyJsError> {
-        let json = self.inner.export_json().await?;
+        let json = self.inner.node_manager.export_json().await?;
         Ok(serde_json::to_string(&json)?)
     }
 
@@ -522,7 +579,7 @@ impl NodeManager {
 #[cfg(test)]
 mod tests {
     use crate::utils::test::*;
-    use crate::NodeManager;
+    use crate::MutinyWallet;
     use mutiny_core::test_utils::*;
 
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
@@ -530,11 +587,11 @@ mod tests {
     wasm_bindgen_test_configure!(run_in_browser);
 
     #[test]
-    async fn create_node_manager() {
-        log!("creating node manager!");
+    async fn create_mutiny_wallet() {
+        log!("creating mutiny wallet!");
 
-        assert!(!NodeManager::has_node_manager().await);
-        NodeManager::new(
+        assert!(!MutinyWallet::has_node_manager().await);
+        MutinyWallet::new(
             "password".to_string(),
             None,
             None,
@@ -544,8 +601,8 @@ mod tests {
             None,
         )
         .await
-        .expect("node manager should initialize");
-        assert!(NodeManager::has_node_manager().await);
+        .expect("mutiny wallet should initialize");
+        assert!(MutinyWallet::has_node_manager().await);
 
         cleanup_wallet_test().await;
     }
@@ -558,7 +615,7 @@ mod tests {
         getrandom::getrandom(&mut entropy).unwrap();
         let seed = bip39::Mnemonic::from_entropy(&entropy).unwrap();
 
-        let nm = NodeManager::new(
+        let nm = MutinyWallet::new(
             "password".to_string(),
             Some(seed.to_string()),
             None,
@@ -570,7 +627,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(NodeManager::has_node_manager().await);
+        assert!(MutinyWallet::has_node_manager().await);
         assert_eq!(seed.to_string(), nm.show_seed());
 
         cleanup_wallet_test().await;
@@ -584,7 +641,7 @@ mod tests {
         getrandom::getrandom(&mut entropy).unwrap();
         let seed = bip39::Mnemonic::from_entropy(&entropy).unwrap();
 
-        let nm = NodeManager::new(
+        let nm = MutinyWallet::new(
             "password".to_string(),
             Some(seed.to_string()),
             None,
@@ -594,13 +651,16 @@ mod tests {
             None,
         )
         .await
-        .expect("node manager should initialize");
+        .expect("mutiny wallet should initialize");
 
         let node_identity = nm.new_node().await.expect("should create new node");
         assert_ne!("", node_identity.uuid());
         assert_ne!("", node_identity.pubkey());
 
-        let node_identity = nm.new_node().await.expect("node manager should initialize");
+        let node_identity = nm
+            .new_node()
+            .await
+            .expect("mutiny wallet should initialize");
 
         assert_ne!("", node_identity.uuid());
         assert_ne!("", node_identity.pubkey());

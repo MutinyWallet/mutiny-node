@@ -12,6 +12,7 @@ use crate::{
     logging::MutinyLogger,
     lspclient::LspClient,
     nodemanager::{MutinyInvoice, NodeIndex},
+    onchain::OnChainWallet,
     peermanager::{GossipMessageHandler, PeerManager, PeerManagerImpl},
     proxy::WsProxy,
     socket::{
@@ -19,7 +20,6 @@ use crate::{
         WsTcpSocketDescriptor,
     },
     utils::{self, sleep},
-    wallet::MutinyWallet,
 };
 use crate::{indexed_db::MutinyStorage, lspclient::FeeRequest};
 use anyhow::{anyhow, Context};
@@ -150,7 +150,7 @@ pub(crate) struct Node {
     pub chain_monitor: Arc<ChainMonitor>,
     network: Network,
     pub persister: Arc<MutinyNodePersister>,
-    wallet: Arc<MutinyWallet>,
+    wallet: Arc<OnChainWallet>,
     logger: Arc<MutinyLogger>,
     websocket_proxy_addr: String,
     multi_socket: MultiWsSocketDescriptor,
@@ -168,7 +168,7 @@ impl Node {
         scorer: Arc<utils::Mutex<ProbScorer>>,
         chain: Arc<MutinyChain>,
         fee_estimator: Arc<MutinyFeeEstimator>,
-        wallet: Arc<MutinyWallet>,
+        wallet: Arc<OnChainWallet>,
         network: Network,
         websocket_proxy_addr: String,
         esplora: Arc<AsyncClient>,

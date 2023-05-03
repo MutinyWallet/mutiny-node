@@ -18,21 +18,21 @@ use crate::fees::MutinyFeeEstimator;
 use crate::indexed_db::MutinyStorage;
 
 #[derive(Clone)]
-pub struct MutinyWallet {
+pub struct OnChainWallet {
     pub wallet: Arc<RwLock<Wallet<MutinyStorage>>>,
     pub network: Network,
     pub blockchain: Arc<AsyncClient>,
     pub fees: Arc<MutinyFeeEstimator>,
 }
 
-impl MutinyWallet {
+impl OnChainWallet {
     pub fn new(
         mnemonic: &Mnemonic,
         db: MutinyStorage,
         network: Network,
         esplora: Arc<AsyncClient>,
         fees: Arc<MutinyFeeEstimator>,
-    ) -> Result<MutinyWallet, MutinyError> {
+    ) -> Result<OnChainWallet, MutinyError> {
         let seed = mnemonic.to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(network, &seed)?;
         let account_number = 0;
@@ -46,7 +46,7 @@ impl MutinyWallet {
             network,
         )?;
 
-        Ok(MutinyWallet {
+        Ok(OnChainWallet {
             wallet: Arc::new(RwLock::new(wallet)),
             network,
             blockchain: esplora,

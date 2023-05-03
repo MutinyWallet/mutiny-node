@@ -14,9 +14,9 @@ use crate::{
     logging::MutinyLogger,
     lspclient::LspClient,
     node::{Node, ProbScorer, PubkeyConnectionInfo, RapidGossipSync},
+    onchain::get_esplora_url,
+    onchain::OnChainWallet,
     utils,
-    wallet::get_esplora_url,
-    wallet::MutinyWallet,
 };
 use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::{wallet::AddressIndex, LocalUtxo, TransactionDetails};
@@ -49,7 +49,7 @@ pub struct NodeManager {
     network: Network,
     websocket_proxy_addr: String,
     esplora: Arc<AsyncClient>,
-    wallet: Arc<MutinyWallet>,
+    wallet: Arc<OnChainWallet>,
     gossip_sync: Arc<RapidGossipSync>,
     scorer: Arc<utils::Mutex<ProbScorer>>,
     chain: Arc<MutinyChain>,
@@ -315,7 +315,7 @@ impl NodeManager {
         let esplora = Arc::new(tx_sync.client().clone());
         let fee_estimator = Arc::new(MutinyFeeEstimator::new(storage.clone(), esplora.clone()));
 
-        let wallet = Arc::new(MutinyWallet::new(
+        let wallet = Arc::new(OnChainWallet::new(
             &mnemonic,
             storage.clone(),
             network,
@@ -426,7 +426,7 @@ impl NodeManager {
             .build_async()
             .expect("failed to make lnurl client");
 
-        Ok(NodeManager {
+        let nm = NodeManager {
             mnemonic,
             network,
             wallet,
@@ -442,7 +442,9 @@ impl NodeManager {
             auth,
             lnurl_client,
             lsp_clients,
-        })
+        };
+
+        Ok(nm)
     }
 
     /// Broadcast a transaction to the network.

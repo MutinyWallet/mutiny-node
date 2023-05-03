@@ -2,8 +2,8 @@ use crate::fees::MutinyFeeEstimator;
 use crate::keymanager::PhantomKeysManager;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::logging::MutinyLogger;
+use crate::onchain::OnChainWallet;
 use crate::utils::sleep;
-use crate::wallet::MutinyWallet;
 use anyhow::anyhow;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
@@ -59,7 +59,7 @@ pub(crate) enum HTLCStatus {
 pub struct EventHandler {
     channel_manager: Arc<PhantomChannelManager>,
     fee_estimator: Arc<MutinyFeeEstimator>,
-    wallet: Arc<MutinyWallet>,
+    wallet: Arc<OnChainWallet>,
     keys_manager: Arc<PhantomKeysManager>,
     persister: Arc<MutinyNodePersister>,
     lsp_client_pubkey: Option<PublicKey>,
@@ -70,7 +70,7 @@ impl EventHandler {
     pub(crate) fn new(
         channel_manager: Arc<PhantomChannelManager>,
         fee_estimator: Arc<MutinyFeeEstimator>,
-        wallet: Arc<MutinyWallet>,
+        wallet: Arc<OnChainWallet>,
         keys_manager: Arc<PhantomKeysManager>,
         persister: Arc<MutinyNodePersister>,
         lsp_client_pubkey: Option<PublicKey>,
