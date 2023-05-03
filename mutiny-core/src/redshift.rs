@@ -262,7 +262,7 @@ impl RedshiftManager for NodeManager {
     async fn attempt_payments(&self, mut rs: Redshift) -> Result<(), MutinyError> {
         // TODO find the max channel reserve
         let max_sats = (rs.amount_sats as f64 * 0.99) as u64;
-        let _min_sats = 10_000;
+        let min_sats = 10_000;
 
         // get the node making the payment
         let nodes = self.nodes.lock().await;
@@ -273,7 +273,6 @@ impl RedshiftManager for NodeManager {
                 nodes.get(&receiving_pubkey).ok_or(MutinyError::NotFound)?
             }
             RedshiftRecipient::OnChain(_) => {
-                // TODO specific address
                 let new_receiving_node = self.new_node().await?.pubkey;
                 nodes
                     .get(&new_receiving_node)
@@ -281,48 +280,63 @@ impl RedshiftManager for NodeManager {
             }
         };
 
-        // TODO for loop while max_sats is not hit
-        // TODO get the real number to attempt
-        let local_max = max_sats;
-
-        // get an invoice from the receiving node
-        let invoice = receiving_node
-            .create_invoice(Some(local_max), None, None)
-            .await?; // TODO probably should handle error
-
-        // make attempts to pay it
-        match sending_node
-            .pay_invoice_with_timeout(&invoice, None, None)
-            .await
-        {
-            Ok(i) => {
-                if i.paid {
-                    debug!("paid the redshift invoice");
-                    rs.payment_attempted(local_max);
-
-                    // TODO when running in a for loop, only
-                    // return this when it is actually done
-                    rs.status = RedshiftStatus::Completed;
-                } else {
-                    // TODO need to handle payments still pending
-                    debug!("payment still pending...");
+        // attempt payments in loop until we sent all or hit min sats
+        let mut local_max_sats = max_sats;
+        rs.status = RedshiftStatus::AttemptingPayments(0);
+        loop {
+            // keep trying until the amount is too small to send through
+            if local_max_sats < min_sats {
+                // if no payments were made, consider it a fail
+                if let RedshiftStatus::AttemptingPayments(0) = rs.status {
+                    rs.fail("exhausted all payment attempt amounts".to_string());
                 }
+                break;
             }
-            Err(e) => {
-                // TODO keep going through loop
-                error!("could not pay: {e}");
-                rs.status = RedshiftStatus::Failed("could not pay invoice".to_string());
-                self.storage.update_redshift(rs)?;
-                return Err(MutinyError::Other(anyhow!(
-                    "could not redshift pay invoice"
-                )));
+
+            // get an invoice from the receiving node
+            let invoice = receiving_node
+                .create_invoice(Some(local_max_sats), None, None)
+                .await?; // TODO probably should handle error
+
+            // make attempts to pay it
+            match sending_node
+                .pay_invoice_with_timeout(&invoice, None, None)
+                .await
+            {
+                Ok(i) => {
+                    if i.paid {
+                        debug!("paid the redshift invoice");
+                        let prev_amount_paid = match rs.status {
+                            RedshiftStatus::AttemptingPayments(x) => x,
+                            _ => 0,
+                        };
+
+                        rs.payment_attempted(local_max_sats);
+
+                        // check if the max amount was sent on all tries
+                        if local_max_sats + prev_amount_paid >= max_sats {
+                            rs.status = RedshiftStatus::Completed;
+                            break;
+                        }
+
+                        // keep trying with the remaining amount
+                        local_max_sats = max_sats.saturating_sub(local_max_sats);
+                    } else {
+                        // TODO need to handle payments still pending
+                        debug!("payment still pending...");
+                    }
+                }
+                Err(e) => {
+                    // Keep trying to pay but go down 5% of the channel amount
+                    error!("could not pay: {e}");
+                    let decrement = (local_max_sats as f64 * 0.05) as u64;
+                    local_max_sats = local_max_sats.saturating_sub(decrement);
+                }
             }
         }
 
         // save to db
         self.storage.update_redshift(rs.clone())?;
-
-        // TODO once completely done, close the existing channel
 
         // close introduction channel
         match rs.introduction_channel {
