@@ -64,7 +64,7 @@ pub struct NodeManager {
     auth: AuthManager,
     lnurl_client: LnUrlClient,
     pub(crate) lsp_clients: Vec<LspClient>,
-    logger: Arc<MutinyLogger>,
+    pub(crate) logger: Arc<MutinyLogger>,
 }
 
 // This is the NodeStorage object saved to the DB
