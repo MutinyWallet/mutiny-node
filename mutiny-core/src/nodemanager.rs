@@ -292,7 +292,7 @@ impl NodeManager {
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
-    ) -> Result<Arc<NodeManager>, MutinyError> {
+    ) -> Result<NodeManager, MutinyError> {
         let websocket_proxy_addr =
             websocket_proxy_addr.unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
 
@@ -433,7 +433,7 @@ impl NodeManager {
             .build_async()
             .expect("failed to make lnurl client");
 
-        let nm = Arc::new(NodeManager {
+        Ok(NodeManager {
             mnemonic,
             network,
             wallet,
@@ -450,15 +450,10 @@ impl NodeManager {
             lnurl_client,
             lsp_clients,
             logger,
-        });
-
-        // todo move to start function
-        NodeManager::start_redshifts(nm.clone());
-
-        Ok(nm)
+        })
     }
 
-    fn start_redshifts(nm: Arc<NodeManager>) {
+    pub(crate) fn start_redshifts(nm: Arc<NodeManager>) {
         let node_manager = nm.clone();
         spawn_local(async move {
             loop {
