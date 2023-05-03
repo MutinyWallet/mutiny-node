@@ -82,7 +82,7 @@ pub struct MutinyBip21RawMaterials {
     pub address: Address,
     pub invoice: Invoice,
     pub btc_amount: Option<String>,
-    pub description: Option<String>,
+    pub labels: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
@@ -587,13 +587,13 @@ impl NodeManager {
     pub async fn create_bip21(
         &self,
         amount: Option<u64>,
-        description: Option<String>,
+        labels: Vec<String>,
     ) -> Result<MutinyBip21RawMaterials, MutinyError> {
         let Ok(address) = self.get_new_address() else {
             return Err(MutinyError::WalletOperationFailed);
         };
 
-        let invoice = self.create_invoice(amount, description.clone()).await?;
+        let invoice = self.create_invoice(amount, labels.clone()).await?;
 
         let Some(bolt11) = invoice.bolt11 else {
             return Err(MutinyError::WalletOperationFailed);
@@ -603,7 +603,7 @@ impl NodeManager {
             address,
             invoice: bolt11,
             btc_amount: amount.map(|amount| bitcoin::Amount::from_sat(amount).to_btc().to_string()),
-            description: invoice.description,
+            labels,
         })
     }
 
@@ -615,13 +615,14 @@ impl NodeManager {
         &self,
         send_to: Address,
         amount: u64,
+        labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
         if !send_to.is_valid_for_network(self.network) {
             return Err(MutinyError::IncorrectNetwork(send_to.network));
         }
 
-        self.wallet.send(send_to, amount, fee_rate).await
+        self.wallet.send(send_to, amount, labels, fee_rate).await
     }
 
     /// Sweeps all the funds from the wallet to the given address.
@@ -631,13 +632,14 @@ impl NodeManager {
     pub async fn sweep_wallet(
         &self,
         send_to: Address,
+        labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
         if !send_to.is_valid_for_network(self.network) {
             return Err(MutinyError::IncorrectNetwork(send_to.network));
         }
 
-        self.wallet.sweep(send_to, fee_rate).await
+        self.wallet.sweep(send_to, labels, fee_rate).await
     }
 
     /// Checks if the given address has any transactions.
@@ -960,7 +962,7 @@ impl NodeManager {
     pub async fn create_invoice(
         &self,
         amount: Option<u64>,
-        description: Option<String>,
+        labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
         let use_phantom = nodes.len() > 1 && self.lsp_clients.is_empty();
@@ -985,7 +987,7 @@ impl NodeManager {
             return Err(MutinyError::WalletOperationFailed);
         };
         let invoice = first_node
-            .create_invoice(amount, description, route_hints)
+            .create_invoice(amount, labels, route_hints)
             .await?;
 
         Ok(invoice.into())
@@ -1102,9 +1104,10 @@ impl NodeManager {
             LnUrlResponse::LnUrlPayResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
             LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
             LnUrlResponse::LnUrlWithdrawResponse(withdraw) => {
-                let description = withdraw.default_description.clone();
+                // fixme: do we need to use this description?
+                let _description = withdraw.default_description.clone();
                 let mutiny_invoice = self
-                    .create_invoice(Some(amount_sats), Some(description))
+                    .create_invoice(Some(amount_sats), vec!["LNURL Withdrawal".to_string()])
                     .await?;
                 let invoice_str = mutiny_invoice.bolt11.expect("Invoice should have bolt11");
                 let res = self

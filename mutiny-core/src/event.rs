@@ -107,10 +107,13 @@ impl EventHandler {
                     }
                 };
 
+                let label = format!("LN Channel: {}", counterparty_node_id.to_hex());
+
                 let psbt_result = match params_opt {
                     None => self.wallet.create_signed_psbt_to_spk(
                         output_script,
                         channel_value_satoshis,
+                        vec![label],
                         None,
                     ),
                     Some(params) => {
@@ -118,6 +121,7 @@ impl EventHandler {
                             &params.utxos,
                             output_script,
                             channel_value_satoshis,
+                            params.labels.unwrap_or(vec![label]),
                         );
 
                         // delete from storage, if it fails, it is fine, just log it.

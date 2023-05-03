@@ -16,6 +16,7 @@ mod fees;
 mod gossip;
 mod indexed_db;
 mod keymanager;
+pub mod labels;
 mod ldkstorage;
 mod logging;
 mod lspclient;

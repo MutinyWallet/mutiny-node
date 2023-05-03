@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
@@ -7,6 +8,7 @@ use bdk::{FeeRate, LocalUtxo, SignOptions, TransactionDetails, Wallet};
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_macros::maybe_await;
 use bip39::Mnemonic;
+use bitcoin::psbt::PartiallySignedTransaction;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, OutPoint, Script, Transaction, Txid};
 use esplora_client::AsyncClient;
@@ -17,11 +19,13 @@ use lightning::util::logger::Logger;
 use crate::error::MutinyError;
 use crate::fees::MutinyFeeEstimator;
 use crate::indexed_db::MutinyStorage;
+use crate::labels::*;
 use crate::logging::MutinyLogger;
 
 #[derive(Clone)]
 pub struct OnChainWallet {
     pub wallet: Arc<RwLock<Wallet<MutinyStorage>>>,
+    storage: MutinyStorage,
     pub network: Network,
     pub blockchain: Arc<AsyncClient>,
     pub fees: Arc<MutinyFeeEstimator>,
@@ -46,12 +50,13 @@ impl OnChainWallet {
         let wallet = Wallet::new(
             receive_descriptor_template,
             Some(change_descriptor_template),
-            db,
+            db.clone(),
             network,
         )?;
 
         Ok(OnChainWallet {
             wallet: Arc::new(RwLock::new(wallet)),
+            storage: db,
             network,
             blockchain: esplora,
             fees,
@@ -143,25 +148,85 @@ impl OnChainWallet {
         Ok(self.wallet.try_read()?.get_tx(txid, include_raw))
     }
 
+    fn label_psbt(
+        &self,
+        psbt: &PartiallySignedTransaction,
+        labels: Vec<String>,
+    ) -> Result<(), MutinyError> {
+        // first get previous labels
+        let address_labels = self.storage.get_address_labels()?;
+
+        // get previous addresses
+        let mut prev_addresses = psbt
+            .inputs
+            .iter()
+            .filter_map(|i| {
+                let address = if let Some(out) = i.witness_utxo.as_ref() {
+                    Address::from_script(&out.script_pubkey, self.network).ok()
+                } else {
+                    None
+                };
+
+                address
+            })
+            .collect::<Vec<_>>();
+
+        // get addresses from previous labels
+        let mut prev_labels = prev_addresses
+            .iter()
+            .filter_map(|addr| address_labels.get(addr))
+            .flatten()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        // add on new labels
+        prev_labels.extend(labels);
+
+        // deduplicate labels and create aggregate label
+        // we use a HashSet to deduplicate so we can retain the order of the labels
+        let mut seen = HashSet::new();
+        let agg_labels = prev_labels
+            .into_iter()
+            .filter(|s| seen.insert(s.clone()))
+            .collect::<Vec<_>>();
+
+        // add output addresses to previous addresses
+        prev_addresses.extend(
+            psbt.unsigned_tx
+                .output
+                .iter()
+                .filter_map(|o| Address::from_script(&o.script_pubkey, self.network).ok()),
+        );
+
+        // set label for send to address
+        for addr in prev_addresses {
+            self.storage.set_address_labels(addr, agg_labels.clone())?;
+        }
+
+        Ok(())
+    }
+
     pub fn create_signed_psbt(
         &self,
         send_to: Address,
         amount: u64,
+        labels: Vec<String>,
         fee_rate: Option<f32>,
-    ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
+    ) -> Result<PartiallySignedTransaction, MutinyError> {
         if !send_to.is_valid_for_network(self.network) {
             return Err(MutinyError::IncorrectNetwork(send_to.network));
         }
 
-        self.create_signed_psbt_to_spk(send_to.script_pubkey(), amount, fee_rate)
+        self.create_signed_psbt_to_spk(send_to.script_pubkey(), amount, labels, fee_rate)
     }
 
     pub fn create_signed_psbt_to_spk(
         &self,
         spk: Script,
         amount: u64,
+        labels: Vec<String>,
         fee_rate: Option<f32>,
-    ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
+    ) -> Result<PartiallySignedTransaction, MutinyError> {
         let mut wallet = self.wallet.try_write()?;
 
         let fee_rate = if let Some(rate) = fee_rate {
@@ -184,6 +249,7 @@ impl OnChainWallet {
         log_debug!(self.logger, "Unsigned PSBT: {psbt}");
         let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
         log_debug!(self.logger, "finalized: {finalized}");
+        self.label_psbt(&psbt, labels)?;
         Ok(psbt)
     }
 
@@ -191,9 +257,10 @@ impl OnChainWallet {
         &self,
         destination_address: Address,
         amount: u64,
+        labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        let psbt = self.create_signed_psbt(destination_address, amount, fee_rate)?;
+        let psbt = self.create_signed_psbt(destination_address, amount, labels, fee_rate)?;
 
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
@@ -206,8 +273,9 @@ impl OnChainWallet {
     pub fn create_sweep_psbt(
         &self,
         destination_address: Address,
+        labels: Vec<String>,
         fee_rate: Option<f32>,
-    ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
+    ) -> Result<PartiallySignedTransaction, MutinyError> {
         if !destination_address.is_valid_for_network(self.network) {
             return Err(MutinyError::IncorrectNetwork(destination_address.network));
         }
@@ -222,11 +290,12 @@ impl OnChainWallet {
                 .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
             FeeRate::from_sat_per_kwu(sat_per_kwu as f32)
         };
+        let spk = destination_address.script_pubkey();
         let (mut psbt, details) = {
             let mut builder = wallet.build_tx();
             builder
                 .drain_wallet() // Spend all outputs in this wallet.
-                .drain_to(destination_address.script_pubkey())
+                .drain_to(spk)
                 .enable_rbf()
                 .fee_rate(fee_rate);
             builder.finish()?
@@ -235,15 +304,17 @@ impl OnChainWallet {
         log_debug!(self.logger, "Unsigned PSBT: {psbt}");
         let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
         log_debug!(self.logger, "finalized: {finalized}");
+        self.label_psbt(&psbt, labels)?;
         Ok(psbt)
     }
 
     pub async fn sweep(
         &self,
         destination_address: Address,
+        labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        let psbt = self.create_sweep_psbt(destination_address, fee_rate)?;
+        let psbt = self.create_sweep_psbt(destination_address, labels, fee_rate)?;
 
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
@@ -261,7 +332,8 @@ impl OnChainWallet {
         utxos: &[OutPoint],
         spk: Script,
         amount_sats: u64,
-    ) -> Result<bitcoin::psbt::PartiallySignedTransaction, MutinyError> {
+        labels: Vec<String>,
+    ) -> Result<PartiallySignedTransaction, MutinyError> {
         let mut wallet = self.wallet.try_write()?;
         let (mut psbt, details) = {
             let mut builder = wallet.build_tx();
@@ -275,6 +347,7 @@ impl OnChainWallet {
         log_debug!(self.logger, "Unsigned PSBT: {psbt}");
         let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
         log_debug!(self.logger, "finalized: {finalized}");
+        self.label_psbt(&psbt, labels)?;
         Ok(psbt)
     }
 }
@@ -349,5 +422,84 @@ pub(crate) fn get_rgs_url(
                 format!("https://rgs.mutinynet.com/snapshot/{last_sync_time}")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::cleanup_wallet_test;
+    use bitcoin::Address;
+    use esplora_client::Builder;
+    use std::str::FromStr;
+    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    async fn create_wallet() -> OnChainWallet {
+        let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
+        let esplora = Arc::new(
+            Builder::new("https://blockstream.info/testnet/api/")
+                .build_async()
+                .unwrap(),
+        );
+        let db = MutinyStorage::new("".to_string()).await.unwrap();
+        let logger = Arc::new(MutinyLogger::default());
+        let fees = Arc::new(MutinyFeeEstimator::new(
+            db.clone(),
+            esplora.clone(),
+            logger.clone(),
+        ));
+
+        OnChainWallet::new(&mnemonic, db, Network::Testnet, esplora, fees, logger).unwrap()
+    }
+
+    #[test]
+    async fn test_create_wallet() {
+        let _wallet = create_wallet().await;
+        cleanup_wallet_test().await;
+    }
+
+    #[test]
+    async fn test_label_psbt() {
+        let wallet = create_wallet().await;
+
+        let psbt = PartiallySignedTransaction::from_str("cHNidP8BAKACAAAAAqsJSaCMWvfEm4IS9Bfi8Vqz9cM9zxU4IagTn4d6W3vkAAAAAAD+////qwlJoIxa98SbghL0F+LxWrP1wz3PFTghqBOfh3pbe+QBAAAAAP7///8CYDvqCwAAAAAZdqkUdopAu9dAy+gdmI5x3ipNXHE5ax2IrI4kAAAAAAAAGXapFG9GILVT+glechue4O/p+gOcykWXiKwAAAAAAAEHakcwRAIgR1lmF5fAGwNrJZKJSGhiGDR9iYZLcZ4ff89X0eURZYcCIFMJ6r9Wqk2Ikf/REf3xM286KdqGbX+EhtdVRs7tr5MZASEDXNxh/HupccC1AaZGoqg7ECy0OIEhfKaC3Ibi1z+ogpIAAQEgAOH1BQAAAAAXqRQ1RebjO4MsRwUPJNPuuTycA5SLx4cBBBYAFIXRNTfy4mVAWjTbr6nj3aAfuCMIAAAA").unwrap();
+
+        // set label for input
+        let input_addr = Address::from_str("2Mx6uYKYGW5J6sV59e5NsdtCTsJYRxednbx").unwrap();
+        let prev_label = "previous".to_string();
+        wallet
+            .storage
+            .set_address_labels(input_addr.clone(), vec![prev_label.clone()])
+            .unwrap();
+
+        let send_to_addr = Address::from_str("mrKjeffvbnmKJURrLNdqLkfrptLrFtnkFx").unwrap();
+        let change_addr = Address::from_str("mqfKJuj2Ea4RtXsKawQWrqosGeHFTrp6iZ").unwrap();
+        let label = "test".to_string();
+
+        let result = wallet.label_psbt(&psbt, vec![label.clone()]);
+        assert!(result.is_ok());
+
+        let expected_labels = vec![prev_label.clone(), label.clone()];
+
+        let addr_labels = wallet.storage.get_address_labels().unwrap();
+        assert_eq!(addr_labels.len(), 3);
+        assert_eq!(
+            addr_labels.get(&send_to_addr),
+            Some(&expected_labels.clone())
+        );
+        assert_eq!(
+            addr_labels.get(&change_addr),
+            Some(&expected_labels.clone())
+        );
+
+        let label = wallet.storage.get_label(&label).unwrap();
+        assert!(label.is_some());
+        assert_eq!(label.clone().unwrap().addresses.len(), 3);
+        assert!(label.clone().unwrap().addresses.contains(&input_addr));
+        assert!(label.clone().unwrap().addresses.contains(&send_to_addr));
+        assert!(label.clone().unwrap().addresses.contains(&change_addr));
+
+        cleanup_wallet_test().await;
     }
 }
