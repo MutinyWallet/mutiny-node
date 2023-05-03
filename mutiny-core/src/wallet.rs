@@ -1,16 +1,15 @@
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
+use crate::chain::MutinyChain;
 use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::template::DescriptorTemplateOut;
 use bdk::{FeeRate, LocalUtxo, SignOptions, TransactionDetails, Wallet};
-use bdk_esplora::{esplora_client, EsploraAsyncExt};
-use bdk_macros::maybe_await;
+use bdk_esplora::EsploraAsyncExt;
 use bip39::Mnemonic;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, OutPoint, Script, Transaction, Txid};
-use esplora_client::AsyncClient;
-use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
+use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
 use log::debug;
 
 use crate::error::MutinyError;
@@ -21,7 +20,7 @@ use crate::indexed_db::MutinyStorage;
 pub struct MutinyWallet {
     pub wallet: Arc<RwLock<Wallet<MutinyStorage>>>,
     pub network: Network,
-    pub blockchain: Arc<AsyncClient>,
+    pub chain: Arc<MutinyChain>,
     pub fees: Arc<MutinyFeeEstimator>,
 }
 
@@ -30,7 +29,7 @@ impl MutinyWallet {
         mnemonic: &Mnemonic,
         db: MutinyStorage,
         network: Network,
-        esplora: Arc<AsyncClient>,
+        chain: Arc<MutinyChain>,
         fees: Arc<MutinyFeeEstimator>,
     ) -> Result<MutinyWallet, MutinyError> {
         let seed = mnemonic.to_seed("");
@@ -49,7 +48,7 @@ impl MutinyWallet {
         Ok(MutinyWallet {
             wallet: Arc::new(RwLock::new(wallet)),
             network,
-            blockchain: esplora,
+            chain,
             fees,
         })
     }
@@ -69,7 +68,9 @@ impl MutinyWallet {
         };
 
         let update = self
-            .blockchain
+            .chain
+            .tx_sync
+            .client()
             .scan(
                 &checkpoints,
                 spks,
@@ -193,7 +194,7 @@ impl MutinyWallet {
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
 
-        maybe_await!(self.blockchain.broadcast(&raw_transaction))?;
+        self.chain.broadcast_transaction(&raw_transaction);
         debug!("Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }
@@ -243,7 +244,7 @@ impl MutinyWallet {
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
 
-        maybe_await!(self.blockchain.broadcast(&raw_transaction))?;
+        self.chain.broadcast_transaction(&raw_transaction);
         debug!("Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }

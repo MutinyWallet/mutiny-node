@@ -8,6 +8,7 @@ use anyhow::anyhow;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
+use lightning::chain::chaininterface::BroadcasterInterface;
 use lightning::chain::keysinterface::SpendableOutputDescriptor;
 use lightning::events::{Event, PaymentPurpose};
 use lightning::{
@@ -627,7 +628,7 @@ impl EventHandler {
             )
             .map_err(|_| anyhow!("Failed to spend spendable outputs"))?;
 
-        self.wallet.blockchain.broadcast(&spending_tx).await?;
+        self.wallet.chain.broadcast_transaction(&spending_tx);
 
         Ok(())
     }

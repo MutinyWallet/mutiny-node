@@ -49,7 +49,7 @@ impl MutinyChain {
         client.connect().await;
 
         let tag = Tag::Generic("magic".into(), vec![network_magic.to_hex()]);
-        let base64_tx = base64::encode(&tx.encode());
+        let base64_tx = base64::encode(tx.encode());
         let event = nostr_sdk::event::builder::EventBuilder::new(28333.into(), base64_tx, &[tag])
             .to_event(&ephemeral_key)?;
 
@@ -75,7 +75,7 @@ impl BroadcasterInterface for MutinyChain {
     fn broadcast_transaction(&self, tx: &Transaction) {
         let blockchain = self.tx_sync.clone();
         let tx_clone = tx.clone();
-        let magic = self.network_magic.clone();
+        let magic = self.network_magic;
         spawn_local(async move {
             // broadcast to esplora client
             maybe_await!(blockchain.client().broadcast(&tx_clone))

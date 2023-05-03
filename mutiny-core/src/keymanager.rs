@@ -207,12 +207,14 @@ mod tests {
     use crate::{keymanager::pubkey_from_keys_manager, test_utils::*};
 
     use super::create_keys_manager;
+    use crate::chain::MutinyChain;
+    use crate::esplora::EsploraSyncClient;
     use crate::fees::MutinyFeeEstimator;
     use crate::indexed_db::MutinyStorage;
+    use crate::logging::MutinyLogger;
     use crate::wallet::MutinyWallet;
     use bip39::Mnemonic;
     use bitcoin::Network;
-    use esplora_client::Builder;
     use std::str::FromStr;
     use std::sync::Arc;
 
@@ -221,16 +223,17 @@ mod tests {
         log!("creating pubkeys from a child seed");
 
         let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
-        let esplora = Arc::new(
-            Builder::new("https://blockstream.info/testnet/api/")
-                .build_async()
-                .unwrap(),
-        );
+        let tx_sync = Arc::new(EsploraSyncClient::new(
+            "https://blockstream.info/testnet/api/".to_owned(),
+            Arc::new(MutinyLogger::default()),
+        ));
+        let esplora = Arc::new(tx_sync.client().clone());
+        let chain = Arc::new(MutinyChain::new(tx_sync, [0u8; 4]));
         let db = MutinyStorage::new("".to_string()).await.unwrap();
-        let fees = Arc::new(MutinyFeeEstimator::new(db.clone(), esplora.clone()));
+        let fees = Arc::new(MutinyFeeEstimator::new(db.clone(), esplora));
 
         let wallet =
-            Arc::new(MutinyWallet::new(&mnemonic, db, Network::Testnet, esplora, fees).unwrap());
+            Arc::new(MutinyWallet::new(&mnemonic, db, Network::Testnet, chain, fees).unwrap());
 
         let km = create_keys_manager(wallet.clone(), &mnemonic, 1).unwrap();
         let pubkey = pubkey_from_keys_manager(&km);
