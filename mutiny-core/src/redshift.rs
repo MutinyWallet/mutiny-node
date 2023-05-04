@@ -268,42 +268,94 @@ impl RedshiftManager for NodeManager {
             rs.id.to_hex()
         );
         // TODO find the max channel reserve
-        let max_sats = (rs.amount_sats as f64 * 0.99) as u64;
+        let max_sats = (rs.amount_sats as f64 * 0.99) as u64 - 1;
         let min_sats = 10_000;
 
         // get the node making the payment
-        let nodes = self.nodes.lock().await;
-        let sending_node = nodes.get(&rs.sending_node).ok_or(MutinyError::NotFound)?;
+        let sending_node = {
+            let nodes = self.nodes.lock().await;
+            nodes
+                .get(&rs.sending_node)
+                .ok_or(MutinyError::NotFound)?
+                .clone()
+        };
 
         let receiving_node = match rs.recipient {
             RedshiftRecipient::Lightning(receiving_pubkey) => {
-                nodes.get(&receiving_pubkey).ok_or(MutinyError::NotFound)?
+                let node = {
+                    let nodes = self.nodes.lock().await;
+                    nodes.get(&receiving_pubkey).cloned()
+                };
+                node.ok_or(MutinyError::NotFound)?
             }
             RedshiftRecipient::OnChain(_) => {
                 let new_receiving_node = self.new_node().await?.pubkey;
-                nodes
-                    .get(&new_receiving_node)
-                    .ok_or(MutinyError::NotFound)?
+                // sleep to let new node init properly
+                sleep(5000).await;
+                let node = {
+                    let nodes = self.nodes.lock().await;
+                    nodes.get(&new_receiving_node).cloned()
+                };
+                node.ok_or(MutinyError::NotFound)?
             }
         };
 
         // attempt payments in loop until we sent all or hit min sats
         let mut local_max_sats = max_sats;
-        rs.status = RedshiftStatus::AttemptingPayments(0);
+        let get_invoice_failures = 0;
         loop {
+            log_debug!(
+                &self.logger,
+                "Looping through payments for redshift {}: sats={}",
+                rs.id.to_hex(),
+                local_max_sats,
+            );
             // keep trying until the amount is too small to send through
             if local_max_sats < min_sats {
+                log_debug!(
+                    &self.logger,
+                    "Local max amount is less than min for redshift {}: sats={}",
+                    rs.id.to_hex(),
+                    local_max_sats,
+                );
                 // if no payments were made, consider it a fail
                 if let RedshiftStatus::AttemptingPayments(0) = rs.status {
+                    log_error!(
+                        &self.logger,
+                        "Exhausted all payment attempts for redshift {}: sats={}",
+                        rs.id.to_hex(),
+                        local_max_sats,
+                    );
                     rs.fail("exhausted all payment attempt amounts".to_string());
                 }
                 break;
             }
+            log_debug!(
+                &self.logger,
+                "Getting an invoice for redshift {}: sats={}",
+                rs.id.to_hex(),
+                local_max_sats,
+            );
 
             // get an invoice from the receiving node
-            let invoice = receiving_node
+            let invoice = match receiving_node
                 .create_invoice(Some(local_max_sats), None, None)
-                .await?; // TODO probably should handle error
+                .await
+            {
+                Ok(i) => i,
+                Err(_) => {
+                    if get_invoice_failures > 3 {
+                        break;
+                    }
+                    log_debug!(
+                        &self.logger,
+                        "Could not get an invoice, trying again for redshift {}",
+                        rs.id.to_hex(),
+                    );
+                    sleep(1000).await;
+                    continue;
+                }
+            };
 
             log_debug!(
                 &self.logger,
@@ -323,11 +375,12 @@ impl RedshiftManager for NodeManager {
                             RedshiftStatus::AttemptingPayments(x) => x,
                             _ => 0,
                         };
+                        let total_amount_paid = local_max_sats + prev_amount_paid;
 
-                        rs.payment_attempted(local_max_sats);
+                        rs.payment_attempted(total_amount_paid);
 
                         // check if the max amount was sent on all tries
-                        if local_max_sats + prev_amount_paid >= max_sats {
+                        if total_amount_paid >= max_sats {
                             rs.status = RedshiftStatus::Completed;
                             break;
                         }
@@ -337,7 +390,7 @@ impl RedshiftManager for NodeManager {
                         self.storage.update_redshift(rs.clone())?;
 
                         // keep trying with the remaining amount
-                        local_max_sats = max_sats.saturating_sub(local_max_sats);
+                        local_max_sats = max_sats.saturating_sub(total_amount_paid);
                     } else {
                         // TODO need to handle payments still pending
                         log_debug!(&self.logger, "payment still pending...");
@@ -350,6 +403,14 @@ impl RedshiftManager for NodeManager {
                     local_max_sats = local_max_sats.saturating_sub(decrement);
                 }
             }
+        }
+
+        // lookup the new channel on the receiving node
+        if let Some(c) = receiving_node.channel_manager.list_channels().first() {
+            rs.output_channel = c.funding_txo.map(|o| OutPoint {
+                txid: o.txid,
+                vout: o.index as u32,
+            });
         }
 
         // save to db
@@ -368,6 +429,7 @@ impl RedshiftManager for NodeManager {
                 if let Some(chan) = rs.output_channel {
                     self.close_channel(&chan).await?;
                     // todo send funds to address, ldk doesn't support this yet...
+                    // also update the final utxo
                 } else {
                     log_debug!(&self.logger, "no output channel to close");
                 }
