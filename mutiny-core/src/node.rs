@@ -1043,6 +1043,33 @@ async fn start_reconnection_handling(
     uuid: String,
     lsp_client: &Option<LspClient>,
 ) -> Result<(), MutinyError> {
+    // Attempt connection to LSP first
+    if let Some(lsp) = lsp_client.clone() {
+        let node_id = NodeId::from_pubkey(&lsp.pubkey);
+
+        match connect_peer_if_necessary(
+            multi_socket.clone(),
+            &websocket_proxy_addr,
+            &PubkeyConnectionInfo::new(lsp.connection_string.as_str())?,
+            peer_man.clone(),
+        )
+        .await
+        {
+            Ok(_) => {
+                trace!("auto connected lsp: {node_id}");
+            }
+            Err(e) => {
+                trace!("could not connect to lsp {node_id}: {e}");
+            }
+        }
+
+        if let Err(e) =
+            save_peer_connection_info(&uuid, &node_id, &lsp.connection_string, None).await
+        {
+            error!("could not save connection to lsp: {e}");
+        }
+    };
+
     let mut multi_socket_reconnect = multi_socket.clone();
     let websocket_proxy_addr_copy = websocket_proxy_addr.clone();
     let self_connection_copy = self_connection.clone();
@@ -1063,12 +1090,15 @@ async fn start_reconnection_handling(
             sleep(5 * 1000).await;
         }
     });
+
     let connect_peer_man = peer_man.clone();
     let connect_proxy = websocket_proxy_addr.clone();
     let connect_logger = logger.clone();
     let connect_multi_socket = multi_socket.clone();
     let connect_uuid = uuid.clone();
     spawn_local(async move {
+        // wait for things to start up first before starting reconnecting logic
+        sleep(5 * 1000).await;
         loop {
             // if we aren't connected to master socket
             // then don't try to connect peer
@@ -1134,31 +1164,6 @@ async fn start_reconnection_handling(
             sleep(5 * 1000).await;
         }
     });
-    if let Some(lsp) = lsp_client.clone() {
-        let node_id = NodeId::from_pubkey(&lsp.pubkey);
-
-        match connect_peer_if_necessary(
-            multi_socket.clone(),
-            &websocket_proxy_addr,
-            &PubkeyConnectionInfo::new(lsp.connection_string.as_str())?,
-            peer_man.clone(),
-        )
-        .await
-        {
-            Ok(_) => {
-                trace!("auto connected lsp: {node_id}");
-            }
-            Err(e) => {
-                trace!("could not connect to lsp {node_id}: {e}");
-            }
-        }
-
-        if let Err(e) =
-            save_peer_connection_info(&uuid, &node_id, &lsp.connection_string, None).await
-        {
-            error!("could not save connection to lsp: {e}");
-        }
-    };
     Ok(())
 }
 
