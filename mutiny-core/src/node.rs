@@ -392,130 +392,16 @@ impl Node {
         );
         multi_socket.listen();
 
-        // keep trying to reconnect to our multi socket proxy
-        let mut multi_socket_reconnect = multi_socket.clone();
-        let websocket_proxy_addr_copy = websocket_proxy_addr.clone();
-        let self_connection_copy = self_connection.clone();
-        spawn_local(async move {
-            loop {
-                if !multi_socket_reconnect.connected() {
-                    debug!("got disconnected from multi socket proxy, going to reconnect");
-                    match WsProxy::new(&websocket_proxy_addr_copy, self_connection_copy.clone())
-                        .await
-                    {
-                        Ok(main_proxy) => {
-                            multi_socket_reconnect.reconnect(Arc::new(main_proxy)).await;
-                        }
-                        Err(_) => {
-                            sleep(5 * 1000).await;
-                            continue;
-                        }
-                    };
-                }
-                sleep(5 * 1000).await;
-            }
-        });
-
-        // try to connect to peers we already have a channel with
-        let connect_peer_man = peer_man.clone();
-        let connect_proxy = websocket_proxy_addr.clone();
-        let connect_logger = logger.clone();
-        let connect_multi_socket = multi_socket.clone();
-        let connect_uuid = uuid.clone();
-        spawn_local(async move {
-            loop {
-                // if we aren't connected to master socket
-                // then don't try to connect peer
-                if !connect_multi_socket.connected() {
-                    sleep(5 * 1000).await;
-                    continue;
-                }
-
-                let peer_connections = get_all_peers().await.unwrap_or_default();
-                let current_connections = connect_peer_man.get_peer_node_ids();
-
-                let not_connected: Vec<(NodeId, String)> = peer_connections
-                    .into_iter()
-                    .filter(|(_, d)| {
-                        d.connection_string.is_some()
-                            && d.nodes.binary_search(&connect_uuid).is_ok()
-                    })
-                    .map(|(n, d)| (n, d.connection_string.unwrap()))
-                    .filter(|(n, _)| {
-                        !current_connections
-                            .iter()
-                            .any(|c| &NodeId::from_pubkey(&c.0) == n)
-                    })
-                    .collect();
-
-                for (pubkey, conn_str) in not_connected.into_iter() {
-                    trace!("going to auto connect to peer: {pubkey}");
-                    let peer_connection_info = match PubkeyConnectionInfo::new(&conn_str) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            connect_logger.log(&Record::new(
-                                lightning::util::logger::Level::Error,
-                                format_args!("ERROR: could not parse connection info: {e}"),
-                                "node",
-                                "",
-                                0,
-                            ));
-                            continue;
-                        }
-                    };
-                    match connect_peer(
-                        connect_multi_socket.clone(),
-                        &connect_proxy,
-                        &peer_connection_info,
-                        connect_peer_man.clone(),
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            trace!("auto connected peer: {pubkey}");
-                        }
-                        Err(e) => {
-                            connect_logger.log(&Record::new(
-                                lightning::util::logger::Level::Warn,
-                                format_args!("WARN: could not auto connect peer: {e}"),
-                                "node",
-                                "",
-                                0,
-                            ));
-                        }
-                    }
-                }
-                sleep(5 * 1000).await;
-            }
-        });
-
-        // save connection info peer connection list to auto connect
-        // also go ahead and connect to the LSP peer
-        if let Some(lsp) = lsp_client.clone() {
-            let node_id = NodeId::from_pubkey(&lsp.pubkey);
-
-            match connect_peer(
-                multi_socket.clone(),
-                &websocket_proxy_addr,
-                &PubkeyConnectionInfo::new(lsp.connection_string.as_str())?,
-                peer_man.clone(),
-            )
-            .await
-            {
-                Ok(_) => {
-                    trace!("auto connected lsp: {pubkey}");
-                }
-                Err(e) => {
-                    trace!("could not connect to lsp {pubkey}: {e}");
-                }
-            }
-
-            if let Err(e) =
-                save_peer_connection_info(&uuid, &node_id, &lsp.connection_string, None).await
-            {
-                error!("could not save connection to lsp: {e}");
-            }
-        }
+        start_reconnection_handling(
+            &multi_socket,
+            websocket_proxy_addr.clone(),
+            self_connection,
+            peer_man.clone(),
+            &logger,
+            uuid.clone(),
+            &lsp_client,
+        )
+        .await?;
 
         Ok(Node {
             _uuid: uuid,
@@ -1146,6 +1032,139 @@ impl Node {
             }
         }
     }
+}
+
+async fn start_reconnection_handling(
+    multi_socket: &MultiWsSocketDescriptor,
+    websocket_proxy_addr: String,
+    self_connection: PubkeyConnectionInfo,
+    peer_man: Arc<dyn PeerManager>,
+    logger: &Arc<MutinyLogger>,
+    uuid: String,
+    lsp_client: &Option<LspClient>,
+) -> Result<(), MutinyError> {
+    // Attempt connection to LSP first
+    if let Some(lsp) = lsp_client.clone() {
+        let node_id = NodeId::from_pubkey(&lsp.pubkey);
+
+        match connect_peer_if_necessary(
+            multi_socket.clone(),
+            &websocket_proxy_addr,
+            &PubkeyConnectionInfo::new(lsp.connection_string.as_str())?,
+            peer_man.clone(),
+        )
+        .await
+        {
+            Ok(_) => {
+                trace!("auto connected lsp: {node_id}");
+            }
+            Err(e) => {
+                trace!("could not connect to lsp {node_id}: {e}");
+            }
+        }
+
+        if let Err(e) =
+            save_peer_connection_info(&uuid, &node_id, &lsp.connection_string, None).await
+        {
+            error!("could not save connection to lsp: {e}");
+        }
+    };
+
+    let mut multi_socket_reconnect = multi_socket.clone();
+    let websocket_proxy_addr_copy = websocket_proxy_addr.clone();
+    let self_connection_copy = self_connection.clone();
+    spawn_local(async move {
+        loop {
+            if !multi_socket_reconnect.connected() {
+                debug!("got disconnected from multi socket proxy, going to reconnect");
+                match WsProxy::new(&websocket_proxy_addr_copy, self_connection_copy.clone()).await {
+                    Ok(main_proxy) => {
+                        multi_socket_reconnect.reconnect(Arc::new(main_proxy)).await;
+                    }
+                    Err(_) => {
+                        sleep(5 * 1000).await;
+                        continue;
+                    }
+                };
+            }
+            sleep(5 * 1000).await;
+        }
+    });
+
+    let connect_peer_man = peer_man.clone();
+    let connect_proxy = websocket_proxy_addr.clone();
+    let connect_logger = logger.clone();
+    let connect_multi_socket = multi_socket.clone();
+    let connect_uuid = uuid.clone();
+    spawn_local(async move {
+        // wait for things to start up first before starting reconnecting logic
+        sleep(5 * 1000).await;
+        loop {
+            // if we aren't connected to master socket
+            // then don't try to connect peer
+            if !connect_multi_socket.connected() {
+                sleep(5 * 1000).await;
+                continue;
+            }
+
+            let peer_connections = get_all_peers().await.unwrap_or_default();
+            let current_connections = connect_peer_man.get_peer_node_ids();
+
+            let not_connected: Vec<(NodeId, String)> = peer_connections
+                .into_iter()
+                .filter(|(_, d)| {
+                    d.connection_string.is_some()
+                        && d.nodes.binary_search(&connect_uuid.to_string()).is_ok()
+                })
+                .map(|(n, d)| (n, d.connection_string.unwrap()))
+                .filter(|(n, _)| {
+                    !current_connections
+                        .iter()
+                        .any(|c| &NodeId::from_pubkey(c) == n)
+                })
+                .collect();
+
+            for (pubkey, conn_str) in not_connected.into_iter() {
+                trace!("going to auto connect to peer: {pubkey}");
+                let peer_connection_info = match PubkeyConnectionInfo::new(&conn_str) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        connect_logger.log(&Record::new(
+                            lightning::util::logger::Level::Error,
+                            format_args!("ERROR: could not parse connection info: {e}"),
+                            "node",
+                            "",
+                            0,
+                        ));
+                        continue;
+                    }
+                };
+                match connect_peer_if_necessary(
+                    connect_multi_socket.clone(),
+                    &connect_proxy,
+                    &peer_connection_info,
+                    connect_peer_man.clone(),
+                )
+                .await
+                {
+                    Ok(_) => {
+                        trace!("auto connected peer: {pubkey}");
+                    }
+                    Err(e) => {
+                        connect_logger.log(&Record::new(
+                            lightning::util::logger::Level::Warn,
+                            format_args!("WARN: could not auto connect peer: {e}"),
+                            "node",
+                            "",
+                            0,
+                        ));
+                    }
+                }
+            }
+            sleep(5 * 1000).await;
+        }
+    });
+    Ok(())
 }
 
 pub(crate) async fn connect_peer_if_necessary(
