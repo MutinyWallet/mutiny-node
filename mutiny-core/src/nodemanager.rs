@@ -631,7 +631,7 @@ impl NodeManager {
         let nodes = self.nodes.lock().await;
         let lightning_msats: u64 = nodes
             .iter()
-            .flat_map(|(_, n)| n.channel_manager.list_usable_channels())
+            .flat_map(|(_, n)| n.channel_manager.list_channels())
             .map(|c| c.outbound_capacity_msat)
             .sum();
 
