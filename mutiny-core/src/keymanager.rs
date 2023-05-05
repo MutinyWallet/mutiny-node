@@ -1,5 +1,5 @@
 use crate::error::MutinyError;
-use crate::wallet::MutinyWallet;
+use crate::onchain::OnChainWallet;
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
 use bitcoin::bech32::u5;
@@ -20,12 +20,12 @@ use std::sync::Arc;
 
 pub struct PhantomKeysManager {
     inner: LdkPhantomKeysManager,
-    wallet: Arc<MutinyWallet>,
+    wallet: Arc<OnChainWallet>,
 }
 
 impl PhantomKeysManager {
     pub fn new(
-        wallet: Arc<MutinyWallet>,
+        wallet: Arc<OnChainWallet>,
         seed: &[u8; 32],
         starting_time_secs: u64,
         starting_time_nanos: u32,
@@ -163,7 +163,7 @@ pub(crate) fn generate_seed(num_words: u8) -> Result<Mnemonic, MutinyError> {
 // be derived from the LDK default being `m/0'/X'/0'`. The PhantomKeysManager shared
 // key secret will be derived from `m/0'`.
 pub(crate) fn create_keys_manager(
-    wallet: Arc<MutinyWallet>,
+    wallet: Arc<OnChainWallet>,
     mnemonic: &Mnemonic,
     child_index: u32,
 ) -> Result<PhantomKeysManager, MutinyError> {
@@ -209,7 +209,7 @@ mod tests {
     use super::create_keys_manager;
     use crate::fees::MutinyFeeEstimator;
     use crate::indexed_db::MutinyStorage;
-    use crate::wallet::MutinyWallet;
+    use crate::onchain::OnChainWallet;
     use bip39::Mnemonic;
     use bitcoin::Network;
     use esplora_client::Builder;
@@ -230,7 +230,7 @@ mod tests {
         let fees = Arc::new(MutinyFeeEstimator::new(db.clone(), esplora.clone()));
 
         let wallet =
-            Arc::new(MutinyWallet::new(&mnemonic, db, Network::Testnet, esplora, fees).unwrap());
+            Arc::new(OnChainWallet::new(&mnemonic, db, Network::Testnet, esplora, fees).unwrap());
 
         let km = create_keys_manager(wallet.clone(), &mnemonic, 1).unwrap();
         let pubkey = pubkey_from_keys_manager(&km);
