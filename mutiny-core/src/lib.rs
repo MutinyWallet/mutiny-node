@@ -101,6 +101,8 @@ impl MutinyWallet {
 
         let node_manager = Arc::new(NodeManager::new(config.clone()).await?);
 
+        NodeManager::start_redshifts(node_manager.clone());
+
         Ok(Self {
             config,
             node_manager,

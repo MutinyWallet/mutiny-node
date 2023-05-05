@@ -539,7 +539,7 @@ impl MutinyWallet {
     pub async fn close_channel(&self, outpoint: String) -> Result<(), MutinyJsError> {
         let outpoint: OutPoint =
             OutPoint::from_str(&outpoint).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        Ok(self.inner.close_channel(&outpoint).await?)
+        Ok(self.inner.node_manager.close_channel(&outpoint).await?)
     }
 
     /// Lists all the channels for all the nodes in the node manager.
@@ -590,6 +590,7 @@ impl MutinyWallet {
         Ok(JsValue::from_serde(
             &self
                 .inner
+                .node_manager
                 .init_redshift(
                     outpoint,
                     redshift_recipient,
@@ -608,7 +609,9 @@ impl MutinyWallet {
     ) -> Result<JsValue /* Vec<Redshift> */, MutinyJsError> {
         let outpoint: OutPoint =
             OutPoint::from_str(&outpoint).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        Ok(JsValue::from_serde(&self.inner.get_redshift(outpoint)?)?)
+        Ok(JsValue::from_serde(
+            &self.inner.node_manager.get_redshift(outpoint)?,
+        )?)
     }
 
     /// Gets the current bitcoin price in USD.

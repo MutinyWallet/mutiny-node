@@ -503,7 +503,7 @@ impl NodeManager {
         Ok(())
     }
 
-    fn start_redshifts(nm: Arc<NodeManager>) {
+    pub(crate) fn start_redshifts(nm: Arc<NodeManager>) {
         let node_manager = nm.clone();
         spawn_local(async move {
             loop {
