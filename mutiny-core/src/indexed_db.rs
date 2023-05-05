@@ -33,17 +33,17 @@ pub struct MutinyStorage {
     /// This is used to avoid having to read from IndexedDB on every get.
     /// This is a RwLock because we want to be able to read from it without blocking
     memory: Arc<RwLock<HashMap<String, serde_json::Value>>>,
-    pub(crate) indexed_db: Arc<Rexie>,
+    pub(crate) indexed_db: Arc<RwLock<Option<Rexie>>>,
 }
 
 impl MutinyStorage {
     pub async fn new(password: String) -> Result<MutinyStorage, MutinyError> {
-        let indexed_db = Arc::new(Self::build_indexed_db_database().await?);
+        let indexed_db = Arc::new(RwLock::new(Some(Self::build_indexed_db_database().await?)));
 
         // If the password is empty, set to None
         let password = Some(password).filter(|pw| !pw.is_empty());
 
-        let map = Self::read_all(&indexed_db, &password).await?;
+        let map = Self::read_all(indexed_db.clone(), &password).await?;
         let memory = Arc::new(RwLock::new(map));
 
         Ok(MutinyStorage {
@@ -51,6 +51,19 @@ impl MutinyStorage {
             memory,
             indexed_db,
         })
+    }
+
+    pub async fn start(&mut self) -> Result<(), MutinyError> {
+        let indexed_db = Arc::new(RwLock::new(Some(Self::build_indexed_db_database().await?)));
+        let map = Self::read_all(indexed_db.clone(), &self.password).await?;
+        let memory = Arc::new(RwLock::new(map));
+        self.indexed_db = indexed_db;
+        self.memory = memory;
+        Ok(())
+    }
+
+    pub fn connected(self) -> Result<bool, MutinyError> {
+        Ok(self.indexed_db.try_read()?.is_some())
     }
 
     pub(crate) fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
@@ -85,14 +98,23 @@ impl MutinyStorage {
     }
 
     async fn save_to_indexed_db(
-        indexed_db: Arc<Rexie>,
+        indexed_db: Arc<RwLock<Option<Rexie>>>,
         password: &Option<String>,
         key: &str,
         data: &serde_json::Value,
     ) -> Result<(), MutinyError> {
         let tx = indexed_db
-            .as_ref()
-            .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)?;
+            .try_write()
+            .map_err(|e| MutinyError::read_err(e.into()))
+            .and_then(|mut indexed_db_lock| {
+                if let Some(indexed_db) = &mut *indexed_db_lock {
+                    indexed_db
+                        .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)
+                        .map_err(|e| e.into())
+                } else {
+                    Err(MutinyError::read_err(MutinyStorageError::IndexedDBError))
+                }
+            })?;
 
         let store = tx.store(WALLET_OBJECT_STORE_NAME)?;
 
@@ -115,10 +137,22 @@ impl MutinyStorage {
         Ok(())
     }
 
-    async fn delete_from_indexed_db(indexed_db: Arc<Rexie>, key: &str) -> Result<(), MutinyError> {
+    async fn delete_from_indexed_db(
+        indexed_db: Arc<RwLock<Option<Rexie>>>,
+        key: &str,
+    ) -> Result<(), MutinyError> {
         let tx = indexed_db
-            .as_ref()
-            .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)?;
+            .try_write()
+            .map_err(|e| MutinyError::read_err(e.into()))
+            .and_then(|mut indexed_db_lock| {
+                if let Some(indexed_db) = &mut *indexed_db_lock {
+                    indexed_db
+                        .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)
+                        .map_err(|e| e.into())
+                } else {
+                    Err(MutinyError::read_err(MutinyStorageError::IndexedDBError))
+                }
+            })?;
 
         let store = tx.store(WALLET_OBJECT_STORE_NAME)?;
 
@@ -208,10 +242,23 @@ impl MutinyStorage {
     }
 
     pub(crate) async fn get_mnemonic(&self) -> Result<Mnemonic, MutinyError> {
-        let tx = self
-            .indexed_db
-            .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadOnly)?;
-        let store = tx.store(WALLET_OBJECT_STORE_NAME)?;
+        let store = {
+            let tx = self
+                .indexed_db
+                .try_read()
+                .map_err(|e| MutinyError::read_err(e.into()))
+                .and_then(|indexed_db_lock| {
+                    if let Some(indexed_db) = &*indexed_db_lock {
+                        indexed_db
+                            .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadOnly)
+                            .map_err(|e| e.into())
+                    } else {
+                        Err(MutinyError::read_err(MutinyStorageError::IndexedDBError))
+                    }
+                })?;
+
+            tx.store(WALLET_OBJECT_STORE_NAME)?
+        };
 
         let key = JsValue::from(MNEMONIC_KEY);
         let json = store.get(&key).await?;
@@ -221,8 +268,6 @@ impl MutinyStorage {
             Some(mnemonic) => Mnemonic::from_str(&mnemonic)?,
             None => return Err(MutinyError::InvalidMnemonic), // maybe need a better error
         };
-
-        tx.done().await?;
 
         Ok(mnemonic)
     }
@@ -275,7 +320,7 @@ impl MutinyStorage {
 
     #[cfg(test)]
     pub(crate) async fn reload_from_indexed_db(&self) -> Result<(), MutinyError> {
-        let map = Self::read_all(&self.indexed_db, &self.password).await?;
+        let map = Self::read_all(self.indexed_db.clone(), &self.password).await?;
         let mut memory = self
             .memory
             .try_write()
@@ -307,12 +352,24 @@ impl MutinyStorage {
     }
 
     pub(crate) async fn read_all(
-        indexed_db: &Rexie,
+        indexed_db: Arc<RwLock<Option<Rexie>>>,
         password: &Option<String>,
     ) -> Result<HashMap<String, serde_json::Value>, MutinyError> {
-        let tx = indexed_db.transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadOnly)?;
-
-        let store = tx.store(WALLET_OBJECT_STORE_NAME)?;
+        let store = {
+            let tx = indexed_db
+                .try_read()
+                .map_err(|e| MutinyError::read_err(e.into()))
+                .and_then(|indexed_db_lock| {
+                    if let Some(indexed_db) = &*indexed_db_lock {
+                        indexed_db
+                            .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadOnly)
+                            .map_err(|e| e.into())
+                    } else {
+                        Err(MutinyError::read_err(MutinyStorageError::IndexedDBError))
+                    }
+                })?;
+            tx.store(WALLET_OBJECT_STORE_NAME)?
+        };
 
         let mut map = HashMap::new();
         let all_json = store.get_all(None, None, None, None).await?;
@@ -366,6 +423,7 @@ impl MutinyStorage {
         }
 
         tx.done().await?;
+        indexed_db.close();
 
         Ok(())
     }
@@ -380,6 +438,14 @@ impl MutinyStorage {
         tx.done().await?;
 
         Ok(())
+    }
+
+    pub(crate) fn stop(&mut self) {
+        if let Ok(mut indexed_db_lock) = self.indexed_db.try_write() {
+            if let Some(indexed_db) = indexed_db_lock.take() {
+                indexed_db.close();
+            }
+        }
     }
 }
 

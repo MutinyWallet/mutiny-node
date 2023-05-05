@@ -486,6 +486,14 @@ impl NodeManager {
         join_all(node_futures).await;
         nodes.clear();
         debug!("stopped all nodes");
+
+        // stop the indexeddb object to close db connection
+        if self.storage.clone().connected().unwrap_or(false) {
+            debug!("stopping storage");
+            self.storage.clone().stop();
+            debug!("stopped storage");
+        }
+
         Ok(())
     }
 
@@ -1303,8 +1311,20 @@ impl NodeManager {
 
     /// Exports the current state of the node manager to a json object.
     pub async fn export_json(&self) -> Result<serde_json::Value, MutinyError> {
-        let map = MutinyStorage::read_all(&self.storage.indexed_db, &self.storage.password).await?;
+        let needs_db_connection = self.storage.clone().connected().unwrap_or(false);
+        if needs_db_connection {
+            self.storage.clone().start().await?;
+        }
+
+        let map = MutinyStorage::read_all(self.storage.indexed_db.clone(), &self.storage.password)
+            .await?;
         let serde_map = serde_json::map::Map::from_iter(map.into_iter());
+
+        // shut back down after reading if it was already closed
+        if needs_db_connection {
+            self.storage.clone().stop();
+        }
+
         Ok(serde_json::Value::Object(serde_map))
     }
 
