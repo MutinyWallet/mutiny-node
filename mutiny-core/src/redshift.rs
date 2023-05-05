@@ -126,6 +126,9 @@ impl RedshiftStorage for MutinyStorage {
 }
 
 pub trait RedshiftManager {
+    /// Waits until the channel's funding transaction has been broadcast.
+    ///
+    /// Returns the channel's funding utxo outpoint
     async fn await_chan_funding_tx(
         &self,
         sending_node: &PublicKey,
@@ -267,9 +270,6 @@ impl RedshiftManager for NodeManager {
             "Attempting payments for redshift {}",
             rs.id.to_hex()
         );
-        // TODO find the max channel reserve
-        let max_sats = (rs.amount_sats as f64 * 0.99) as u64 - 1;
-        let min_sats = 10_000;
 
         // get the node making the payment
         let sending_node = {
@@ -279,6 +279,28 @@ impl RedshiftManager for NodeManager {
                 .ok_or(MutinyError::NotFound)?
                 .clone()
         };
+
+        // find the channel reserve the introduction channel
+        let reserve = match rs.introduction_channel {
+            None => 0,
+            Some(chan) => sending_node
+                .channel_manager
+                .list_channels()
+                .iter()
+                .find_map(|c| {
+                    if c.funding_txo.map(|u| u.into_bitcoin_outpoint()) == Some(chan) {
+                        c.unspendable_punishment_reserve
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0),
+        };
+
+        // original utxo value - opening tx fee - channel reserve
+        let max_sats = rs.amount_sats - rs.fees_paid - reserve;
+        // Voltage LSP minimum is 10,000 sats
+        let min_sats = 10_000;
 
         let receiving_node = match rs.recipient {
             RedshiftRecipient::Lightning(receiving_pubkey) => {
@@ -407,10 +429,7 @@ impl RedshiftManager for NodeManager {
 
         // lookup the new channel on the receiving node
         if let Some(c) = receiving_node.channel_manager.list_channels().first() {
-            rs.output_channel = c.funding_txo.map(|o| OutPoint {
-                txid: o.txid,
-                vout: o.index as u32,
-            });
+            rs.output_channel = c.funding_txo.map(|o| o.into_bitcoin_outpoint());
         }
 
         // save to db
@@ -418,7 +437,10 @@ impl RedshiftManager for NodeManager {
 
         // close introduction channel
         match rs.introduction_channel {
-            Some(chan) => self.close_channel(&chan).await?,
+            Some(chan) => {
+                self.close_channel(&chan).await?
+                // todo need to set change amount to on the amount we get back
+            }
             None => log_debug!(&self.logger, "no introduction channel to close"),
         }
 
