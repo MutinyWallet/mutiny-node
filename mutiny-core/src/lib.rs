@@ -68,6 +68,8 @@ impl MutinyWallet {
             .await?,
         );
 
+        NodeManager::start_redshifts(node_manager.clone());
+
         Ok(Self { node_manager })
     }
 }
