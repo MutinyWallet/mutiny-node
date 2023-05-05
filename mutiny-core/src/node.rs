@@ -414,6 +414,7 @@ impl Node {
             Arc::new(main_proxy),
             peer_man.clone(),
             pubkey.serialize().to_vec(),
+            stop.clone(),
         );
         multi_socket.listen();
 

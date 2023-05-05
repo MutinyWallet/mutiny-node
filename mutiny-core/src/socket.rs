@@ -125,12 +125,15 @@ pub(crate) struct MultiWsSocketDescriptor {
     peer_manager: Arc<dyn PeerManager>,
     our_peer_pubkey: Vec<u8>,
     connected: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
 }
+
 impl MultiWsSocketDescriptor {
     pub fn new(
         conn: Arc<dyn Proxy>,
         peer_manager: Arc<dyn PeerManager>,
         our_peer_pubkey: Vec<u8>,
+        stop: Arc<AtomicBool>,
     ) -> Self {
         trace!("setting up multi websocket descriptor");
 
@@ -146,6 +149,7 @@ impl MultiWsSocketDescriptor {
             socket_map,
             peer_manager,
             our_peer_pubkey,
+            stop,
             connected: Arc::new(AtomicBool::new(true)),
         }
     }
@@ -204,9 +208,16 @@ impl MultiWsSocketDescriptor {
         let peer_manager_copy = self.peer_manager.clone();
         let connected_copy = self.connected.clone();
         let our_peer_pubkey_copy = self.our_peer_pubkey.clone();
+        let stop_copy = self.stop.clone();
         trace!("spawning multi socket connection reader");
         spawn_local(async move {
             while let Some(msg) = conn_copy.read().await {
+                // check if we are supposed to stop reading,
+                // this might happen after the next message
+                // or error comes through
+                if stop_copy.load(Ordering::Relaxed) {
+                    break;
+                }
                 if let Ok(msg) = msg {
                     match msg {
                         Message::Text(msg) => {
