@@ -209,6 +209,7 @@ mod tests {
     use super::create_keys_manager;
     use crate::fees::MutinyFeeEstimator;
     use crate::indexed_db::MutinyStorage;
+    use crate::logging::MutinyLogger;
     use crate::onchain::OnChainWallet;
     use bip39::Mnemonic;
     use bitcoin::Network;
@@ -227,10 +228,16 @@ mod tests {
                 .unwrap(),
         );
         let db = MutinyStorage::new("".to_string()).await.unwrap();
-        let fees = Arc::new(MutinyFeeEstimator::new(db.clone(), esplora.clone()));
+        let logger = Arc::new(MutinyLogger::default());
+        let fees = Arc::new(MutinyFeeEstimator::new(
+            db.clone(),
+            esplora.clone(),
+            logger.clone(),
+        ));
 
-        let wallet =
-            Arc::new(OnChainWallet::new(&mnemonic, db, Network::Testnet, esplora, fees).unwrap());
+        let wallet = Arc::new(
+            OnChainWallet::new(&mnemonic, db, Network::Testnet, esplora, fees, logger).unwrap(),
+        );
 
         let km = create_keys_manager(wallet.clone(), &mnemonic, 1).unwrap();
         let pubkey = pubkey_from_keys_manager(&km);

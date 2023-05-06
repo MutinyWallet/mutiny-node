@@ -9,8 +9,9 @@ use gloo_utils::format::JsValueSerdeExt;
 use lightning::ln::msgs::NodeAnnouncement;
 use lightning::routing::gossip::NodeId;
 use lightning::routing::scoring::ProbabilisticScoringParameters;
+use lightning::util::logger::Logger;
 use lightning::util::ser::{ReadableArgs, Writeable};
-use log::{debug, error, info, warn};
+use lightning::{log_debug, log_error, log_info, log_warn};
 use reqwest::Client;
 use rexie::{ObjectStore, Rexie, Store, TransactionMode};
 use serde::{Deserialize, Serialize};
@@ -100,7 +101,7 @@ async fn get_gossip_data(
     let mut readable_bytes = lightning::io::Cursor::new(network_graph_bytes);
     let network_graph = Arc::new(NetworkGraph::read(&mut readable_bytes, logger.clone())?);
 
-    debug!("Got network graph, getting scorer...");
+    log_debug!(logger, "Got network graph, getting scorer...");
 
     // Get the probabilistic scorer
     let prob_scorer_js = store.get(&JsValue::from(PROB_SCORER_KEY)).await?;
@@ -123,7 +124,10 @@ async fn get_gossip_data(
     let scorer = ProbScorer::read(&mut readable_bytes, args);
 
     if let Err(e) = scorer.as_ref() {
-        warn!("Could not read probabilistic scorer from database: {e}");
+        log_warn!(
+            logger,
+            "Could not read probabilistic scorer from database: {e}"
+        );
     }
 
     let gossip = Gossip {
@@ -254,12 +258,16 @@ pub async fn get_gossip_sync(
         Ok(Some(gossip_data)) => gossip_data,
         Ok(None) => Gossip::new(network, logger.clone()),
         Err(e) => {
-            error!("Error getting gossip data from storage: {e}, re-syncing gossip...");
+            log_error!(
+                logger,
+                "Error getting gossip data from storage: {e}, re-syncing gossip..."
+            );
             Gossip::new(network, logger.clone())
         }
     };
 
-    debug!(
+    log_debug!(
+        &logger,
         "Previous gossip sync timestamp: {}",
         gossip_data.last_sync_timestamp
     );
@@ -271,7 +279,7 @@ pub async fn get_gossip_sync(
         Some(scorer) => scorer,
         None => {
             let params = ProbabilisticScoringParameters::default();
-            ProbScorer::new(params, gossip_data.network_graph.clone(), logger)
+            ProbScorer::new(params, gossip_data.network_graph.clone(), logger.clone())
         }
     };
 
@@ -289,7 +297,7 @@ pub async fn get_gossip_sync(
     };
 
     let rgs_url = get_rgs_url(network, user_rgs_url, Some(gossip_data.last_sync_timestamp));
-    info!("RGS URL: {}", rgs_url);
+    log_info!(&logger, "RGS URL: {}", rgs_url);
 
     let fetch_result = fetch_updated_gossip(
         rgs_url,
@@ -297,11 +305,15 @@ pub async fn get_gossip_sync(
         gossip_data.last_sync_timestamp,
         &gossip_sync,
         &rexie,
+        &logger,
     )
     .await;
 
     if fetch_result.is_err() {
-        warn!("Failed to fetch updated gossip, using default gossip data");
+        log_warn!(
+            logger,
+            "Failed to fetch updated gossip, using default gossip data"
+        );
     }
 
     Ok((gossip_sync, prob_scorer))
@@ -313,6 +325,7 @@ async fn fetch_updated_gossip(
     last_sync_timestamp: u32,
     gossip_sync: &RapidGossipSync,
     rexie: &Rexie,
+    logger: &MutinyLogger,
 ) -> Result<(), MutinyError> {
     let http_client = Client::builder()
         .build()
@@ -332,7 +345,11 @@ async fn fetch_updated_gossip(
     let new_last_sync_timestamp_result =
         gossip_sync.update_network_graph_no_std(&rgs_data, Some(now))?;
 
-    info!("RGS sync result: {}", new_last_sync_timestamp_result);
+    log_info!(
+        logger,
+        "RGS sync result: {}",
+        new_last_sync_timestamp_result
+    );
 
     // save the network graph if has been updated
     if new_last_sync_timestamp_result != last_sync_timestamp {

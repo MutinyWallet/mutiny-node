@@ -5,18 +5,23 @@ use bdk_macros::maybe_await;
 use bitcoin::{Script, Transaction, Txid};
 use lightning::chain::chaininterface::BroadcasterInterface;
 use lightning::chain::{Filter, WatchedOutput};
-use log::error;
+use lightning::log_error;
+use lightning::util::logger::Logger;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::logging::MutinyLogger;
 
 pub struct MutinyChain {
     pub tx_sync: Arc<EsploraSyncClient<Arc<MutinyLogger>>>,
+    logger: Arc<MutinyLogger>,
 }
 
 impl MutinyChain {
-    pub(crate) fn new(tx_sync: Arc<EsploraSyncClient<Arc<MutinyLogger>>>) -> Self {
-        Self { tx_sync }
+    pub(crate) fn new(
+        tx_sync: Arc<EsploraSyncClient<Arc<MutinyLogger>>>,
+        logger: Arc<MutinyLogger>,
+    ) -> Self {
+        Self { tx_sync, logger }
     }
 }
 
@@ -34,9 +39,11 @@ impl BroadcasterInterface for MutinyChain {
     fn broadcast_transaction(&self, tx: &Transaction) {
         let blockchain = self.tx_sync.clone();
         let tx_clone = tx.clone();
+        let logger = self.logger.clone();
         spawn_local(async move {
-            maybe_await!(blockchain.client().broadcast(&tx_clone))
-                .unwrap_or_else(|_| error!("failed to broadcast tx! {}", tx_clone.txid()))
+            maybe_await!(blockchain.client().broadcast(&tx_clone)).unwrap_or_else(|_| {
+                log_error!(logger, "failed to broadcast tx! {}", tx_clone.txid())
+            })
         });
     }
 }

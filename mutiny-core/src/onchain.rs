@@ -11,11 +11,13 @@ use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, OutPoint, Script, Transaction, Txid};
 use esplora_client::AsyncClient;
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
-use log::debug;
+use lightning::log_debug;
+use lightning::util::logger::Logger;
 
 use crate::error::MutinyError;
 use crate::fees::MutinyFeeEstimator;
 use crate::indexed_db::MutinyStorage;
+use crate::logging::MutinyLogger;
 
 #[derive(Clone)]
 pub struct OnChainWallet {
@@ -23,6 +25,7 @@ pub struct OnChainWallet {
     pub network: Network,
     pub blockchain: Arc<AsyncClient>,
     pub fees: Arc<MutinyFeeEstimator>,
+    logger: Arc<MutinyLogger>,
 }
 
 impl OnChainWallet {
@@ -32,6 +35,7 @@ impl OnChainWallet {
         network: Network,
         esplora: Arc<AsyncClient>,
         fees: Arc<MutinyFeeEstimator>,
+        logger: Arc<MutinyLogger>,
     ) -> Result<OnChainWallet, MutinyError> {
         let seed = mnemonic.to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(network, &seed)?;
@@ -51,6 +55,7 @@ impl OnChainWallet {
             network,
             blockchain: esplora,
             fees,
+            logger,
         })
     }
 
@@ -175,10 +180,10 @@ impl OnChainWallet {
                 .fee_rate(fee_rate);
             builder.finish()?
         };
-        debug!("Transaction details: {:#?}", details);
-        debug!("Unsigned PSBT: {}", &psbt);
+        log_debug!(self.logger, "Transaction details: {details:#?}");
+        log_debug!(self.logger, "Unsigned PSBT: {psbt}");
         let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
-        debug!("{}", finalized);
+        log_debug!(self.logger, "finalized: {finalized}");
         Ok(psbt)
     }
 
@@ -194,7 +199,7 @@ impl OnChainWallet {
         let txid = raw_transaction.txid();
 
         maybe_await!(self.blockchain.broadcast(&raw_transaction))?;
-        debug!("Transaction broadcast! TXID: {txid}");
+        log_debug!(self.logger, "Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }
 
@@ -226,10 +231,10 @@ impl OnChainWallet {
                 .fee_rate(fee_rate);
             builder.finish()?
         };
-        debug!("Transaction details: {:#?}", details);
-        debug!("Unsigned PSBT: {}", &psbt);
+        log_debug!(self.logger, "Transaction details: {details:#?}");
+        log_debug!(self.logger, "Unsigned PSBT: {psbt}");
         let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
-        debug!("{}", finalized);
+        log_debug!(self.logger, "finalized: {finalized}");
         Ok(psbt)
     }
 
@@ -244,7 +249,7 @@ impl OnChainWallet {
         let txid = raw_transaction.txid();
 
         maybe_await!(self.blockchain.broadcast(&raw_transaction))?;
-        debug!("Transaction broadcast! TXID: {txid}");
+        log_debug!(self.logger, "Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }
 
@@ -266,10 +271,10 @@ impl OnChainWallet {
                 .add_recipient(spk, amount_sats);
             builder.finish()?
         };
-        debug!("Transaction details: {:#?}", details);
-        debug!("Unsigned PSBT: {}", &psbt);
+        log_debug!(self.logger, "Transaction details: {details:#?}");
+        log_debug!(self.logger, "Unsigned PSBT: {psbt}");
         let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
-        debug!("{}", finalized);
+        log_debug!(self.logger, "finalized: {finalized}");
         Ok(psbt)
     }
 }

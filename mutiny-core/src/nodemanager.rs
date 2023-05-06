@@ -37,10 +37,11 @@ use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning::ln::PaymentHash;
 use lightning::routing::gossip::NodeId;
+use lightning::util::logger::Logger;
+use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::{Invoice, InvoiceDescription};
 use lnurl::lnurl::LnUrl;
 use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
-use log::{debug, error, info, warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -271,6 +272,7 @@ pub struct NodeManager {
     auth: AuthManager,
     lnurl_client: LnUrlClient,
     lsp_clients: Vec<LspClient>,
+    pub(crate) logger: Arc<MutinyLogger>,
 }
 
 impl NodeManager {
@@ -312,7 +314,11 @@ impl NodeManager {
         let tx_sync = Arc::new(EsploraSyncClient::new(esplora_server_url, logger.clone()));
 
         let esplora = Arc::new(tx_sync.client().clone());
-        let fee_estimator = Arc::new(MutinyFeeEstimator::new(storage.clone(), esplora.clone()));
+        let fee_estimator = Arc::new(MutinyFeeEstimator::new(
+            storage.clone(),
+            esplora.clone(),
+            logger.clone(),
+        ));
 
         let wallet = Arc::new(OnChainWallet::new(
             &mnemonic,
@@ -320,9 +326,10 @@ impl NodeManager {
             network,
             esplora.clone(),
             fee_estimator.clone(),
+            logger.clone(),
         )?);
 
-        let chain = Arc::new(MutinyChain::new(tx_sync));
+        let chain = Arc::new(MutinyChain::new(tx_sync, logger.clone()));
 
         // We don't need to actually sync gossip in tests unless we need to test gossip
         #[cfg(test)]
@@ -352,7 +359,7 @@ impl NodeManager {
                     .flat_map(|res| match res {
                         Ok(client) => Some(client),
                         Err(e) => {
-                            warn!("Error starting up lsp client: {e}");
+                            log_warn!(logger, "Error starting up lsp client: {e}");
                             None
                         }
                     })
@@ -388,6 +395,7 @@ impl NodeManager {
                 websocket_proxy_addr.clone(),
                 esplora.clone(),
                 &lsp_clients,
+                logger.clone(),
             )
             .await?;
 
@@ -407,13 +415,13 @@ impl NodeManager {
             .map(|n| (n._uuid.clone(), n.node_index()))
             .collect();
 
-        info!("inserting updated nodes");
+        log_info!(logger, "inserting updated nodes");
 
         storage.insert_nodes(NodeStorage {
             nodes: updated_nodes,
         })?;
 
-        info!("inserted updated nodes");
+        log_info!(logger, "inserted updated nodes");
 
         let seed = mnemonic.to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(network, &seed)?;
@@ -443,6 +451,7 @@ impl NodeManager {
             auth,
             lnurl_client,
             lsp_clients,
+            logger,
         };
 
         Ok(nm)
@@ -463,23 +472,27 @@ impl NodeManager {
         let node_futures = nodes.iter().map(|(_, n)| async {
             match n.stopped().await {
                 Ok(_) => {
-                    debug!("stopped node: {}", n.pubkey.to_hex())
+                    log_debug!(self.logger, "stopped node: {}", n.pubkey.to_hex())
                 }
                 Err(e) => {
-                    error!("failed to stop node {}: {e}", n.pubkey.to_hex())
+                    log_error!(
+                        self.logger,
+                        "failed to stop node {}: {e}",
+                        n.pubkey.to_hex()
+                    )
                 }
             }
         });
-        debug!("stopping all nodes");
+        log_debug!(self.logger, "stopping all nodes");
         join_all(node_futures).await;
         nodes.clear();
-        debug!("stopped all nodes");
+        log_debug!(self.logger, "stopped all nodes");
 
         // stop the indexeddb object to close db connection
         if self.storage.connected().unwrap_or(false) {
-            debug!("stopping storage");
+            log_debug!(self.logger, "stopping storage");
             self.storage.stop();
-            debug!("stopped storage");
+            log_debug!(self.logger, "stopped storage");
         }
 
         Ok(())
@@ -722,7 +735,7 @@ impl NodeManager {
         // update fee estimates before sync in case we need to
         // broadcast a transaction
         self.fee_estimator.update_fee_estimates().await?;
-        info!("Updated cached fees!");
+        log_info!(self.logger, "Updated cached fees!");
 
         // Sync ldk first because it may broadcast transactions
         // to addresses that are in our bdk wallet. This way
@@ -732,7 +745,7 @@ impl NodeManager {
 
         // sync bdk wallet
         match self.wallet.sync().await {
-            Ok(()) => Ok(info!("We are synced!")),
+            Ok(()) => Ok(log_info!(self.logger, "We are synced!")),
             Err(e) => Err(e),
         }
     }
@@ -817,18 +830,24 @@ impl NodeManager {
             let res = node.connect_peer(connect_info, label_opt).await;
             match res {
                 Ok(_) => {
-                    info!("connected to peer: {connection_string}");
+                    log_info!(self.logger, "connected to peer: {connection_string}");
                     return Ok(());
                 }
                 Err(e) => {
-                    error!("could not connect to peer: {connection_string} - {e}");
+                    log_error!(
+                        self.logger,
+                        "could not connect to peer: {connection_string} - {e}"
+                    );
                     return Err(e);
                 }
             };
         }
 
-        error!("could not find internal node {self_node_pubkey}");
-        Err(MutinyError::WalletOperationFailed)
+        log_error!(
+            self.logger,
+            "could not find internal node {self_node_pubkey}"
+        );
+        Err(MutinyError::NotFound)
     }
 
     /// Disconnects from a peer from the selected node.
@@ -841,8 +860,11 @@ impl NodeManager {
             node.disconnect_peer(peer);
             Ok(())
         } else {
-            error!("could not find internal node {self_node_pubkey}");
-            Err(MutinyError::WalletOperationFailed)
+            log_error!(
+                self.logger,
+                "could not find internal node {self_node_pubkey}"
+            );
+            Err(MutinyError::NotFound)
         }
     }
 
@@ -858,8 +880,11 @@ impl NodeManager {
             gossip::delete_peer_info(&node._uuid, peer).await?;
             Ok(())
         } else {
-            error!("could not find internal node {self_node_pubkey}");
-            Err(MutinyError::WalletOperationFailed)
+            log_error!(
+                self.logger,
+                "could not find internal node {self_node_pubkey}"
+            );
+            Err(MutinyError::NotFound)
         }
     }
 
@@ -941,7 +966,7 @@ impl NodeManager {
         amt_sats: u64,
     ) -> Result<MutinyInvoice, MutinyError> {
         let node = self.get_node(from_node).await?;
-        debug!("Keysending to {to_node}");
+        log_debug!(self.logger, "Keysending to {to_node}");
         node.keysend_with_timeout(to_node, amt_sats, None).await
     }
 
@@ -1070,7 +1095,7 @@ impl NodeManager {
             Response::Ok { .. } => {
                 // don't fail if we just can't save the service
                 if let Err(e) = self.auth.add_used_service(profile_index, url) {
-                    error!("Failed to save used lnurl auth service: {e}");
+                    log_error!(self.logger, "Failed to save used lnurl auth service: {e}");
                 }
 
                 Ok(())
@@ -1187,7 +1212,8 @@ impl NodeManager {
                 node.channel_manager
                     .close_channel(&channel.channel_id, &channel.counterparty.node_id)
                     .map_err(|e| {
-                        error!(
+                        log_error!(
+                            self.logger,
                             "had an error closing channel {} with node {} : {e:?}",
                             &channel.channel_id.to_hex(),
                             &channel.counterparty.node_id.to_hex()
@@ -1198,9 +1224,9 @@ impl NodeManager {
                 Ok(())
             }
             None => {
-                error!(
-                    "Channel not found with this transaction: {}",
-                    outpoint.to_string()
+                log_error!(
+                    self.logger,
+                    "Channel not found with this transaction: {outpoint}",
                 );
                 Err(MutinyError::NotFound)
             }
@@ -1379,10 +1405,13 @@ pub(crate) async fn create_new_node_from_node_manager(
     let next_node_uuid = Uuid::new_v4().to_string();
 
     let lsp = if node_manager.lsp_clients.is_empty() {
-        info!("no lsp saved and no lsp clients available");
+        log_info!(
+            node_manager.logger,
+            "no lsp saved and no lsp clients available"
+        );
         None
     } else {
-        info!("no lsp saved, picking random one");
+        log_info!(node_manager.logger, "no lsp saved, picking random one");
         // If we don't have an lsp saved we should pick a random
         // one from our client list and save it for next time
         let rand = rand::random::<usize>() % node_manager.lsp_clients.len();
@@ -1418,6 +1447,7 @@ pub(crate) async fn create_new_node_from_node_manager(
         node_manager.websocket_proxy_addr.clone(),
         node_manager.esplora.clone(),
         &node_manager.lsp_clients,
+        node_manager.logger.clone(),
     )
     .await
     {

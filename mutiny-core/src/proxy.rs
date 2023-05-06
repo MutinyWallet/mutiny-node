@@ -5,10 +5,12 @@ use async_trait::async_trait;
 use futures::stream::SplitStream;
 use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
-use log::{debug, trace};
+use lightning::util::logger::Logger;
+use lightning::{log_debug, log_trace};
 use std::sync::Arc;
 use wasm_bindgen_futures::spawn_local;
 
+use crate::logging::MutinyLogger;
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 
@@ -23,6 +25,7 @@ pub(crate) trait Proxy {
 pub(crate) struct WsProxy {
     write: WsSplit,
     read: ReadSplit,
+    logger: Arc<MutinyLogger>,
 }
 
 type WsSplit = Arc<Mutex<SplitSink<WebSocket, Message>>>;
@@ -32,6 +35,7 @@ impl WsProxy {
     pub async fn new(
         proxy_url: &str,
         peer_connection_info: PubkeyConnectionInfo,
+        logger: Arc<MutinyLogger>,
     ) -> Result<Self, MutinyError> {
         let ws = match peer_connection_info.connection_type {
             ConnectionType::Tcp(s) => WebSocket::open(&tcp_proxy_to_url(proxy_url, &s)?)
@@ -42,12 +46,13 @@ impl WsProxy {
             .map_err(|_| MutinyError::ConnectionFailed)?,
         };
 
-        debug!("connected to ws: {proxy_url}");
+        log_debug!(logger, "connected to ws: {proxy_url}");
 
         let (write, read) = ws.split();
         Ok(Self {
             write: Arc::new(Mutex::new(write)),
             read: Arc::new(Mutex::new(read)),
+            logger,
         })
     }
 }
@@ -55,16 +60,17 @@ impl WsProxy {
 #[async_trait(?Send)]
 impl Proxy for WsProxy {
     fn send(&self, data: Message) {
-        trace!("initiating sending down websocket");
+        log_trace!(self.logger, "initiating sending down websocket");
 
         // There can only be one sender at a time
         // Cannot send and write at the same time either
         // TODO check if the connection is closed before trying to send.
         let cloned_conn = self.write.clone();
+        let logger = self.logger.clone();
         spawn_local(async move {
             let mut write = cloned_conn.lock().await;
             write.send(data).await.unwrap();
-            trace!("sent data down websocket");
+            log_trace!(logger, "sent data down websocket");
         });
     }
 
@@ -74,7 +80,7 @@ impl Proxy for WsProxy {
 
     async fn close(&self) {
         let _ = self.write.lock().await.close().await;
-        debug!("closed websocket");
+        log_debug!(self.logger, "closed websocket");
     }
 }
 
@@ -112,11 +118,13 @@ mod tests {
     #[cfg(feature = "ignored_tests")]
     async fn test_websocket_proxy_init() {
         log!("test websocket proxy");
+        let logger = Arc::new(MutinyLogger::default());
 
         // TODO do something useful
         let proxy = WsProxy::new(
             "ws://127.0.0.1:3001",
             PubkeyConnectionInfo::new(&format!("{}@{}", PEER_PUBKEY, "127.0.0.1:4000")).unwrap(),
+            logger,
         )
         .await
         .unwrap();
