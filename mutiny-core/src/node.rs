@@ -851,9 +851,13 @@ impl Node {
                     .read_payment_info(&payment_hash, false, self.logger.clone());
 
             if let Some(info) = payment_info {
-                if matches!(info.status, HTLCStatus::Succeeded | HTLCStatus::Failed) {
-                    let mutiny_invoice = MutinyInvoice::from(info, payment_hash, false)?;
-                    return Ok(mutiny_invoice);
+                match info.status {
+                    HTLCStatus::Succeeded => {
+                        let mutiny_invoice = MutinyInvoice::from(info, payment_hash, false)?;
+                        return Ok(mutiny_invoice);
+                    }
+                    HTLCStatus::Failed => return Err(MutinyError::RoutingFailed),
+                    _ => {}
                 }
             }
 

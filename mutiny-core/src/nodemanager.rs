@@ -494,7 +494,6 @@ impl NodeManager {
     }
 
     pub(crate) fn start_redshifts(nm: Arc<NodeManager>) {
-        let node_manager = nm.clone();
         spawn_local(async move {
             loop {
                 // find redshifts with channels ready
@@ -518,14 +517,19 @@ impl NodeManager {
                             redshift
                                 .channel_opened(chan.funding_txo.unwrap().into_bitcoin_outpoint());
                             nm.storage
-                                .update_redshift(redshift.clone())
-                                .expect("failed to update redshift");
+                                .persist_redshift(redshift.clone())
+                                .expect("failed to persist redshift");
 
                             // start attempting payments
-                            // todo this might need to be in another spawn local
-                            if let Err(e) = node_manager.attempt_payments(redshift).await {
-                                log_error!(nm.logger, "Error attempting redshift payments: {e}");
-                            }
+                            let payment_nm = nm.clone();
+                            spawn_local(async move {
+                                if let Err(e) = payment_nm.attempt_payments(redshift).await {
+                                    log_error!(
+                                        payment_nm.logger,
+                                        "Error attempting redshift payments: {e}"
+                                    );
+                                }
+                            });
                         }
                     }
                 }
