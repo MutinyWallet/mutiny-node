@@ -476,9 +476,9 @@ impl NodeManager {
         debug!("stopped all nodes");
 
         // stop the indexeddb object to close db connection
-        if self.storage.clone().connected().unwrap_or(false) {
+        if self.storage.connected().unwrap_or(false) {
             debug!("stopping storage");
-            self.storage.clone().stop();
+            self.storage.stop();
             debug!("stopped storage");
         }
 
