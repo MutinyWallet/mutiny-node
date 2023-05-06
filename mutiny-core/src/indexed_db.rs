@@ -215,7 +215,14 @@ impl MutinyStorage {
 
         let key = JsValue::from(MNEMONIC_KEY);
         let json = store.get(&key).await?;
-        let value: Option<String> = json.into_serde()?;
+        let value: Option<String> = match &self.password {
+            Some(pw) if Self::needs_encryption(MNEMONIC_KEY) => {
+                let str: String = json.into_serde()?;
+                let ciphertext = decrypt(&str, pw);
+                serde_json::from_str(&ciphertext)?
+            }
+            _ => json.into_serde()?,
+        };
 
         let mnemonic = match value {
             Some(mnemonic) => Mnemonic::from_str(&mnemonic)?,
@@ -418,5 +425,48 @@ where
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{indexed_db::MutinyStorage, keymanager};
+
+    use crate::test_utils::*;
+
+    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test]
+    async fn insert_and_get_mnemonic_no_password() {
+        log!("insert and get mnemonic!");
+        cleanup_wallet_test().await;
+
+        let seed = keymanager::generate_seed(12).unwrap();
+
+        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let mnemonic = storage.insert_mnemonic(seed).await.unwrap();
+
+        let stored_mnemonic = storage.get_mnemonic().await.unwrap();
+        assert_eq!(mnemonic, stored_mnemonic);
+
+        cleanup_wallet_test().await;
+    }
+
+    #[test]
+    async fn insert_and_get_mnemonic_with_password() {
+        log!("insert and get mnemonic with password!");
+        cleanup_wallet_test().await;
+
+        let seed = keymanager::generate_seed(12).unwrap();
+
+        let storage = MutinyStorage::new("password".to_string()).await.unwrap();
+        let mnemonic = storage.insert_mnemonic(seed).await.unwrap();
+
+        let stored_mnemonic = storage.get_mnemonic().await.unwrap();
+        assert_eq!(mnemonic, stored_mnemonic);
+
+        cleanup_wallet_test().await;
     }
 }
