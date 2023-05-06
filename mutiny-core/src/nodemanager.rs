@@ -447,6 +447,13 @@ impl NodeManager {
         Ok(nm)
     }
 
+    /// Returns the node with the given pubkey
+    pub(crate) async fn get_node(&self, pk: &PublicKey) -> Result<Arc<Node>, MutinyError> {
+        let nodes = self.nodes.lock().await;
+        let node = nodes.get(pk).ok_or(MutinyError::NotFound)?;
+        Ok(node.clone())
+    }
+
     /// Broadcast a transaction to the network.
     /// The transaction is broadcast through the configured esplora server.
     pub fn broadcast_transaction(&self, tx: &Transaction) -> Result<(), MutinyError> {
@@ -890,8 +897,7 @@ impl NodeManager {
             return Err(MutinyError::IncorrectNetwork(invoice.network()));
         }
 
-        let nodes = self.nodes.lock().await;
-        let node = nodes.get(from_node).unwrap();
+        let node = self.get_node(from_node).await?;
         node.pay_invoice_with_timeout(invoice, amt_sats, None).await
     }
 
@@ -903,9 +909,8 @@ impl NodeManager {
         to_node: PublicKey,
         amt_sats: u64,
     ) -> Result<MutinyInvoice, MutinyError> {
-        let nodes = self.nodes.lock().await;
+        let node = self.get_node(from_node).await?;
         debug!("Keysending to {to_node}");
-        let node = nodes.get(from_node).unwrap();
         node.keysend_with_timeout(to_node, amt_sats, None).await
     }
 
@@ -1098,8 +1103,7 @@ impl NodeManager {
         to_pubkey: PublicKey,
         amount: u64,
     ) -> Result<MutinyChannel, MutinyError> {
-        let nodes = self.nodes.lock().await;
-        let node = nodes.get(from_node).unwrap();
+        let node = self.get_node(from_node).await?;
 
         let chan_id = node.open_channel(to_pubkey, amount).await?;
 
@@ -1123,8 +1127,7 @@ impl NodeManager {
         utxos: &[OutPoint],
         to_pubkey: PublicKey,
     ) -> Result<MutinyChannel, MutinyError> {
-        let nodes = self.nodes.lock().await;
-        let node = nodes.get(from_node).unwrap();
+        let node = self.get_node(from_node).await?;
 
         let chan_id = node.sweep_utxos_to_channel(utxos, to_pubkey).await?;
 
