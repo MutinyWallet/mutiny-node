@@ -62,7 +62,7 @@ impl MutinyStorage {
         Ok(())
     }
 
-    pub fn connected(self) -> Result<bool, MutinyError> {
+    pub fn connected(&self) -> Result<bool, MutinyError> {
         Ok(self.indexed_db.try_read()?.is_some())
     }
 
@@ -447,7 +447,7 @@ impl MutinyStorage {
         Ok(())
     }
 
-    pub(crate) fn stop(&mut self) {
+    pub(crate) fn stop(&self) {
         if let Ok(mut indexed_db_lock) = self.indexed_db.try_write() {
             if let Some(indexed_db) = indexed_db_lock.take() {
                 indexed_db.close();
