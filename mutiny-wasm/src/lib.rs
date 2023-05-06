@@ -82,8 +82,8 @@ impl MutinyWallet {
     /// Starts up all the nodes again.
     /// Not needed after [NodeManager]'s `new()` function.
     #[wasm_bindgen]
-    pub async fn start(&self) -> Result<(), MutinyJsError> {
-        Ok(self.inner.node_manager.start().await?)
+    pub async fn start(&mut self) -> Result<(), MutinyJsError> {
+        Ok(self.inner.start().await?)
     }
 
     /// Stops all of the nodes and background processes.

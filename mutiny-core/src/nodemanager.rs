@@ -2,9 +2,12 @@ use anyhow::anyhow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
-use crate::auth::{AuthManager, AuthProfile};
 use crate::event::{HTLCStatus, PaymentInfo};
 use crate::indexed_db::MutinyStorage;
+use crate::{
+    auth::{AuthManager, AuthProfile},
+    MutinyWalletConfig,
+};
 use crate::{
     chain::MutinyChain,
     error::MutinyError,
@@ -280,26 +283,19 @@ impl NodeManager {
     /// Creates a new [NodeManager] with the given parameters.
     /// The mnemonic seed is read from storage, unless one is provided.
     /// If no mnemonic is provided, a new one is generated and stored.
-    pub async fn new(
-        password: String,
-        mnemonic: Option<Mnemonic>,
-        websocket_proxy_addr: Option<String>,
-        network: Option<Network>,
-        user_esplora_url: Option<String>,
-        user_rgs_url: Option<String>,
-        lsp_url: Option<String>,
-    ) -> Result<NodeManager, MutinyError> {
+    pub async fn new(c: MutinyWalletConfig) -> Result<NodeManager, MutinyError> {
         let stop = Arc::new(AtomicBool::new(false));
 
-        let websocket_proxy_addr =
-            websocket_proxy_addr.unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
+        let websocket_proxy_addr = c
+            .websocket_proxy_addr
+            .unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
 
         // todo we should eventually have default mainnet
-        let network: Network = network.unwrap_or(Network::Testnet);
+        let network: Network = c.network.unwrap_or(Network::Testnet);
 
-        let storage = MutinyStorage::new(password.clone()).await?;
+        let storage = MutinyStorage::new(c.password.clone()).await?;
 
-        let mnemonic = match mnemonic {
+        let mnemonic = match c.mnemonic {
             Some(seed) => storage.insert_mnemonic(seed).await?,
             None => match storage.get_mnemonic().await {
                 Ok(mnemonic) => mnemonic,
@@ -312,7 +308,7 @@ impl NodeManager {
 
         let logger = Arc::new(MutinyLogger::default());
 
-        let esplora_server_url = get_esplora_url(network, user_esplora_url);
+        let esplora_server_url = get_esplora_url(network, c.user_esplora_url);
         let tx_sync = Arc::new(EsploraSyncClient::new(esplora_server_url, logger.clone()));
 
         let esplora = Arc::new(tx_sync.client().clone());
@@ -331,18 +327,18 @@ impl NodeManager {
         // We don't need to actually sync gossip in tests unless we need to test gossip
         #[cfg(test)]
         let (gossip_sync, scorer) =
-            gossip::get_dummy_gossip(user_rgs_url.clone(), network, logger.clone());
+            gossip::get_dummy_gossip(c.user_rgs_url.clone(), network, logger.clone());
 
         #[cfg(not(test))]
         let (gossip_sync, scorer) =
-            gossip::get_gossip_sync(user_rgs_url, network, logger.clone()).await?;
+            gossip::get_gossip_sync(c.user_rgs_url, network, logger.clone()).await?;
 
         let scorer = Arc::new(utils::Mutex::new(scorer));
 
         let gossip_sync = Arc::new(gossip_sync);
 
         // load lsp clients, if any
-        let lsp_clients: Vec<LspClient> = match lsp_url.clone() {
+        let lsp_clients: Vec<LspClient> = match c.lsp_url.clone() {
             // check if string is some and not an empty string
             Some(lsp_urls) if !lsp_urls.is_empty() => {
                 let urls: Vec<&str> = lsp_urls.split(',').collect();
@@ -457,14 +453,6 @@ impl NodeManager {
         let nodes = self.nodes.lock().await;
         let node = nodes.get(pk).ok_or(MutinyError::NotFound)?;
         Ok(node.clone())
-    }
-
-    /// Starts up all the nodes again.
-    /// Not needed after [NodeManager]'s `new()` function.
-    pub async fn start(&self) -> Result<(), MutinyError> {
-        self.stop.swap(false, Ordering::Relaxed);
-        // TODO
-        Ok(())
     }
 
     /// Stops all of the nodes and background processes.
@@ -1453,8 +1441,8 @@ pub(crate) async fn create_new_node_from_node_manager(
 
 #[cfg(test)]
 mod tests {
-    use crate::keymanager::generate_seed;
     use crate::nodemanager::{MutinyInvoice, NodeManager};
+    use crate::{keymanager::generate_seed, MutinyWalletConfig};
     use bitcoin::hashes::hex::{FromHex, ToHex};
     use bitcoin::hashes::{sha256, Hash};
     use bitcoin::secp256k1::PublicKey;
@@ -1477,7 +1465,7 @@ mod tests {
         log!("creating node manager!");
 
         assert!(!NodeManager::has_node_manager().await);
-        NodeManager::new(
+        let c = MutinyWalletConfig::new(
             "password".to_string(),
             None,
             None,
@@ -1485,9 +1473,10 @@ mod tests {
             None,
             None,
             None,
-        )
-        .await
-        .expect("node manager should initialize");
+        );
+        NodeManager::new(c)
+            .await
+            .expect("node manager should initialize");
         assert!(NodeManager::has_node_manager().await);
 
         cleanup_wallet_test().await;
@@ -1498,7 +1487,7 @@ mod tests {
         log!("showing seed");
 
         let seed = generate_seed(12).expect("Failed to gen seed");
-        let nm = NodeManager::new(
+        let c = MutinyWalletConfig::new(
             "password".to_string(),
             Some(seed.clone()),
             None,
@@ -1506,9 +1495,8 @@ mod tests {
             None,
             None,
             None,
-        )
-        .await
-        .unwrap();
+        );
+        let nm = NodeManager::new(c).await.unwrap();
 
         assert!(NodeManager::has_node_manager().await);
         assert_eq!(seed, nm.show_seed());
@@ -1521,7 +1509,7 @@ mod tests {
         log!("creating new nodes");
 
         let seed = generate_seed(12).expect("Failed to gen seed");
-        let nm = NodeManager::new(
+        let c = MutinyWalletConfig::new(
             "password".to_string(),
             Some(seed),
             None,
@@ -1529,9 +1517,10 @@ mod tests {
             None,
             None,
             None,
-        )
-        .await
-        .expect("node manager should initialize");
+        );
+        let nm = NodeManager::new(c)
+            .await
+            .expect("node manager should initialize");
 
         {
             let node_identity = nm.new_node().await.expect("should create new node");
