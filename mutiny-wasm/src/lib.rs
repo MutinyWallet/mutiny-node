@@ -552,14 +552,14 @@ impl MutinyWallet {
         lightning_recipient_pubkey: Option<String>,
         lightning_recipient_connection_string: Option<String>,
         onchain_recipient: Option<String>,
-    ) -> Result<JsValue /* Redshift */, MutinyJsError> {
+    ) -> Result<Redshift, MutinyJsError> {
         let outpoint: OutPoint =
             OutPoint::from_str(&outpoint).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         let introduction_node = match lightning_recipient_pubkey.clone() {
             Some(p) => Some(PublicKey::from_str(&p)?),
             None => None,
         };
-        let redshift_recipient = match (lightning_recipient_pubkey.clone(), onchain_recipient) {
+        let redshift_recipient = match (lightning_recipient_pubkey, onchain_recipient) {
             (Some(_), Some(_)) => {
                 return Err(MutinyJsError::InvalidArgumentsError);
             }
@@ -573,31 +573,25 @@ impl MutinyWallet {
             }
             (None, None) => RedshiftRecipient::OnChain(None),
         };
-        Ok(JsValue::from_serde(
-            &self
-                .inner
-                .node_manager
-                .init_redshift(
-                    outpoint,
-                    redshift_recipient,
-                    introduction_node,
-                    lightning_recipient_connection_string.as_deref(),
-                )
-                .await?,
-        )?)
+        Ok(self
+            .inner
+            .node_manager
+            .init_redshift(
+                outpoint,
+                redshift_recipient,
+                introduction_node,
+                lightning_recipient_connection_string.as_deref(),
+            )
+            .await?
+            .into())
     }
 
     /// Get all redshift attempts for a given utxo
     #[wasm_bindgen]
-    pub fn get_redshift(
-        &self,
-        outpoint: String,
-    ) -> Result<JsValue /* Vec<Redshift> */, MutinyJsError> {
-        let outpoint: OutPoint =
-            OutPoint::from_str(&outpoint).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        Ok(JsValue::from_serde(
-            &self.inner.node_manager.get_redshift(outpoint)?,
-        )?)
+    pub fn get_redshift(&self, id: String) -> Result<Option<Redshift>, MutinyJsError> {
+        let id: [u8; 16] =
+            FromHex::from_hex(&id).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        Ok(self.inner.node_manager.get_redshift(&id)?.map(|r| r.into()))
     }
 
     /// Gets the current bitcoin price in USD.

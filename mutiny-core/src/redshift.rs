@@ -23,7 +23,7 @@ pub enum RedshiftStatus {
     ///
     /// The u64 is the amount of sats we've successfully
     /// sent to the receiving node.
-    AttemptingPayments(u64),
+    AttemptingPayments,
     /// The redshift was success and is now complete.
     Completed,
     /// The redshift failed. The error is given.
@@ -35,7 +35,7 @@ impl RedshiftStatus {
     pub fn is_in_progress(&self) -> bool {
         match self {
             RedshiftStatus::ChannelOpening => true,
-            RedshiftStatus::AttemptingPayments(_) => true,
+            RedshiftStatus::AttemptingPayments => true,
             RedshiftStatus::Completed => false,
             RedshiftStatus::Failed(_) => false,
         }
@@ -67,6 +67,7 @@ pub struct Redshift {
     pub output_channel: Option<OutPoint>,
     pub introduction_node: PublicKey,
     pub amount_sats: u64,
+    pub sats_sent: u64,
     pub change_amt: Option<u64>,
     pub fees_paid: u64,
 }
@@ -74,13 +75,12 @@ pub struct Redshift {
 impl Redshift {
     pub fn channel_opened(&mut self, chan_id: OutPoint) {
         self.introduction_channel = Some(chan_id);
-        self.status = RedshiftStatus::AttemptingPayments(0);
+        self.status = RedshiftStatus::AttemptingPayments;
     }
 
-    pub fn payment_attempted(&mut self, amount: u64) {
-        if let RedshiftStatus::AttemptingPayments(paid) = &mut self.status {
-            *paid += amount;
-        }
+    pub fn payment_successful(&mut self, amount: u64, fees_paid: u64) {
+        self.sats_sent += amount;
+        self.fees_paid += fees_paid;
     }
 
     pub fn fail(&mut self, error: String) {
@@ -89,39 +89,30 @@ impl Redshift {
 }
 
 pub trait RedshiftStorage {
-    fn get_redshifts_for_utxo(&self, utxo: &OutPoint) -> Result<Vec<Redshift>, MutinyError>;
+    fn get_redshift(&self, utxo: &[u8; 16]) -> Result<Option<Redshift>, MutinyError>;
     fn get_redshifts(&self) -> Result<Vec<Redshift>, MutinyError>;
-    fn update_redshift(&self, redshift: Redshift) -> Result<(), MutinyError>;
+    fn persist_redshift(&self, redshift: Redshift) -> Result<(), MutinyError>;
 }
 
 const REDSHIFT_KEY_PREFIX: &str = "redshift/";
 
-fn get_redshift_key(utxo: &OutPoint) -> String {
-    format!("{REDSHIFT_KEY_PREFIX}{utxo}")
+fn get_redshift_key(id: &[u8; 16]) -> String {
+    format!("{REDSHIFT_KEY_PREFIX}{}", id.to_hex())
 }
 
 impl RedshiftStorage for MutinyStorage {
-    fn get_redshifts_for_utxo(&self, utxo: &OutPoint) -> Result<Vec<Redshift>, MutinyError> {
-        let redshifts = self.get(get_redshift_key(utxo))?;
-        Ok(redshifts.unwrap_or_default())
+    fn get_redshift(&self, id: &[u8; 16]) -> Result<Option<Redshift>, MutinyError> {
+        let redshifts = self.get(get_redshift_key(id))?;
+        Ok(redshifts)
     }
 
     fn get_redshifts(&self) -> Result<Vec<Redshift>, MutinyError> {
-        let map: HashMap<String, Vec<Redshift>> = self.scan(REDSHIFT_KEY_PREFIX, None)?;
-        Ok(map.values().flat_map(|v| v.to_owned()).collect())
+        let map: HashMap<String, Redshift> = self.scan(REDSHIFT_KEY_PREFIX, None)?;
+        Ok(map.values().map(|v| v.to_owned()).collect())
     }
 
-    fn update_redshift(&self, redshift: Redshift) -> Result<(), MutinyError> {
-        let utxo = &redshift.input_utxo.clone();
-        let mut redshifts = self.get_redshifts_for_utxo(utxo)?;
-
-        if let Some(idx) = redshifts.iter().position(|s| s.id == redshift.id) {
-            redshifts[idx] = redshift;
-        } else {
-            redshifts.push(redshift);
-        };
-
-        self.set(get_redshift_key(utxo), redshifts)
+    fn persist_redshift(&self, redshift: Redshift) -> Result<(), MutinyError> {
+        self.set(get_redshift_key(&redshift.id), redshift)
     }
 }
 
@@ -146,7 +137,7 @@ pub trait RedshiftManager {
         connection_string: Option<&str>,
     ) -> Result<Redshift, MutinyError>;
 
-    fn get_redshift(&self, utxo: OutPoint) -> Result<Vec<Redshift>, MutinyError>;
+    fn get_redshift(&self, id: &[u8; 16]) -> Result<Option<Redshift>, MutinyError>;
 
     async fn attempt_payments(&self, rs: Redshift) -> Result<(), MutinyError>;
 }
@@ -250,18 +241,17 @@ impl RedshiftManager for NodeManager {
             output_channel: None,
             introduction_node,
             amount_sats: u.txout.value,
+            sats_sent: 0,
             change_amt: None,
             fees_paid: fees,
         };
-        self.storage.update_redshift(redshift.clone())?;
+        self.storage.persist_redshift(redshift.clone())?;
 
         Ok(redshift)
     }
 
-    fn get_redshift(&self, utxo: OutPoint) -> Result<Vec<Redshift>, MutinyError> {
-        let redshift = self.storage.get_redshifts_for_utxo(&utxo)?;
-
-        Ok(redshift)
+    fn get_redshift(&self, id: &[u8; 16]) -> Result<Option<Redshift>, MutinyError> {
+        self.storage.get_redshift(id)
     }
 
     async fn attempt_payments(&self, mut rs: Redshift) -> Result<(), MutinyError> {
@@ -341,14 +331,16 @@ impl RedshiftManager for NodeManager {
                     local_max_sats,
                 );
                 // if no payments were made, consider it a fail
-                if let RedshiftStatus::AttemptingPayments(0) = rs.status {
+                if rs.sats_sent == 0 {
                     log_error!(
                         &self.logger,
-                        "Exhausted all payment attempts for redshift {}: sats={}",
+                        "No payments were made for redshift {}: sats={}",
                         rs.id.to_hex(),
                         local_max_sats,
                     );
-                    rs.fail("exhausted all payment attempt amounts".to_string());
+                    rs.fail("no payments were made".to_string());
+                } else {
+                    rs.status = RedshiftStatus::Completed;
                 }
                 break;
             }
@@ -392,27 +384,26 @@ impl RedshiftManager for NodeManager {
             {
                 Ok(i) => {
                     if i.paid {
-                        log_debug!(&self.logger, "successfully paid the redshift invoice!");
-                        let prev_amount_paid = match rs.status {
-                            RedshiftStatus::AttemptingPayments(x) => x,
-                            _ => 0,
-                        };
-                        let total_amount_paid = local_max_sats + prev_amount_paid;
-
-                        rs.payment_attempted(total_amount_paid);
+                        let amount_sent = i.amount_sats.expect("invoice must have amount");
+                        log_debug!(
+                            &self.logger,
+                            "successfully paid the redshift invoice {amount_sent} sats"
+                        );
+                        // update the redshift with the payment
+                        rs.payment_successful(amount_sent, i.fees_paid.unwrap_or(0));
 
                         // check if the max amount was sent on all tries
-                        if total_amount_paid >= max_sats {
+                        if rs.sats_sent >= max_sats {
                             rs.status = RedshiftStatus::Completed;
                             break;
                         }
 
                         // save to db, to update the frontend
                         // do it after the if statement so we don't save the redshift twice
-                        self.storage.update_redshift(rs.clone())?;
+                        self.storage.persist_redshift(rs.clone())?;
 
                         // keep trying with the remaining amount
-                        local_max_sats = max_sats.saturating_sub(total_amount_paid);
+                        local_max_sats = max_sats.saturating_sub(rs.sats_sent);
                     } else {
                         // TODO need to handle payments still pending
                         log_debug!(&self.logger, "payment still pending...");
@@ -427,13 +418,21 @@ impl RedshiftManager for NodeManager {
             }
         }
 
+        log_debug!(
+            &self.logger,
+            "Redshift {} completed with status: {:?}",
+            rs.id.to_hex(),
+            rs.status
+        );
+
+        // fixme, this could close the wrong channel if the receiving_node already had channels
         // lookup the new channel on the receiving node
         if let Some(c) = receiving_node.channel_manager.list_channels().first() {
             rs.output_channel = c.funding_txo.map(|o| o.into_bitcoin_outpoint());
         }
 
         // save to db
-        self.storage.update_redshift(rs.clone())?;
+        self.storage.persist_redshift(rs.clone())?;
 
         // close introduction channel
         match rs.introduction_channel {
@@ -459,5 +458,58 @@ impl RedshiftManager for NodeManager {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::str::FromStr;
+    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+
+    use crate::test_utils::*;
+
+    use super::*;
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    fn dummy_redshift() -> Redshift {
+        let pubkey = PublicKey::from_str(
+            "02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b",
+        )
+        .unwrap();
+
+        Redshift {
+            id: [0u8; 16],
+            input_utxo: Default::default(),
+            status: RedshiftStatus::ChannelOpening,
+            sending_node: pubkey,
+            recipient: RedshiftRecipient::OnChain(None),
+            output_utxo: None,
+            introduction_channel: None,
+            output_channel: None,
+            introduction_node: pubkey,
+            amount_sats: 69_420,
+            sats_sent: 0,
+            change_amt: None,
+            fees_paid: 123,
+        }
+    }
+
+    #[test]
+    async fn test_redshift_persistence() {
+        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let rs = dummy_redshift();
+
+        assert!(storage.get_redshifts().unwrap().is_empty());
+
+        storage.persist_redshift(rs.clone()).unwrap();
+
+        let read = storage.get_redshift(&rs.id).unwrap();
+        assert_eq!(read.unwrap(), rs);
+
+        let all = storage.get_redshifts().unwrap();
+        assert_eq!(all, vec![rs]);
+
+        cleanup_wallet_test().await;
     }
 }
