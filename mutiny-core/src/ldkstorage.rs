@@ -15,7 +15,6 @@ use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::BlockHash;
 use bitcoin::Network;
 use futures::{try_join, TryFutureExt};
-use lightning::chain;
 use lightning::chain::chainmonitor::{MonitorUpdateId, Persist};
 use lightning::chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate};
 use lightning::chain::keysinterface::{
@@ -29,9 +28,9 @@ use lightning::ln::channelmanager::{
 };
 use lightning::ln::PaymentHash;
 use lightning::util::logger::Logger;
-use lightning::util::logger::Record;
 use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
+use lightning::{chain, log_trace};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
@@ -234,13 +233,7 @@ impl MutinyNodePersister {
         logger: Arc<MutinyLogger>,
     ) -> Option<PaymentInfo> {
         let key = self.get_key(payment_key(inbound, payment_hash).as_str());
-        logger.log(&Record::new(
-            lightning::util::logger::Level::Trace,
-            format_args!("Trace: checking payment key: {key}"),
-            "node",
-            "",
-            0,
-        ));
+        log_trace!(logger, "Trace: checking payment key: {key}");
         let deserialized_value: Result<Option<PaymentInfo>, MutinyError> = self.storage.get(key);
         deserialized_value.ok().flatten()
     }

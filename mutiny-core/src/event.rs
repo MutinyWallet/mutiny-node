@@ -14,7 +14,7 @@ use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
     log_debug, log_error, log_info, log_warn,
     util::errors::APIError,
-    util::logger::{Logger, Record},
+    util::logger::Logger,
 };
 use lightning_invoice::Invoice;
 use serde::{Deserialize, Serialize};
@@ -161,37 +161,18 @@ impl EventHandler {
                 amount_msat,
                 ..
             } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!(
-                        "EVENT: PaymentReceived received payment from payment hash {} of {} millisatoshis to {:?}",
-                        payment_hash.0.to_hex(),
-                        amount_msat,
-                        receiver_node_id
-                    ),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_debug!(self.logger, "EVENT: PaymentReceived received payment from payment hash {} of {amount_msat} millisatoshis to {receiver_node_id:?}", payment_hash.0.to_hex());
 
-                let payment_preimage = if let Some(payment_preimage) = match purpose {
+                if let Some(payment_preimage) = match purpose {
                     PaymentPurpose::InvoicePayment {
                         payment_preimage, ..
                     } => payment_preimage,
                     PaymentPurpose::SpontaneousPayment(preimage) => Some(preimage),
                 } {
-                    payment_preimage
+                    self.channel_manager.claim_funds(payment_preimage);
                 } else {
-                    self.logger.log(&Record::new(
-                        lightning::util::logger::Level::Error,
-                        format_args!("ERROR: No payment preimage found"),
-                        "node",
-                        "",
-                        0,
-                    ));
-                    return;
+                    log_error!(self.logger, "ERROR: No payment preimage found");
                 };
-                self.channel_manager.claim_funds(payment_preimage);
             }
             Event::PaymentClaimed {
                 receiver_node_id,
@@ -199,17 +180,7 @@ impl EventHandler {
                 purpose,
                 amount_msat,
             } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!(
-                        "EVENT: PaymentClaimed claimed payment from payment hash {} of {} millisatoshis",
-                        payment_hash.0.to_hex(),
-                        amount_msat
-                    ),
-                    "node",
-                    "",
-                    0,
-                ));
+                log_debug!(self.logger, "EVENT: PaymentClaimed claimed payment from payment hash {} of {} millisatoshis", payment_hash.0.to_hex(), amount_msat);
 
                 let (payment_preimage, payment_secret) = match purpose {
                     PaymentPurpose::InvoicePayment {
@@ -237,15 +208,10 @@ impl EventHandler {
                             true,
                         ) {
                             Ok(_) => (),
-                            Err(e) => {
-                                self.logger.log(&Record::new(
-                                    lightning::util::logger::Level::Error,
-                                    format_args!("ERROR: could not persist payment info: {e}"),
-                                    "node",
-                                    "",
-                                    0,
-                                ));
-                            }
+                            Err(e) => log_error!(
+                                self.logger,
+                                "ERROR: could not persist payment info: {e}"
+                            ),
                         }
                     }
                     None => {
@@ -269,15 +235,10 @@ impl EventHandler {
                             true,
                         ) {
                             Ok(_) => (),
-                            Err(e) => {
-                                self.logger.log(&Record::new(
-                                    lightning::util::logger::Level::Error,
-                                    format_args!("ERROR: could not persist payment info: {e}"),
-                                    "node",
-                                    "",
-                                    0,
-                                ));
-                            }
+                            Err(e) => log_error!(
+                                self.logger,
+                                "ERROR: could not persist payment info: {e}"
+                            ),
                         }
                     }
                 }
@@ -288,13 +249,11 @@ impl EventHandler {
                 fee_paid_msat,
                 ..
             } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!("EVENT: PaymentSent: {}", payment_hash.0.to_hex()),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_debug!(
+                    self.logger,
+                    "EVENT: PaymentSent: {}",
+                    payment_hash.0.to_hex()
+                );
 
                 match self
                     .persister
@@ -311,26 +270,18 @@ impl EventHandler {
                             false,
                         ) {
                             Ok(_) => (),
-                            Err(e) => {
-                                self.logger.log(&Record::new(
-                                    lightning::util::logger::Level::Error,
-                                    format_args!("ERROR: could not persist payment info: {e}"),
-                                    "event",
-                                    "",
-                                    0,
-                                ));
-                            }
+                            Err(e) => log_error!(
+                                self.logger,
+                                "ERROR: could not persist payment info: {e}"
+                            ),
                         }
                     }
                     None => {
                         // we succeeded in a payment that we didn't have saved? ...
-                        self.logger.log(&Record::new(
-                            lightning::util::logger::Level::Warn,
-                            format_args!("WARN: payment succeeded but we did not have it stored"),
-                            "event",
-                            "",
-                            0,
-                        ));
+                        log_warn!(
+                            self.logger,
+                            "WARN: payment succeeded but we did not have it stored"
+                        );
                     }
                 }
             }
@@ -339,45 +290,23 @@ impl EventHandler {
                 counterparty_node_id,
                 ..
             } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!("EVENT: OpenChannelRequest incoming"),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_debug!(
+                    self.logger,
+                    "EVENT: OpenChannelRequest incoming: {counterparty_node_id}"
+                );
 
                 let mut internal_channel_id_bytes = [0u8; 16];
                 if getrandom::getrandom(&mut internal_channel_id_bytes).is_err() {
-                    self.logger.log(&Record::new(
-                        lightning::util::logger::Level::Debug,
-                        format_args!("EVENT: OpenChannelRequest failed random number generation"),
-                        "event",
-                        "",
-                        0,
-                    ));
+                    log_debug!(
+                        self.logger,
+                        "EVENT: OpenChannelRequest failed random number generation"
+                    );
                 };
                 let internal_channel_id = u128::from_be_bytes(internal_channel_id_bytes);
 
                 let log_result = |result: Result<(), APIError>| match result {
-                    Ok(_) => {
-                        self.logger.log(&Record::new(
-                            lightning::util::logger::Level::Debug,
-                            format_args!("EVENT: OpenChannelRequest accepted"),
-                            "event",
-                            "",
-                            0,
-                        ));
-                    }
-                    Err(e) => {
-                        self.logger.log(&Record::new(
-                            lightning::util::logger::Level::Debug,
-                            format_args!("EVENT: OpenChannelRequest error: {:?}", e),
-                            "event",
-                            "",
-                            0,
-                        ));
-                    }
+                    Ok(_) => log_debug!(self.logger, "EVENT: OpenChannelRequest accepted"),
+                    Err(e) => log_debug!(self.logger, "EVENT: OpenChannelRequest error: {e:?}"),
                 };
 
                 if self.lsp_client_pubkey.as_ref() != Some(&counterparty_node_id) {
@@ -401,49 +330,23 @@ impl EventHandler {
                 }
             }
             Event::PaymentPathSuccessful { .. } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!("EVENT: PaymentPathSuccessful ignored"),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_debug!(self.logger, "EVENT: PaymentPathSuccessful, ignored");
             }
             Event::PaymentPathFailed { .. } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!("EVENT: PaymentPathFailed ignored"),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_debug!(self.logger, "EVENT: PaymentPathFailed, ignored");
             }
             Event::ProbeSuccessful { .. } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!("EVENT: ProbeSuccessful ignored"),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_debug!(self.logger, "EVENT: ProbeSuccessful, ignored");
             }
             Event::ProbeFailed { .. } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!("EVENT: ProbeFailed ignored"),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_debug!(self.logger, "EVENT: ProbeFailed, ignored");
             }
             Event::PaymentFailed { payment_hash, .. } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Error,
-                    format_args!("EVENT: PaymentFailed: {}", payment_hash.0.to_hex()),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_error!(
+                    self.logger,
+                    "EVENT: PaymentFailed: {}",
+                    payment_hash.0.to_hex()
+                );
 
                 match self
                     .persister
@@ -458,55 +361,33 @@ impl EventHandler {
                             false,
                         ) {
                             Ok(_) => (),
-                            Err(e) => {
-                                self.logger.log(&Record::new(
-                                    lightning::util::logger::Level::Error,
-                                    format_args!("ERROR: could not persist payment info: {e}"),
-                                    "event",
-                                    "",
-                                    0,
-                                ));
-                            }
+                            Err(e) => log_error!(
+                                self.logger,
+                                "ERROR: could not persist payment info: {e}"
+                            ),
                         }
                     }
                     None => {
                         // we failed in a payment that we didn't have saved? ...
-                        self.logger.log(&Record::new(
-                            lightning::util::logger::Level::Warn,
-                            format_args!("WARN: payment failed but we did not have it stored"),
-                            "event",
-                            "",
-                            0,
-                        ));
+                        log_warn!(
+                            self.logger,
+                            "WARN: payment failed but we did not have it stored"
+                        );
                     }
                 }
             }
             Event::PaymentForwarded { .. } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Info,
-                    format_args!("EVENT: PaymentForwarded somehow...:"),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_info!(self.logger, "EVENT: PaymentForwarded somehow...");
             }
             Event::HTLCHandlingFailed { .. } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!("EVENT: HTLCHandlingFailed ignored"),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_debug!(self.logger, "EVENT: HTLCHandlingFailed, ignored");
             }
             Event::PendingHTLCsForwardable { time_forwardable } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!("EVENT: PendingHTLCsForwardable processing"),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_debug!(
+                    self.logger,
+                    "EVENT: PendingHTLCsForwardable: {time_forwardable:?}, processing..."
+                );
+
                 let forwarding_channel_manager = self.channel_manager.clone();
                 let min = time_forwardable.as_millis() as i32;
                 sleep(min).await;
@@ -529,28 +410,17 @@ impl EventHandler {
                 reason,
                 user_channel_id: _,
             } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!(
-                        "EVENT: Channel {} closed due to: {:?}",
-                        channel_id.to_hex(),
-                        reason
-                    ),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_debug!(
+                    self.logger,
+                    "EVENT: Channel {} closed due to: {:?}",
+                    channel_id.to_hex(),
+                    reason
+                );
             }
             Event::DiscardFunding { .. } => {
                 // A "real" node should probably "lock" the UTXOs spent in funding transactions until
                 // the funding transaction either confirms, or this event is generated.
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!("EVENT: DiscardFunding ignored"),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_debug!(self.logger, "EVENT: DiscardFunding, ignored");
             }
             Event::ChannelReady {
                 channel_id,
@@ -558,13 +428,13 @@ impl EventHandler {
                 counterparty_node_id,
                 channel_type,
             } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!("EVENT: ChannelReady channel_id: {}, user_channel_id: {}, counterparty_node_id: {}, channel_type: {}", channel_id.to_hex(), user_channel_id, counterparty_node_id.to_hex(), channel_type),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_debug!(
+                    self.logger,
+                    "EVENT: ChannelReady channel_id: {}, user_channel_id: {}, counterparty_node_id: {}, channel_type: {}",
+                    channel_id.to_hex(),
+                    user_channel_id,
+                    counterparty_node_id.to_hex(),
+                    channel_type);
             }
             Event::ChannelPending {
                 channel_id,
@@ -572,13 +442,12 @@ impl EventHandler {
                 counterparty_node_id,
                 ..
             } => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Debug,
-                    format_args!("EVENT: ChannelPending channel_id: {}, user_channel_id: {}, counterparty_node_id: {}", channel_id.to_hex(), user_channel_id, counterparty_node_id.to_hex()),
-                    "event",
-                    "",
-                    0,
-                ));
+                log_debug!(
+                    self.logger,
+                    "EVENT: ChannelPending channel_id: {}, user_channel_id: {}, counterparty_node_id: {}",
+                    channel_id.to_hex(),
+                    user_channel_id,
+                    counterparty_node_id.to_hex());
             }
             Event::HTLCIntercepted { .. } => {}
         }

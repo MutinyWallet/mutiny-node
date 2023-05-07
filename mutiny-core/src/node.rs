@@ -46,7 +46,7 @@ use lightning::{
         },
         PaymentHash, PaymentPreimage,
     },
-    log_error, log_info, log_warn,
+    log_debug, log_error, log_info, log_trace, log_warn,
     routing::{
         gossip,
         gossip::NodeId,
@@ -55,7 +55,7 @@ use lightning::{
     },
     util::{
         config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig},
-        logger::{Logger, Record},
+        logger::Logger,
         ser::Writeable,
     },
 };
@@ -64,7 +64,6 @@ use lightning_invoice::{
     utils::{create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice},
     Invoice,
 };
-use log::{debug, error, info, trace};
 use std::{
     net::SocketAddr,
     str::FromStr,
@@ -182,13 +181,12 @@ impl Node {
         websocket_proxy_addr: String,
         esplora: Arc<AsyncClient>,
         lsp_clients: &[LspClient],
+        logger: Arc<MutinyLogger>,
     ) -> Result<Self, MutinyError> {
-        info!("initialized a new node: {uuid}");
+        log_info!(logger, "initialized a new node: {uuid}");
 
         // a list of components that need to be stopped and whether or not they are stopped
         let stopped_components = Arc::new(RwLock::new(vec![]));
-
-        let logger = Arc::new(MutinyLogger::default());
 
         let keys_manager = Arc::new(create_keys_manager(
             wallet.clone(),
@@ -245,6 +243,7 @@ impl Node {
 
         let route_handler = Arc::new(GossipMessageHandler {
             network_graph: gossip_sync.network_graph().clone(),
+            logger: logger.clone(),
         });
 
         // init peer manager
@@ -254,14 +253,14 @@ impl Node {
             onion_message_handler: Arc::new(IgnoringMessageHandler {}),
         };
 
-        info!("creating lsp client");
+        log_info!(logger, "creating lsp client");
         let lsp_client: Option<LspClient> = match node_index.lsp {
             None => {
                 if lsp_clients.is_empty() {
-                    info!("no lsp saved and no lsp clients available");
+                    log_info!(logger, "no lsp saved and no lsp clients available");
                     None
                 } else {
-                    info!("no lsp saved, picking random one");
+                    log_info!(logger, "no lsp saved, picking random one");
                     // If we don't have an lsp saved we should pick a random
                     // one from our client list and save it for next time
                     let rand = rand::random::<usize>() % lsp_clients.len();
@@ -362,6 +361,7 @@ impl Node {
         let background_processor_channel_manager = channel_manager.clone();
         let background_chain_monitor = chain_monitor.clone();
         let background_gossip_sync = gossip_sync.clone();
+        let background_logger = logger.clone();
         let background_stop = stop.clone();
         stopped_components.try_write()?.push(false);
         let background_stopped_components = stopped_components.clone();
@@ -391,12 +391,17 @@ impl Node {
                 .expect("Failed to process events");
 
                 if background_stop.load(Ordering::Relaxed) {
-                    debug!(
+                    log_debug!(
+                        background_logger,
                         "stopping background component for node: {}",
                         pubkey.to_hex(),
                     );
                     stop_component(&background_stopped_components);
-                    debug!("stopped background component for node: {}", pubkey.to_hex());
+                    log_debug!(
+                        background_logger,
+                        "stopped background component for node: {}",
+                        pubkey.to_hex()
+                    );
                     break;
                 }
             }
@@ -409,7 +414,12 @@ impl Node {
             connection_type: ConnectionType::Mutiny(websocket_proxy_addr.to_string()),
             original_connection_string: format!("mutiny:{pubkey}@{websocket_proxy_addr}"),
         };
-        let main_proxy = WsProxy::new(&websocket_proxy_addr, self_connection.clone()).await?;
+        let main_proxy = WsProxy::new(
+            &websocket_proxy_addr,
+            self_connection.clone(),
+            logger.clone(),
+        )
+        .await?;
         let multi_socket = MultiWsSocketDescriptor::new(
             Arc::new(main_proxy),
             peer_man.clone(),
@@ -488,6 +498,7 @@ impl Node {
             self.multi_socket.clone(),
             &self.websocket_proxy_addr,
             &peer_connection_info,
+            self.logger.clone(),
             self.peer_manager.clone(),
         )
         .await
@@ -512,33 +523,25 @@ impl Node {
                         .await
                         {
                             Ok(_) => (),
-                            Err(_) => self.logger.log(&Record::new(
-                                lightning::util::logger::Level::Warn,
-                                format_args!("WARN: could not store peer connection info",),
-                                "node",
-                                "",
-                                0,
-                            )),
+                            Err(_) => {
+                                log_warn!(self.logger, "WARN: could not store peer connection info")
+                            }
                         }
                     }
                 } else {
                     // store this so we can reconnect later
-                    if save_peer_connection_info(
+                    if let Err(e) = save_peer_connection_info(
                         &self._uuid,
                         &node_id,
                         &peer_connection_info.original_connection_string,
                         label,
                     )
                     .await
-                    .is_err()
                     {
-                        self.logger.log(&Record::new(
-                            lightning::util::logger::Level::Warn,
-                            format_args!("WARN: could not store peer connection info",),
-                            "node",
-                            "",
-                            0,
-                        ));
+                        log_warn!(
+                            self.logger,
+                            "WARN: could not store peer connection info: {e}"
+                        );
                     }
                 }
 
@@ -664,13 +667,7 @@ impl Node {
             ),
         };
         let invoice = invoice_res.map_err(|e| {
-            self.logger.log(&Record::new(
-                lightning::util::logger::Level::Error,
-                format_args!("ERROR: could not generate invoice: {e}"),
-                "node",
-                "",
-                0,
-            ));
+            log_error!(self.logger, "ERROR: could not generate invoice: {e}");
             MutinyError::InvoiceCreationFailed
         })?;
 
@@ -689,23 +686,11 @@ impl Node {
         self.persister
             .persist_payment_info(&payment_hash, &payment_info, true)
             .map_err(|e| {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Error,
-                    format_args!("ERROR: could not persist payment info: {e}"),
-                    "node",
-                    "",
-                    0,
-                ));
+                log_error!(self.logger, "ERROR: could not persist payment info: {e}");
                 MutinyError::InvoiceCreationFailed
             })?;
 
-        self.logger.log(&Record::new(
-            lightning::util::logger::Level::Info,
-            format_args!("SUCCESS: generated invoice: {invoice}",),
-            "node",
-            "",
-            0,
-        ));
+        log_info!(self.logger, "SUCCESS: generated invoice: {invoice}");
 
         Ok(invoice)
     }
@@ -821,10 +806,14 @@ impl Node {
         match pay_result {
             Ok(_) => Ok(payment_hash),
             Err(e) => {
-                error!("failed to make payment: {:?}", e);
+                log_error!(self.logger, "failed to make payment: {:?}", e);
                 // call list channels to see what our channels are
                 let current_channels = self.channel_manager.list_channels();
-                debug!("current channel details: {:?}", current_channels);
+                log_debug!(
+                    self.logger,
+                    "current channel details: {:?}",
+                    current_channels
+                );
 
                 payment_info.status = HTLCStatus::Failed;
                 self.persister
@@ -971,23 +960,17 @@ impl Node {
             .create_channel(pubkey, amount_sat, 0, 0, Some(config))
         {
             Ok(res) => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Info,
-                    format_args!("SUCCESS: channel initiated with peer: {pubkey:?}"),
-                    "node",
-                    "",
-                    0,
-                ));
+                log_info!(
+                    self.logger,
+                    "SUCCESS: channel initiated with peer: {pubkey:?}"
+                );
                 Ok(res)
             }
             Err(e) => {
-                self.logger.log(&Record::new(
-                    lightning::util::logger::Level::Error,
-                    format_args!("ERROR: failed to open channel to pubkey {pubkey:?}: {e:?}"),
-                    "node",
-                    "",
-                    0,
-                ));
+                log_error!(
+                    self.logger,
+                    "ERROR: failed to open channel to pubkey {pubkey:?}: {e:?}"
+                );
                 Err(MutinyError::ChannelCreationFailed)
             }
         }
@@ -1105,22 +1088,23 @@ async fn start_reconnection_handling(
             multi_socket.clone(),
             &websocket_proxy_addr,
             &PubkeyConnectionInfo::new(lsp.connection_string.as_str())?,
+            logger.clone(),
             peer_man.clone(),
         )
         .await
         {
             Ok(_) => {
-                trace!("auto connected lsp: {node_id}");
+                log_trace!(logger, "auto connected lsp: {node_id}");
             }
             Err(e) => {
-                trace!("could not connect to lsp {node_id}: {e}");
+                log_trace!(logger, "could not connect to lsp {node_id}: {e}");
             }
         }
 
         if let Err(e) =
             save_peer_connection_info(&uuid, &node_id, &lsp.connection_string, None).await
         {
-            error!("could not save connection to lsp: {e}");
+            log_error!(logger, "could not save connection to lsp: {e}");
         }
     };
 
@@ -1128,17 +1112,20 @@ async fn start_reconnection_handling(
     let websocket_proxy_addr_copy = websocket_proxy_addr.clone();
     let self_connection_copy = self_connection.clone();
     let reconnection_stop = stop.clone();
+    let reconnection_logger = logger.clone();
     stopped_components.try_write()?.push(false);
     let reconnection_stopped_components = stopped_components.clone();
     spawn_local(async move {
         loop {
             if reconnection_stop.load(Ordering::Relaxed) {
-                debug!(
+                log_debug!(
+                    reconnection_logger,
                     "stopping reconnection component for node: {}",
                     node_pubkey.to_hex(),
                 );
                 stop_component(&reconnection_stopped_components);
-                debug!(
+                log_debug!(
+                    reconnection_logger,
                     "stopped reconnection component for node: {}",
                     node_pubkey.to_hex(),
                 );
@@ -1146,8 +1133,17 @@ async fn start_reconnection_handling(
             }
 
             if !multi_socket_reconnect.connected() {
-                debug!("got disconnected from multi socket proxy, going to reconnect");
-                match WsProxy::new(&websocket_proxy_addr_copy, self_connection_copy.clone()).await {
+                log_debug!(
+                    reconnection_logger,
+                    "got disconnected from multi socket proxy, going to reconnect"
+                );
+                match WsProxy::new(
+                    &websocket_proxy_addr_copy,
+                    self_connection_copy.clone(),
+                    reconnection_logger.clone(),
+                )
+                .await
+                {
                     Ok(main_proxy) => {
                         multi_socket_reconnect.reconnect(Arc::new(main_proxy)).await;
                     }
@@ -1159,12 +1155,14 @@ async fn start_reconnection_handling(
             }
 
             if reconnection_stop.load(Ordering::Relaxed) {
-                debug!(
+                log_debug!(
+                    reconnection_logger,
                     "stopping reconnection component for node: {}",
                     node_pubkey.to_hex(),
                 );
                 stop_component(&reconnection_stopped_components);
-                debug!(
+                log_debug!(
+                    reconnection_logger,
                     "stopped reconnection component for node: {}",
                     node_pubkey.to_hex(),
                 );
@@ -1187,13 +1185,15 @@ async fn start_reconnection_handling(
         sleep(5 * 1000).await;
         loop {
             if connect_stop.load(Ordering::Relaxed) {
-                debug!(
+                log_debug!(
+                    connect_logger,
                     "stopping connection component and disconnecting peers for node: {}",
                     node_pubkey.to_hex(),
                 );
                 connect_peer_man.disconnect_all_peers();
                 stop_component(&connect_stopped_components);
-                debug!(
+                log_debug!(
+                    connect_logger,
                     "stopped connection component and disconnected peers for node: {}",
                     node_pubkey.to_hex(),
                 );
@@ -1225,17 +1225,11 @@ async fn start_reconnection_handling(
                 .collect();
 
             for (pubkey, conn_str) in not_connected.into_iter() {
-                trace!("going to auto connect to peer: {pubkey}");
+                log_trace!(connect_logger, "going to auto connect to peer: {pubkey}");
                 let peer_connection_info = match PubkeyConnectionInfo::new(&conn_str) {
                     Ok(p) => p,
                     Err(e) => {
-                        connect_logger.log(&Record::new(
-                            lightning::util::logger::Level::Error,
-                            format_args!("ERROR: could not parse connection info: {e}"),
-                            "node",
-                            "",
-                            0,
-                        ));
+                        log_error!(connect_logger, "could not parse connection info: {e}");
                         continue;
                     }
                 };
@@ -1243,31 +1237,28 @@ async fn start_reconnection_handling(
                     connect_multi_socket.clone(),
                     &connect_proxy,
                     &peer_connection_info,
+                    connect_logger.clone(),
                     connect_peer_man.clone(),
                 )
                 .await
                 {
                     Ok(_) => {
-                        trace!("auto connected peer: {pubkey}");
+                        log_trace!(connect_logger, "auto connected peer: {pubkey}");
                     }
                     Err(e) => {
-                        connect_logger.log(&Record::new(
-                            lightning::util::logger::Level::Warn,
-                            format_args!("WARN: could not auto connect peer: {e}"),
-                            "node",
-                            "",
-                            0,
-                        ));
+                        log_warn!(connect_logger, "could not auto connect peer: {e}");
                     }
                 }
                 if connect_stop.load(Ordering::Relaxed) {
-                    debug!(
+                    log_debug!(
+                        connect_logger,
                         "stopping connection component and disconnecting peers for node: {}",
                         node_pubkey.to_hex(),
                     );
                     connect_peer_man.disconnect_all_peers();
                     stop_component(&connect_stopped_components);
-                    debug!(
+                    log_debug!(
+                        connect_logger,
                         "stopped connection component and disconnected peers for node: {}",
                         node_pubkey.to_hex(),
                     );
@@ -1293,6 +1284,7 @@ pub(crate) async fn connect_peer_if_necessary(
     multi_socket: MultiWsSocketDescriptor,
     websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
+    logger: Arc<MutinyLogger>,
     peer_manager: Arc<dyn PeerManager>,
 ) -> Result<(), MutinyError> {
     if peer_manager
@@ -1305,6 +1297,7 @@ pub(crate) async fn connect_peer_if_necessary(
             multi_socket,
             websocket_proxy_addr,
             peer_connection_info,
+            logger,
             peer_manager,
         )
         .await
@@ -1315,13 +1308,23 @@ pub(crate) async fn connect_peer(
     multi_socket: MultiWsSocketDescriptor,
     websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
+    logger: Arc<MutinyLogger>,
     peer_manager: Arc<dyn PeerManager>,
 ) -> Result<(), MutinyError> {
     // first make a connection to the node
-    debug!("making connection to peer: {:?}", peer_connection_info);
+    log_debug!(
+        logger,
+        "making connection to peer: {:?}",
+        peer_connection_info
+    );
     let (mut descriptor, socket_addr_opt) = match peer_connection_info.connection_type {
         ConnectionType::Tcp(ref t) => {
-            let proxy = WsProxy::new(websocket_proxy_addr, peer_connection_info.clone()).await?;
+            let proxy = WsProxy::new(
+                websocket_proxy_addr,
+                peer_connection_info.clone(),
+                logger.clone(),
+            )
+            .await?;
             (
                 WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
                 try_get_net_addr_from_socket(t),
@@ -1343,10 +1346,14 @@ pub(crate) async fn connect_peer(
         descriptor.clone(),
         socket_addr_opt,
     )?;
-    debug!("connected to peer: {:?}", peer_connection_info);
+    log_debug!(logger, "connected to peer: {:?}", peer_connection_info);
 
     let sent_bytes = descriptor.send_data(&initial_bytes, true);
-    trace!("sent {sent_bytes} to node: {}", peer_connection_info.pubkey);
+    log_trace!(
+        logger,
+        "sent {sent_bytes} to node: {}",
+        peer_connection_info.pubkey
+    );
 
     // schedule a reader on the connection
     schedule_descriptor_read(descriptor, peer_manager.clone());
@@ -1407,18 +1414,13 @@ pub(crate) fn split_peer_connection_string(
     peer_pubkey_and_ip_addr: &str,
 ) -> Result<(PublicKey, String), MutinyError> {
     let mut pubkey_and_addr = peer_pubkey_and_ip_addr.split('@');
-    let pubkey = pubkey_and_addr.next().ok_or_else(|| {
-        error!("incorrectly formatted peer info. Should be formatted as: `pubkey@host:port` but pubkey could not be parsed");
-        MutinyError::PeerInfoParseFailed
-    })?;
-    let peer_addr_str = pubkey_and_addr.next().ok_or_else(|| {
-        error!("incorrectly formatted peer info. Should be formatted as: `pubkey@host:port` but host:port part could not be parsed");
-        MutinyError::PeerInfoParseFailed
-    })?;
-    let pubkey = PublicKey::from_str(pubkey).map_err(|e| {
-        error!("{}", format!("could not parse peer pubkey: {e:?}"));
-        MutinyError::PeerInfoParseFailed
-    })?;
+    let pubkey = pubkey_and_addr
+        .next()
+        .ok_or_else(|| MutinyError::PeerInfoParseFailed)?;
+    let peer_addr_str = pubkey_and_addr
+        .next()
+        .ok_or_else(|| MutinyError::PeerInfoParseFailed)?;
+    let pubkey = PublicKey::from_str(pubkey).map_err(|_| MutinyError::PeerInfoParseFailed)?;
     Ok((pubkey, peer_addr_str.to_string()))
 }
 

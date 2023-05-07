@@ -1,10 +1,12 @@
 use crate::error::MutinyError;
 use crate::indexed_db::MutinyStorage;
+use crate::logging::MutinyLogger;
 use esplora_client::AsyncClient;
 use lightning::chain::chaininterface::{
     ConfirmationTarget, FeeEstimator, FEERATE_FLOOR_SATS_PER_KW,
 };
-use log::trace;
+use lightning::log_trace;
+use lightning::util::logger::Logger;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,11 +15,20 @@ use std::sync::Arc;
 pub struct MutinyFeeEstimator {
     storage: MutinyStorage,
     esplora: Arc<AsyncClient>,
+    logger: Arc<MutinyLogger>,
 }
 
 impl MutinyFeeEstimator {
-    pub fn new(storage: MutinyStorage, esplora: Arc<AsyncClient>) -> MutinyFeeEstimator {
-        MutinyFeeEstimator { storage, esplora }
+    pub fn new(
+        storage: MutinyStorage,
+        esplora: Arc<AsyncClient>,
+        logger: Arc<MutinyLogger>,
+    ) -> MutinyFeeEstimator {
+        MutinyFeeEstimator {
+            storage,
+            esplora,
+            logger,
+        }
     }
 }
 
@@ -81,7 +92,7 @@ impl FeeEstimator for MutinyFeeEstimator {
                 let found = estimates.get(&num_blocks.to_string());
                 match found {
                     Some(num) => {
-                        trace!("Got fee rate from saved cache!");
+                        log_trace!(self.logger, "Got fee rate from saved cache!");
                         let sats_vbyte = num.to_owned();
                         // convert to sats per kw
                         let fee_rate = sats_vbyte * 250.0;
@@ -161,8 +172,9 @@ mod test {
                 .build_async()
                 .unwrap(),
         );
+        let logger = Arc::new(MutinyLogger::default());
 
-        let fee_estimator = MutinyFeeEstimator::new(storage, esplora);
+        let fee_estimator = MutinyFeeEstimator::new(storage, esplora, logger);
 
         fee_estimator.update_fee_estimates().await.unwrap();
 
@@ -187,7 +199,8 @@ mod test {
                 .unwrap(),
         );
 
-        let fee_estimator = MutinyFeeEstimator::new(storage, esplora);
+        let logger = Arc::new(MutinyLogger::default());
+        let fee_estimator = MutinyFeeEstimator::new(storage, esplora, logger);
 
         // test that we get the fee rate from the cache
         assert_eq!(

@@ -12,9 +12,10 @@ use lightning::ln::msgs;
 use lightning::ln::msgs::{LightningError, NetAddress, RoutingMessageHandler};
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning::ln::peer_handler::{IgnoringMessageHandler, PeerManager as LdkPeerManager};
+use lightning::log_warn;
 use lightning::routing::gossip::NodeId;
 use lightning::routing::utxo::{UtxoLookup, UtxoLookupError, UtxoResult};
-use log::warn;
+use lightning::util::logger::Logger;
 use std::sync::Arc;
 use wasm_bindgen_futures::spawn_local;
 
@@ -143,6 +144,7 @@ impl PeerManager for PeerManagerImpl {
 #[derive(Clone)]
 pub struct GossipMessageHandler {
     pub(crate) network_graph: Arc<NetworkGraph>,
+    pub(crate) logger: Arc<MutinyLogger>,
 }
 
 impl MessageSendEventsProvider for GossipMessageHandler {
@@ -167,6 +169,7 @@ impl RoutingMessageHandler for GossipMessageHandler {
         msg: &msgs::NodeAnnouncement,
     ) -> Result<bool, LightningError> {
         let msg_clone = msg.clone();
+        let logger = self.logger.clone();
         spawn_local(async move {
             // We use RGS to sync gossip, but we can save the node's metadata (alias and color)
             // we should only save it for relevant peers however (i.e. peers we have a channel with)
@@ -178,7 +181,10 @@ impl RoutingMessageHandler for GossipMessageHandler {
             {
                 let node_id = msg_clone.contents.node_id;
                 if let Err(e) = gossip::save_ln_peer_info(&node_id, &msg_clone.into()).await {
-                    warn!("Failed to save node announcement for {node_id}: {e}");
+                    log_warn!(
+                        logger,
+                        "Failed to save node announcement for {node_id}: {e}"
+                    );
                 }
             }
         });
