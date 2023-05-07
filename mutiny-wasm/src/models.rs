@@ -352,7 +352,7 @@ pub struct Redshift {
     onchain_recipient: Option<Address>,
     output_utxo: Option<OutPoint>,
     introduction_channel: Option<OutPoint>,
-    output_channel: Option<OutPoint>,
+    output_channel: Option<Vec<OutPoint>>,
     introduction_node: PublicKey,
     pub amount_sats: u64,
     pub sats_sent: u64,
@@ -413,8 +413,8 @@ impl Redshift {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn output_channel(&self) -> Option<String> {
-        self.output_channel.map(|o| o.to_string())
+    pub fn output_channel(&self) -> JsValue /* Option<Vec<String>> */ {
+        JsValue::from_serde(&serde_json::to_value(&self.output_channel).unwrap()).unwrap()
     }
 
     #[wasm_bindgen(getter)]

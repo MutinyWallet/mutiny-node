@@ -7,8 +7,8 @@ use anyhow::anyhow;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, OutPoint};
-use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info};
+use lightning::{log_warn, util::logger::Logger};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -64,7 +64,9 @@ pub struct Redshift {
     pub recipient: RedshiftRecipient,
     pub output_utxo: Option<OutPoint>,
     pub introduction_channel: Option<OutPoint>,
-    pub output_channel: Option<OutPoint>,
+    /// output_channel will be None if being kept in lightning, this is only relevant when the
+    /// channels will be closed into an on chain address
+    pub output_channel: Option<Vec<OutPoint>>,
     pub introduction_node: PublicKey,
     pub amount_sats: u64,
     pub sats_sent: u64,
@@ -425,12 +427,6 @@ impl RedshiftManager for NodeManager {
             rs.status
         );
 
-        // fixme, this could close the wrong channel if the receiving_node already had channels
-        // lookup the new channel on the receiving node
-        if let Some(c) = receiving_node.channel_manager.list_channels().first() {
-            rs.output_channel = c.funding_txo.map(|o| o.into_bitcoin_outpoint());
-        }
-
         // save to db
         self.storage.persist_redshift(rs.clone())?;
 
@@ -443,17 +439,31 @@ impl RedshiftManager for NodeManager {
             None => log_debug!(&self.logger, "no introduction channel to close"),
         }
 
-        // close receiving channel
+        // close receiving channel(s)
         match rs.recipient {
             RedshiftRecipient::Lightning(_) => {} // Keep channel open in lightning case
             RedshiftRecipient::OnChain(_addr) => {
-                if let Some(chan) = rs.output_channel {
-                    self.close_channel(&chan).await?;
-                    // todo send funds to address, ldk doesn't support this yet...
-                    // also update the final utxo
-                } else {
-                    log_debug!(&self.logger, "no output channel to close");
+                // close all the channels that were opened on the receiving node, if the receiving
+                // node was only created temporarily for the purpose of being thrown away
+                // record all of the channel outpoints.
+                let mut channel_outpoints: Vec<OutPoint> = vec![];
+                for c in receiving_node.channel_manager.list_channels() {
+                    if let Some(funding_txo) = c.funding_txo {
+                        let channel_outpoint = funding_txo.into_bitcoin_outpoint();
+                        self.close_channel(&channel_outpoint).await?;
+                        channel_outpoints.push(channel_outpoint);
+                    }
                 }
+                // Set rs.output_channel to None if channel_outpoints is empty
+                rs.output_channel = if channel_outpoints.is_empty() {
+                    log_warn!(
+                        &self.logger,
+                        "Expecting at least one channel from a receiving redshift node to close..."
+                    );
+                    None
+                } else {
+                    Some(channel_outpoints)
+                };
             }
         }
 
