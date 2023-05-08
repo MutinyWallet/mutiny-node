@@ -154,10 +154,7 @@ impl RedshiftManager for NodeManager {
         user_channel_id: u128,
         timeout: u64,
     ) -> Result<OutPoint, MutinyError> {
-        let node = {
-            let nodes = self.nodes.lock().await;
-            nodes.get(sending_node).unwrap().to_owned()
-        };
+        let node = self.get_node(sending_node).await?;
         let start = utils::now().as_secs();
         loop {
             let channels = node.channel_manager.list_channels();
@@ -276,13 +273,7 @@ impl RedshiftManager for NodeManager {
         );
 
         // get the node making the payment
-        let sending_node = {
-            let nodes = self.nodes.lock().await;
-            nodes
-                .get(&rs.sending_node)
-                .ok_or(MutinyError::NotFound)?
-                .clone()
-        };
+        let sending_node = self.get_node(&rs.sending_node).await?;
 
         // find the channel reserve the introduction channel
         let reserve = match rs.introduction_channel {
@@ -308,21 +299,14 @@ impl RedshiftManager for NodeManager {
 
         let receiving_node = match rs.recipient {
             RedshiftRecipient::Lightning(receiving_pubkey) => {
-                let node = {
-                    let nodes = self.nodes.lock().await;
-                    nodes.get(&receiving_pubkey).cloned()
-                };
-                node.ok_or(MutinyError::NotFound)?
+                self.get_node(&receiving_pubkey).await?
             }
             RedshiftRecipient::OnChain(_) => {
                 let new_receiving_node = self.new_node().await?.pubkey;
                 // sleep to let new node init properly
                 sleep(NEW_NODE_SLEEP_DURATION).await;
-                let node = {
-                    let nodes = self.nodes.lock().await;
-                    nodes.get(&new_receiving_node).cloned()
-                };
-                node.ok_or(MutinyError::NotFound)?
+
+                self.get_node(&new_receiving_node).await?
             }
         };
 
