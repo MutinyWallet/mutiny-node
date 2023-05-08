@@ -277,6 +277,7 @@ impl RedshiftManager for NodeManager {
         let sending_node = self.get_node(&rs.sending_node).await?;
 
         // find the channel reserve the introduction channel
+        // TODO use outbound_capacity_msat
         let reserve = match rs.introduction_channel {
             None => 0,
             Some(chan) => sending_node
@@ -464,10 +465,13 @@ impl RedshiftManager for NodeManager {
             }
         }
 
+        // TODO archive nodes afterwards
+
         Ok(())
     }
 }
 
+// TODO add more redshift tests
 #[cfg(test)]
 mod test {
     use std::str::FromStr;
