@@ -12,6 +12,9 @@ use lightning::{log_warn, util::logger::Logger};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// When creating a new node sleep for 5 seconds to give it time to start up.
+const NEW_NODE_SLEEP_DURATION: i32 = 5_000;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RedshiftStatus {
     /// The channel to the introduction node is opening.
@@ -192,7 +195,7 @@ impl RedshiftManager for NodeManager {
         // create new node
         let node = self.new_node().await?;
 
-        sleep(5000).await;
+        sleep(NEW_NODE_SLEEP_DURATION).await;
 
         // connect to introduction node
         let introduction_node = match (introduction_node, connection_string) {
@@ -314,7 +317,7 @@ impl RedshiftManager for NodeManager {
             RedshiftRecipient::OnChain(_) => {
                 let new_receiving_node = self.new_node().await?.pubkey;
                 // sleep to let new node init properly
-                sleep(5000).await;
+                sleep(NEW_NODE_SLEEP_DURATION).await;
                 let node = {
                     let nodes = self.nodes.lock().await;
                     nodes.get(&new_receiving_node).cloned()
