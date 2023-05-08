@@ -202,13 +202,22 @@ impl RedshiftManager for NodeManager {
                     .await?;
                 i
             }
-            _ => {
-                // get the first LSP as the introduction node
-                // TODO allow falling back to others
-                if self.lsp_clients.is_empty() {
-                    return Err(MutinyError::LspFailure);
+            (Some(i), None) => {
+                let node = self.get_node(&node.pubkey).await?;
+
+                if node.peer_manager.get_peer_node_ids().contains(&i) {
+                    i
                 } else {
-                    self.lsp_clients.first().unwrap().pubkey
+                    return Err(MutinyError::Other(anyhow!(
+                        "Could not connect to introduction node"
+                    )));
+                }
+            }
+            _ => {
+                let node = self.get_node(&node.pubkey).await?;
+                match &node.lsp_client {
+                    Some(lsp) => lsp.pubkey,
+                    None => return Err(MutinyError::LspFailure),
                 }
             }
         };

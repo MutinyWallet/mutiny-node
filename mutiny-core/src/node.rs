@@ -161,7 +161,7 @@ pub(crate) struct Node {
     logger: Arc<MutinyLogger>,
     websocket_proxy_addr: String,
     multi_socket: MultiWsSocketDescriptor,
-    lsp_client: Option<LspClient>,
+    pub(crate) lsp_client: Option<LspClient>,
 }
 
 impl Node {
