@@ -214,6 +214,7 @@ impl RedshiftManager for NodeManager {
                 }
             }
             _ => {
+                // TODO this would be better if it was a random node
                 let node = self.get_node(&node.pubkey).await?;
                 match &node.lsp_client {
                     Some(lsp) => lsp.pubkey,
