@@ -140,7 +140,7 @@ mod tests {
     #[test]
     async fn create_mutiny_wallet() {
         log!("creating mutiny wallet!");
-        cleanup_wallet_test().await;
+        cleanup_all().await;
 
         assert!(!NodeManager::has_node_manager().await);
         MutinyWallet::new(
@@ -156,13 +156,13 @@ mod tests {
         .expect("mutiny wallet should initialize");
         assert!(NodeManager::has_node_manager().await);
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
     async fn restart_mutiny_wallet() {
         log!("restarting mutiny wallet!");
-        cleanup_wallet_test().await;
+        cleanup_all().await;
 
         assert!(!NodeManager::has_node_manager().await);
         let mut mw = MutinyWallet::new(
@@ -184,13 +184,13 @@ mod tests {
         assert!(mw.start().await.is_ok());
         assert_eq!(first_seed, mw.node_manager.show_seed());
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
     async fn restart_mutiny_wallet_with_nodes() {
         log!("restarting mutiny wallet with nodes!");
-        cleanup_wallet_test().await;
+        cleanup_all().await;
 
         assert!(!NodeManager::has_node_manager().await);
         let mut mw = MutinyWallet::new(
@@ -214,6 +214,6 @@ mod tests {
         assert!(mw.start().await.is_ok());
         assert!(!mw.node_manager.list_nodes().await.unwrap().is_empty());
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 }

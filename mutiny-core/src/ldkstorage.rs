@@ -517,7 +517,7 @@ mod test {
         assert_eq!(list[0].0, payment_hash);
         assert_eq!(list[0].1.preimage, Some(preimage));
 
-        cleanup_gossip_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -550,7 +550,7 @@ mod test {
         let result = persister.get_failed_spendable_outputs().unwrap();
         assert_eq!(result, vec![static_output_0, static_output_1]);
 
-        cleanup_gossip_test().await;
+        cleanup_all().await;
 
         let result = persister.clear_failed_spendable_outputs().await;
         assert!(result.is_ok());

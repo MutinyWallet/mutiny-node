@@ -257,7 +257,6 @@ mod tests {
         let second_pubkey_again = pubkey_from_keys_manager(&km);
 
         assert_eq!(second_pubkey, second_pubkey_again);
-
-        cleanup_test();
+        cleanup_all().await;
     }
 }

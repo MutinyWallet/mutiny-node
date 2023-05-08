@@ -310,7 +310,7 @@ impl NodeManager {
             },
         };
 
-        let logger = Arc::new(MutinyLogger::default());
+        let logger = Arc::new(MutinyLogger::with_writer(stop.clone()));
 
         let esplora_server_url = get_esplora_url(network, c.user_esplora_url);
         let tx_sync = Arc::new(EsploraSyncClient::new(esplora_server_url, logger.clone()));
@@ -1380,6 +1380,11 @@ impl NodeManager {
         Ok(response.bitcoin.usd)
     }
 
+    /// Retrieves the logs from storage.
+    pub async fn get_logs(&self) -> Result<Option<Vec<String>>, MutinyError> {
+        self.logger.get_logs().await
+    }
+
     /// Exports the current state of the node manager to a json object.
     pub async fn export_json(&self) -> Result<serde_json::Value, MutinyError> {
         let needs_db_connection = self.storage.clone().connected().unwrap_or(false);
@@ -1566,7 +1571,7 @@ mod tests {
             .expect("node manager should initialize");
         assert!(NodeManager::has_node_manager().await);
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -1588,7 +1593,7 @@ mod tests {
         assert!(NodeManager::has_node_manager().await);
         assert_eq!(seed, nm.show_seed());
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -1632,7 +1637,7 @@ mod tests {
             assert_eq!(1, retrieved_node.child_index);
         }
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]

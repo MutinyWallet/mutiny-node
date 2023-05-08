@@ -503,7 +503,7 @@ mod tests {
     #[test]
     async fn insert_and_get_mnemonic_no_password() {
         log!("insert and get mnemonic!");
-        cleanup_wallet_test().await;
+        cleanup_all().await;
 
         let seed = keymanager::generate_seed(12).unwrap();
 
@@ -513,13 +513,13 @@ mod tests {
         let stored_mnemonic = storage.get_mnemonic().await.unwrap();
         assert_eq!(mnemonic, stored_mnemonic);
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
     async fn insert_and_get_mnemonic_with_password() {
         log!("insert and get mnemonic with password!");
-        cleanup_wallet_test().await;
+        cleanup_all().await;
 
         let seed = keymanager::generate_seed(12).unwrap();
 
@@ -529,6 +529,6 @@ mod tests {
         let stored_mnemonic = storage.get_mnemonic().await.unwrap();
         assert_eq!(mnemonic, stored_mnemonic);
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 }

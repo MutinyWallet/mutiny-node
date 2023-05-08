@@ -521,6 +521,6 @@ mod test {
         let all = storage.get_redshifts().unwrap();
         assert_eq!(all, vec![rs]);
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 }

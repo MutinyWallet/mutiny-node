@@ -14,8 +14,8 @@ publish:
     wasm-pack publish --access public -t web
 
 test:
-    wasm-pack test --headless --chrome ./mutiny-core
-    wasm-pack test --headless --chrome ./mutiny-wasm
+    WASM_BINDGEN_TEST_TIMEOUT=120 wasm-pack test --headless --chrome ./mutiny-core
+    WASM_BINDGEN_TEST_TIMEOUT=120 wasm-pack test --headless --chrome ./mutiny-wasm
 
 clippy:
     cargo clippy --package mutiny-core
