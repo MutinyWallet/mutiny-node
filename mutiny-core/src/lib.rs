@@ -24,6 +24,7 @@ pub mod nodemanager;
 mod onchain;
 mod peermanager;
 mod proxy;
+pub mod redshift;
 mod socket;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
@@ -100,6 +101,8 @@ impl MutinyWallet {
 
         let node_manager = Arc::new(NodeManager::new(config.clone()).await?);
 
+        NodeManager::start_redshifts(node_manager.clone());
+
         Ok(Self {
             config,
             node_manager,
@@ -110,12 +113,14 @@ impl MutinyWallet {
     /// Not needed after [NodeManager]'s `new()` function.
     pub async fn start(&mut self) -> Result<(), MutinyError> {
         self.node_manager = Arc::new(NodeManager::new(self.config.clone()).await?);
+        NodeManager::start_redshifts(self.node_manager.clone());
         Ok(())
     }
 
     /// Stops all of the nodes and background processes.
     /// Returns after node has been stopped.
     pub async fn stop(&self) -> Result<(), MutinyError> {
+        // TODO stop redshift as well
         self.node_manager.stop().await
     }
 }

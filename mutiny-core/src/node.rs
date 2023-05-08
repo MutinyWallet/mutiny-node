@@ -161,7 +161,7 @@ pub(crate) struct Node {
     logger: Arc<MutinyLogger>,
     websocket_proxy_addr: String,
     multi_socket: MultiWsSocketDescriptor,
-    lsp_client: Option<LspClient>,
+    pub(crate) lsp_client: Option<LspClient>,
 }
 
 impl Node {
@@ -840,9 +840,13 @@ impl Node {
                     .read_payment_info(&payment_hash, false, self.logger.clone());
 
             if let Some(info) = payment_info {
-                if matches!(info.status, HTLCStatus::Succeeded | HTLCStatus::Failed) {
-                    let mutiny_invoice = MutinyInvoice::from(info, payment_hash, false)?;
-                    return Ok(mutiny_invoice);
+                match info.status {
+                    HTLCStatus::Succeeded => {
+                        let mutiny_invoice = MutinyInvoice::from(info, payment_hash, false)?;
+                        return Ok(mutiny_invoice);
+                    }
+                    HTLCStatus::Failed => return Err(MutinyError::RoutingFailed),
+                    _ => {}
                 }
             }
 
@@ -978,6 +982,7 @@ impl Node {
 
     pub async fn sweep_utxos_to_channel(
         &self,
+        user_chan_id: Option<u128>,
         utxos: &[OutPoint],
         pubkey: PublicKey,
     ) -> Result<[u8; 32], MutinyError> {
@@ -1026,11 +1031,12 @@ impl Node {
             }
         }
 
-        // generate random user channel id
-        let mut user_channel_id_bytes = [0u8; 16];
-        getrandom::getrandom(&mut user_channel_id_bytes)
-            .map_err(|_| MutinyError::Other(anyhow!("Failed to generate user channel id")))?;
-        let user_channel_id = u128::from_be_bytes(user_channel_id_bytes);
+        let user_channel_id = user_chan_id.unwrap_or_else(|| {
+            // generate random user channel id
+            let mut user_channel_id_bytes = [0u8; 16];
+            getrandom::getrandom(&mut user_channel_id_bytes).unwrap();
+            u128::from_be_bytes(user_channel_id_bytes)
+        });
 
         // save params to db
         let params = ChannelOpenParams {

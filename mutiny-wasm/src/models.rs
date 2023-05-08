@@ -1,7 +1,9 @@
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
+use bitcoin::{Address, OutPoint};
 use gloo_utils::format::JsValueSerdeExt;
 use lightning_invoice::Invoice;
+use mutiny_core::redshift::{RedshiftRecipient, RedshiftStatus};
 use mutiny_core::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -336,5 +338,113 @@ impl AuthProfile {
     #[wasm_bindgen(getter)]
     pub fn used_services(&self) -> JsValue /* Vec<String> */ {
         JsValue::from_serde(&serde_json::to_value(&self.used_services).unwrap()).unwrap()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[wasm_bindgen]
+pub struct Redshift {
+    id: String,
+    input_utxo: OutPoint,
+    status: RedshiftStatus,
+    sending_node: PublicKey,
+    lightning_recipient_pubkey: Option<PublicKey>,
+    onchain_recipient: Option<Address>,
+    output_utxo: Option<OutPoint>,
+    introduction_channel: Option<OutPoint>,
+    output_channel: Option<Vec<OutPoint>>,
+    introduction_node: PublicKey,
+    pub amount_sats: u64,
+    pub sats_sent: u64,
+    pub change_amt: Option<u64>,
+    pub fees_paid: u64,
+}
+
+#[wasm_bindgen]
+impl Redshift {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> String {
+        self.id.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn input_utxo(&self) -> String {
+        self.input_utxo.to_string()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn status(&self) -> String {
+        match self.status {
+            RedshiftStatus::ChannelOpening => "ChannelOpening".to_string(),
+            RedshiftStatus::AttemptingPayments => "AttemptingPayments".to_string(),
+            RedshiftStatus::Completed => "Completed".to_string(),
+            RedshiftStatus::Failed(_) => "Failed".to_string(),
+        }
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn sending_node(&self) -> String {
+        self.sending_node.to_hex()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn lightning_recipient_pubkey(&self) -> Option<String> {
+        self.lightning_recipient_pubkey.map(|o| o.to_hex())
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn onchain_recipient(&self) -> Option<String> {
+        self.onchain_recipient.clone().map(|o| o.to_string())
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn output_utxo(&self) -> Option<String> {
+        self.output_utxo.map(|o| o.to_string())
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn introduction_channel(&self) -> Option<String> {
+        self.introduction_channel.map(|o| o.to_string())
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn output_channel(&self) -> JsValue /* Option<Vec<String>> */ {
+        JsValue::from_serde(&serde_json::to_value(&self.output_channel).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn introduction_node(&self) -> String {
+        self.introduction_node.to_hex()
+    }
+}
+
+impl From<redshift::Redshift> for Redshift {
+    fn from(rs: redshift::Redshift) -> Self {
+        let (lightning_recipient_pubkey, onchain_recipient) = match rs.recipient {
+            RedshiftRecipient::Lightning(pk) => (Some(pk), None),
+            RedshiftRecipient::OnChain(addr) => (None, addr),
+        };
+
+        Redshift {
+            id: rs.id.to_hex(),
+            input_utxo: rs.input_utxo,
+            status: rs.status,
+            sending_node: rs.sending_node,
+            lightning_recipient_pubkey,
+            onchain_recipient,
+            output_utxo: rs.output_utxo,
+            introduction_channel: rs.introduction_channel,
+            output_channel: rs.output_channel,
+            introduction_node: rs.introduction_node,
+            amount_sats: rs.amount_sats,
+            sats_sent: rs.sats_sent,
+            change_amt: rs.change_amt,
+            fees_paid: rs.fees_paid,
+        }
     }
 }

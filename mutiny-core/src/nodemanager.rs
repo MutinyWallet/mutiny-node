@@ -4,6 +4,8 @@ use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use crate::event::{HTLCStatus, PaymentInfo};
 use crate::indexed_db::MutinyStorage;
+use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
+use crate::utils::sleep;
 use crate::{
     auth::{AuthManager, AuthProfile},
     MutinyWalletConfig,
@@ -37,7 +39,7 @@ use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning::ln::PaymentHash;
 use lightning::routing::gossip::NodeId;
-use lightning::util::logger::Logger;
+use lightning::util::logger::*;
 use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::{Invoice, InvoiceDescription};
 use lnurl::lnurl::LnUrl;
@@ -266,12 +268,12 @@ pub struct NodeManager {
     scorer: Arc<utils::Mutex<ProbScorer>>,
     chain: Arc<MutinyChain>,
     fee_estimator: Arc<MutinyFeeEstimator>,
-    storage: MutinyStorage,
-    node_storage: Mutex<NodeStorage>,
-    nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node>>>>,
+    pub(crate) storage: MutinyStorage,
+    pub(crate) node_storage: Mutex<NodeStorage>,
+    pub(crate) nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node>>>>,
     auth: AuthManager,
     lnurl_client: LnUrlClient,
-    lsp_clients: Vec<LspClient>,
+    pub(crate) lsp_clients: Vec<LspClient>,
     pub(crate) logger: Arc<MutinyLogger>,
 }
 
@@ -423,6 +425,8 @@ impl NodeManager {
 
         log_info!(logger, "inserted updated nodes");
 
+        let nodes = Arc::new(Mutex::new(nodes_map));
+
         let seed = mnemonic.to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(network, &seed)?;
         let auth = AuthManager::new(xprivkey, storage.clone())?;
@@ -445,7 +449,7 @@ impl NodeManager {
             fee_estimator,
             storage,
             node_storage: Mutex::new(node_storage),
-            nodes: Arc::new(Mutex::new(nodes_map)),
+            nodes,
             websocket_proxy_addr,
             esplora,
             auth,
@@ -496,6 +500,53 @@ impl NodeManager {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn start_redshifts(nm: Arc<NodeManager>) {
+        spawn_local(async move {
+            loop {
+                // find redshifts with channels ready
+                let all = nm.storage.get_redshifts().unwrap();
+                for mut redshift in all {
+                    if redshift.status == RedshiftStatus::ChannelOpening {
+                        let node = {
+                            let nodes = nm.nodes.lock().await;
+                            nodes.get(&redshift.sending_node).unwrap().clone()
+                        };
+
+                        // check if channel is ready
+                        // using list_usable_channels because it checks for channel status
+                        if let Some(chan) = node
+                            .channel_manager
+                            .list_usable_channels()
+                            .iter()
+                            .find(|c| c.user_channel_id == u128::from_be_bytes(redshift.id))
+                        {
+                            // update redshift status and save to storage
+                            redshift
+                                .channel_opened(chan.funding_txo.unwrap().into_bitcoin_outpoint());
+                            nm.storage
+                                .persist_redshift(redshift.clone())
+                                .expect("failed to persist redshift");
+
+                            // start attempting payments
+                            let payment_nm = nm.clone();
+                            spawn_local(async move {
+                                if let Err(e) = payment_nm.attempt_payments(redshift).await {
+                                    log_error!(
+                                        payment_nm.logger,
+                                        "Error attempting redshift payments: {e}"
+                                    );
+                                }
+                            });
+                        }
+                    }
+                }
+
+                // sleep 10 seconds
+                sleep(10_000).await;
+            }
+        });
     }
 
     /// Broadcast a transaction to the network.
@@ -1179,13 +1230,16 @@ impl NodeManager {
     /// The UTXOs must all exist in the wallet.
     pub async fn sweep_utxos_to_channel(
         &self,
+        user_chan_id: Option<u128>,
         from_node: &PublicKey,
         utxos: &[OutPoint],
         to_pubkey: PublicKey,
     ) -> Result<MutinyChannel, MutinyError> {
         let node = self.get_node(from_node).await?;
 
-        let chan_id = node.sweep_utxos_to_channel(utxos, to_pubkey).await?;
+        let chan_id = node
+            .sweep_utxos_to_channel(user_chan_id, utxos, to_pubkey)
+            .await?;
 
         let all_channels = node.channel_manager.list_channels();
         let found_channel = all_channels.iter().find(|chan| chan.channel_id == chan_id);
