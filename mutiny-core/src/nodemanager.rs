@@ -509,10 +509,10 @@ impl NodeManager {
                 let all = nm.storage.get_redshifts().unwrap();
                 for mut redshift in all {
                     if redshift.status == RedshiftStatus::ChannelOpening {
-                        let node = {
-                            let nodes = nm.nodes.lock().await;
-                            nodes.get(&redshift.sending_node).unwrap().clone()
-                        };
+                        let node = nm
+                            .get_node(&redshift.sending_node)
+                            .await
+                            .expect("node not found");
 
                         // check if channel is ready
                         // using list_usable_channels because it checks for channel status
