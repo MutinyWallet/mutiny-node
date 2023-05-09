@@ -332,6 +332,7 @@ impl OnChainWallet {
         utxos: &[OutPoint],
         spk: Script,
         amount_sats: u64,
+        sat_per_kwu: u32,
         labels: Vec<String>,
     ) -> Result<PartiallySignedTransaction, MutinyError> {
         let mut wallet = self.wallet.try_write()?;
@@ -340,6 +341,7 @@ impl OnChainWallet {
             builder
                 .manually_selected_only()
                 .add_utxos(utxos)?
+                .fee_rate(FeeRate::from_sat_per_kwu(sat_per_kwu as f32))
                 .add_recipient(spk, amount_sats);
             builder.finish()?
         };

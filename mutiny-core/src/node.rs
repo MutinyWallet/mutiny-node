@@ -1,3 +1,4 @@
+use crate::fees::P2WSH_OUTPUT_SIZE;
 use crate::keymanager::PhantomKeysManager;
 use crate::labels::LabelStorage;
 use crate::ldkstorage::ChannelOpenParams;
@@ -24,7 +25,6 @@ use crate::{
 };
 use crate::{indexed_db::MutinyStorage, lspclient::FeeRequest};
 use anyhow::{anyhow, Context};
-use bdk::FeeRate;
 use bdk_esplora::esplora_client::AsyncClient;
 use bip39::Mnemonic;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
@@ -114,12 +114,6 @@ pub(crate) struct PubkeyConnectionInfo {
     pub connection_type: ConnectionType,
     pub original_connection_string: String,
 }
-
-// Constants for overhead, input, and output sizes
-const TX_OVERHEAD: usize = 10;
-const TAPROOT_INPUT_NON_WITNESS_SIZE: usize = 41;
-const TAPROOT_INPUT_WITNESS_SIZE: usize = 67;
-const P2WSH_OUTPUT_SIZE: usize = 43;
 
 impl PubkeyConnectionInfo {
     pub fn new(connection: &str) -> Result<Self, MutinyError> {
@@ -1007,22 +1001,17 @@ impl Node {
             total
         };
 
-        // Calculate the expected transaction fee
         let sats_per_kw = self
             .wallet
             .fees
             .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
-        let expected_weight = {
-            let num_utxos = utxos.len();
-            // Calculate the non-witness and witness data sizes
-            let non_witness_size =
-                TX_OVERHEAD + (num_utxos * TAPROOT_INPUT_NON_WITNESS_SIZE) + P2WSH_OUTPUT_SIZE;
-            let witness_size = num_utxos * TAPROOT_INPUT_WITNESS_SIZE;
-
-            // Calculate the transaction weight
-            (non_witness_size * 4) + witness_size
-        };
-        let expected_fee = FeeRate::from_sat_per_kwu(sats_per_kw as f32).fee_wu(expected_weight);
+        // Calculate the expected transaction fee
+        let expected_fee = self.wallet.fees.calculate_expected_fee(
+            utxos.len(),
+            P2WSH_OUTPUT_SIZE,
+            None,
+            Some(sats_per_kw),
+        );
 
         // channel size is the total value of the utxos minus the fee
         let channel_value_satoshis = utxo_value - expected_fee;

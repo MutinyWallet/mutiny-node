@@ -121,6 +121,7 @@ impl EventHandler {
                             &params.utxos,
                             output_script,
                             channel_value_satoshis,
+                            params.sats_per_kw,
                             params.labels.unwrap_or(vec![label]),
                         );
 
