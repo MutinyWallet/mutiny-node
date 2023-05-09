@@ -275,13 +275,23 @@ pub struct NodeManager {
     lnurl_client: LnUrlClient,
     pub(crate) lsp_clients: Vec<LspClient>,
     pub(crate) logger: Arc<MutinyLogger>,
+    #[cfg(test)]
+    db_prefix: String,
 }
 
 impl NodeManager {
     /// Returns if there is a saved wallet in storage.
     /// This is checked by seeing if a mnemonic seed exists in storage.
-    pub async fn has_node_manager() -> bool {
-        MutinyStorage::has_mnemonic().await.unwrap_or(false)
+    pub async fn has_node_manager(#[cfg(test)] db_prefix: String) -> bool {
+        #[cfg(test)]
+        let has = MutinyStorage::has_mnemonic(Some(db_prefix))
+            .await
+            .unwrap_or(false);
+
+        #[cfg(not(test))]
+        let has = MutinyStorage::has_mnemonic(None).await.unwrap_or(false);
+
+        has
     }
 
     /// Creates a new [NodeManager] with the given parameters.
@@ -297,7 +307,11 @@ impl NodeManager {
         // todo we should eventually have default mainnet
         let network: Network = c.network.unwrap_or(Network::Testnet);
 
-        let storage = MutinyStorage::new(c.password.clone()).await?;
+        #[cfg(test)]
+        let storage = MutinyStorage::new(c.password.clone(), Some(c.db_prefix.clone())).await?;
+
+        #[cfg(not(test))]
+        let storage = MutinyStorage::new(c.password.clone(), None).await?;
 
         let mnemonic = match c.mnemonic {
             Some(seed) => storage.insert_mnemonic(seed).await?,
@@ -310,7 +324,14 @@ impl NodeManager {
             },
         };
 
-        let logger = Arc::new(MutinyLogger::with_writer(stop.clone()));
+        #[cfg(test)]
+        let logger = Arc::new(MutinyLogger::with_writer(
+            stop.clone(),
+            Some(c.db_prefix.clone()),
+        ));
+
+        #[cfg(not(test))]
+        let logger = Arc::new(MutinyLogger::with_writer(stop.clone(), None));
 
         let esplora_server_url = get_esplora_url(network, c.user_esplora_url);
         let tx_sync = Arc::new(EsploraSyncClient::new(esplora_server_url, logger.clone()));
@@ -456,6 +477,8 @@ impl NodeManager {
             lnurl_client,
             lsp_clients,
             logger,
+            #[cfg(test)]
+            db_prefix: c.db_prefix,
         };
 
         Ok(nm)
@@ -1382,7 +1405,13 @@ impl NodeManager {
 
     /// Retrieves the logs from storage.
     pub async fn get_logs(&self) -> Result<Option<Vec<String>>, MutinyError> {
-        self.logger.get_logs().await
+        #[cfg(test)]
+        let logs = self.logger.get_logs(Some(self.db_prefix.clone())).await;
+
+        #[cfg(not(test))]
+        let logs = self.logger.get_logs(None).await;
+
+        logs
     }
 
     /// Exports the current state of the node manager to a json object.
@@ -1406,7 +1435,7 @@ impl NodeManager {
 
     /// Restore a node manager from a json object.
     pub async fn import_json(json: serde_json::Value) -> Result<(), MutinyError> {
-        MutinyStorage::import(json).await?;
+        MutinyStorage::import(json, None).await?;
         Ok(())
     }
 
@@ -1554,9 +1583,10 @@ mod tests {
 
     #[test]
     async fn create_node_manager() {
-        log!("creating node manager!");
+        let test_name = "create_node_manager";
+        log!("{}", test_name);
 
-        assert!(!NodeManager::has_node_manager().await);
+        assert!(!NodeManager::has_node_manager(test_name.to_string()).await);
         let c = MutinyWalletConfig::new(
             "password".to_string(),
             None,
@@ -1565,18 +1595,18 @@ mod tests {
             None,
             None,
             None,
+            test_name.to_string(),
         );
         NodeManager::new(c)
             .await
             .expect("node manager should initialize");
-        assert!(NodeManager::has_node_manager().await);
-
-        cleanup_all().await;
+        assert!(NodeManager::has_node_manager(test_name.to_string()).await);
     }
 
     #[test]
     async fn correctly_show_seed() {
-        log!("showing seed");
+        let test_name = "correctly_show_seed";
+        log!("{}", test_name);
 
         let seed = generate_seed(12).expect("Failed to gen seed");
         let c = MutinyWalletConfig::new(
@@ -1587,18 +1617,18 @@ mod tests {
             None,
             None,
             None,
+            test_name.to_string(),
         );
         let nm = NodeManager::new(c).await.unwrap();
 
-        assert!(NodeManager::has_node_manager().await);
+        assert!(NodeManager::has_node_manager(test_name.to_string()).await);
         assert_eq!(seed, nm.show_seed());
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn created_new_nodes() {
-        log!("creating new nodes");
+        let test_name = "created_new_nodes";
+        log!("{}", test_name);
 
         let seed = generate_seed(12).expect("Failed to gen seed");
         let c = MutinyWalletConfig::new(
@@ -1609,6 +1639,7 @@ mod tests {
             None,
             None,
             None,
+            test_name.to_string(),
         );
         let nm = NodeManager::new(c)
             .await
@@ -1636,8 +1667,6 @@ mod tests {
             let retrieved_node = node_storage.nodes.get(&node_identity.uuid).unwrap();
             assert_eq!(1, retrieved_node.child_index);
         }
-
-        cleanup_all().await;
     }
 
     #[test]

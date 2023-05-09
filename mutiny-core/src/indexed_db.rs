@@ -33,11 +33,17 @@ pub struct MutinyStorage {
     /// This is a RwLock because we want to be able to read from it without blocking
     memory: Arc<RwLock<HashMap<String, serde_json::Value>>>,
     pub(crate) indexed_db: Arc<RwLock<Option<Rexie>>>,
+    db_prefix: Option<String>,
 }
 
 impl MutinyStorage {
-    pub async fn new(password: String) -> Result<MutinyStorage, MutinyError> {
-        let indexed_db = Arc::new(RwLock::new(Some(Self::build_indexed_db_database().await?)));
+    pub async fn new(
+        password: String,
+        db_prefix: Option<String>,
+    ) -> Result<MutinyStorage, MutinyError> {
+        let indexed_db = Arc::new(RwLock::new(Some(
+            Self::build_indexed_db_database(db_prefix.clone()).await?,
+        )));
 
         // If the password is empty, set to None
         let password = Some(password).filter(|pw| !pw.is_empty());
@@ -49,11 +55,14 @@ impl MutinyStorage {
             password,
             memory,
             indexed_db,
+            db_prefix,
         })
     }
 
     pub async fn start(&mut self) -> Result<(), MutinyError> {
-        let indexed_db = Arc::new(RwLock::new(Some(Self::build_indexed_db_database().await?)));
+        let indexed_db = Arc::new(RwLock::new(Some(
+            Self::build_indexed_db_database(self.db_prefix.clone()).await?,
+        )));
         let map = Self::read_all(indexed_db.clone(), &self.password).await?;
         let memory = Arc::new(RwLock::new(map));
         self.indexed_db = indexed_db;
@@ -332,8 +341,8 @@ impl MutinyStorage {
         Ok(())
     }
 
-    pub(crate) async fn has_mnemonic() -> Result<bool, MutinyError> {
-        let indexed_db = Self::build_indexed_db_database().await?;
+    pub(crate) async fn has_mnemonic(db_prefix: Option<String>) -> Result<bool, MutinyError> {
+        let indexed_db = Self::build_indexed_db_database(db_prefix).await?;
         let tx = indexed_db.transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadOnly)?;
         let store = tx.store(WALLET_OBJECT_STORE_NAME)?;
 
@@ -344,8 +353,11 @@ impl MutinyStorage {
         Ok(value.is_some())
     }
 
-    async fn build_indexed_db_database() -> Result<Rexie, MutinyError> {
-        let rexie = Rexie::builder(WALLET_DATABASE_NAME)
+    async fn build_indexed_db_database(db_prefix: Option<String>) -> Result<Rexie, MutinyError> {
+        let db_name = db_prefix
+            .map(|prefix| format!("{}_{}", prefix, WALLET_DATABASE_NAME))
+            .unwrap_or_else(|| String::from(WALLET_DATABASE_NAME));
+        let rexie = Rexie::builder(&db_name)
             .version(1)
             .add_object_store(ObjectStore::new(WALLET_OBJECT_STORE_NAME))
             .build()
@@ -407,9 +419,12 @@ impl MutinyStorage {
         }
     }
 
-    pub(crate) async fn import(json: serde_json::Value) -> Result<(), MutinyError> {
-        Self::clear().await?;
-        let indexed_db = Self::build_indexed_db_database().await?;
+    pub(crate) async fn import(
+        json: serde_json::Value,
+        db_prefix: Option<String>,
+    ) -> Result<(), MutinyError> {
+        Self::clear(db_prefix.clone()).await?;
+        let indexed_db = Self::build_indexed_db_database(db_prefix).await?;
         let tx = indexed_db.transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)?;
         let store = tx.store(WALLET_OBJECT_STORE_NAME)?;
 
@@ -431,8 +446,8 @@ impl MutinyStorage {
         Ok(())
     }
 
-    pub(crate) async fn clear() -> Result<(), MutinyError> {
-        let indexed_db = Self::build_indexed_db_database().await?;
+    pub(crate) async fn clear(db_prefix: Option<String>) -> Result<(), MutinyError> {
+        let indexed_db = Self::build_indexed_db_database(db_prefix).await?;
         let tx = indexed_db.transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)?;
         let store = tx.store(WALLET_OBJECT_STORE_NAME)?;
 
@@ -502,33 +517,33 @@ mod tests {
 
     #[test]
     async fn insert_and_get_mnemonic_no_password() {
-        log!("insert and get mnemonic!");
-        cleanup_all().await;
+        let test_name = "insert_and_get_mnemonic_no_password";
+        log!("{}", test_name);
 
         let seed = keymanager::generate_seed(12).unwrap();
 
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let mnemonic = storage.insert_mnemonic(seed).await.unwrap();
 
         let stored_mnemonic = storage.get_mnemonic().await.unwrap();
         assert_eq!(mnemonic, stored_mnemonic);
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn insert_and_get_mnemonic_with_password() {
-        log!("insert and get mnemonic with password!");
-        cleanup_all().await;
+        let test_name = "insert_and_get_mnemonic_with_password";
+        log!("{}", test_name);
 
         let seed = keymanager::generate_seed(12).unwrap();
 
-        let storage = MutinyStorage::new("password".to_string()).await.unwrap();
+        let storage = MutinyStorage::new("password".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let mnemonic = storage.insert_mnemonic(seed).await.unwrap();
 
         let stored_mnemonic = storage.get_mnemonic().await.unwrap();
         assert_eq!(mnemonic, stored_mnemonic);
-
-        cleanup_all().await;
     }
 }

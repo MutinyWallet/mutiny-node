@@ -430,7 +430,7 @@ pub(crate) fn get_rgs_url(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::cleanup_all;
+    use crate::test_utils::*;
     use bitcoin::Address;
     use esplora_client::Builder;
     use std::str::FromStr;
@@ -438,13 +438,18 @@ mod tests {
     wasm_bindgen_test_configure!(run_in_browser);
 
     async fn create_wallet() -> OnChainWallet {
+        let test_name = "create_wallet";
+        log!("{}", test_name);
+
         let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
         let esplora = Arc::new(
             Builder::new("https://blockstream.info/testnet/api/")
                 .build_async()
                 .unwrap(),
         );
-        let db = MutinyStorage::new("".to_string()).await.unwrap();
+        let db = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let logger = Arc::new(MutinyLogger::default());
         let fees = Arc::new(MutinyFeeEstimator::new(
             db.clone(),
@@ -458,7 +463,6 @@ mod tests {
     #[test]
     async fn test_create_wallet() {
         let _wallet = create_wallet().await;
-        cleanup_all().await;
     }
 
     #[test]
@@ -482,26 +486,18 @@ mod tests {
         let result = wallet.label_psbt(&psbt, vec![label.clone()]);
         assert!(result.is_ok());
 
-        let expected_labels = vec![prev_label.clone(), label.clone()];
+        let expected_labels = vec![prev_label, label.clone()];
 
         let addr_labels = wallet.storage.get_address_labels().unwrap();
         assert_eq!(addr_labels.len(), 3);
-        assert_eq!(
-            addr_labels.get(&send_to_addr),
-            Some(&expected_labels.clone())
-        );
-        assert_eq!(
-            addr_labels.get(&change_addr),
-            Some(&expected_labels.clone())
-        );
+        assert_eq!(addr_labels.get(&send_to_addr), Some(&expected_labels));
+        assert_eq!(addr_labels.get(&change_addr), Some(&expected_labels));
 
         let label = wallet.storage.get_label(&label).unwrap();
         assert!(label.is_some());
         assert_eq!(label.clone().unwrap().addresses.len(), 3);
         assert!(label.clone().unwrap().addresses.contains(&input_addr));
         assert!(label.clone().unwrap().addresses.contains(&send_to_addr));
-        assert!(label.clone().unwrap().addresses.contains(&change_addr));
-
-        cleanup_all().await;
+        assert!(label.unwrap().addresses.contains(&change_addr));
     }
 }

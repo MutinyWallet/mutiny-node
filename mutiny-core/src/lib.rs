@@ -47,9 +47,12 @@ pub struct MutinyWalletConfig {
     user_esplora_url: Option<String>,
     user_rgs_url: Option<String>,
     lsp_url: Option<String>,
+    #[cfg(test)]
+    db_prefix: String,
 }
 
 impl MutinyWalletConfig {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         password: String,
         mnemonic: Option<Mnemonic>,
@@ -58,6 +61,7 @@ impl MutinyWalletConfig {
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
+        #[cfg(test)] db_prefix: String,
     ) -> Self {
         Self {
             password,
@@ -67,6 +71,8 @@ impl MutinyWalletConfig {
             user_esplora_url,
             user_rgs_url,
             lsp_url,
+            #[cfg(test)]
+            db_prefix,
         }
     }
 }
@@ -81,6 +87,7 @@ pub struct MutinyWallet {
 }
 
 impl MutinyWallet {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         password: String,
         mnemonic: Option<Mnemonic>,
@@ -89,6 +96,7 @@ impl MutinyWallet {
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
+        #[cfg(test)] db_prefix: String,
     ) -> Result<MutinyWallet, MutinyError> {
         let config = MutinyWalletConfig::new(
             password,
@@ -98,6 +106,8 @@ impl MutinyWallet {
             user_esplora_url,
             user_rgs_url,
             lsp_url,
+            #[cfg(test)]
+            db_prefix,
         );
 
         let node_manager = Arc::new(NodeManager::new(config.clone()).await?);
@@ -137,10 +147,10 @@ mod tests {
 
     #[test]
     async fn create_mutiny_wallet() {
-        log!("creating mutiny wallet!");
-        cleanup_all().await;
+        let test_name = "create_mutiny_wallet";
+        log!("{}", test_name);
 
-        assert!(!NodeManager::has_node_manager().await);
+        assert!(!NodeManager::has_node_manager(test_name.to_string()).await);
         MutinyWallet::new(
             "".to_string(),
             None,
@@ -149,20 +159,19 @@ mod tests {
             None,
             None,
             None,
+            test_name.to_string(),
         )
         .await
         .expect("mutiny wallet should initialize");
-        assert!(NodeManager::has_node_manager().await);
-
-        cleanup_all().await;
+        assert!(NodeManager::has_node_manager(test_name.to_string()).await);
     }
 
     #[test]
     async fn restart_mutiny_wallet() {
-        log!("restarting mutiny wallet!");
-        cleanup_all().await;
+        let test_name = "restart_mutiny_wallet";
+        log!("{}", test_name);
 
-        assert!(!NodeManager::has_node_manager().await);
+        assert!(!NodeManager::has_node_manager(test_name.to_string()).await);
         let mut mw = MutinyWallet::new(
             "".to_string(),
             None,
@@ -171,26 +180,25 @@ mod tests {
             None,
             None,
             None,
+            test_name.to_string(),
         )
         .await
         .expect("mutiny wallet should initialize");
-        assert!(NodeManager::has_node_manager().await);
+        assert!(NodeManager::has_node_manager(test_name.to_string()).await);
 
         let first_seed = mw.node_manager.show_seed();
 
         assert!(mw.stop().await.is_ok());
         assert!(mw.start().await.is_ok());
         assert_eq!(first_seed, mw.node_manager.show_seed());
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn restart_mutiny_wallet_with_nodes() {
-        log!("restarting mutiny wallet with nodes!");
-        cleanup_all().await;
+        let test_name = "restart_mutiny_wallet_with_nodes";
+        log!("{}", test_name);
 
-        assert!(!NodeManager::has_node_manager().await);
+        assert!(!NodeManager::has_node_manager(test_name.to_string()).await);
         let mut mw = MutinyWallet::new(
             "".to_string(),
             None,
@@ -199,10 +207,11 @@ mod tests {
             None,
             None,
             None,
+            test_name.to_string(),
         )
         .await
         .expect("mutiny wallet should initialize");
-        assert!(NodeManager::has_node_manager().await);
+        assert!(NodeManager::has_node_manager(test_name.to_string()).await);
 
         assert!(mw.node_manager.list_nodes().await.unwrap().is_empty());
         assert!(mw.node_manager.new_node().await.is_ok());
@@ -211,7 +220,5 @@ mod tests {
         assert!(mw.stop().await.is_ok());
         assert!(mw.start().await.is_ok());
         assert!(!mw.node_manager.list_nodes().await.unwrap().is_empty());
-
-        cleanup_all().await;
     }
 }

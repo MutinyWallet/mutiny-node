@@ -219,7 +219,8 @@ mod tests {
 
     #[test]
     async fn derive_pubkey_child_from_seed() {
-        log!("creating pubkeys from a child seed");
+        let test_name = "derive_pubkey_child_from_seed";
+        log!("{}", test_name);
 
         let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
         let esplora = Arc::new(
@@ -227,7 +228,9 @@ mod tests {
                 .build_async()
                 .unwrap(),
         );
-        let db = MutinyStorage::new("".to_string()).await.unwrap();
+        let db = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let logger = Arc::new(MutinyLogger::default());
         let fees = Arc::new(MutinyFeeEstimator::new(
             db.clone(),
@@ -257,6 +260,5 @@ mod tests {
         let second_pubkey_again = pubkey_from_keys_manager(&km);
 
         assert_eq!(second_pubkey, second_pubkey_again);
-        cleanup_all().await;
     }
 }

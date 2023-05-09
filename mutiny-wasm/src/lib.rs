@@ -755,7 +755,7 @@ mod tests {
         .expect("mutiny wallet should initialize");
         assert!(MutinyWallet::has_node_manager().await);
 
-        cleanup_all().await;
+        cleanup_all(None).await;
     }
 
     #[test]
@@ -781,7 +781,7 @@ mod tests {
         assert!(MutinyWallet::has_node_manager().await);
         assert_eq!(seed.to_string(), nm.show_seed());
 
-        cleanup_all().await;
+        cleanup_all(None).await;
     }
 
     #[test]
@@ -816,6 +816,6 @@ mod tests {
         assert_ne!("", node_identity.uuid());
         assert_ne!("", node_identity.pubkey());
 
-        cleanup_all().await;
+        cleanup_all(None).await;
     }
 }

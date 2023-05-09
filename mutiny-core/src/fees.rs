@@ -170,8 +170,10 @@ mod test {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
-    async fn create_fee_estimator() -> MutinyFeeEstimator {
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+    async fn create_fee_estimator(db_prefix: String) -> MutinyFeeEstimator {
+        let storage = MutinyStorage::new("".to_string(), Some(db_prefix))
+            .await
+            .unwrap();
         let esplora = Arc::new(
             Builder::new("https://mutinynet.com/api")
                 .build_async()
@@ -213,7 +215,10 @@ mod test {
 
     #[test]
     async fn test_update_fee_estimates() {
-        let fee_estimator = create_fee_estimator().await;
+        let test_name = "test_update_fee_estimates";
+        log!("{}", test_name);
+
+        let fee_estimator = create_fee_estimator(test_name.to_string()).await;
         fee_estimator.update_fee_estimates().await.unwrap();
 
         let fee_estimates = fee_estimator.storage.get_fee_estimates().unwrap().unwrap();
@@ -221,13 +226,14 @@ mod test {
         assert!(fee_estimates.get("3").is_some());
         assert!(fee_estimates.get("6").is_some());
         assert!(fee_estimates.get("12").is_some());
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn test_get_est_sat_per_1000_weight() {
-        let fee_estimator = create_fee_estimator().await;
+        let test_name = "test_get_est_sat_per_1000_weight";
+        log!("{}", test_name);
+
+        let fee_estimator = create_fee_estimator(test_name.to_string()).await;
         // set up the cache
         let mut fee_estimates = HashMap::new();
         fee_estimates.insert("6".to_string(), 10_f64);
@@ -251,13 +257,14 @@ mod test {
             fee_estimator.get_est_sat_per_1000_weight(ConfirmationTarget::HighPriority),
             5000
         );
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn test_estimate_expected_fee() {
-        let fee_estimator = create_fee_estimator().await;
+        let test_name = "test_estimate_expected_fee";
+        log!("{}", test_name);
+
+        let fee_estimator = create_fee_estimator(test_name.to_string()).await;
 
         assert_eq!(
             fee_estimator.calculate_expected_fee(

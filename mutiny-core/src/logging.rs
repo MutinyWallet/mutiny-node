@@ -26,7 +26,7 @@ pub struct MutinyLogger {
 }
 
 impl MutinyLogger {
-    pub(crate) fn with_writer(stop: Arc<AtomicBool>) -> Self {
+    pub(crate) fn with_writer(stop: Arc<AtomicBool>, db_prefix: Option<String>) -> Self {
         let l = MutinyLogger {
             should_write_to_storage: true,
             memory_logs: Arc::new(Mutex::new(vec![])),
@@ -34,7 +34,7 @@ impl MutinyLogger {
 
         let log_copy = l.clone();
         spawn_local(async move {
-            let logging_db = build_logging_database().await;
+            let logging_db = build_logging_database(db_prefix).await;
             if logging_db.is_err() {
                 error!("could not build logging database, log entries will be lost");
                 return;
@@ -80,11 +80,14 @@ impl MutinyLogger {
         l
     }
 
-    pub(crate) async fn get_logs(&self) -> Result<Option<Vec<String>>, MutinyError> {
+    pub(crate) async fn get_logs(
+        &self,
+        db_prefix: Option<String>,
+    ) -> Result<Option<Vec<String>>, MutinyError> {
         if !self.should_write_to_storage {
             return Ok(None);
         }
-        let logging_db = build_logging_database().await?;
+        let logging_db = build_logging_database(db_prefix).await?;
         get_logging_data(&logging_db).await
     }
 }
@@ -132,12 +135,14 @@ impl Logger for MutinyLogger {
     }
 }
 
-async fn build_logging_database() -> Result<Rexie, MutinyError> {
-    // Create a new database
-    let rexie = Rexie::builder(LOGGING_DATABASE_NAME)
+async fn build_logging_database(db_prefix: Option<String>) -> Result<Rexie, MutinyError> {
+    let db_name = db_prefix
+        .map(|prefix| format!("{}_{}", prefix, LOGGING_DATABASE_NAME))
+        .unwrap_or_else(|| String::from(LOGGING_DATABASE_NAME));
+
+    let rexie = Rexie::builder(&db_name)
         .version(1)
         .add_object_store(ObjectStore::new(LOGGING_OBJECT_STORE_NAME))
-        // Build the database
         .build()
         .await?;
 
@@ -145,8 +150,8 @@ async fn build_logging_database() -> Result<Rexie, MutinyError> {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-pub(crate) async fn clear() -> Result<(), MutinyError> {
-    let indexed_db = build_logging_database().await?;
+pub(crate) async fn clear(db_prefix: Option<String>) -> Result<(), MutinyError> {
+    let indexed_db = build_logging_database(db_prefix).await?;
     let tx = indexed_db.transaction(&[LOGGING_OBJECT_STORE_NAME], TransactionMode::ReadWrite)?;
     let store = tx.store(LOGGING_OBJECT_STORE_NAME)?;
 
@@ -239,28 +244,33 @@ mod tests {
 
     #[test]
     async fn log_without_storage() {
-        log!("log without storage");
-        cleanup_all().await;
+        let test_name = "log_without_storage";
+        log!("{}", test_name);
 
         let logger = MutinyLogger::default();
-        assert_eq!(logger.get_logs().await.unwrap(), None);
+        assert_eq!(
+            logger.get_logs(Some(test_name.to_string())).await.unwrap(),
+            None
+        );
 
         log_debug!(logger, "testing");
 
         // saves every 5s, so do one second later
         sleep(6_000).await;
 
-        assert_eq!(logger.get_logs().await.unwrap(), None);
-        cleanup_all().await;
+        assert_eq!(
+            logger.get_logs(Some(test_name.to_string())).await.unwrap(),
+            None
+        );
     }
 
     #[test]
     async fn log_with_storage() {
-        log!("log with storage");
-        cleanup_all().await;
+        let test_name = "log_with_storage";
+        log!("{}", test_name);
 
         let stop = Arc::new(AtomicBool::new(false));
-        let logger = MutinyLogger::with_writer(stop.clone());
+        let logger = MutinyLogger::with_writer(stop.clone(), Some(test_name.to_string()));
 
         let log_str = "testing logging with storage";
         log_debug!(logger, "{}", log_str);
@@ -269,14 +279,14 @@ mod tests {
         sleep(6_000).await;
 
         assert!(logger
-            .get_logs()
+            .get_logs(Some(test_name.to_string()))
             .await
             .unwrap()
             .unwrap()
-            .iter()
-            .any(|s| s.contains(log_str)));
+            .first()
+            .unwrap()
+            .contains(log_str));
 
         stop.swap(true, Ordering::Relaxed);
-        cleanup_all().await;
     }
 }
