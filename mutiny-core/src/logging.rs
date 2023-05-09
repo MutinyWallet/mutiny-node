@@ -17,7 +17,7 @@ pub(crate) const LOGGING_DATABASE_NAME: &str = "logging";
 pub(crate) const LOGGING_OBJECT_STORE_NAME: &str = "log_store";
 pub(crate) const LOGGING_KEY: &str = "logs";
 
-const MAX_LOG_ITEMS: usize = 1_000;
+const MAX_LOG_ITEMS: usize = 10_000;
 
 #[derive(Clone)]
 pub struct MutinyLogger {
