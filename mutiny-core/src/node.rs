@@ -879,13 +879,9 @@ impl Node {
         to_node: PublicKey,
         amt_sats: u64,
     ) -> Result<MutinyInvoice, MutinyError> {
-        let mut entropy = [0u8; 32];
-        getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
-        let payment_id = PaymentId(entropy);
+        let payment_id = PaymentId(self.keys_manager.get_secure_random_bytes());
 
-        let mut entropy = [0u8; 32];
-        getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
-        let preimage = PaymentPreimage(entropy);
+        let preimage = PaymentPreimage(self.keys_manager.get_secure_random_bytes());
 
         let amt_msats = amt_sats * 1000;
 
@@ -1039,7 +1035,8 @@ impl Node {
         let user_channel_id = user_chan_id.unwrap_or_else(|| {
             // generate random user channel id
             let mut user_channel_id_bytes = [0u8; 16];
-            getrandom::getrandom(&mut user_channel_id_bytes).unwrap();
+            user_channel_id_bytes
+                .copy_from_slice(&self.keys_manager.get_secure_random_bytes()[..16]);
             u128::from_be_bytes(user_channel_id_bytes)
         });
 
@@ -1394,9 +1391,8 @@ pub(crate) fn create_peer_manager(
     lightning_msg_handler: MessageHandler,
     logger: Arc<MutinyLogger>,
 ) -> PeerManagerImpl {
-    let now = crate::utils::now().as_secs();
-    let mut ephemeral_bytes = [0u8; 32];
-    getrandom::getrandom(&mut ephemeral_bytes).expect("Failed to generate entropy");
+    let now = utils::now().as_secs();
+    let ephemeral_bytes = km.get_secure_random_bytes();
 
     PeerManagerImpl::new(
         lightning_msg_handler,

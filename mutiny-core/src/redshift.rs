@@ -7,6 +7,7 @@ use anyhow::anyhow;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, OutPoint};
+use lightning::chain::keysinterface::EntropySource;
 use lightning::{log_debug, log_error, log_info};
 use lightning::{log_warn, util::logger::Logger};
 use serde::{Deserialize, Serialize};
@@ -194,6 +195,7 @@ impl RedshiftManager for NodeManager {
 
         sleep(NEW_NODE_SLEEP_DURATION).await;
 
+        let node = self.get_node(&node.pubkey).await?;
         // connect to introduction node
         let introduction_node = match (introduction_node, connection_string) {
             (Some(i), Some(c)) => {
@@ -203,8 +205,6 @@ impl RedshiftManager for NodeManager {
                 i
             }
             (Some(i), None) => {
-                let node = self.get_node(&node.pubkey).await?;
-
                 if node.peer_manager.get_peer_node_ids().contains(&i) {
                     i
                 } else {
@@ -215,7 +215,6 @@ impl RedshiftManager for NodeManager {
             }
             _ => {
                 // TODO this would be better if it was a random node
-                let node = self.get_node(&node.pubkey).await?;
                 match &node.lsp_client {
                     Some(lsp) => lsp.pubkey,
                     None => return Err(MutinyError::LspFailure),
@@ -225,8 +224,7 @@ impl RedshiftManager for NodeManager {
 
         // generate random user channel id
         let mut user_channel_id_bytes = [0u8; 16];
-        getrandom::getrandom(&mut user_channel_id_bytes)
-            .map_err(|_| MutinyError::Other(anyhow!("Failed to generate user channel id")))?;
+        user_channel_id_bytes.copy_from_slice(&node.keys_manager.get_secure_random_bytes()[..16]);
         let user_chan_id = u128::from_be_bytes(user_channel_id_bytes);
 
         // initiate channel open

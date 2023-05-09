@@ -8,7 +8,7 @@ use anyhow::anyhow;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
-use lightning::chain::keysinterface::SpendableOutputDescriptor;
+use lightning::chain::keysinterface::{EntropySource, SpendableOutputDescriptor};
 use lightning::events::{Event, PaymentPurpose};
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
@@ -300,12 +300,8 @@ impl EventHandler {
                 );
 
                 let mut internal_channel_id_bytes = [0u8; 16];
-                if getrandom::getrandom(&mut internal_channel_id_bytes).is_err() {
-                    log_debug!(
-                        self.logger,
-                        "EVENT: OpenChannelRequest failed random number generation"
-                    );
-                };
+                internal_channel_id_bytes
+                    .copy_from_slice(&self.keys_manager.get_secure_random_bytes()[..16]);
                 let internal_channel_id = u128::from_be_bytes(internal_channel_id_bytes);
 
                 let log_result = |result: Result<(), APIError>| match result {
