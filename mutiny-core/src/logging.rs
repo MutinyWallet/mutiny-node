@@ -113,7 +113,7 @@ impl Logger for MutinyLogger {
             raw_log
         );
 
-        if self.should_write_to_storage {
+        if self.should_write_to_storage && record.level >= Level::Debug {
             if let Ok(mut memory_logs) = self.memory_logs.lock() {
                 memory_logs.push(log.clone());
             } else {
