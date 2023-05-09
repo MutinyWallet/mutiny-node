@@ -359,7 +359,7 @@ mod tests {
     use std::collections::HashMap;
     use std::str::FromStr;
 
-    use crate::test_utils::cleanup_wallet_test;
+    use crate::test_utils::cleanup_all;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
     wasm_bindgen_test_configure!(run_in_browser);
 
@@ -472,7 +472,7 @@ mod tests {
         let result = storage.get_address_labels();
         assert_eq!(result.unwrap(), labels_map);
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -486,7 +486,7 @@ mod tests {
         let result = storage.get_invoice_labels();
         assert_eq!(result.unwrap(), labels_map);
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -507,7 +507,7 @@ mod tests {
 
         assert_eq!(result, labels);
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -522,7 +522,7 @@ mod tests {
         let result = storage.get_label(&label);
         assert_eq!(result.unwrap(), labels.get(&label).cloned());
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -537,7 +537,7 @@ mod tests {
         let address_labels = storage.get_address_labels().unwrap();
         assert_eq!(address_labels.get(&address), Some(&labels));
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -552,7 +552,7 @@ mod tests {
         let invoice_labels = storage.get_invoice_labels().unwrap();
         assert_eq!(invoice_labels.get(&invoice), Some(&labels));
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -573,7 +573,7 @@ mod tests {
 
         assert_eq!(result, contacts);
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -591,7 +591,7 @@ mod tests {
         let result = storage.get_contact(&id).unwrap();
         assert_eq!(result.unwrap(), contact);
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -645,7 +645,7 @@ mod tests {
         let label_item = storage.get_label(&label).unwrap();
         assert!(label_item.is_none());
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -660,7 +660,7 @@ mod tests {
         let stored_contact = storage.get_contact(id).unwrap();
         assert_eq!(stored_contact, Some(contact));
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -695,6 +695,6 @@ mod tests {
 
         assert_eq!(result, expected_tag_items);
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 }

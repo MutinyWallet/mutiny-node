@@ -693,6 +693,14 @@ impl MutinyWallet {
 
     /// Exports the current state of the node manager to a json object.
     #[wasm_bindgen]
+    pub async fn get_logs(&self) -> Result<JsValue /* Option<Vec<String>> */, MutinyJsError> {
+        Ok(JsValue::from_serde(
+            &self.inner.node_manager.get_logs().await?,
+        )?)
+    }
+
+    /// Exports the current state of the node manager to a json object.
+    #[wasm_bindgen]
     pub async fn export_json(&self) -> Result<String, MutinyJsError> {
         let json = self.inner.node_manager.export_json().await?;
         Ok(serde_json::to_string(&json)?)
@@ -747,7 +755,7 @@ mod tests {
         .expect("mutiny wallet should initialize");
         assert!(MutinyWallet::has_node_manager().await);
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -773,7 +781,7 @@ mod tests {
         assert!(MutinyWallet::has_node_manager().await);
         assert_eq!(seed.to_string(), nm.show_seed());
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -808,6 +816,6 @@ mod tests {
         assert_ne!("", node_identity.uuid());
         assert_ne!("", node_identity.pubkey());
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 }

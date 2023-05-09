@@ -184,7 +184,7 @@ mod test {
         assert!(fee_estimates.get("6").is_some());
         assert!(fee_estimates.get("12").is_some());
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -218,6 +218,6 @@ mod test {
             5000
         );
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 }

@@ -428,7 +428,7 @@ pub(crate) fn get_rgs_url(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::cleanup_wallet_test;
+    use crate::test_utils::cleanup_all;
     use bitcoin::Address;
     use esplora_client::Builder;
     use std::str::FromStr;
@@ -456,7 +456,7 @@ mod tests {
     #[test]
     async fn test_create_wallet() {
         let _wallet = create_wallet().await;
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -500,6 +500,6 @@ mod tests {
         assert!(label.clone().unwrap().addresses.contains(&send_to_addr));
         assert!(label.clone().unwrap().addresses.contains(&change_addr));
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 }

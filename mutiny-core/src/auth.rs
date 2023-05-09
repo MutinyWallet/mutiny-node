@@ -216,7 +216,7 @@ impl AuthManager {
 #[cfg(test)]
 mod test {
     use crate::keymanager::generate_seed;
-    use crate::test_utils::cleanup_wallet_test;
+    use crate::test_utils::cleanup_all;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::Network;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
@@ -225,7 +225,7 @@ mod test {
     use super::*;
 
     async fn create_manager() -> AuthManager {
-        cleanup_wallet_test().await;
+        cleanup_all().await;
 
         let storage = MutinyStorage::new("".to_string()).await.unwrap();
         let mnemonic = generate_seed(12).unwrap();
@@ -273,7 +273,7 @@ mod test {
             .verify_ecdsa(&Message::from_slice(&k1).unwrap(), &sig, &pk)
             .unwrap();
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -291,7 +291,7 @@ mod test {
             .used_services
             .contains(&url.host().unwrap().to_string()));
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 
     #[test]
@@ -312,6 +312,6 @@ mod test {
         let profiles = auth.get_profiles().unwrap();
         assert_eq!(profiles.len(), 2);
 
-        cleanup_wallet_test().await;
+        cleanup_all().await;
     }
 }

@@ -1,4 +1,4 @@
-use gloo_storage::{LocalStorage, Storage};
+use futures::join;
 
 #[allow(unused_macros)]
 macro_rules! log {
@@ -10,19 +10,25 @@ macro_rules! log {
 pub(crate) use log;
 use rexie::Rexie;
 
-use crate::gossip::GOSSIP_DATABASE_NAME;
 use crate::indexed_db::MutinyStorage;
+use crate::{gossip::GOSSIP_DATABASE_NAME, logging};
 
-pub fn cleanup_test() {
-    LocalStorage::clear();
-}
-
-pub async fn cleanup_gossip_test() {
-    cleanup_test();
+async fn cleanup_gossip_test() {
     Rexie::delete(GOSSIP_DATABASE_NAME).await.unwrap();
 }
 
-pub async fn cleanup_wallet_test() {
-    cleanup_test();
+async fn cleanup_wallet_test() {
     MutinyStorage::clear().await.unwrap();
+}
+
+async fn cleanup_logging_test() {
+    logging::clear().await.unwrap();
+}
+
+pub async fn cleanup_all() {
+    let cleanup_gossip = cleanup_gossip_test();
+    let cleanup_wallet = cleanup_wallet_test();
+    let cleanup_logging = cleanup_logging_test();
+
+    join!(cleanup_gossip, cleanup_wallet, cleanup_logging);
 }
