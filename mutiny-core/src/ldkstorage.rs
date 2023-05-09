@@ -350,6 +350,8 @@ fn channel_open_params_key(id: u128) -> String {
 pub(crate) struct ChannelOpenParams {
     pub sats_per_kw: u32,
     pub utxos: Vec<bitcoin::OutPoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
 }
 
 fn payment_key(inbound: bool, payment_hash: &PaymentHash) -> String {

@@ -102,7 +102,7 @@ pub enum MutinyJsError {
     /// A error with WasmBindgen
     #[error("Failed to execute a wasm_bindgen function")]
     WasmBindgenError,
-    /// Unknown error.
+    /// Invalid Arguments were given
     #[error("Invalid Arguments were given")]
     InvalidArgumentsError,
     /// Unknown error.

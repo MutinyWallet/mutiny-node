@@ -353,7 +353,7 @@ impl RedshiftManager for NodeManager {
 
             // get an invoice from the receiving node
             let invoice = match receiving_node
-                .create_invoice(Some(local_max_sats), None, None)
+                .create_invoice(Some(local_max_sats), vec!["Redshift".to_string()], None)
                 .await
             {
                 Ok(i) => i,

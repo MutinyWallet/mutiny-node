@@ -1,8 +1,11 @@
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::{Address, OutPoint};
+use bitcoin::{Address, OutPoint, XOnlyPublicKey};
 use gloo_utils::format::JsValueSerdeExt;
 use lightning_invoice::Invoice;
+use lnurl::lightning_address::LightningAddress;
+use lnurl::lnurl::LnUrl;
+use mutiny_core::labels::Contact as MutinyContact;
 use mutiny_core::redshift::{RedshiftRecipient, RedshiftStatus};
 use mutiny_core::*;
 use serde::{Deserialize, Serialize};
@@ -273,7 +276,7 @@ pub struct MutinyBip21RawMaterials {
     address: String,
     invoice: String,
     btc_amount: Option<String>,
-    description: Option<String>,
+    labels: Vec<String>,
 }
 
 #[wasm_bindgen]
@@ -299,8 +302,8 @@ impl MutinyBip21RawMaterials {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn description(&self) -> Option<String> {
-        self.description.clone()
+    pub fn labels(&self) -> JsValue /* Vec<String> */ {
+        JsValue::from_serde(&self.labels).unwrap()
     }
 }
 
@@ -310,7 +313,7 @@ impl From<nodemanager::MutinyBip21RawMaterials> for MutinyBip21RawMaterials {
             address: m.address.to_string(),
             invoice: m.invoice.to_string(),
             btc_amount: m.btc_amount,
-            description: m.description,
+            labels: m.labels,
         }
     }
 }
@@ -445,6 +448,159 @@ impl From<redshift::Redshift> for Redshift {
             sats_sent: rs.sats_sent,
             change_amt: rs.change_amt,
             fees_paid: rs.fees_paid,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Eq, PartialEq, Hash)]
+#[wasm_bindgen]
+pub enum TagKind {
+    Label,
+    Contact,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[wasm_bindgen]
+pub struct TagItem {
+    id: String,
+    pub kind: TagKind,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    npub: Option<XOnlyPublicKey>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ln_address: Option<LightningAddress>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lnurl: Option<LnUrl>,
+    /// Epoch time in seconds when this tag was last used
+    pub last_used_time: u64,
+}
+
+#[wasm_bindgen]
+impl TagItem {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> String {
+        self.id.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn npub(&self) -> Option<String> {
+        self.npub.map(|a| a.to_string())
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn ln_address(&self) -> Option<String> {
+        self.ln_address.clone().map(|a| a.to_string())
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn lnurl(&self) -> Option<String> {
+        self.lnurl.clone().map(|a| a.to_string())
+    }
+}
+
+impl From<(String, MutinyContact)> for TagItem {
+    fn from(m: (String, MutinyContact)) -> Self {
+        let (id, contact) = m;
+        TagItem {
+            id,
+            kind: TagKind::Contact,
+            name: contact.name,
+            npub: contact.npub,
+            ln_address: contact.ln_address,
+            lnurl: contact.lnurl,
+            last_used_time: contact.last_used,
+        }
+    }
+}
+
+impl From<labels::TagItem> for TagItem {
+    fn from(m: labels::TagItem) -> Self {
+        match m {
+            labels::TagItem::Label((label, item)) => TagItem {
+                id: label.clone(),
+                kind: TagKind::Label,
+                name: label,
+                npub: None,
+                ln_address: None,
+                lnurl: None,
+                last_used_time: item.last_used_time,
+            },
+            labels::TagItem::Contact(contact) => contact.into(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[wasm_bindgen]
+pub struct Contact {
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    npub: Option<XOnlyPublicKey>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ln_address: Option<LightningAddress>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lnurl: Option<LnUrl>,
+    pub last_used: u64,
+}
+
+#[wasm_bindgen]
+impl Contact {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn npub(&self) -> Option<String> {
+        self.npub.map(|a| a.to_string())
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn ln_address(&self) -> Option<String> {
+        self.ln_address.clone().map(|a| a.to_string())
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn lnurl(&self) -> Option<String> {
+        self.lnurl.clone().map(|a| a.to_string())
+    }
+}
+
+impl From<Contact> for MutinyContact {
+    fn from(c: Contact) -> Self {
+        MutinyContact {
+            name: c.name,
+            npub: c.npub,
+            ln_address: c.ln_address,
+            lnurl: c.lnurl,
+            last_used: c.last_used,
+        }
+    }
+}
+
+impl From<MutinyContact> for Contact {
+    fn from(c: MutinyContact) -> Self {
+        Contact {
+            name: c.name,
+            npub: c.npub,
+            ln_address: c.ln_address,
+            lnurl: c.lnurl,
+            last_used: c.last_used,
         }
     }
 }

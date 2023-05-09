@@ -1,4 +1,5 @@
 use crate::keymanager::PhantomKeysManager;
+use crate::labels::LabelStorage;
 use crate::ldkstorage::ChannelOpenParams;
 use crate::{
     background::process_events_async,
@@ -562,7 +563,7 @@ impl Node {
     pub async fn create_invoice(
         &self,
         amount_sat: Option<u64>,
-        description: Option<String>,
+        labels: Vec<String>,
         route_hints: Option<Vec<PhantomRouteHints>>,
     ) -> Result<Invoice, MutinyError> {
         // the amount to create for the invoice whether or not there is an lsp
@@ -598,7 +599,7 @@ impl Node {
         };
 
         let invoice = self
-            .create_internal_invoice(amount_sat, lsp_fee_msat, description, route_hints)
+            .create_internal_invoice(amount_sat, lsp_fee_msat, labels, route_hints)
             .await?;
 
         if let Some(lsp) = self.lsp_client.clone() {
@@ -627,12 +628,12 @@ impl Node {
         &self,
         amount_sat: Option<u64>,
         fee_amount_msat: Option<u64>,
-        description: Option<String>,
+        labels: Vec<String>,
         route_hints: Option<Vec<PhantomRouteHints>>,
     ) -> Result<Invoice, MutinyError> {
         let amount_msat = amount_sat.map(|s| s * 1_000);
-        // TODO if there's no description we should probably a random one
-        let description = description.unwrap_or_default();
+        // Set description to empty string to make smallest possible invoice/QR code
+        let description = "".to_string();
         let invoice_res = match route_hints {
             None => {
                 let now = crate::utils::now();
@@ -689,6 +690,10 @@ impl Node {
                 log_error!(self.logger, "ERROR: could not persist payment info: {e}");
                 MutinyError::InvoiceCreationFailed
             })?;
+
+        self.persister
+            .storage
+            .set_invoice_labels(invoice.clone(), labels)?;
 
         log_info!(self.logger, "SUCCESS: generated invoice: {invoice}");
 
@@ -1042,6 +1047,7 @@ impl Node {
         let params = ChannelOpenParams {
             sats_per_kw,
             utxos: utxos.to_vec(),
+            labels: None,
         };
         self.persister
             .persist_channel_open_params(user_channel_id, params)?;

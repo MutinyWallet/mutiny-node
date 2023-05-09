@@ -19,6 +19,7 @@ use gloo_utils::format::JsValueSerdeExt;
 use lightning::routing::gossip::NodeId;
 use lightning_invoice::Invoice;
 use lnurl::lnurl::LnUrl;
+use mutiny_core::labels::LabelStorage;
 use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::{nodemanager, redshift::RedshiftRecipient};
 use std::str::FromStr;
@@ -137,12 +138,15 @@ impl MutinyWallet {
     pub async fn create_bip21(
         &self,
         amount: Option<u64>,
-        description: Option<String>,
+        labels: JsValue, /* Vec<String> */
     ) -> Result<MutinyBip21RawMaterials, MutinyJsError> {
+        let labels: Vec<String> = labels
+            .into_serde()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
-            .create_bip21(amount, description)
+            .create_bip21(amount, labels)
             .await?
             .into())
     }
@@ -156,13 +160,17 @@ impl MutinyWallet {
         &self,
         destination_address: String,
         amount: u64,
+        labels: JsValue, /* Vec<String> */
         fee_rate: Option<f32>,
     ) -> Result<String, MutinyJsError> {
         let send_to = Address::from_str(&destination_address)?;
+        let labels: Vec<String> = labels
+            .into_serde()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
-            .send_to_address(send_to, amount, fee_rate)
+            .send_to_address(send_to, amount, labels, fee_rate)
             .await?
             .to_string())
     }
@@ -175,13 +183,17 @@ impl MutinyWallet {
     pub async fn sweep_wallet(
         &self,
         destination_address: String,
+        labels: JsValue, /* Vec<String> */
         fee_rate: Option<f32>,
     ) -> Result<String, MutinyJsError> {
         let send_to = Address::from_str(&destination_address)?;
+        let labels: Vec<String> = labels
+            .into_serde()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
-            .sweep_wallet(send_to, fee_rate)
+            .sweep_wallet(send_to, labels, fee_rate)
             .await?
             .to_string())
     }
@@ -348,12 +360,15 @@ impl MutinyWallet {
     pub async fn create_invoice(
         &self,
         amount: Option<u64>,
-        description: Option<String>,
+        labels: JsValue, /* Vec<String> */
     ) -> Result<MutinyInvoice, MutinyJsError> {
+        let labels: Vec<String> = labels
+            .into_serde()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
-            .create_invoice(amount, description)
+            .create_invoice(amount, labels)
             .await?
             .into())
     }
@@ -606,6 +621,68 @@ impl MutinyWallet {
         let id: [u8; 16] =
             FromHex::from_hex(&id).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self.inner.node_manager.get_redshift(&id)?.map(|r| r.into()))
+    }
+
+    pub fn get_address_labels(
+        &self,
+    ) -> Result<JsValue /* Map<Address, Vec<String>> */, MutinyJsError> {
+        Ok(JsValue::from_serde(
+            &self.inner.node_manager.get_address_labels()?,
+        )?)
+    }
+
+    /// Set the labels for an address, replacing any existing labels
+    /// If you want to do not want to replace any existing labels, use `get_address_labels` to get the existing labels,
+    /// add the new labels, and then use `set_address_labels` to set the new labels
+    pub fn set_address_labels(
+        &self,
+        address: String,
+        labels: JsValue, /* Vec<String> */
+    ) -> Result<(), MutinyJsError> {
+        let address = Address::from_str(&address)?;
+        let labels: Vec<String> = labels
+            .into_serde()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        Ok(self
+            .inner
+            .node_manager
+            .set_address_labels(address, labels)?)
+    }
+
+    pub fn get_contacts(&self) -> Result<JsValue /* Map<String, Contact>*/, MutinyJsError> {
+        Ok(JsValue::from_serde(
+            &self.inner.node_manager.get_contacts()?,
+        )?)
+    }
+
+    pub fn get_contact(&self, label: String) -> Result<Option<TagItem>, MutinyJsError> {
+        Ok(self
+            .inner
+            .node_manager
+            .get_contact(&label)?
+            .map(|c| (label, c).into()))
+    }
+
+    /// Create a new contact from an existing label and returns the new identifying label
+    pub fn create_contact_from_label(
+        &self,
+        label: String,
+        contact: Contact,
+    ) -> Result<String, MutinyJsError> {
+        Ok(self
+            .inner
+            .node_manager
+            .create_contact_from_label(label, contact.into())?)
+    }
+
+    pub fn create_new_contact(&self, contact: Contact) -> Result<String, MutinyJsError> {
+        Ok(self.inner.node_manager.create_new_contact(contact.into())?)
+    }
+
+    pub fn get_tag_items(&self) -> Result<JsValue /* Vec<TagItem> */, MutinyJsError> {
+        Ok(JsValue::from_serde(
+            &self.inner.node_manager.get_tag_items()?,
+        )?)
     }
 
     /// Gets the current bitcoin price in USD.
