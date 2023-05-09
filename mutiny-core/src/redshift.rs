@@ -508,7 +508,12 @@ mod test {
 
     #[test]
     async fn test_redshift_persistence() {
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let test_name = "test_create_signature";
+        log!("{}", test_name);
+
+        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let rs = dummy_redshift();
 
         assert!(storage.get_redshifts().unwrap().is_empty());
@@ -520,7 +525,5 @@ mod test {
 
         let all = storage.get_redshifts().unwrap();
         assert_eq!(all, vec![rs]);
-
-        cleanup_all().await;
     }
 }

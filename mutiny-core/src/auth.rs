@@ -216,7 +216,7 @@ impl AuthManager {
 #[cfg(test)]
 mod test {
     use crate::keymanager::generate_seed;
-    use crate::test_utils::cleanup_all;
+    use crate::test_utils::*;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::Network;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
@@ -224,10 +224,10 @@ mod test {
 
     use super::*;
 
-    async fn create_manager() -> AuthManager {
-        cleanup_all().await;
-
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+    async fn create_manager(db_prefix: String) -> AuthManager {
+        let storage = MutinyStorage::new("".to_string(), Some(db_prefix))
+            .await
+            .unwrap();
         let mnemonic = generate_seed(12).unwrap();
         let seed = mnemonic.to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &seed).unwrap();
@@ -261,7 +261,10 @@ mod test {
 
     #[test]
     async fn test_create_signature() {
-        let auth = create_manager().await;
+        let test_name = "test_create_signature";
+        log!("{}", test_name);
+
+        let auth = create_manager(test_name.to_string()).await;
 
         let k1 = [0; 32];
 
@@ -272,13 +275,14 @@ mod test {
         auth.context
             .verify_ecdsa(&Message::from_slice(&k1).unwrap(), &sig, &pk)
             .unwrap();
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn test_add_used_service() {
-        let auth = create_manager().await;
+        let test_name = "test_add_used_service";
+        log!("{}", test_name);
+
+        let auth = create_manager(test_name.to_string()).await;
 
         let url = Url::parse("https://mutinywallet.com").unwrap();
 
@@ -290,13 +294,14 @@ mod test {
             .unwrap()
             .used_services
             .contains(&url.host().unwrap().to_string()));
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn test_add_profile() {
-        let auth = create_manager().await;
+        let test_name = "test_add_profile";
+        log!("{}", test_name);
+
+        let auth = create_manager(test_name.to_string()).await;
 
         let url = Url::parse("https://mutinywallet.com").unwrap();
         let k1 = [0; 32];
@@ -311,7 +316,5 @@ mod test {
 
         let profiles = auth.get_profiles().unwrap();
         assert_eq!(profiles.len(), 2);
-
-        cleanup_all().await;
     }
 }

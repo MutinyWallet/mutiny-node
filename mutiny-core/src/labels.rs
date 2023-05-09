@@ -354,12 +354,12 @@ impl LabelStorage for NodeManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::*;
     use bitcoin::Address;
     use lightning_invoice::Invoice;
     use std::collections::HashMap;
     use std::str::FromStr;
 
-    use crate::test_utils::cleanup_all;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
     wasm_bindgen_test_configure!(run_in_browser);
 
@@ -463,7 +463,12 @@ mod tests {
 
     #[test]
     async fn test_get_address_labels() {
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let test_name = "test_get_address_labels";
+        log!("{}", test_name);
+
+        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let labels_map = create_test_address_labels_map();
         storage
             .set(ADDRESS_LABELS_MAP_KEY, labels_map.clone())
@@ -471,13 +476,16 @@ mod tests {
 
         let result = storage.get_address_labels();
         assert_eq!(result.unwrap(), labels_map);
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn test_get_invoice_labels() {
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let test_name = "test_get_invoice_labels";
+        log!("{}", test_name);
+
+        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let labels_map = create_test_invoice_labels_map();
         storage
             .set(INVOICE_LABELS_MAP_KEY, labels_map.clone())
@@ -485,13 +493,16 @@ mod tests {
 
         let result = storage.get_invoice_labels();
         assert_eq!(result.unwrap(), labels_map);
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn test_get_labels() {
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let test_name = "test_get_labels";
+        log!("{}", test_name);
+
+        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let labels = create_test_labels();
         for (label, label_item) in labels.clone() {
             storage.set(get_label_item_key(label), label_item).unwrap();
@@ -506,13 +517,16 @@ mod tests {
         labels.sort_by(|a, b| a.0.cmp(&b.0));
 
         assert_eq!(result, labels);
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn test_get_label() {
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let test_name = "test_get_label";
+        log!("{}", test_name);
+
+        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let labels = create_test_labels();
         for (label, label_item) in labels.clone() {
             storage.set(get_label_item_key(label), label_item).unwrap();
@@ -521,13 +535,16 @@ mod tests {
         let label = "test_label".to_string();
         let result = storage.get_label(&label);
         assert_eq!(result.unwrap(), labels.get(&label).cloned());
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn test_set_address_labels() {
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let test_name = "test_set_address_labels";
+        log!("{}", test_name);
+
+        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let address = Address::from_str("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa").unwrap();
         let labels = vec!["label1".to_string(), "label2".to_string()];
 
@@ -536,13 +553,16 @@ mod tests {
 
         let address_labels = storage.get_address_labels().unwrap();
         assert_eq!(address_labels.get(&address), Some(&labels));
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn test_set_invoice_labels() {
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let test_name = "test_set_invoice_labels";
+        log!("{}", test_name);
+
+        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let invoice = Invoice::from_str("lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm").unwrap();
         let labels = vec!["label1".to_string(), "label2".to_string()];
 
@@ -551,13 +571,16 @@ mod tests {
 
         let invoice_labels = storage.get_invoice_labels().unwrap();
         assert_eq!(invoice_labels.get(&invoice), Some(&labels));
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn test_get_contacts() {
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let test_name = "test_get_contacts";
+        log!("{}", test_name);
+
+        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let contacts = create_test_contacts();
         for (id, contact) in contacts.clone() {
             storage.set(get_contact_key(id), contact).unwrap();
@@ -572,13 +595,16 @@ mod tests {
         contacts.sort_by(|a, b| a.0.cmp(&b.0));
 
         assert_eq!(result, contacts);
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn test_get_contact() {
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let test_name = "test_get_contact";
+        log!("{}", test_name);
+
+        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let contact = Contact {
             name: "Satoshi Nakamoto".to_string(),
             npub: None,
@@ -588,15 +614,18 @@ mod tests {
         };
         let id = storage.create_new_contact(contact.clone()).unwrap();
 
-        let result = storage.get_contact(&id).unwrap();
+        let result = storage.get_contact(id).unwrap();
         assert_eq!(result.unwrap(), contact);
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn test_create_contact_from_label() {
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let test_name = "test_create_contact_from_label";
+        log!("{}", test_name);
+
+        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let address = Address::from_str("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa").unwrap();
         let invoice = Invoice::from_str("lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm").unwrap();
         let label = "test_label".to_string();
@@ -644,13 +673,16 @@ mod tests {
         // verify we deleted the old label
         let label_item = storage.get_label(&label).unwrap();
         assert!(label_item.is_none());
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn test_create_new_contact() {
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let test_name = "test_create_new_contact";
+        log!("{}", test_name);
+
+        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let contact = create_test_contacts().iter().next().unwrap().1.to_owned();
 
         let result = storage.create_new_contact(contact.clone());
@@ -659,13 +691,16 @@ mod tests {
         let id = result.unwrap();
         let stored_contact = storage.get_contact(id).unwrap();
         assert_eq!(stored_contact, Some(contact));
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn test_get_tag_items() {
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let test_name = "test_get_tag_items";
+        log!("{}", test_name);
+
+        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
         let contacts = create_test_contacts();
         for (id, contact) in contacts.clone() {
             storage.set(get_contact_key(id), contact).unwrap();
@@ -694,7 +729,5 @@ mod tests {
         expected_tag_items.sort();
 
         assert_eq!(result, expected_tag_items);
-
-        cleanup_all().await;
     }
 }

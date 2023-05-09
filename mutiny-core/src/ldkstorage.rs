@@ -457,15 +457,20 @@ mod test {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
-    async fn get_test_persister() -> MutinyNodePersister {
+    async fn get_test_persister(db_prefix: String) -> MutinyNodePersister {
         let id = Uuid::new_v4().to_string();
-        let storage = MutinyStorage::new("".to_string()).await.unwrap();
+        let storage = MutinyStorage::new("".to_string(), Some(db_prefix))
+            .await
+            .unwrap();
         MutinyNodePersister::new(id, storage)
     }
 
     #[test]
     async fn test_persist_payment_info() {
-        let persister = get_test_persister().await;
+        let test_name = "test_persist_payment_info";
+        log!("{}", test_name);
+
+        let persister = get_test_persister(test_name.to_string()).await;
         let preimage = [1; 32];
         let payment_hash = PaymentHash([0; 32]);
         let pubkey = PublicKey::from_str(
@@ -510,19 +515,20 @@ mod test {
 
         assert!(result.is_some());
         assert_eq!(result.clone().unwrap().preimage, Some(preimage));
-        assert_eq!(result.clone().unwrap().status, HTLCStatus::Succeeded);
+        assert_eq!(result.unwrap().status, HTLCStatus::Succeeded);
 
         let list = persister.list_payment_info(true).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].0, payment_hash);
         assert_eq!(list[0].1.preimage, Some(preimage));
-
-        cleanup_all().await;
     }
 
     #[test]
     async fn test_persist_spendable_output_descriptor() {
-        let persister = get_test_persister().await;
+        let test_name = "test_persist_spendable_output_descriptor";
+        log!("{}", test_name);
+
+        let persister = get_test_persister(test_name.to_string()).await;
 
         let static_output_0 = SpendableOutputDescriptor::StaticOutput {
             outpoint: OutPoint {
@@ -549,8 +555,6 @@ mod test {
 
         let result = persister.get_failed_spendable_outputs().unwrap();
         assert_eq!(result, vec![static_output_0, static_output_1]);
-
-        cleanup_all().await;
 
         let result = persister.clear_failed_spendable_outputs().await;
         assert!(result.is_ok());
