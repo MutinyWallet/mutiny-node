@@ -649,6 +649,32 @@ impl MutinyWallet {
             .set_address_labels(address, labels)?)
     }
 
+    pub fn get_invoice_labels(
+        &self,
+    ) -> Result<JsValue /* Map<Invoice, Vec<String>> */, MutinyJsError> {
+        Ok(JsValue::from_serde(
+            &self.inner.node_manager.get_invoice_labels()?,
+        )?)
+    }
+
+    /// Set the labels for an invoice, replacing any existing labels
+    /// If you want to do not want to replace any existing labels, use `get_invoice_labels` to get the existing labels,
+    /// add the new labels, and then use `set_invoice_labels` to set the new labels
+    pub fn set_invoice_labels(
+        &self,
+        invoice: String,
+        labels: JsValue, /* Vec<String> */
+    ) -> Result<(), MutinyJsError> {
+        let invoice = Invoice::from_str(&invoice)?;
+        let labels: Vec<String> = labels
+            .into_serde()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        Ok(self
+            .inner
+            .node_manager
+            .set_invoice_labels(invoice, labels)?)
+    }
+
     pub fn get_contacts(&self) -> Result<JsValue /* Map<String, Contact>*/, MutinyJsError> {
         Ok(JsValue::from_serde(
             &self.inner.node_manager.get_contacts()?,
