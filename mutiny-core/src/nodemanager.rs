@@ -4,6 +4,7 @@ use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use crate::event::{HTLCStatus, PaymentInfo};
 use crate::indexed_db::MutinyStorage;
+use crate::labels::LabelStorage;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
 use crate::utils::sleep;
 use crate::{
@@ -615,6 +616,7 @@ impl NodeManager {
         let Ok(address) = self.get_new_address() else {
             return Err(MutinyError::WalletOperationFailed);
         };
+        self.set_address_labels(address.clone(), labels.clone())?;
 
         let invoice = self.create_invoice(amount, labels.clone()).await?;
 
