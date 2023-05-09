@@ -112,18 +112,19 @@ mod tests {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
-    const PEER_PUBKEY: &str = "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443";
+    // ACINQ's node pubkey
+    const PEER_PUBKEY: &str = "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f";
 
     #[test]
+    // test ignored because it connects to a real server
     #[cfg(feature = "ignored_tests")]
     async fn test_websocket_proxy_init() {
         log!("test websocket proxy");
         let logger = Arc::new(MutinyLogger::default());
 
-        // TODO do something useful
         let proxy = WsProxy::new(
-            "ws://127.0.0.1:3001",
-            PubkeyConnectionInfo::new(&format!("{}@{}", PEER_PUBKEY, "127.0.0.1:4000")).unwrap(),
+            "wss://p.mutinywallet.com",
+            PubkeyConnectionInfo::new(&format!("{}@{}", PEER_PUBKEY, "3.33.236.230:9735")).unwrap(),
             logger,
         )
         .await
