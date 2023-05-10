@@ -377,9 +377,10 @@ impl RedshiftManager for NodeManager {
                 invoice.payment_hash().to_hex()
             );
 
+            let label = format!("Redshift: {}", rs.id.to_hex());
             // make attempts to pay it
             match sending_node
-                .pay_invoice_with_timeout(&invoice, None, None)
+                .pay_invoice_with_timeout(&invoice, None, None, vec![label])
                 .await
             {
                 Ok(i) => {

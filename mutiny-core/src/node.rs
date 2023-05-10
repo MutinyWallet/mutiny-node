@@ -697,10 +697,13 @@ impl Node {
     pub fn get_invoice(&self, invoice: &Invoice) -> Result<MutinyInvoice, MutinyError> {
         let payment_hash = invoice.payment_hash();
         let (payment_info, inbound) = self.get_payment_info_from_persisters(payment_hash)?;
+        let labels_map = self.persister.storage.get_invoice_labels()?;
+        let labels = labels_map.get(invoice).cloned().unwrap_or_default();
         MutinyInvoice::from(
             payment_info,
             PaymentHash(payment_hash.into_inner()),
             inbound,
+            labels,
         )
     }
 
@@ -716,12 +719,18 @@ impl Node {
         inbound: bool,
     ) -> Result<Vec<MutinyInvoice>, MutinyError> {
         let now = utils::now();
+        let labels_map = self.persister.storage.get_invoice_labels()?;
+
         Ok(self
             .persister
             .list_payment_info(inbound)?
             .into_iter()
             .filter_map(|(h, i)| {
-                let mutiny_invoice = MutinyInvoice::from(i.clone(), h, inbound).ok();
+                let labels = match i.bolt11.clone() {
+                    None => vec![],
+                    Some(i) => labels_map.get(&i).cloned().unwrap_or_default(),
+                };
+                let mutiny_invoice = MutinyInvoice::from(i.clone(), h, inbound, labels).ok();
 
                 // filter out expired invoices
                 mutiny_invoice.filter(|invoice| {
@@ -826,6 +835,7 @@ impl Node {
         &self,
         payment_hash: PaymentHash,
         timeout: u64,
+        labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let start = utils::now().as_secs();
         loop {
@@ -841,7 +851,8 @@ impl Node {
             if let Some(info) = payment_info {
                 match info.status {
                     HTLCStatus::Succeeded => {
-                        let mutiny_invoice = MutinyInvoice::from(info, payment_hash, false)?;
+                        let mutiny_invoice =
+                            MutinyInvoice::from(info, payment_hash, false, labels)?;
                         return Ok(mutiny_invoice);
                     }
                     HTLCStatus::Failed => return Err(MutinyError::RoutingFailed),
@@ -858,12 +869,13 @@ impl Node {
         invoice: &Invoice,
         amt_sats: Option<u64>,
         timeout_secs: Option<u64>,
+        labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         // initiate payment
         let payment_hash = self.init_invoice_payment(invoice, amt_sats)?;
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
 
-        self.await_payment(payment_hash, timeout).await
+        self.await_payment(payment_hash, timeout, labels).await
     }
 
     /// init_keysend_payment sends off the payment but does not wait for results
@@ -872,6 +884,7 @@ impl Node {
         &self,
         to_node: PublicKey,
         amt_sats: u64,
+        labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let mut entropy = [0u8; 32];
         getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
@@ -916,7 +929,8 @@ impl Node {
 
         match pay_result {
             Ok(_) => {
-                let mutiny_invoice = MutinyInvoice::from(payment_info, payment_hash, false)?;
+                let mutiny_invoice =
+                    MutinyInvoice::from(payment_info, payment_hash, false, labels)?;
                 Ok(mutiny_invoice)
             }
             Err(_) => {
@@ -932,15 +946,16 @@ impl Node {
         &self,
         to_node: PublicKey,
         amt_sats: u64,
+        labels: Vec<String>,
         timeout_secs: Option<u64>,
     ) -> Result<MutinyInvoice, MutinyError> {
         // initiate payment
-        let pay = self.init_keysend_payment(to_node, amt_sats)?;
+        let pay = self.init_keysend_payment(to_node, amt_sats, labels.clone())?;
 
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
         let payment_hash = PaymentHash(pay.payment_hash.into_inner());
 
-        self.await_payment(payment_hash, timeout).await
+        self.await_payment(payment_hash, timeout, labels).await
     }
 
     pub async fn open_channel(
