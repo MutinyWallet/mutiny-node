@@ -1,3 +1,5 @@
+use core::time::Duration;
+use instant::SystemTime;
 use log::{debug, Level};
 use wasm_bindgen::prelude::*;
 
@@ -17,6 +19,12 @@ pub async fn main_js() -> Result<(), JsValue> {
     wasm_logger::init(wasm_logger::Config::new(Level::Debug).message_on_new_line());
     debug!("Main function begins and ends");
     Ok(())
+}
+
+pub fn now() -> Duration {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
 }
 
 #[cfg(test)]
