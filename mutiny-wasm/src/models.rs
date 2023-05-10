@@ -9,7 +9,10 @@ use mutiny_core::labels::Contact as MutinyContact;
 use mutiny_core::redshift::{RedshiftRecipient, RedshiftStatus};
 use mutiny_core::*;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use wasm_bindgen::prelude::*;
+
+use crate::{error::MutinyJsError, utils};
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
@@ -562,6 +565,29 @@ pub struct Contact {
 
 #[wasm_bindgen]
 impl Contact {
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        name: String,
+        npub: Option<String>,
+        ln_address: Option<String>,
+        lnurl: Option<String>,
+    ) -> Result<Contact, MutinyJsError> {
+        // Convert the parameters into the types expected by the struct
+        let npub = npub.map(|s| XOnlyPublicKey::from_str(&s)).transpose()?;
+        let ln_address = ln_address
+            .map(|s| LightningAddress::from_str(&s))
+            .transpose()?;
+        let lnurl = lnurl.map(|s| LnUrl::from_str(&s)).transpose()?;
+
+        Ok(Contact {
+            name,
+            npub,
+            ln_address,
+            lnurl,
+            last_used: utils::now().as_secs(),
+        })
+    }
+
     #[wasm_bindgen(getter)]
     pub fn value(&self) -> JsValue {
         JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
