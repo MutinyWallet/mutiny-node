@@ -52,7 +52,7 @@ fn get_contact_key(label: impl AsRef<str>) -> String {
 
 pub trait LabelStorage {
     /// Get a map of addresses to labels. This can be used to get all the labels for an address
-    fn get_address_labels(&self) -> Result<HashMap<Address, Vec<String>>, MutinyError>;
+    fn get_address_labels(&self) -> Result<HashMap<String, Vec<String>>, MutinyError>;
     /// Get a map of invoices to labels. This can be used to get all the labels for an invoice
     fn get_invoice_labels(&self) -> Result<HashMap<Invoice, Vec<String>>, MutinyError>;
     /// Get all the existing labels
@@ -84,8 +84,8 @@ pub trait LabelStorage {
 }
 
 impl LabelStorage for MutinyStorage {
-    fn get_address_labels(&self) -> Result<HashMap<Address, Vec<String>>, MutinyError> {
-        let res: Option<HashMap<Address, Vec<String>>> = self.get(ADDRESS_LABELS_MAP_KEY)?;
+    fn get_address_labels(&self) -> Result<HashMap<String, Vec<String>>, MutinyError> {
+        let res: Option<HashMap<String, Vec<String>>> = self.get(ADDRESS_LABELS_MAP_KEY)?;
         Ok(res.unwrap_or_default()) // if no labels exist, return an empty map
     }
 
@@ -114,7 +114,7 @@ impl LabelStorage for MutinyStorage {
     fn set_address_labels(&self, address: Address, labels: Vec<String>) -> Result<(), MutinyError> {
         // update the labels map
         let mut address_labels = self.get_address_labels()?;
-        address_labels.insert(address.clone(), labels.clone());
+        address_labels.insert(address.to_string(), labels.clone());
         self.set(ADDRESS_LABELS_MAP_KEY, address_labels)?;
 
         // update the label items
@@ -302,7 +302,7 @@ impl LabelStorage for MutinyStorage {
 }
 
 impl LabelStorage for NodeManager {
-    fn get_address_labels(&self) -> Result<HashMap<Address, Vec<String>>, MutinyError> {
+    fn get_address_labels(&self) -> Result<HashMap<String, Vec<String>>, MutinyError> {
         self.storage.get_address_labels()
     }
 
@@ -363,18 +363,18 @@ mod tests {
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
     wasm_bindgen_test_configure!(run_in_browser);
 
-    fn create_test_address_labels_map() -> HashMap<Address, Vec<String>> {
+    fn create_test_address_labels_map() -> HashMap<String, Vec<String>> {
         let mut labels = HashMap::new();
         labels.insert(
-            Address::from_str("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa").unwrap(),
+            "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string(),
             vec!["test1".to_string()],
         );
         labels.insert(
-            Address::from_str("1BitcoinEaterAddressDontSendf59kuE").unwrap(),
+            "1BitcoinEaterAddressDontSendf59kuE".to_string(),
             vec!["test2".to_string()],
         );
         labels.insert(
-            Address::from_str("12cbQLTFMXRnSzktFkuoG3eHoMeFtpTu3S").unwrap(),
+            "12cbQLTFMXRnSzktFkuoG3eHoMeFtpTu3S".to_string(),
             vec!["test3".to_string()],
         );
         labels
@@ -552,7 +552,7 @@ mod tests {
         assert!(result.is_ok());
 
         let address_labels = storage.get_address_labels().unwrap();
-        assert_eq!(address_labels.get(&address), Some(&labels));
+        assert_eq!(address_labels.get(&address.to_string()), Some(&labels));
     }
 
     #[test]

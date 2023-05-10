@@ -754,7 +754,10 @@ impl NodeManager {
                 .unwrap_or(ConfirmationTime::Unconfirmed);
 
             let address_labels = self.get_address_labels().unwrap_or_default();
-            let labels = address_labels.get(address).cloned().unwrap_or_default();
+            let labels = address_labels
+                .get(&address.to_string())
+                .cloned()
+                .unwrap_or_default();
 
             let details = TransactionDetails {
                 transaction: Some(tx.to_tx()),
@@ -801,18 +804,9 @@ impl NodeManager {
     /// ensure that the transaction is included.
     fn add_onchain_labels(
         &self,
-        address_labels: &HashMap<Address, Vec<String>>,
+        address_labels: &HashMap<String, Vec<String>>,
         tx: bdk::TransactionDetails,
     ) -> TransactionDetails {
-        // when we parse signet addresses, they are parsed as testnet addresses
-        // so it fails to properly compare in the hashmap, so if we are on signet
-        // we need to say they are testnet addresses
-        let used_network = if self.network == Network::Signet {
-            Network::Testnet
-        } else {
-            self.network
-        };
-
         // find the first output address that has a label
         let labels = tx
             .transaction
@@ -821,8 +815,8 @@ impl NodeManager {
             .output
             .iter()
             .find_map(|o| {
-                if let Ok(addr) = Address::from_script(&o.script_pubkey, used_network) {
-                    address_labels.get(&addr).cloned()
+                if let Ok(addr) = Address::from_script(&o.script_pubkey, self.network) {
+                    address_labels.get(&addr.to_string()).cloned()
                 } else {
                     None
                 }
