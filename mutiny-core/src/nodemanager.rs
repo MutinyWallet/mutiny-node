@@ -649,10 +649,11 @@ impl NodeManager {
     /// Will generate a new address on every call.
     ///
     /// It is recommended to create a new address for every transaction.
-    pub fn get_new_address(&self) -> Result<Address, MutinyError> {
+    pub fn get_new_address(&self, labels: Vec<String>) -> Result<Address, MutinyError> {
         let mut wallet = self.wallet.wallet.try_write()?;
-
-        Ok(wallet.get_address(AddressIndex::New).address)
+        let address = wallet.get_address(AddressIndex::New).address;
+        self.set_address_labels(address.clone(), labels)?;
+        Ok(address)
     }
 
     /// Gets the current balance of the on-chain wallet.
@@ -668,10 +669,9 @@ impl NodeManager {
         amount: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyBip21RawMaterials, MutinyError> {
-        let Ok(address) = self.get_new_address() else {
+        let Ok(address) = self.get_new_address(labels.clone()) else {
             return Err(MutinyError::WalletOperationFailed);
         };
-        self.set_address_labels(address.clone(), labels.clone())?;
 
         let invoice = self.create_invoice(amount, labels.clone()).await?;
 
@@ -754,7 +754,10 @@ impl NodeManager {
                 .unwrap_or(ConfirmationTime::Unconfirmed);
 
             let address_labels = self.get_address_labels().unwrap_or_default();
-            let labels = address_labels.get(address).cloned().unwrap_or_default();
+            let labels = address_labels
+                .get(&address.to_string())
+                .cloned()
+                .unwrap_or_default();
 
             let details = TransactionDetails {
                 transaction: Some(tx.to_tx()),
@@ -801,7 +804,7 @@ impl NodeManager {
     /// ensure that the transaction is included.
     fn add_onchain_labels(
         &self,
-        address_labels: &HashMap<Address, Vec<String>>,
+        address_labels: &HashMap<String, Vec<String>>,
         tx: bdk::TransactionDetails,
     ) -> TransactionDetails {
         // find the first output address that has a label
@@ -813,7 +816,7 @@ impl NodeManager {
             .iter()
             .find_map(|o| {
                 if let Ok(addr) = Address::from_script(&o.script_pubkey, self.network) {
-                    address_labels.get(&addr).cloned()
+                    address_labels.get(&addr.to_string()).cloned()
                 } else {
                     None
                 }
@@ -1674,10 +1677,11 @@ pub(crate) async fn create_new_node_from_node_manager(
 mod tests {
     use crate::nodemanager::{MutinyInvoice, NodeManager};
     use crate::{keymanager::generate_seed, MutinyWalletConfig};
+    use bdk::chain::ConfirmationTime;
     use bitcoin::hashes::hex::{FromHex, ToHex};
     use bitcoin::hashes::{sha256, Hash};
     use bitcoin::secp256k1::PublicKey;
-    use bitcoin::Network;
+    use bitcoin::{Network, PackedLockTime, Transaction, TxOut};
     use lightning::ln::PaymentHash;
     use lightning_invoice::Invoice;
     use std::str::FromStr;
@@ -1777,6 +1781,67 @@ mod tests {
             let retrieved_node = node_storage.nodes.get(&node_identity.uuid).unwrap();
             assert_eq!(1, retrieved_node.child_index);
         }
+    }
+
+    #[test]
+    async fn created_label_transaction() {
+        let test_name = "created_new_nodes";
+        log!("{}", test_name);
+
+        let seed = generate_seed(12).expect("Failed to gen seed");
+        let c = MutinyWalletConfig::new(
+            "password".to_string(),
+            Some(seed),
+            None,
+            Some(Network::Signet),
+            None,
+            None,
+            None,
+            test_name.to_string(),
+        );
+        let nm = NodeManager::new(c)
+            .await
+            .expect("node manager should initialize");
+
+        let labels = vec![String::from("label1"), String::from("label2")];
+
+        let address = nm
+            .get_new_address(labels.clone())
+            .expect("should create new address");
+
+        let fake_tx = Transaction {
+            version: 2,
+            lock_time: PackedLockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut {
+                value: 1_000_000,
+                script_pubkey: address.script_pubkey(),
+            }],
+        };
+
+        // insert fake tx into wallet
+        {
+            let mut wallet = nm.wallet.wallet.try_write().unwrap();
+            wallet
+                .insert_tx(fake_tx.clone(), ConfirmationTime::Unconfirmed)
+                .unwrap();
+            wallet.commit().unwrap();
+        }
+
+        let txs = nm.list_onchain().expect("should list onchain txs");
+        let tx_opt = nm
+            .get_transaction(fake_tx.txid())
+            .expect("should get transaction");
+
+        assert_eq!(txs.len(), 1);
+        let tx = &txs[0];
+        assert_eq!(tx.txid, fake_tx.txid());
+        assert_eq!(tx.labels, labels);
+
+        assert!(tx_opt.is_some());
+        let tx = tx_opt.unwrap();
+        assert_eq!(tx.txid, fake_tx.txid());
+        assert_eq!(tx.labels, labels);
     }
 
     #[test]

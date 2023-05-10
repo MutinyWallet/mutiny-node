@@ -174,7 +174,7 @@ impl OnChainWallet {
         // get addresses from previous labels
         let mut prev_labels = prev_addresses
             .iter()
-            .filter_map(|addr| address_labels.get(addr))
+            .filter_map(|addr| address_labels.get(&addr.to_string()))
             .flatten()
             .cloned()
             .collect::<Vec<_>>();
@@ -490,8 +490,14 @@ mod tests {
 
         let addr_labels = wallet.storage.get_address_labels().unwrap();
         assert_eq!(addr_labels.len(), 3);
-        assert_eq!(addr_labels.get(&send_to_addr), Some(&expected_labels));
-        assert_eq!(addr_labels.get(&change_addr), Some(&expected_labels));
+        assert_eq!(
+            addr_labels.get(&send_to_addr.to_string()),
+            Some(&expected_labels)
+        );
+        assert_eq!(
+            addr_labels.get(&change_addr.to_string()),
+            Some(&expected_labels)
+        );
 
         let label = wallet.storage.get_label(&label).unwrap();
         assert!(label.is_some());
