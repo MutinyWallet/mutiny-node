@@ -22,6 +22,7 @@ use lnurl::lnurl::LnUrl;
 use mutiny_core::labels::LabelStorage;
 use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::{nodemanager, redshift::RedshiftRecipient};
+use std::collections::HashMap;
 use std::str::FromStr;
 use wasm_bindgen::prelude::*;
 
@@ -695,7 +696,13 @@ impl MutinyWallet {
 
     pub fn get_contacts(&self) -> Result<JsValue /* Map<String, Contact>*/, MutinyJsError> {
         Ok(JsValue::from_serde(
-            &self.inner.node_manager.get_contacts()?,
+            &self
+                .inner
+                .node_manager
+                .get_contacts()?
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect::<HashMap<String, Contact>>(),
         )?)
     }
 
@@ -725,7 +732,13 @@ impl MutinyWallet {
 
     pub fn get_tag_items(&self) -> Result<JsValue /* Vec<TagItem> */, MutinyJsError> {
         Ok(JsValue::from_serde(
-            &self.inner.node_manager.get_tag_items()?,
+            &self
+                .inner
+                .node_manager
+                .get_tag_items()?
+                .into_iter()
+                .map(|t| t.into())
+                .collect::<Vec<TagItem>>(),
         )?)
     }
 
