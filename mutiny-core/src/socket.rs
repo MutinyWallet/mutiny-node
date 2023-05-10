@@ -158,6 +158,12 @@ impl MultiWsSocketDescriptor {
         self.connected.load(Ordering::Relaxed)
     }
 
+    pub fn attempt_keep_alive(&self) {
+        self.conn.send(Message::Text(
+            serde_json::to_string(&MutinyProxyCommand::Ping {}).unwrap(),
+        ));
+    }
+
     pub async fn reconnect(&mut self, conn: Arc<dyn Proxy>) {
         let mut socket_map = self.socket_map.lock().await;
         trace!("setting up multi websocket descriptor");
@@ -253,6 +259,9 @@ impl MultiWsSocketDescriptor {
                                             error!("tried to disconnect a subsocket that doesn't exist...");
                                         }
                                     }
+                                }
+                                MutinyProxyCommand::Ping => {
+                                    // Ignore, we send to them
                                 }
                             };
                         }

@@ -1153,6 +1153,9 @@ async fn start_reconnection_handling(
                         continue;
                     }
                 };
+            } else {
+                // send a keep alive message if connected
+                multi_socket_reconnect.attempt_keep_alive();
             }
 
             if reconnection_stop.load(Ordering::Relaxed) {
