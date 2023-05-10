@@ -804,6 +804,15 @@ impl NodeManager {
         address_labels: &HashMap<Address, Vec<String>>,
         tx: bdk::TransactionDetails,
     ) -> TransactionDetails {
+        // when we parse signet addresses, they are parsed as testnet addresses
+        // so it fails to properly compare in the hashmap, so if we are on signet
+        // we need to say they are testnet addresses
+        let used_network = if self.network == Network::Signet {
+            Network::Testnet
+        } else {
+            self.network
+        };
+
         // find the first output address that has a label
         let labels = tx
             .transaction
@@ -812,7 +821,7 @@ impl NodeManager {
             .output
             .iter()
             .find_map(|o| {
-                if let Ok(addr) = Address::from_script(&o.script_pubkey, self.network) {
+                if let Ok(addr) = Address::from_script(&o.script_pubkey, used_network) {
                     address_labels.get(&addr).cloned()
                 } else {
                     None
@@ -1790,7 +1799,7 @@ mod tests {
             "password".to_string(),
             Some(seed),
             None,
-            Some(Network::Testnet),
+            Some(Network::Signet),
             None,
             None,
             None,
