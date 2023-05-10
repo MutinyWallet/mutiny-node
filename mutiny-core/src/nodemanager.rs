@@ -25,7 +25,7 @@ use crate::{
     utils,
 };
 use bdk::chain::{BlockId, ConfirmationTime};
-use bdk::{wallet::AddressIndex, LocalUtxo, TransactionDetails};
+use bdk::{wallet::AddressIndex, LocalUtxo};
 use bdk_esplora::esplora_client::AsyncClient;
 use bip39::Mnemonic;
 use bitcoin::hashes::hex::{FromHex, ToHex};
@@ -98,6 +98,7 @@ pub struct MutinyInvoice {
     pub paid: bool,
     pub fees_paid: Option<u64>,
     pub is_send: bool,
+    pub labels: Vec<String>,
     pub last_updated: u64,
 }
 
@@ -132,6 +133,7 @@ impl From<Invoice> for MutinyInvoice {
             paid: false,
             fees_paid: None,
             is_send: false, // todo this could be bad
+            labels: vec![],
             last_updated: timestamp,
         }
     }
@@ -142,6 +144,7 @@ impl MutinyInvoice {
         i: PaymentInfo,
         payment_hash: PaymentHash,
         inbound: bool,
+        labels: Vec<String>,
     ) -> Result<Self, MutinyError> {
         match i.bolt11 {
             Some(invoice) => {
@@ -163,6 +166,7 @@ impl MutinyInvoice {
                 mutiny_invoice.preimage = i.preimage.map(|p| p.to_hex());
                 mutiny_invoice.fees_paid = i.fee_paid_msat.map(|f| f / 1_000);
                 mutiny_invoice.payee_pubkey = i.payee_pubkey;
+                mutiny_invoice.labels = labels;
                 Ok(mutiny_invoice)
             }
             None => {
@@ -182,6 +186,7 @@ impl MutinyInvoice {
                     paid,
                     fees_paid,
                     is_send: !inbound,
+                    labels,
                     last_updated: i.last_update,
                 };
                 Ok(invoice)
@@ -235,6 +240,56 @@ impl From<&ChannelDetails> for MutinyChannel {
             outpoint: c.funding_txo.map(|f| f.into_bitcoin_outpoint()),
             peer: c.counterparty.node_id,
             confirmed: c.is_channel_ready, // fixme not exactly correct
+        }
+    }
+}
+
+/// A wallet transaction
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TransactionDetails {
+    /// Optional transaction
+    pub transaction: Option<Transaction>,
+    /// Transaction id
+    pub txid: Txid,
+    /// Received value (sats)
+    /// Sum of owned outputs of this transaction.
+    pub received: u64,
+    /// Sent value (sats)
+    /// Sum of owned inputs of this transaction.
+    pub sent: u64,
+    /// Fee value in sats if it was available.
+    pub fee: Option<u64>,
+    /// If the transaction is confirmed, contains height and Unix timestamp of the block containing the
+    /// transaction, unconfirmed transaction contains `None`.
+    pub confirmation_time: ConfirmationTime,
+    /// Labels associated with this transaction
+    pub labels: Vec<String>,
+}
+
+impl PartialOrd for TransactionDetails {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TransactionDetails {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.confirmation_time
+            .cmp(&other.confirmation_time)
+            .then_with(|| self.txid.cmp(&other.txid))
+    }
+}
+
+impl From<bdk::TransactionDetails> for TransactionDetails {
+    fn from(t: bdk::TransactionDetails) -> Self {
+        TransactionDetails {
+            transaction: t.transaction,
+            txid: t.txid,
+            received: t.received,
+            sent: t.sent,
+            fee: t.fee,
+            confirmation_time: t.confirmation_time,
+            labels: vec![],
         }
     }
 }
@@ -698,6 +753,9 @@ impl NodeManager {
                 })
                 .unwrap_or(ConfirmationTime::Unconfirmed);
 
+            let address_labels = self.get_address_labels().unwrap_or_default();
+            let labels = address_labels.get(address).cloned().unwrap_or_default();
+
             let details = TransactionDetails {
                 transaction: Some(tx.to_tx()),
                 txid: tx.txid,
@@ -705,6 +763,7 @@ impl NodeManager {
                 sent: 0,
                 fee: None,
                 confirmation_time,
+                labels,
             };
 
             let block_id = match tx.status.block_hash {
@@ -736,18 +795,61 @@ impl NodeManager {
         Ok(details_opt.map(|(d, _)| d))
     }
 
+    /// Adds labels to the TransactionDetails based on the address labels.
+    /// This will panic if the TransactionDetails does not have a transaction.
+    /// Make sure you flag `include_raw` when calling `list_transactions` to
+    /// ensure that the transaction is included.
+    fn add_onchain_labels(
+        &self,
+        address_labels: &HashMap<Address, Vec<String>>,
+        tx: bdk::TransactionDetails,
+    ) -> TransactionDetails {
+        // find the first output address that has a label
+        let labels = tx
+            .transaction
+            .clone()
+            .unwrap() // safe because we call with list_transactions(true)
+            .output
+            .iter()
+            .find_map(|o| {
+                if let Ok(addr) = Address::from_script(&o.script_pubkey, self.network) {
+                    address_labels.get(&addr).cloned()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        TransactionDetails {
+            labels,
+            ..tx.into()
+        }
+    }
+
     /// Lists all the on-chain transactions in the wallet.
     /// These are sorted by confirmation time.
     pub fn list_onchain(&self) -> Result<Vec<TransactionDetails>, MutinyError> {
-        let mut txs = self.wallet.list_transactions(false)?;
+        let mut txs = self.wallet.list_transactions(true)?;
         txs.sort();
+        let address_labels = self.get_address_labels()?;
+        let txs = txs
+            .into_iter()
+            .map(|tx| self.add_onchain_labels(&address_labels, tx))
+            .collect();
 
         Ok(txs)
     }
 
     /// Gets the details of a specific on-chain transaction.
     pub fn get_transaction(&self, txid: Txid) -> Result<Option<TransactionDetails>, MutinyError> {
-        self.wallet.get_transaction(txid, false)
+        match self.wallet.get_transaction(txid, true)? {
+            Some(tx) => {
+                let address_labels = self.get_address_labels()?;
+                let tx_details = self.add_onchain_labels(&address_labels, tx);
+                Ok(Some(tx_details))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Gets the current balance of the wallet.
@@ -1026,13 +1128,15 @@ impl NodeManager {
         from_node: &PublicKey,
         invoice: &Invoice,
         amt_sats: Option<u64>,
+        labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         if invoice.network() != self.network {
             return Err(MutinyError::IncorrectNetwork(invoice.network()));
         }
 
         let node = self.get_node(from_node).await?;
-        node.pay_invoice_with_timeout(invoice, amt_sats, None).await
+        node.pay_invoice_with_timeout(invoice, amt_sats, None, labels)
+            .await
     }
 
     /// Sends a spontaneous payment to a node from the selected node.
@@ -1042,10 +1146,12 @@ impl NodeManager {
         from_node: &PublicKey,
         to_node: PublicKey,
         amt_sats: u64,
+        labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let node = self.get_node(from_node).await?;
         log_debug!(self.logger, "Keysending to {to_node}");
-        node.keysend_with_timeout(to_node, amt_sats, None).await
+        node.keysend_with_timeout(to_node, amt_sats, labels, None)
+            .await
     }
 
     /// Decodes a lightning invoice into useful information.
@@ -1101,6 +1207,7 @@ impl NodeManager {
         from_node: &PublicKey,
         lnurl: &LnUrl,
         amount_sats: u64,
+        labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let response = self.lnurl_client.make_request(&lnurl.url).await?;
 
@@ -1109,7 +1216,8 @@ impl NodeManager {
                 let msats = amount_sats * 1000;
                 let invoice = self.lnurl_client.get_invoice(&pay, msats).await?;
 
-                self.pay_invoice(from_node, &invoice.invoice(), None).await
+                self.pay_invoice(from_node, &invoice.invoice(), None, labels)
+                    .await
             }
             LnUrlResponse::LnUrlWithdrawResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
             LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
@@ -1687,6 +1795,8 @@ mod tests {
 
         let invoice = Invoice::from_str(BOLT_11).unwrap();
 
+        let labels = vec!["label1".to_string(), "label2".to_string()];
+
         let payment_info = PaymentInfo {
             preimage: Some(preimage),
             secret: Some(secret),
@@ -1709,12 +1819,17 @@ mod tests {
             paid: true,
             fees_paid: None,
             is_send: false,
+            labels: labels.clone(),
             last_updated: 1681781585,
         };
 
-        let actual =
-            MutinyInvoice::from(payment_info, PaymentHash(payment_hash.into_inner()), true)
-                .unwrap();
+        let actual = MutinyInvoice::from(
+            payment_info,
+            PaymentHash(payment_hash.into_inner()),
+            true,
+            labels,
+        )
+        .unwrap();
 
         assert_eq!(actual, expected);
     }
@@ -1757,12 +1872,17 @@ mod tests {
             paid: true,
             fees_paid: Some(1),
             is_send: true,
+            labels: vec![],
             last_updated: 1681781585,
         };
 
-        let actual =
-            MutinyInvoice::from(payment_info, PaymentHash(payment_hash.into_inner()), false)
-                .unwrap();
+        let actual = MutinyInvoice::from(
+            payment_info,
+            PaymentHash(payment_hash.into_inner()),
+            false,
+            vec![],
+        )
+        .unwrap();
 
         assert_eq!(actual, expected);
     }

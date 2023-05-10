@@ -25,6 +25,7 @@ pub struct MutinyInvoice {
     pub fees_paid: Option<u64>,
     pub is_send: bool,
     pub last_updated: u64,
+    labels: Vec<String>,
 }
 
 #[wasm_bindgen]
@@ -58,6 +59,11 @@ impl MutinyInvoice {
     pub fn payee_pubkey(&self) -> Option<String> {
         self.payee_pubkey.clone()
     }
+
+    #[wasm_bindgen(getter)]
+    pub fn labels(&self) -> JsValue /* Vec<String> */ {
+        JsValue::from_serde(&self.labels).unwrap()
+    }
 }
 
 impl From<nodemanager::MutinyInvoice> for MutinyInvoice {
@@ -74,6 +80,7 @@ impl From<nodemanager::MutinyInvoice> for MutinyInvoice {
             fees_paid: m.fees_paid,
             is_send: m.is_send,
             last_updated: m.last_updated,
+            labels: m.labels,
         }
     }
 }

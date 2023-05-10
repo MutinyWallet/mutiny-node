@@ -382,13 +382,17 @@ impl MutinyWallet {
         from_node: String,
         invoice_str: String,
         amt_sats: Option<u64>,
+        labels: JsValue, /* Vec<String> */
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let from_node = PublicKey::from_str(&from_node)?;
         let invoice = Invoice::from_str(&invoice_str)?;
+        let labels: Vec<String> = labels
+            .into_serde()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
-            .pay_invoice(&from_node, &invoice, amt_sats)
+            .pay_invoice(&from_node, &invoice, amt_sats, labels)
             .await?
             .into())
     }
@@ -401,13 +405,17 @@ impl MutinyWallet {
         from_node: String,
         to_node: String,
         amt_sats: u64,
+        labels: JsValue, /* Vec<String> */
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let from_node = PublicKey::from_str(&from_node)?;
         let to_node = PublicKey::from_str(&to_node)?;
+        let labels: Vec<String> = labels
+            .into_serde()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
-            .keysend(&from_node, to_node, amt_sats)
+            .keysend(&from_node, to_node, amt_sats, labels)
             .await?
             .into())
     }
@@ -441,13 +449,17 @@ impl MutinyWallet {
         from_node: String,
         lnurl: String,
         amount_sats: u64,
+        labels: JsValue, /* Vec<String> */
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let from_node = PublicKey::from_str(&from_node)?;
         let lnurl = LnUrl::from_str(&lnurl)?;
+        let labels: Vec<String> = labels
+            .into_serde()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
-            .lnurl_pay(&from_node, &lnurl, amount_sats)
+            .lnurl_pay(&from_node, &lnurl, amount_sats, labels)
             .await?
             .into())
     }
