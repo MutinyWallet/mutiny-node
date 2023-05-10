@@ -17,7 +17,7 @@ pub(crate) const LOGGING_DATABASE_NAME: &str = "logging";
 pub(crate) const LOGGING_OBJECT_STORE_NAME: &str = "log_store";
 pub(crate) const LOGGING_KEY: &str = "logs";
 
-const MAX_LOG_ITEMS: usize = 1_000;
+const MAX_LOG_ITEMS: usize = 10_000;
 
 #[derive(Clone)]
 pub struct MutinyLogger {
@@ -116,7 +116,7 @@ impl Logger for MutinyLogger {
             raw_log
         );
 
-        if self.should_write_to_storage && record.level >= Level::Debug {
+        if self.should_write_to_storage && record.level >= Level::Trace {
             if let Ok(mut memory_logs) = self.memory_logs.lock() {
                 memory_logs.push(log.clone());
             } else {
