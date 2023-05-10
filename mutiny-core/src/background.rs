@@ -13,7 +13,7 @@
 #[cfg(any(test, feature = "std"))]
 extern crate core;
 
-use log::{error, trace, warn};
+use lightning::{log_error, log_trace, log_warn};
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;
@@ -261,9 +261,9 @@ macro_rules! define_run_body {
 	 $loop_exit_check: expr, $await: expr, $get_timer: expr, $timer_elapsed: expr,
 	 $check_slow_await: expr)
 	=> { {
-		trace!("Calling ChannelManager's timer_tick_occurred on startup");
+		log_trace!($logger, "Calling ChannelManager's timer_tick_occurred on startup");
 		$channel_manager.timer_tick_occurred();
-		trace!("Rebroadcasting monitor's pending claims on startup");
+		log_trace!($logger, "Rebroadcasting monitor's pending claims on startup");
 		$chain_monitor.rebroadcast_pending_claims();
 
 		let mut last_freshness_call = $get_timer(FRESHNESS_TIMER);
@@ -292,7 +292,7 @@ macro_rules! define_run_body {
 
 			// Exit the loop if the background processor was requested to stop.
 			if $loop_exit_check {
-				trace!("Terminating background processor.");
+				log_trace!($logger, "Terminating background processor.");
 				break;
 			}
 
@@ -305,17 +305,17 @@ macro_rules! define_run_body {
 
 			// Exit the loop if the background processor was requested to stop.
 			if $loop_exit_check {
-				trace!("Terminating background processor.");
+				log_trace!($logger, "Terminating background processor.");
 				break;
 			}
 
 			if updates_available {
-				trace!("Persisting ChannelManager...");
+				log_trace!($logger, "Persisting ChannelManager...");
 				$persister.persist_manager(&*$channel_manager)?;
-				trace!("Done persisting ChannelManager.");
+				log_trace!($logger, "Done persisting ChannelManager.");
 			}
 			if $timer_elapsed(&mut last_freshness_call, FRESHNESS_TIMER) {
-				trace!("Calling ChannelManager's timer_tick_occurred");
+				log_trace!($logger, "Calling ChannelManager's timer_tick_occurred");
 				$channel_manager.timer_tick_occurred();
 				last_freshness_call = $get_timer(FRESHNESS_TIMER);
 			}
@@ -332,11 +332,11 @@ macro_rules! define_run_body {
 				// may call Bitcoin Core RPCs during event handling, which very often takes
 				// more than a handful of seconds to complete, and shouldn't disconnect all our
 				// peers.
-				trace!("100ms sleep took more than a second, disconnecting peers.");
+				log_trace!($logger, "100ms sleep took more than a second, disconnecting peers.");
 				$peer_manager.disconnect_all_peers();
 				last_ping_call = $get_timer(PING_TIMER);
 			} else if $timer_elapsed(&mut last_ping_call, PING_TIMER) {
-				trace!("Calling PeerManager's timer_tick_occurred");
+				log_trace!($logger, "Calling PeerManager's timer_tick_occurred");
 				$peer_manager.timer_tick_occurred();
 				last_ping_call = $get_timer(PING_TIMER);
 			}
@@ -350,16 +350,16 @@ macro_rules! define_run_body {
 				// The network graph must not be pruned while rapid sync completion is pending
 				if let Some(network_graph) = $gossip_sync.prunable_network_graph() {
 					#[cfg(feature = "std")] {
-						trace!("Pruning and persisting network graph.");
+						log_trace!($logger, "Pruning and persisting network graph.");
 						network_graph.remove_stale_channels_and_tracking();
 					}
 					#[cfg(not(feature = "std"))] {
-						warn!("Not pruning network graph, consider enabling `std` or doing so manually with remove_stale_channels_and_tracking_with_time.");
-						trace!("Persisting network graph.");
+						log_warn!($logger, "Not pruning network graph, consider enabling `std` or doing so manually with remove_stale_channels_and_tracking_with_time.");
+						log_trace!($logger, "Persisting network graph.");
 					}
 
 					if let Err(e) = $persister.persist_graph(network_graph) {
-						error!("Error: Failed to persist network graph, check your disk and permissions {}", e)
+						log_error!($logger, "Error: Failed to persist network graph, check your disk and permissions {}", e)
 					}
 
 					have_pruned = true;
@@ -370,16 +370,16 @@ macro_rules! define_run_body {
 
 			if $timer_elapsed(&mut last_scorer_persist_call, SCORER_PERSIST_TIMER) {
 				if let Some(ref scorer) = $scorer {
-					trace!("Persisting scorer");
+					log_trace!($logger, "Persisting scorer");
 					if let Err(e) = $persister.persist_scorer(&scorer) {
-						error!("Error: Failed to persist scorer, check your disk and permissions {}", e)
+						log_error!($logger, "Error: Failed to persist scorer, check your disk and permissions {}", e)
 					}
 				}
 				last_scorer_persist_call = $get_timer(SCORER_PERSIST_TIMER);
 			}
 
 			if $timer_elapsed(&mut last_rebroadcast_call, REBROADCAST_TIMER) {
-				trace!("Rebroadcasting monitor's pending claims");
+				log_trace!($logger, "Rebroadcasting monitor's pending claims");
 				$chain_monitor.rebroadcast_pending_claims();
 				last_rebroadcast_call = $get_timer(REBROADCAST_TIMER);
 			}
@@ -615,7 +615,7 @@ pub async fn process_events_async<
     channel_manager: CM,
     gossip_sync: GossipSync<PGS, RGS, G, UL, L>,
     peer_manager: PM,
-    _logger: L,
+    logger: L,
     scorer: Option<S>,
     sleeper: Sleeper,
     mobile_interruptable_platform: bool,
