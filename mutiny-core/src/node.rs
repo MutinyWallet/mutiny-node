@@ -1142,19 +1142,24 @@ async fn start_reconnection_handling(
     let reconnection_stopped_components = stopped_components.clone();
     spawn_local(async move {
         loop {
-            if reconnection_stop.load(Ordering::Relaxed) {
-                log_debug!(
-                    reconnection_logger,
-                    "stopping reconnection component for node: {}",
-                    node_pubkey.to_hex(),
-                );
-                stop_component(&reconnection_stopped_components);
-                log_debug!(
-                    reconnection_logger,
-                    "stopped reconnection component for node: {}",
-                    node_pubkey.to_hex(),
-                );
-                break;
+            // run through reconnection logic every 5 seconds,
+            // check if it should stop once every second.
+            for _ in 0..5 {
+                if reconnection_stop.load(Ordering::Relaxed) {
+                    log_debug!(
+                        reconnection_logger,
+                        "stopping reconnection component for node: {}",
+                        node_pubkey.to_hex(),
+                    );
+                    stop_component(&reconnection_stopped_components);
+                    log_debug!(
+                        reconnection_logger,
+                        "stopped reconnection component for node: {}",
+                        node_pubkey.to_hex(),
+                    );
+                    return;
+                }
+                sleep(1_000).await;
             }
 
             if !multi_socket_reconnect.connected() {
@@ -1172,31 +1177,17 @@ async fn start_reconnection_handling(
                     Ok(main_proxy) => {
                         multi_socket_reconnect.reconnect(Arc::new(main_proxy)).await;
                     }
-                    Err(_) => {
-                        sleep(5 * 1000).await;
-                        continue;
+                    Err(e) => {
+                        log_error!(
+                            reconnection_logger,
+                            "could not create new multi socket proxy: {e}",
+                        );
                     }
                 };
             } else {
                 // send a keep alive message if connected
                 multi_socket_reconnect.attempt_keep_alive();
             }
-
-            if reconnection_stop.load(Ordering::Relaxed) {
-                log_debug!(
-                    reconnection_logger,
-                    "stopping reconnection component for node: {}",
-                    node_pubkey.to_hex(),
-                );
-                stop_component(&reconnection_stopped_components);
-                log_debug!(
-                    reconnection_logger,
-                    "stopped reconnection component for node: {}",
-                    node_pubkey.to_hex(),
-                );
-                break;
-            }
-            sleep(5 * 1000).await;
         }
     });
 
@@ -1209,29 +1200,31 @@ async fn start_reconnection_handling(
     stopped_components.try_write()?.push(false);
     let connect_stopped_components = stopped_components.clone();
     spawn_local(async move {
-        // wait for things to start up first before starting reconnecting logic
-        sleep(5 * 1000).await;
         loop {
-            if connect_stop.load(Ordering::Relaxed) {
-                log_debug!(
-                    connect_logger,
-                    "stopping connection component and disconnecting peers for node: {}",
-                    node_pubkey.to_hex(),
-                );
-                connect_peer_man.disconnect_all_peers();
-                stop_component(&connect_stopped_components);
-                log_debug!(
-                    connect_logger,
-                    "stopped connection component and disconnected peers for node: {}",
-                    node_pubkey.to_hex(),
-                );
-                break;
+            for _ in 0..5 {
+                if connect_stop.load(Ordering::Relaxed) {
+                    log_debug!(
+                        connect_logger,
+                        "stopping connection component and disconnecting peers for node: {}",
+                        node_pubkey.to_hex(),
+                    );
+                    connect_peer_man.disconnect_all_peers();
+                    stop_component(&connect_stopped_components);
+                    log_debug!(
+                        connect_logger,
+                        "stopped connection component and disconnected peers for node: {}",
+                        node_pubkey.to_hex(),
+                    );
+                    break;
+                }
+                sleep(1_000).await;
             }
 
-            // if we aren't connected to master socket
-            // then don't try to connect peer
+            // if we aren't connected to master socket then skip
+            // this is either an indication that there's a network issue or another instance of the
+            // same node is already connected (we do checking server side), in which case we probably
+            // shouldn't connect to the same peers again anyways.
             if !connect_multi_socket.connected() {
-                sleep(5 * 1000).await;
                 continue;
             }
 
@@ -1261,6 +1254,7 @@ async fn start_reconnection_handling(
                         continue;
                     }
                 };
+
                 match connect_peer_if_necessary(
                     connect_multi_socket.clone(),
                     &connect_proxy,
@@ -1277,23 +1271,7 @@ async fn start_reconnection_handling(
                         log_warn!(connect_logger, "could not auto connect peer: {e}");
                     }
                 }
-                if connect_stop.load(Ordering::Relaxed) {
-                    log_debug!(
-                        connect_logger,
-                        "stopping connection component and disconnecting peers for node: {}",
-                        node_pubkey.to_hex(),
-                    );
-                    connect_peer_man.disconnect_all_peers();
-                    stop_component(&connect_stopped_components);
-                    log_debug!(
-                        connect_logger,
-                        "stopped connection component and disconnected peers for node: {}",
-                        node_pubkey.to_hex(),
-                    );
-                    break;
-                }
             }
-            sleep(5 * 1000).await;
         }
     });
     Ok(())
