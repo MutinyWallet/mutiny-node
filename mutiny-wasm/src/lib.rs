@@ -123,8 +123,14 @@ impl MutinyWallet {
     ///
     /// It is recommended to create a new address for every transaction.
     #[wasm_bindgen]
-    pub fn get_new_address(&self) -> Result<String, MutinyJsError> {
-        Ok(self.inner.node_manager.get_new_address()?.to_string())
+    pub fn get_new_address(
+        &self,
+        labels: JsValue, /* Vec<String> */
+    ) -> Result<String, MutinyJsError> {
+        let labels: Vec<String> = labels
+            .into_serde()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        Ok(self.inner.node_manager.get_new_address(labels)?.to_string())
     }
 
     /// Gets the current balance of the on-chain wallet.
