@@ -796,9 +796,13 @@ impl Node {
             )
         };
 
-        self.persister
+        if let Err(e) = self
+            .persister
             .storage
-            .set_invoice_labels(invoice.clone(), labels)?;
+            .set_invoice_labels(invoice.clone(), labels)
+        {
+            log_error!(self.logger, "could not set invoice label: {e}");
+        }
 
         let last_update = utils::now().as_secs();
         let mut payment_info = PaymentInfo {
