@@ -770,6 +770,7 @@ impl Node {
         &self,
         invoice: &Invoice,
         amt_sats: Option<u64>,
+        labels: Vec<String>,
     ) -> Result<PaymentHash, MutinyError> {
         let (pay_result, amt_msat) = if invoice.amount_milli_satoshis().is_none() {
             if amt_sats.is_none() {
@@ -794,6 +795,14 @@ impl Node {
                 invoice.amount_milli_satoshis().unwrap(),
             )
         };
+
+        if let Err(e) = self
+            .persister
+            .storage
+            .set_invoice_labels(invoice.clone(), labels)
+        {
+            log_error!(self.logger, "could not set invoice label: {e}");
+        }
 
         let last_update = utils::now().as_secs();
         let mut payment_info = PaymentInfo {
@@ -872,7 +881,7 @@ impl Node {
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         // initiate payment
-        let payment_hash = self.init_invoice_payment(invoice, amt_sats)?;
+        let payment_hash = self.init_invoice_payment(invoice, amt_sats, labels.clone())?;
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
 
         self.await_payment(payment_hash, timeout, labels).await
