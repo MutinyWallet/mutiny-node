@@ -30,6 +30,7 @@ use bip39::Mnemonic;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
 use bitcoin::secp256k1::rand;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint};
+use core::time::Duration;
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::ln::channelmanager::RecipientOnionFields;
 use lightning::{
@@ -65,6 +66,7 @@ use lightning_invoice::{
     utils::{create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice},
     Invoice,
 };
+use std::collections::HashMap;
 use std::{
     net::SocketAddr,
     str::FromStr,
@@ -76,6 +78,8 @@ use std::{
 use wasm_bindgen_futures::spawn_local;
 
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
+const INITIAL_RECONNECTION_DELAY: u64 = 5;
+const MAX_RECONNECTION_DELAY: u64 = 60;
 
 pub(crate) type RapidGossipSync =
     lightning_rapid_gossip_sync::RapidGossipSync<Arc<NetworkGraph>, Arc<MutinyLogger>>;
@@ -1141,10 +1145,11 @@ async fn start_reconnection_handling(
     stopped_components.try_write()?.push(false);
     let reconnection_stopped_components = stopped_components.clone();
     spawn_local(async move {
+        let mut delay = INITIAL_RECONNECTION_DELAY;
         loop {
-            // run through reconnection logic every 5 seconds,
+            // run through reconnection logic every delay seconds,
             // check if it should stop once every second.
-            for _ in 0..5 {
+            for _ in 0..delay {
                 if reconnection_stop.load(Ordering::Relaxed) {
                     log_debug!(
                         reconnection_logger,
@@ -1176,17 +1181,23 @@ async fn start_reconnection_handling(
                 {
                     Ok(main_proxy) => {
                         multi_socket_reconnect.reconnect(Arc::new(main_proxy)).await;
+                        // reset delay to initial value if reconnection successful
+                        delay = 5;
                     }
                     Err(e) => {
                         log_error!(
                             reconnection_logger,
                             "could not create new multi socket proxy: {e}",
                         );
+                        // double the delay if reconnection fails, but do not exceed max
+                        delay = (delay * 2).min(MAX_RECONNECTION_DELAY);
                     }
                 };
             } else {
                 // send a keep alive message if connected
                 multi_socket_reconnect.attempt_keep_alive();
+                // reset delay to initial value if connection is healthy
+                delay = INITIAL_RECONNECTION_DELAY;
             }
         }
     });
@@ -1200,6 +1211,9 @@ async fn start_reconnection_handling(
     stopped_components.try_write()?.push(false);
     let connect_stopped_components = stopped_components.clone();
     spawn_local(async move {
+        // hashMap to store backoff times for each pubkey
+        let mut backoff_times = HashMap::new();
+
         loop {
             for _ in 0..5 {
                 if connect_stop.load(Ordering::Relaxed) {
@@ -1246,6 +1260,21 @@ async fn start_reconnection_handling(
                 .collect();
 
             for (pubkey, conn_str) in not_connected.into_iter() {
+                let now = crate::utils::now();
+
+                // initialize backoff time and last attempt time if they do not exist
+                let backoff_entry = backoff_times
+                    .entry(pubkey)
+                    .or_insert((INITIAL_RECONNECTION_DELAY, now));
+
+                // skip this pubkey if not enough time has passed since the last attempt
+                if now - backoff_entry.1 < Duration::from_secs(backoff_entry.0) {
+                    continue;
+                }
+
+                // Update the last attempt time
+                backoff_entry.1 = now;
+
                 log_trace!(connect_logger, "going to auto connect to peer: {pubkey}");
                 let peer_connection_info = match PubkeyConnectionInfo::new(&conn_str) {
                     Ok(p) => p,
@@ -1266,9 +1295,13 @@ async fn start_reconnection_handling(
                 {
                     Ok(_) => {
                         log_trace!(connect_logger, "auto connected peer: {pubkey}");
+                        // reset backoff time to initial value if connection is successful
+                        backoff_entry.0 = INITIAL_RECONNECTION_DELAY;
                     }
                     Err(e) => {
                         log_warn!(connect_logger, "could not auto connect peer: {e}");
+                        // double the backoff time if connection fails, but do not exceed max
+                        backoff_entry.0 = (backoff_entry.0 * 2).min(MAX_RECONNECTION_DELAY);
                     }
                 }
             }

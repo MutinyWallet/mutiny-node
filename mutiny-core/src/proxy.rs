@@ -1,10 +1,10 @@
-use crate::error::MutinyError;
 use crate::node::ConnectionType;
 use crate::node::PubkeyConnectionInfo;
+use crate::{error::MutinyError, utils::sleep};
 use async_trait::async_trait;
 use futures::stream::SplitStream;
 use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
-use gloo_net::websocket::{futures::WebSocket, Message};
+use gloo_net::websocket::{futures::WebSocket, Message, State};
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_trace};
 use std::sync::Arc;
@@ -45,6 +45,31 @@ impl WsProxy {
             ))
             .map_err(|_| MutinyError::ConnectionFailed)?,
         };
+
+        // wait for connected status or time out at 10s
+        let mut retries = 10;
+        while retries > 0 {
+            match ws.state() {
+                State::Open => break,
+                State::Closed => break,
+                _ => {
+                    sleep(1_000).await;
+                    retries -= 1;
+                }
+            }
+        }
+
+        match ws.state() {
+            State::Open => {}
+            _ => return Err(MutinyError::ConnectionFailed),
+        }
+
+        // TODO wait until we get an OK response from websocket.
+        // A connection to the proxy for connections just means that
+        // it just connected to the proxy. It does not mean the proxy
+        // successfully connected out to the other end. They may be
+        // offline and shortly cut off from the WS but that happens
+        // outside of the connect flow. This will falsely return success.
 
         log_debug!(logger, "connected to ws: {proxy_url}");
 
