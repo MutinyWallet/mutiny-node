@@ -3,6 +3,7 @@ use crate::keymanager::PhantomKeysManager;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::logging::MutinyLogger;
 use crate::onchain::OnChainWallet;
+use crate::storage::MutinyStorage;
 use crate::utils::sleep;
 use anyhow::anyhow;
 use bitcoin::hashes::hex::ToHex;
@@ -56,23 +57,23 @@ pub(crate) enum HTLCStatus {
 }
 
 #[derive(Clone)]
-pub struct EventHandler {
-    channel_manager: Arc<PhantomChannelManager>,
-    fee_estimator: Arc<MutinyFeeEstimator>,
-    wallet: Arc<OnChainWallet>,
-    keys_manager: Arc<PhantomKeysManager>,
-    persister: Arc<MutinyNodePersister>,
+pub struct EventHandler<S: MutinyStorage> {
+    channel_manager: Arc<PhantomChannelManager<S>>,
+    fee_estimator: Arc<MutinyFeeEstimator<S>>,
+    wallet: Arc<OnChainWallet<S>>,
+    keys_manager: Arc<PhantomKeysManager<S>>,
+    persister: Arc<MutinyNodePersister<S>>,
     lsp_client_pubkey: Option<PublicKey>,
     logger: Arc<MutinyLogger>,
 }
 
-impl EventHandler {
+impl<S: MutinyStorage> EventHandler<S> {
     pub(crate) fn new(
-        channel_manager: Arc<PhantomChannelManager>,
-        fee_estimator: Arc<MutinyFeeEstimator>,
-        wallet: Arc<OnChainWallet>,
-        keys_manager: Arc<PhantomKeysManager>,
-        persister: Arc<MutinyNodePersister>,
+        channel_manager: Arc<PhantomChannelManager<S>>,
+        fee_estimator: Arc<MutinyFeeEstimator<S>>,
+        wallet: Arc<OnChainWallet<S>>,
+        keys_manager: Arc<PhantomKeysManager<S>>,
+        persister: Arc<MutinyNodePersister<S>>,
         lsp_client_pubkey: Option<PublicKey>,
         logger: Arc<MutinyLogger>,
     ) -> Self {

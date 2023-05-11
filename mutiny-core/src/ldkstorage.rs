@@ -2,12 +2,12 @@ use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyStorageError};
 use crate::event::PaymentInfo;
 use crate::fees::MutinyFeeEstimator;
-use crate::gossip;
-use crate::indexed_db::MutinyStorage;
+use crate::gossip::{NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 use crate::keymanager::PhantomKeysManager;
 use crate::logging::MutinyLogger;
 use crate::node::{default_user_config, ChainMonitor, ProbScorer};
 use crate::node::{NetworkGraph, Router};
+use crate::storage::MutinyStorage;
 use crate::utils;
 use anyhow::anyhow;
 use bdk_esplora::esplora_client::AsyncClient;
@@ -43,31 +43,31 @@ const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
 const CHANNEL_OPENING_PARAMS_PREFIX: &str = "chan_open_params/";
 const FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY: &str = "failed_spendable_outputs";
 
-pub(crate) type PhantomChannelManager = LdkChannelManager<
-    Arc<ChainMonitor>,
+pub(crate) type PhantomChannelManager<S: MutinyStorage> = LdkChannelManager<
+    Arc<ChainMonitor<S>>,
     Arc<MutinyChain>,
-    Arc<PhantomKeysManager>,
-    Arc<PhantomKeysManager>,
-    Arc<PhantomKeysManager>,
-    Arc<MutinyFeeEstimator>,
+    Arc<PhantomKeysManager<S>>,
+    Arc<PhantomKeysManager<S>>,
+    Arc<PhantomKeysManager<S>>,
+    Arc<MutinyFeeEstimator<S>>,
     Arc<Router>,
     Arc<MutinyLogger>,
 >;
 
 #[derive(Clone)]
-pub struct MutinyNodePersister {
+pub struct MutinyNodePersister<S: MutinyStorage> {
     node_id: String,
-    pub(crate) storage: MutinyStorage,
+    pub(crate) storage: S,
 }
 
-pub(crate) struct ReadChannelManager {
-    pub channel_manager: PhantomChannelManager,
+pub(crate) struct ReadChannelManager<S: MutinyStorage> {
+    pub channel_manager: PhantomChannelManager<S>,
     pub is_restarting: bool,
     pub channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
 }
 
-impl MutinyNodePersister {
-    pub fn new(node_id: String, storage: MutinyStorage) -> Self {
+impl<S: MutinyStorage> MutinyNodePersister<S> {
+    pub fn new(node_id: String, storage: S) -> Self {
         MutinyNodePersister { node_id, storage }
     }
 
@@ -82,7 +82,7 @@ impl MutinyNodePersister {
     ) -> Result<(), lightning::io::Error> {
         let key_with_node = self.get_key(key);
         self.storage
-            .set(key_with_node, object.encode())
+            .set_data(key_with_node, object.encode())
             .map_err(|_| lightning::io::ErrorKind::Other.into())
     }
 
@@ -90,7 +90,7 @@ impl MutinyNodePersister {
     // that has the concatenated node_id
     fn read_value(&self, _key: &str) -> Result<Vec<u8>, MutinyError> {
         let key = self.get_key(_key);
-        match self.storage.get(&key) {
+        match self.storage.get_data(&key) {
             Ok(Some(value)) => Ok(value),
             Ok(None) => Err(MutinyError::read_err(MutinyStorageError::Other(anyhow!(
                 "No value found for key: {key}"
@@ -101,7 +101,7 @@ impl MutinyNodePersister {
 
     pub fn read_channel_monitors(
         &self,
-        keys_manager: Arc<PhantomKeysManager>,
+        keys_manager: Arc<PhantomKeysManager<S>>,
     ) -> Result<Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>, io::Error> {
         // Get all the channel monitor buffers that exist for this node
         let suffix = self.node_id.as_str();
@@ -139,15 +139,15 @@ impl MutinyNodePersister {
     pub(crate) async fn read_channel_manager(
         &self,
         network: Network,
-        chain_monitor: Arc<ChainMonitor>,
+        chain_monitor: Arc<ChainMonitor<S>>,
         mutiny_chain: Arc<MutinyChain>,
-        fee_estimator: Arc<MutinyFeeEstimator>,
+        fee_estimator: Arc<MutinyFeeEstimator<S>>,
         mutiny_logger: Arc<MutinyLogger>,
-        keys_manager: Arc<PhantomKeysManager>,
+        keys_manager: Arc<PhantomKeysManager<S>>,
         router: Arc<Router>,
         mut channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
         esplora: Arc<AsyncClient>,
-    ) -> Result<ReadChannelManager, MutinyError> {
+    ) -> Result<ReadChannelManager<S>, MutinyError> {
         match self.read_value(CHANNEL_MANAGER_KEY) {
             Ok(kv_value) => {
                 let mut channel_monitor_mut_references = Vec::new();
@@ -166,8 +166,8 @@ impl MutinyNodePersister {
                     default_user_config(),
                     channel_monitor_mut_references,
                 );
-                let mut readable_kv_value = lightning::io::Cursor::new(kv_value);
-                let Ok((_, channel_manager)) = <(BlockHash, PhantomChannelManager)>::read(&mut readable_kv_value, read_args) else {
+                let mut readable_kv_value = Cursor::new(kv_value);
+                let Ok((_, channel_manager)) = <(BlockHash, PhantomChannelManager<S>)>::read(&mut readable_kv_value, read_args) else {
                     return Err(MutinyError::ReadError { source: MutinyStorageError::Other(anyhow!("could not read manager")) })
                 };
                 Ok(ReadChannelManager {
@@ -198,7 +198,7 @@ impl MutinyNodePersister {
                     best_block,
                 };
 
-                let fresh_channel_manager: PhantomChannelManager =
+                let fresh_channel_manager: PhantomChannelManager<S> =
                     channelmanager::ChannelManager::new(
                         fee_estimator,
                         chain_monitor,
@@ -229,7 +229,7 @@ impl MutinyNodePersister {
     ) -> io::Result<()> {
         let key = self.get_key(payment_key(inbound, payment_hash).as_str());
         self.storage
-            .set(key, payment_info)
+            .set_data(key, payment_info)
             .map_err(io::Error::other)
     }
 
@@ -241,7 +241,8 @@ impl MutinyNodePersister {
     ) -> Option<PaymentInfo> {
         let key = self.get_key(payment_key(inbound, payment_hash).as_str());
         log_trace!(logger, "Trace: checking payment key: {key}");
-        let deserialized_value: Result<Option<PaymentInfo>, MutinyError> = self.storage.get(key);
+        let deserialized_value: Result<Option<PaymentInfo>, MutinyError> =
+            self.storage.get_data(key);
         deserialized_value.ok().flatten()
     }
 
@@ -280,7 +281,7 @@ impl MutinyNodePersister {
 
         // get the currently stored descriptors encoded as hex
         // if there are none, use an empty vector
-        let mut descriptors: Vec<String> = self.storage.get(&key)?.unwrap_or_default();
+        let mut descriptors: Vec<String> = self.storage.get_data(&key)?.unwrap_or_default();
 
         // convert the failed descriptors to hex
         let failed_hex: Vec<String> = failed
@@ -291,7 +292,7 @@ impl MutinyNodePersister {
         // add the new descriptors
         descriptors.extend(failed_hex);
 
-        self.storage.set(key, descriptors)?;
+        self.storage.set_data(key, descriptors)?;
 
         Ok(())
     }
@@ -302,7 +303,7 @@ impl MutinyNodePersister {
 
         // get the currently stored descriptors encoded as hex
         // if there are none, use an empty vector
-        let strings: Vec<String> = self.storage.get(&key)?.unwrap_or_default();
+        let strings: Vec<String> = self.storage.get_data(&key)?.unwrap_or_default();
 
         // convert the hex strings to descriptors
         let mut descriptors = vec![];
@@ -332,7 +333,7 @@ impl MutinyNodePersister {
         params: ChannelOpenParams,
     ) -> Result<(), MutinyError> {
         let key = self.get_key(&channel_open_params_key(id));
-        self.storage.set(key, params)
+        self.storage.set_data(key, params)
     }
 
     pub(crate) fn get_channel_open_params(
@@ -340,7 +341,7 @@ impl MutinyNodePersister {
         id: u128,
     ) -> Result<Option<ChannelOpenParams>, MutinyError> {
         let key = self.get_key(&channel_open_params_key(id));
-        self.storage.get(key)
+        self.storage.get_data(key)
     }
 
     pub(crate) fn delete_channel_open_params(&self, id: u128) -> Result<(), MutinyError> {
@@ -377,40 +378,47 @@ fn payment_key(inbound: bool, payment_hash: &PaymentHash) -> String {
     }
 }
 
-impl
+impl<S: MutinyStorage>
     Persister<
         '_,
-        Arc<ChainMonitor>,
+        Arc<ChainMonitor<S>>,
         Arc<MutinyChain>,
-        Arc<PhantomKeysManager>,
-        Arc<PhantomKeysManager>,
-        Arc<PhantomKeysManager>,
-        Arc<MutinyFeeEstimator>,
+        Arc<PhantomKeysManager<S>>,
+        Arc<PhantomKeysManager<S>>,
+        Arc<PhantomKeysManager<S>>,
+        Arc<MutinyFeeEstimator<S>>,
         Arc<Router>,
         Arc<MutinyLogger>,
         utils::Mutex<ProbScorer>,
-    > for MutinyNodePersister
+    > for MutinyNodePersister<S>
 {
     fn persist_manager(
         &self,
-        channel_manager: &PhantomChannelManager,
+        channel_manager: &PhantomChannelManager<S>,
     ) -> Result<(), lightning::io::Error> {
         self.persist_local_storage(CHANNEL_MANAGER_KEY, channel_manager)
     }
 
     fn persist_graph(&self, network_graph: &NetworkGraph) -> Result<(), lightning::io::Error> {
-        gossip::persist_network_graph(network_graph)
+        self.storage
+            .set_data(NETWORK_GRAPH_KEY, network_graph.encode().to_hex())
+            .map_err(|_| lightning::io::ErrorKind::Other.into())
     }
 
     fn persist_scorer(
         &self,
         scorer: &utils::Mutex<ProbScorer>,
     ) -> Result<(), lightning::io::Error> {
-        gossip::persist_scorer(scorer)
+        let scorer_str = scorer.encode().to_hex();
+        self.storage
+            .set_data(PROB_SCORER_KEY, scorer_str)
+            .map_err(|_| lightning::io::ErrorKind::Other.into())
     }
 }
 
-impl<ChannelSigner: WriteableEcdsaChannelSigner> Persist<ChannelSigner> for MutinyNodePersister {
+impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<ChannelSigner>
+    for MutinyNodePersister<S>
+{
     fn persist_new_channel(
         &self,
         funding_txo: OutPoint,
@@ -450,6 +458,7 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner> Persist<ChannelSigner> for Muti
 #[cfg(test)]
 mod test {
     use crate::event::{HTLCStatus, MillisatAmount};
+    use crate::storage::MemoryStorage;
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::PublicKey;
     use bitcoin::Txid;
@@ -460,15 +469,12 @@ mod test {
     use super::*;
 
     use crate::test_utils::*;
-    use crate::utils::sleep;
 
     wasm_bindgen_test_configure!(run_in_browser);
 
-    async fn get_test_persister(db_prefix: String) -> MutinyNodePersister {
+    async fn get_test_persister() -> MutinyNodePersister<MemoryStorage> {
         let id = Uuid::new_v4().to_string();
-        let storage = MutinyStorage::new("".to_string(), Some(db_prefix))
-            .await
-            .unwrap();
+        let storage = MemoryStorage::default();
         MutinyNodePersister::new(id, storage)
     }
 
@@ -477,7 +483,7 @@ mod test {
         let test_name = "test_persist_payment_info";
         log!("{}", test_name);
 
-        let persister = get_test_persister(test_name.to_string()).await;
+        let persister = get_test_persister().await;
         let preimage = [1; 32];
         let payment_hash = PaymentHash([0; 32]);
         let pubkey = PublicKey::from_str(
@@ -503,19 +509,12 @@ mod test {
 
         assert!(result.is_some());
         assert_eq!(result.clone().unwrap().preimage, Some(preimage));
-        assert_eq!(result.clone().unwrap().status, HTLCStatus::Succeeded);
+        assert_eq!(result.unwrap().status, HTLCStatus::Succeeded);
 
         let list = persister.list_payment_info(true).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].0, payment_hash);
         assert_eq!(list[0].1.preimage, Some(preimage));
-
-        // now test reading it from indexedDB
-
-        // sleep to make sure the write is done
-        sleep(500).await;
-        // reload from indexedDB so we can read it
-        persister.storage.reload_from_indexed_db().await.unwrap();
 
         let result =
             persister.read_payment_info(&payment_hash, true, Arc::new(MutinyLogger::default()));
@@ -535,7 +534,7 @@ mod test {
         let test_name = "test_persist_spendable_output_descriptor";
         log!("{}", test_name);
 
-        let persister = get_test_persister(test_name.to_string()).await;
+        let persister = get_test_persister().await;
 
         let static_output_0 = SpendableOutputDescriptor::StaticOutput {
             outpoint: OutPoint {

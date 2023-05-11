@@ -1,6 +1,6 @@
 use crate::error::MutinyError;
-use crate::indexed_db::MutinyStorage;
 use crate::nodemanager::NodeManager;
+use crate::storage::MutinyStorage;
 use crate::utils;
 use crate::utils::sleep;
 use anyhow::anyhow;
@@ -105,9 +105,9 @@ fn get_redshift_key(id: &[u8; 16]) -> String {
     format!("{REDSHIFT_KEY_PREFIX}{}", id.to_hex())
 }
 
-impl RedshiftStorage for MutinyStorage {
+impl<S: MutinyStorage> RedshiftStorage for S {
     fn get_redshift(&self, id: &[u8; 16]) -> Result<Option<Redshift>, MutinyError> {
-        let redshifts = self.get(get_redshift_key(id))?;
+        let redshifts = self.get_data(get_redshift_key(id))?;
         Ok(redshifts)
     }
 
@@ -117,7 +117,7 @@ impl RedshiftStorage for MutinyStorage {
     }
 
     fn persist_redshift(&self, redshift: Redshift) -> Result<(), MutinyError> {
-        self.set(get_redshift_key(&redshift.id), redshift)
+        self.set_data(get_redshift_key(&redshift.id), redshift)
     }
 }
 
@@ -147,7 +147,7 @@ pub trait RedshiftManager {
     async fn attempt_payments(&self, rs: Redshift) -> Result<(), MutinyError>;
 }
 
-impl RedshiftManager for NodeManager {
+impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
     async fn await_chan_funding_tx(
         &self,
         sending_node: &PublicKey,
@@ -475,6 +475,7 @@ impl RedshiftManager for NodeManager {
 // TODO add more redshift tests
 #[cfg(test)]
 mod test {
+    use crate::storage::MemoryStorage;
     use std::str::FromStr;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
@@ -512,9 +513,7 @@ mod test {
         let test_name = "test_create_signature";
         log!("{}", test_name);
 
-        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
-            .await
-            .unwrap();
+        let storage = MemoryStorage::default();
         let rs = dummy_redshift();
 
         assert!(storage.get_redshifts().unwrap().is_empty());

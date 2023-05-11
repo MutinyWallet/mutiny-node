@@ -1,6 +1,6 @@
 use crate::error::MutinyError;
-use crate::indexed_db::MutinyStorage;
 use crate::logging::MutinyLogger;
+use crate::storage::MutinyStorage;
 use bdk::FeeRate;
 use esplora_client::AsyncClient;
 use lightning::chain::chaininterface::{
@@ -21,18 +21,18 @@ pub(crate) const P2WSH_OUTPUT_SIZE: usize = 43;
 pub(crate) const TAPROOT_OUTPUT_SIZE: usize = 43;
 
 #[derive(Clone)]
-pub struct MutinyFeeEstimator {
-    storage: MutinyStorage,
+pub struct MutinyFeeEstimator<S: MutinyStorage> {
+    storage: S,
     esplora: Arc<AsyncClient>,
     logger: Arc<MutinyLogger>,
 }
 
-impl MutinyFeeEstimator {
+impl<S: MutinyStorage> MutinyFeeEstimator<S> {
     pub fn new(
-        storage: MutinyStorage,
+        storage: S,
         esplora: Arc<AsyncClient>,
         logger: Arc<MutinyLogger>,
-    ) -> MutinyFeeEstimator {
+    ) -> MutinyFeeEstimator<S> {
         MutinyFeeEstimator {
             storage,
             esplora,
@@ -77,7 +77,7 @@ struct MempoolFees {
     minimum_fee: f64,
 }
 
-impl MutinyFeeEstimator {
+impl<S: MutinyStorage> MutinyFeeEstimator<S> {
     async fn get_mempool_recommended_fees(&self) -> anyhow::Result<HashMap<String, f64>> {
         let fees = self
             .esplora
@@ -116,7 +116,7 @@ impl MutinyFeeEstimator {
     }
 }
 
-impl FeeEstimator for MutinyFeeEstimator {
+impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
     fn get_est_sat_per_1000_weight(&self, confirmation_target: ConfirmationTarget) -> u32 {
         let num_blocks = num_blocks_from_conf_target(confirmation_target);
         let fallback_fee = fallback_fee_from_conf_target(confirmation_target);
@@ -161,7 +161,7 @@ fn fallback_fee_from_conf_target(confirmation_target: ConfirmationTarget) -> u32
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::indexed_db::MutinyStorage;
+    use crate::storage::{MemoryStorage, MutinyStorage};
     use crate::test_utils::*;
     use esplora_client::Builder;
     use std::collections::HashMap;
@@ -170,10 +170,8 @@ mod test {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
-    async fn create_fee_estimator(db_prefix: String) -> MutinyFeeEstimator {
-        let storage = MutinyStorage::new("".to_string(), Some(db_prefix))
-            .await
-            .unwrap();
+    async fn create_fee_estimator() -> MutinyFeeEstimator<MemoryStorage> {
+        let storage = MemoryStorage::new(None);
         let esplora = Arc::new(
             Builder::new("https://mutinynet.com/api")
                 .build_async()
@@ -218,7 +216,7 @@ mod test {
         let test_name = "test_update_fee_estimates";
         log!("{}", test_name);
 
-        let fee_estimator = create_fee_estimator(test_name.to_string()).await;
+        let fee_estimator = create_fee_estimator().await;
         fee_estimator.update_fee_estimates().await.unwrap();
 
         let fee_estimates = fee_estimator.storage.get_fee_estimates().unwrap().unwrap();
@@ -233,7 +231,7 @@ mod test {
         let test_name = "test_get_est_sat_per_1000_weight";
         log!("{}", test_name);
 
-        let fee_estimator = create_fee_estimator(test_name.to_string()).await;
+        let fee_estimator = create_fee_estimator().await;
         // set up the cache
         let mut fee_estimates = HashMap::new();
         fee_estimates.insert("6".to_string(), 10_f64);
@@ -264,7 +262,7 @@ mod test {
         let test_name = "test_estimate_expected_fee";
         log!("{}", test_name);
 
-        let fee_estimator = create_fee_estimator(test_name.to_string()).await;
+        let fee_estimator = create_fee_estimator().await;
 
         assert_eq!(
             fee_estimator.calculate_expected_fee(

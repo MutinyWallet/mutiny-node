@@ -23,7 +23,7 @@ use crate::{
     },
     utils::{self, sleep},
 };
-use crate::{indexed_db::MutinyStorage, lspclient::FeeRequest};
+use crate::{lspclient::FeeRequest, storage::MutinyStorage};
 use anyhow::{anyhow, Context};
 use bdk_esplora::esplora_client::AsyncClient;
 use bip39::Mnemonic;
@@ -90,19 +90,19 @@ pub(crate) type RapidGossipSync =
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
-pub(crate) type MessageHandler = LdkMessageHandler<
-    Arc<PhantomChannelManager>,
-    Arc<GossipMessageHandler>,
+pub(crate) type MessageHandler<S: MutinyStorage> = LdkMessageHandler<
+    Arc<PhantomChannelManager<S>>,
+    Arc<GossipMessageHandler<S>>,
     Arc<IgnoringMessageHandler>,
 >;
 
-pub(crate) type ChainMonitor = chainmonitor::ChainMonitor<
+pub(crate) type ChainMonitor<S: MutinyStorage> = chainmonitor::ChainMonitor<
     InMemorySigner,
     Arc<dyn Filter + Send + Sync>,
     Arc<MutinyChain>,
-    Arc<MutinyFeeEstimator>,
+    Arc<MutinyFeeEstimator<S>>,
     Arc<MutinyLogger>,
-    Arc<MutinyNodePersister>,
+    Arc<MutinyNodePersister<S>>,
 >;
 
 pub(crate) type Router =
@@ -149,18 +149,18 @@ impl PubkeyConnectionInfo {
     }
 }
 
-pub(crate) struct Node {
+pub(crate) struct Node<S: MutinyStorage> {
     pub _uuid: String,
     pub child_index: u32,
     stopped_components: Arc<RwLock<Vec<bool>>>,
     pub pubkey: PublicKey,
     pub peer_manager: Arc<dyn PeerManager>,
-    pub keys_manager: Arc<PhantomKeysManager>,
-    pub channel_manager: Arc<PhantomChannelManager>,
-    pub chain_monitor: Arc<ChainMonitor>,
+    pub keys_manager: Arc<PhantomKeysManager<S>>,
+    pub channel_manager: Arc<PhantomChannelManager<S>>,
+    pub chain_monitor: Arc<ChainMonitor<S>>,
     network: Network,
-    pub persister: Arc<MutinyNodePersister>,
-    wallet: Arc<OnChainWallet>,
+    pub persister: Arc<MutinyNodePersister<S>>,
+    wallet: Arc<OnChainWallet<S>>,
     logger: Arc<MutinyLogger>,
     websocket_proxy_addr: String,
     multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
@@ -168,19 +168,19 @@ pub(crate) struct Node {
     stop: Arc<AtomicBool>,
 }
 
-impl Node {
+impl<S: MutinyStorage> Node<S> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
         uuid: String,
         node_index: &NodeIndex,
         stop: Arc<AtomicBool>,
         mnemonic: &Mnemonic,
-        storage: MutinyStorage,
+        storage: S,
         gossip_sync: Arc<RapidGossipSync>,
         scorer: Arc<utils::Mutex<ProbScorer>>,
         chain: Arc<MutinyChain>,
-        fee_estimator: Arc<MutinyFeeEstimator>,
-        wallet: Arc<OnChainWallet>,
+        fee_estimator: Arc<MutinyFeeEstimator<S>>,
+        wallet: Arc<OnChainWallet<S>>,
         network: Network,
         websocket_proxy_addr: String,
         esplora: Arc<AsyncClient>,
@@ -203,7 +203,7 @@ impl Node {
         let persister = Arc::new(MutinyNodePersister::new(uuid.clone(), storage));
 
         // init chain monitor
-        let chain_monitor: Arc<ChainMonitor> = Arc::new(ChainMonitor::new(
+        let chain_monitor: Arc<ChainMonitor<S>> = Arc::new(ChainMonitor::new(
             Some(chain.tx_sync.clone()),
             chain.clone(),
             logger.clone(),
@@ -242,7 +242,7 @@ impl Node {
             )
             .await?;
 
-        let channel_manager: Arc<PhantomChannelManager> =
+        let channel_manager: Arc<PhantomChannelManager<S>> =
             Arc::new(read_channel_manager.channel_manager);
 
         // Check all existing channels against default configs.
@@ -276,6 +276,7 @@ impl Node {
         }
 
         let route_handler = Arc::new(GossipMessageHandler {
+            storage: persister.storage.clone(),
             network_graph: gossip_sync.network_graph().clone(),
             logger: logger.clone(),
         });
@@ -454,6 +455,7 @@ impl Node {
             logger.clone(),
         )));
         start_reconnection_handling(
+            &persister.storage,
             pubkey,
             multi_socket.clone(),
             websocket_proxy_addr.clone(),
@@ -536,19 +538,17 @@ impl Node {
                 // if we have the connection info saved in storage, update it if we need to
                 // otherwise cache it in temp_peer_connection_map so we can later save it
                 // if we open a channel in the future.
-                if let Some(saved) = read_peer_info(&node_id)
-                    .await?
+                if let Some(saved) = read_peer_info(&self.persister.storage, &node_id)?
                     .and_then(|p| p.connection_string)
                 {
                     if saved != peer_connection_info.original_connection_string {
                         match save_peer_connection_info(
+                            &self.persister.storage,
                             &self._uuid,
                             &node_id,
                             &peer_connection_info.original_connection_string,
                             label,
-                        )
-                        .await
-                        {
+                        ) {
                             Ok(_) => (),
                             Err(_) => {
                                 log_warn!(self.logger, "WARN: could not store peer connection info")
@@ -558,13 +558,12 @@ impl Node {
                 } else {
                     // store this so we can reconnect later
                     if let Err(e) = save_peer_connection_info(
+                        &self.persister.storage,
                         &self._uuid,
                         &node_id,
                         &peer_connection_info.original_connection_string,
                         label,
-                    )
-                    .await
-                    {
+                    ) {
                         log_warn!(
                             self.logger,
                             "WARN: could not store peer connection info: {e}"
@@ -675,11 +674,7 @@ impl Node {
                     Some(40),
                 )
             }
-            Some(r) => create_phantom_invoice::<
-                Arc<PhantomKeysManager>,
-                Arc<PhantomKeysManager>,
-                Arc<MutinyLogger>,
-            >(
+            Some(r) => create_phantom_invoice(
                 amount_msat,
                 None,
                 description,
@@ -1126,6 +1121,7 @@ impl Node {
 
 #[allow(clippy::too_many_arguments)]
 async fn start_reconnection_handling(
+    storage: &impl MutinyStorage,
     node_pubkey: PublicKey,
     multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
     websocket_proxy_addr: String,
@@ -1144,6 +1140,7 @@ async fn start_reconnection_handling(
     let proxy_logger = logger.clone();
     let peer_man_proxy = peer_man.clone();
     let lsp_client_copy = lsp_client.clone();
+    let storage_copy = storage.clone();
     let uuid_copy = uuid.clone();
     let stop_copy = stop.clone();
     spawn_local(async move {
@@ -1189,9 +1186,13 @@ async fn start_reconnection_handling(
                 }
             }
 
-            if let Err(e) =
-                save_peer_connection_info(&uuid_copy, &node_id, &lsp.connection_string, None).await
-            {
+            if let Err(e) = save_peer_connection_info(
+                &storage_copy,
+                &uuid_copy,
+                &node_id,
+                &lsp.connection_string,
+                None,
+            ) {
                 log_error!(proxy_logger, "could not save connection to lsp: {e}");
             }
         };
@@ -1270,6 +1271,7 @@ async fn start_reconnection_handling(
     // keep trying to connect each lightning peer if they get disconnected
     let connect_peer_man = peer_man.clone();
     let connect_logger = logger.clone();
+    let connect_storage = storage.clone();
     stopped_components.try_write()?.push(false);
     spawn_local(async move {
         // hashMap to store backoff times for each pubkey
@@ -1303,7 +1305,7 @@ async fn start_reconnection_handling(
                 continue;
             }
 
-            let peer_connections = get_all_peers().await.unwrap_or_default();
+            let peer_connections = get_all_peers(&connect_storage).unwrap_or_default();
             let current_connections = connect_peer_man.get_peer_node_ids();
 
             let not_connected: Vec<(NodeId, String)> = peer_connections
@@ -1487,12 +1489,12 @@ fn try_get_net_addr_from_socket(socket_addr: &str) -> Option<NetAddress> {
         })
 }
 
-pub(crate) fn create_peer_manager(
-    km: Arc<PhantomKeysManager>,
-    lightning_msg_handler: MessageHandler,
+pub(crate) fn create_peer_manager<S: MutinyStorage>(
+    km: Arc<PhantomKeysManager<S>>,
+    lightning_msg_handler: MessageHandler<S>,
     logger: Arc<MutinyLogger>,
-) -> PeerManagerImpl {
-    let now = crate::utils::now().as_secs();
+) -> PeerManagerImpl<S> {
+    let now = utils::now().as_secs();
     let mut ephemeral_bytes = [0u8; 32];
     getrandom::getrandom(&mut ephemeral_bytes).expect("Failed to generate entropy");
 

@@ -3,9 +3,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use crate::event::{HTLCStatus, PaymentInfo};
-use crate::indexed_db::MutinyStorage;
+use crate::gossip::NETWORK_GRAPH_KEY;
 use crate::labels::LabelStorage;
+use crate::logging::LOGGING_KEY;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
+use crate::storage::MutinyStorage;
 use crate::utils::sleep;
 use crate::{
     auth::{AuthManager, AuthProfile},
@@ -48,6 +50,7 @@ use lnurl::lnurl::LnUrl;
 use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use url::Url;
 use uuid::Uuid;
 use wasm_bindgen_futures::spawn_local;
@@ -56,13 +59,13 @@ const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 
 // This is the NodeStorage object saved to the DB
 #[derive(Serialize, Deserialize, Clone, Default)]
-pub(crate) struct NodeStorage {
+pub struct NodeStorage {
     pub nodes: HashMap<String, NodeIndex>,
 }
 
 // This is the NodeIndex reference that is saved to the DB
 #[derive(Serialize, Deserialize, Clone)]
-pub(crate) struct NodeIndex {
+pub struct NodeIndex {
     pub child_index: u32,
     pub lsp: Option<String>,
     pub archived: Option<bool>,
@@ -318,48 +321,38 @@ pub struct LnUrlParams {
 ///
 /// It can be configured to use all different custom backend services, or to use the default
 /// services provided by Mutiny.
-pub struct NodeManager {
+pub struct NodeManager<S: MutinyStorage> {
     stop: Arc<AtomicBool>,
     mnemonic: Mnemonic,
     network: Network,
     websocket_proxy_addr: String,
     esplora: Arc<AsyncClient>,
-    wallet: Arc<OnChainWallet>,
+    wallet: Arc<OnChainWallet<S>>,
     gossip_sync: Arc<RapidGossipSync>,
     scorer: Arc<utils::Mutex<ProbScorer>>,
     chain: Arc<MutinyChain>,
-    fee_estimator: Arc<MutinyFeeEstimator>,
-    pub(crate) storage: MutinyStorage,
+    fee_estimator: Arc<MutinyFeeEstimator<S>>,
+    pub(crate) storage: S,
     pub(crate) node_storage: Mutex<NodeStorage>,
-    pub(crate) nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node>>>>,
-    auth: AuthManager,
+    pub(crate) nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node<S>>>>>,
+    auth: AuthManager<S>,
     lnurl_client: LnUrlClient,
     pub(crate) lsp_clients: Vec<LspClient>,
     pub(crate) logger: Arc<MutinyLogger>,
     bitcoin_price_cache: Arc<Mutex<Option<(f32, Duration)>>>,
-    #[cfg(test)]
-    db_prefix: String,
 }
 
-impl NodeManager {
+impl<S: MutinyStorage> NodeManager<S> {
     /// Returns if there is a saved wallet in storage.
     /// This is checked by seeing if a mnemonic seed exists in storage.
-    pub async fn has_node_manager(#[cfg(test)] db_prefix: String) -> bool {
-        #[cfg(test)]
-        let has = MutinyStorage::has_mnemonic(Some(db_prefix))
-            .await
-            .unwrap_or(false);
-
-        #[cfg(not(test))]
-        let has = MutinyStorage::has_mnemonic(None).await.unwrap_or(false);
-
-        has
+    pub fn has_node_manager(storage: S) -> bool {
+        storage.get_mnemonic().is_ok()
     }
 
     /// Creates a new [NodeManager] with the given parameters.
     /// The mnemonic seed is read from storage, unless one is provided.
     /// If no mnemonic is provided, a new one is generated and stored.
-    pub async fn new(c: MutinyWalletConfig) -> Result<NodeManager, MutinyError> {
+    pub async fn new(c: MutinyWalletConfig, storage: S) -> Result<NodeManager<S>, MutinyError> {
         let stop = Arc::new(AtomicBool::new(false));
 
         let websocket_proxy_addr = c
@@ -369,31 +362,18 @@ impl NodeManager {
         // todo we should eventually have default mainnet
         let network: Network = c.network.unwrap_or(Network::Signet);
 
-        #[cfg(test)]
-        let storage = MutinyStorage::new(c.password.clone(), Some(c.db_prefix.clone())).await?;
-
-        #[cfg(not(test))]
-        let storage = MutinyStorage::new(c.password.clone(), None).await?;
-
         let mnemonic = match c.mnemonic {
-            Some(seed) => storage.insert_mnemonic(seed).await?,
-            None => match storage.get_mnemonic().await {
+            Some(seed) => storage.insert_mnemonic(seed)?,
+            None => match storage.get_mnemonic() {
                 Ok(mnemonic) => mnemonic,
                 Err(_) => {
                     let seed = keymanager::generate_seed(12)?;
-                    storage.insert_mnemonic(seed).await?
+                    storage.insert_mnemonic(seed)?
                 }
             },
         };
 
-        #[cfg(test)]
-        let logger = Arc::new(MutinyLogger::with_writer(
-            stop.clone(),
-            Some(c.db_prefix.clone()),
-        ));
-
-        #[cfg(not(test))]
-        let logger = Arc::new(MutinyLogger::with_writer(stop.clone(), None));
+        let logger = Arc::new(MutinyLogger::with_writer(stop.clone(), storage.clone()));
 
         let esplora_server_url = get_esplora_url(network, c.user_esplora_url);
         let tx_sync = Arc::new(EsploraSyncClient::new(esplora_server_url, logger.clone()));
@@ -417,7 +397,7 @@ impl NodeManager {
         let chain = Arc::new(MutinyChain::new(tx_sync, logger.clone()));
 
         let (gossip_sync, scorer) =
-            gossip::get_gossip_sync(c.user_rgs_url, network, logger.clone()).await?;
+            gossip::get_gossip_sync(&storage, c.user_rgs_url, network, logger.clone()).await?;
 
         let scorer = Arc::new(utils::Mutex::new(scorer));
 
@@ -534,15 +514,13 @@ impl NodeManager {
             lsp_clients,
             logger,
             bitcoin_price_cache: Arc::new(Mutex::new(None)),
-            #[cfg(test)]
-            db_prefix: c.db_prefix,
         };
 
         Ok(nm)
     }
 
     /// Returns the node with the given pubkey
-    pub(crate) async fn get_node(&self, pk: &PublicKey) -> Result<Arc<Node>, MutinyError> {
+    pub(crate) async fn get_node(&self, pk: &PublicKey) -> Result<Arc<Node<S>>, MutinyError> {
         let nodes = self.nodes.lock().await;
         let node = nodes.get(pk).ok_or(MutinyError::NotFound)?;
         Ok(node.clone())
@@ -582,7 +560,7 @@ impl NodeManager {
         Ok(())
     }
 
-    pub(crate) fn start_redshifts(nm: Arc<NodeManager>) {
+    pub(crate) fn start_redshifts(nm: Arc<NodeManager<S>>) {
         spawn_local(async move {
             loop {
                 // find redshifts with channels ready
@@ -1073,7 +1051,7 @@ impl NodeManager {
         peer: &NodeId,
     ) -> Result<(), MutinyError> {
         if let Some(node) = self.nodes.lock().await.get(self_node_pubkey) {
-            gossip::delete_peer_info(&node._uuid, peer).await?;
+            gossip::delete_peer_info(&self.storage, &node._uuid, peer)?;
             Ok(())
         } else {
             log_error!(
@@ -1085,12 +1063,8 @@ impl NodeManager {
     }
 
     /// Sets the label of a peer from the selected node.
-    pub async fn label_peer(
-        &self,
-        node_id: &NodeId,
-        label: Option<String>,
-    ) -> Result<(), MutinyError> {
-        gossip::set_peer_label(node_id, label).await?;
+    pub fn label_peer(&self, node_id: &NodeId, label: Option<String>) -> Result<(), MutinyError> {
+        gossip::set_peer_label(&self.storage, node_id, label)?;
         Ok(())
     }
 
@@ -1405,13 +1379,14 @@ impl NodeManager {
     /// Closes a channel with the given outpoint.
     pub async fn close_channel(&self, outpoint: &OutPoint) -> Result<(), MutinyError> {
         let nodes = self.nodes.lock().await;
-        let channel_opt: Option<(Arc<Node>, ChannelDetails)> = nodes.iter().find_map(|(_, n)| {
-            n.channel_manager
-                .list_channels()
-                .iter()
-                .find(|c| c.funding_txo.map(|f| f.into_bitcoin_outpoint()) == Some(*outpoint))
-                .map(|c| (n.clone(), c.clone()))
-        });
+        let channel_opt: Option<(Arc<Node<S>>, ChannelDetails)> =
+            nodes.iter().find_map(|(_, n)| {
+                n.channel_manager
+                    .list_channels()
+                    .iter()
+                    .find(|c| c.funding_txo.map(|f| f.into_bitcoin_outpoint()) == Some(*outpoint))
+                    .map(|c| (n.clone(), c.clone()))
+            });
 
         match channel_opt {
             Some((node, channel)) => {
@@ -1455,7 +1430,7 @@ impl NodeManager {
 
     /// Lists all the peers for all the nodes in the node manager.
     pub async fn list_peers(&self) -> Result<Vec<MutinyPeer>, MutinyError> {
-        let peer_data = gossip::get_all_peers().await?;
+        let peer_data = gossip::get_all_peers(&self.storage)?;
 
         // get peers saved in storage
         let mut storage_peers: Vec<MutinyPeer> = peer_data
@@ -1570,58 +1545,31 @@ impl NodeManager {
     }
 
     /// Retrieves the logs from storage.
-    pub async fn get_logs(&self) -> Result<Option<Vec<String>>, MutinyError> {
-        #[cfg(test)]
-        let logs = self.logger.get_logs(Some(self.db_prefix.clone())).await;
-
-        #[cfg(not(test))]
-        let logs = self.logger.get_logs(None).await;
-
-        logs
+    pub fn get_logs(&self) -> Result<Option<Vec<String>>, MutinyError> {
+        self.logger.get_logs(&self.storage)
     }
 
     /// Exports the current state of the node manager to a json object.
-    pub async fn export_json(&self) -> Result<serde_json::Value, MutinyError> {
+    pub async fn export_json(&self) -> Result<Value, MutinyError> {
         let needs_db_connection = self.storage.clone().connected().unwrap_or(false);
         if needs_db_connection {
             self.storage.clone().start().await?;
         }
 
-        let map = MutinyStorage::read_all(self.storage.indexed_db.clone(), &self.storage.password)
-            .await?;
-        let serde_map = serde_json::map::Map::from_iter(map.into_iter());
+        // get all the data from storage, scanning with prefix "" will get all keys
+        let map = self.storage.scan("", None)?;
+        let serde_map = serde_json::map::Map::from_iter(map.into_iter().filter(|(k, _)| {
+            // filter out logs and network graph
+            // these are really big and not needed for export
+            !matches!(k.as_str(), LOGGING_KEY | NETWORK_GRAPH_KEY)
+        }));
 
         // shut back down after reading if it was already closed
         if needs_db_connection {
             self.storage.clone().stop();
         }
 
-        Ok(serde_json::Value::Object(serde_map))
-    }
-
-    /// Restore a node manager from a json object.
-    pub async fn import_json(json: serde_json::Value) -> Result<(), MutinyError> {
-        MutinyStorage::import(json, None).await?;
-        Ok(())
-    }
-
-    /// Converts a bitcoin amount in BTC to satoshis.
-    pub fn convert_btc_to_sats(btc: f64) -> Result<u64, MutinyError> {
-        // rust bitcoin doesn't like extra precision in the float
-        // so we round to the nearest satoshi
-        // explained here: https://stackoverflow.com/questions/28655362/how-does-one-round-a-floating-point-number-to-a-specified-number-of-digits
-        let truncated = 10i32.pow(8) as f64;
-        let btc = (btc * truncated).round() / truncated;
-        if let Ok(amount) = bitcoin::Amount::from_btc(btc) {
-            Ok(amount.to_sat())
-        } else {
-            Err(MutinyError::BadAmountError)
-        }
-    }
-
-    /// Converts a satoshi amount to BTC.
-    pub fn convert_sats_to_btc(sats: u64) -> f64 {
-        bitcoin::Amount::from_sat(sats).to_btc()
+        Ok(Value::Object(serde_map))
     }
 }
 
@@ -1636,8 +1584,8 @@ struct CoingeckoPrice {
 }
 
 // This will create a new node with a node manager and return the PublicKey of the node created.
-pub(crate) async fn create_new_node_from_node_manager(
-    node_manager: &NodeManager,
+pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
+    node_manager: &NodeManager<S>,
 ) -> Result<NodeIdentity, MutinyError> {
     // Begin with a mutex lock so that nothing else can
     // save or alter the node list while it is about to
@@ -1742,6 +1690,7 @@ mod tests {
     use crate::test_utils::*;
 
     use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
+    use crate::storage::MemoryStorage;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -1753,21 +1702,14 @@ mod tests {
         let test_name = "create_node_manager";
         log!("{}", test_name);
 
-        assert!(!NodeManager::has_node_manager(test_name.to_string()).await);
-        let c = MutinyWalletConfig::new(
-            "password".to_string(),
-            None,
-            None,
-            Some(Network::Regtest),
-            None,
-            None,
-            None,
-            test_name.to_string(),
-        );
-        NodeManager::new(c)
+        let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+
+        assert!(!NodeManager::has_node_manager(storage.clone()));
+        let c = MutinyWalletConfig::new(None, None, Some(Network::Regtest), None, None, None);
+        NodeManager::new(c, storage.clone())
             .await
             .expect("node manager should initialize");
-        assert!(NodeManager::has_node_manager(test_name.to_string()).await);
+        assert!(NodeManager::has_node_manager(storage));
     }
 
     #[test]
@@ -1777,18 +1719,15 @@ mod tests {
 
         let seed = generate_seed(12).expect("Failed to gen seed");
         let c = MutinyWalletConfig::new(
-            "password".to_string(),
             Some(seed.clone()),
             None,
             Some(Network::Regtest),
             None,
             None,
             None,
-            test_name.to_string(),
         );
-        let nm = NodeManager::new(c).await.unwrap();
+        let nm = NodeManager::new(c, ()).await.unwrap();
 
-        assert!(NodeManager::has_node_manager(test_name.to_string()).await);
         assert_eq!(seed, nm.show_seed());
     }
 
@@ -1797,18 +1736,10 @@ mod tests {
         let test_name = "created_new_nodes";
         log!("{}", test_name);
 
+        let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
         let seed = generate_seed(12).expect("Failed to gen seed");
-        let c = MutinyWalletConfig::new(
-            "password".to_string(),
-            Some(seed),
-            None,
-            Some(Network::Regtest),
-            None,
-            None,
-            None,
-            test_name.to_string(),
-        );
-        let nm = NodeManager::new(c)
+        let c = MutinyWalletConfig::new(Some(seed), None, Some(Network::Regtest), None, None, None);
+        let nm = NodeManager::new(c, storage)
             .await
             .expect("node manager should initialize");
 
@@ -1841,18 +1772,10 @@ mod tests {
         let test_name = "created_new_nodes";
         log!("{}", test_name);
 
+        let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
         let seed = generate_seed(12).expect("Failed to gen seed");
-        let c = MutinyWalletConfig::new(
-            "password".to_string(),
-            Some(seed),
-            None,
-            Some(Network::Signet),
-            None,
-            None,
-            None,
-            test_name.to_string(),
-        );
-        let nm = NodeManager::new(c)
+        let c = MutinyWalletConfig::new(Some(seed), None, Some(Network::Signet), None, None, None);
+        let nm = NodeManager::new(c, storage)
             .await
             .expect("node manager should initialize");
 
