@@ -118,7 +118,9 @@ impl std::fmt::Debug for WsTcpSocketDescriptor {
 
 #[derive(Clone)]
 pub(crate) struct MultiWsSocketDescriptor {
-    conn: Arc<dyn Proxy>,
+    /// Once `conn` has been set, it MUST NOT be unset.
+    /// This is typically set via `connect`
+    conn: Option<Arc<dyn Proxy>>,
     read_from_sub_socket: Receiver<Message>,
     send_to_multi_socket: Sender<Message>,
     socket_map: SubSocketMap,
@@ -129,8 +131,9 @@ pub(crate) struct MultiWsSocketDescriptor {
 }
 
 impl MultiWsSocketDescriptor {
+    /// Set up a new MultiWsSocketDescriptor that prepares for connections.
+    /// Passing in the Proxy connection is required before listening can begin.
     pub fn new(
-        conn: Arc<dyn Proxy>,
         peer_manager: Arc<dyn PeerManager>,
         our_peer_pubkey: Vec<u8>,
         stop: Arc<AtomicBool>,
@@ -142,15 +145,16 @@ impl MultiWsSocketDescriptor {
 
         let socket_map: SubSocketMap = Arc::new(Mutex::new(HashMap::new()));
 
+        let connected = Arc::new(AtomicBool::new(false));
         Self {
-            conn,
+            conn: None,
             send_to_multi_socket,
             read_from_sub_socket,
             socket_map,
             peer_manager,
             our_peer_pubkey,
             stop,
-            connected: Arc::new(AtomicBool::new(true)),
+            connected,
         }
     }
 
@@ -159,12 +163,14 @@ impl MultiWsSocketDescriptor {
     }
 
     pub fn attempt_keep_alive(&self) {
-        self.conn.send(Message::Text(
-            serde_json::to_string(&MutinyProxyCommand::Ping {}).unwrap(),
-        ));
+        if let Some(conn) = &self.conn {
+            conn.send(Message::Text(
+                serde_json::to_string(&MutinyProxyCommand::Ping {}).unwrap(),
+            ));
+        }
     }
 
-    pub async fn reconnect(&mut self, conn: Arc<dyn Proxy>) {
+    pub async fn connect(&mut self, conn: Arc<dyn Proxy>) {
         let mut socket_map = self.socket_map.lock().await;
         trace!("setting up multi websocket descriptor");
         // if reconnecting master socket, disconnect and clear all subsockets
@@ -177,7 +183,10 @@ impl MultiWsSocketDescriptor {
         }
 
         socket_map.clear();
-        self.conn = conn;
+        // Once `conn` has been set, it must not be unset.
+        // It should not panic if it unset, but it will ruin the reconnection logic
+        // and the expectations around calling `listen`.
+        self.conn = Some(conn);
         self.connected.store(true, Ordering::Relaxed);
 
         self.listen();
@@ -197,7 +206,15 @@ impl MultiWsSocketDescriptor {
         .await
     }
 
-    pub fn listen(&self) {
+    /// Listen starts listening to the socket.
+    /// This should only be called if `connect` has created `Some(conn)`
+    fn listen(&self) {
+        // sanity check to make sure conn has been set first
+        if self.conn.is_none() {
+            self.connected.store(false, Ordering::Relaxed);
+            return;
+        }
+
         // This first part will take in messages from the websocket connection
         // to the proxy and decide what to do with them. If it is a binary message
         // then it is a message from one mutiny peer to another with the first bytes
@@ -208,7 +225,7 @@ impl MultiWsSocketDescriptor {
         // A disconnection message indicates that a subsocket descriptor needs to be
         // closed but the underlying connection should stay open. This indicates that
         // the other peer went away or there was an issue connecting / sending to them.
-        let conn_copy = self.conn.clone();
+        let conn_copy = self.conn.clone().unwrap().clone();
         let socket_map_copy = self.socket_map.clone();
         let send_to_multi_socket_copy = self.send_to_multi_socket.clone();
         let peer_manager_copy = self.peer_manager.clone();
@@ -365,7 +382,7 @@ impl MultiWsSocketDescriptor {
         });
 
         let read_channel_copy = self.read_from_sub_socket.clone();
-        let conn_copy_send = self.conn.clone();
+        let conn_copy_send = self.conn.clone().unwrap().clone();
         let connected_copy_send = self.connected.clone();
         trace!("spawning multi socket channel reader");
         spawn_local(async move {
