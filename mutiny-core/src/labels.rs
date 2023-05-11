@@ -267,6 +267,13 @@ impl LabelStorage for MutinyStorage {
         let id = Uuid::new_v4().to_string();
         let key = get_contact_key(&id);
         self.set(key, contact)?;
+
+        let key = get_label_item_key(&id);
+        let label_item = LabelItem {
+            last_used_time: crate::utils::now().as_secs(),
+            ..Default::default()
+        };
+        self.set(key, label_item)?;
         Ok(id)
     }
 
@@ -274,12 +281,10 @@ impl LabelStorage for MutinyStorage {
         let mut tag_items = vec![];
 
         // Get all the contacts
-        let mut contacts = self.get_contacts()?;
+        let contacts = self.get_contacts()?;
         // Get all the labels
         let mut labels = self.get_labels()?;
 
-        // filter out contacts that have a label
-        contacts.retain(|label, _| labels.get(label).is_none());
         // filter out labels that have a contact
         labels.retain(|label, _| contacts.get(label).is_none());
 
@@ -698,31 +703,25 @@ mod tests {
         let test_name = "test_get_tag_items";
         log!("{}", test_name);
 
+        let mut expected_tag_items = Vec::new();
         let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
             .await
             .unwrap();
-        let contacts = create_test_contacts();
-        for (id, contact) in contacts.clone() {
-            storage.set(get_contact_key(id), contact).unwrap();
+        let contacts = create_test_contacts().into_values();
+        for contact in contacts {
+            let id = storage.create_new_contact(contact.clone()).unwrap();
+            expected_tag_items.push(TagItem::Contact((id, contact)));
         }
 
         let labels = create_test_labels();
-        for (label, label_item) in labels.clone() {
-            storage.set(get_label_item_key(label), label_item).unwrap();
-        }
-
-        let mut result = storage.get_tag_items().unwrap();
-        let mut expected_tag_items = Vec::new();
-
-        // Add expected Label tag items
         for (label, label_item) in labels {
+            storage
+                .set(get_label_item_key(label.clone()), label_item.clone())
+                .unwrap();
             expected_tag_items.push(TagItem::Label((label, label_item)));
         }
 
-        // Add expected Contact tag items
-        for (id, contact) in contacts {
-            expected_tag_items.push(TagItem::Contact((id, contact.clone())));
-        }
+        let mut result = storage.get_tag_items().unwrap();
 
         // Sort the resulting vectors to ensure proper comparison
         result.sort();
