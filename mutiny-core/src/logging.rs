@@ -227,6 +227,33 @@ async fn write_logging_data(
 }
 
 #[cfg(test)]
+use crate::test_utils::log;
+
+#[cfg(test)]
+#[derive(Clone)]
+pub struct TestLogger {}
+
+#[cfg(test)]
+impl Logger for TestLogger {
+    fn log(&self, record: &Record) {
+        let raw_log = record.args.to_string();
+        let log = format!(
+            "{} {:<5} [{}:{}] {}\n",
+            // Note that a "real" lightning node almost certainly does *not* want subsecond
+            // precision for message-receipt information as it makes log entries a target for
+            // deanonymization attacks. For testing, however, its quite useful.
+            Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+            record.level,
+            record.module_path,
+            record.line,
+            raw_log
+        );
+
+        log!("{}", log);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::sync::{
         atomic::{AtomicBool, Ordering},

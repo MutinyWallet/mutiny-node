@@ -416,6 +416,7 @@ impl Node {
             peer_man.clone(),
             pubkey.serialize().to_vec(),
             stop.clone(),
+            logger.clone(),
         );
         start_reconnection_handling(
             pubkey,
@@ -1407,7 +1408,7 @@ pub(crate) async fn connect_peer(
     );
 
     // schedule a reader on the connection
-    schedule_descriptor_read(descriptor, peer_manager.clone());
+    schedule_descriptor_read(descriptor, peer_manager.clone(), logger.clone());
 
     Ok(())
 }
