@@ -621,6 +621,7 @@ impl From<Contact> for MutinyContact {
             npub: c.npub,
             ln_address: c.ln_address,
             lnurl: c.lnurl,
+            archived: Some(false),
             last_used: c.last_used,
         }
     }

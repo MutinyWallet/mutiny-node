@@ -730,6 +730,14 @@ impl MutinyWallet {
         Ok(self.inner.node_manager.create_new_contact(contact.into())?)
     }
 
+    pub fn archive_contact(&self, id: String) -> Result<(), MutinyJsError> {
+        Ok(self.inner.node_manager.archive_contact(id)?)
+    }
+
+    pub fn edit_contact(&self, id: String, contact: Contact) -> Result<(), MutinyJsError> {
+        Ok(self.inner.node_manager.edit_contact(id, contact.into())?)
+    }
+
     pub fn get_tag_items(&self) -> Result<JsValue /* Vec<TagItem> */, MutinyJsError> {
         Ok(JsValue::from_serde(
             &self
