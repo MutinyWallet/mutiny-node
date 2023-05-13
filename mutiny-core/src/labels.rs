@@ -33,6 +33,8 @@ pub struct Contact {
     pub ln_address: Option<LightningAddress>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lnurl: Option<LnUrl>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
     pub last_used: u64,
 }
 
@@ -79,6 +81,10 @@ pub trait LabelStorage {
     ) -> Result<String, MutinyError>;
     /// Create a new contact and return the identifying label
     fn create_new_contact(&self, contact: Contact) -> Result<String, MutinyError>;
+    /// Marks a contact as archived
+    fn archive_contact(&self, id: impl AsRef<str>) -> Result<(), MutinyError>;
+    /// Edits an existing contact and replaces the existing contact
+    fn edit_contact(&self, id: impl AsRef<str>, contact: Contact) -> Result<(), MutinyError>;
     /// Gets all the existing tags (labels and contacts)
     fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyError>;
 }
@@ -188,11 +194,15 @@ impl LabelStorage for MutinyStorage {
     }
 
     fn get_contacts(&self) -> Result<HashMap<String, Contact>, MutinyError> {
-        let all = self.scan(CONTACT_PREFIX, None)?;
+        let all = self.scan::<Contact>(CONTACT_PREFIX, None)?;
         // remove the prefix from the keys
         let mut contacts = HashMap::new();
         for (key, contact) in all {
             let label = key.replace(CONTACT_PREFIX, "");
+            // skip archived contacts
+            if contact.archived.unwrap_or(false) {
+                continue;
+            }
             contacts.insert(label, contact);
         }
 
@@ -277,6 +287,19 @@ impl LabelStorage for MutinyStorage {
         Ok(id)
     }
 
+    fn archive_contact(&self, id: impl AsRef<str>) -> Result<(), MutinyError> {
+        let contact = self.get_contact(&id)?;
+        if let Some(mut contact) = contact {
+            contact.archived = Some(true);
+            self.set(get_contact_key(&id), contact)?;
+        }
+        Ok(())
+    }
+
+    fn edit_contact(&self, id: impl AsRef<str>, contact: Contact) -> Result<(), MutinyError> {
+        self.set(get_contact_key(&id), contact)
+    }
+
     fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyError> {
         let mut tag_items = vec![];
 
@@ -349,6 +372,14 @@ impl LabelStorage for NodeManager {
 
     fn create_new_contact(&self, contact: Contact) -> Result<String, MutinyError> {
         self.storage.create_new_contact(contact)
+    }
+
+    fn archive_contact(&self, id: impl AsRef<str>) -> Result<(), MutinyError> {
+        self.storage.archive_contact(id)
+    }
+
+    fn edit_contact(&self, id: impl AsRef<str>, contact: Contact) -> Result<(), MutinyError> {
+        self.storage.edit_contact(id, contact)
     }
 
     fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyError> {
@@ -439,6 +470,7 @@ mod tests {
                 npub: None,
                 ln_address: None,
                 lnurl: None,
+                archived: Some(false),
                 last_used: 0,
             },
         );
@@ -449,6 +481,7 @@ mod tests {
                 npub: None,
                 ln_address: None,
                 lnurl: None,
+                archived: Some(false),
                 last_used: 0,
             },
         );
@@ -459,6 +492,7 @@ mod tests {
                 npub: None,
                 ln_address: None,
                 lnurl: None,
+                archived: Some(false),
                 last_used: 0,
             },
         );
@@ -615,12 +649,70 @@ mod tests {
             npub: None,
             ln_address: None,
             lnurl: None,
+            archived: Some(false),
             last_used: 0,
         };
         let id = storage.create_new_contact(contact.clone()).unwrap();
 
         let result = storage.get_contact(id).unwrap();
         assert_eq!(result.unwrap(), contact);
+    }
+
+    #[test]
+    async fn test_edit_contact() {
+        let test_name = "test_edit_contact";
+        log!("{}", test_name);
+
+        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
+
+        let contact = Contact {
+            name: "Satoshi Nakamoto".to_string(),
+            npub: None,
+            ln_address: None,
+            lnurl: None,
+            archived: Some(false),
+            last_used: 0,
+        };
+        let id = storage.create_new_contact(contact).unwrap();
+
+        let mut contact = storage.get_contact(&id).unwrap().unwrap();
+        contact.name = "Satoshi Nakamoto 2".to_string();
+        storage.edit_contact(&id, contact.clone()).unwrap();
+
+        let result = storage.get_contact(&id).unwrap();
+        assert_eq!(result.unwrap(), contact);
+    }
+
+    #[test]
+    async fn test_archive_contact() {
+        let test_name = "test_archive_contact";
+        log!("{}", test_name);
+
+        let storage = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
+            .await
+            .unwrap();
+
+        let contact = Contact {
+            name: "Satoshi Nakamoto".to_string(),
+            npub: None,
+            ln_address: None,
+            lnurl: None,
+            archived: Some(false),
+            last_used: 0,
+        };
+        let id = storage.create_new_contact(contact).unwrap();
+
+        let mut contact = storage.get_contact(&id).unwrap().unwrap();
+        contact.archived = Some(true);
+        storage.archive_contact(&id).unwrap();
+
+        let result = storage.get_contact(&id).unwrap();
+        assert_eq!(result.unwrap(), contact);
+
+        let contacts = storage.get_contacts().unwrap();
+        assert!(contacts.get(&id).is_none());
     }
 
     #[test]
