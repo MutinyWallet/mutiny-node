@@ -153,7 +153,8 @@ pub struct MutinyChannel {
     pub reserve: u64,
     outpoint: Option<String>,
     peer: String,
-    pub confirmed: bool,
+    pub confirmations_required: Option<u32>,
+    pub confirmations: u32,
 }
 
 #[wasm_bindgen]
@@ -172,6 +173,14 @@ impl MutinyChannel {
     pub fn peer(&self) -> String {
         self.peer.clone()
     }
+
+    #[wasm_bindgen(getter)]
+    pub fn confirmed(&self) -> bool {
+        match self.confirmations_required {
+            Some(c) => self.confirmations >= c,
+            None => false,
+        }
+    }
 }
 
 impl From<nodemanager::MutinyChannel> for MutinyChannel {
@@ -182,7 +191,8 @@ impl From<nodemanager::MutinyChannel> for MutinyChannel {
             reserve: m.reserve,
             outpoint: m.outpoint.map(|o| o.to_string()),
             peer: m.peer.to_hex(),
-            confirmed: m.confirmed,
+            confirmations_required: m.confirmations_required,
+            confirmations: m.confirmations,
         }
     }
 }

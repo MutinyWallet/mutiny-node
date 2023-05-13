@@ -228,7 +228,8 @@ pub struct MutinyChannel {
     pub reserve: u64,
     pub outpoint: Option<OutPoint>,
     pub peer: PublicKey,
-    pub confirmed: bool,
+    pub confirmations_required: Option<u32>,
+    pub confirmations: u32,
 }
 
 impl From<&ChannelDetails> for MutinyChannel {
@@ -239,7 +240,8 @@ impl From<&ChannelDetails> for MutinyChannel {
             reserve: c.unspendable_punishment_reserve.unwrap_or(0),
             outpoint: c.funding_txo.map(|f| f.into_bitcoin_outpoint()),
             peer: c.counterparty.node_id,
-            confirmed: c.is_channel_ready, // fixme not exactly correct
+            confirmations_required: c.confirmations_required,
+            confirmations: c.confirmations.unwrap_or(0),
         }
     }
 }
