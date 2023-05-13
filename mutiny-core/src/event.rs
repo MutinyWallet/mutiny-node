@@ -107,22 +107,18 @@ impl EventHandler {
                     }
                 };
 
-                let label = format!("LN Channel: {}", counterparty_node_id.to_hex());
-
-                let psbt_result = match params_opt {
+                let psbt_result = match &params_opt {
                     None => self.wallet.create_signed_psbt_to_spk(
                         output_script,
                         channel_value_satoshis,
-                        vec![label],
                         None,
                     ),
                     Some(params) => {
-                        let psbt = self.wallet.spend_utxos_to_output(
+                        let psbt = self.wallet.create_sweep_psbt_to_output(
                             &params.utxos,
                             output_script,
                             channel_value_satoshis,
                             params.sats_per_kw,
-                            params.labels.unwrap_or(vec![label]),
                         );
 
                         // delete from storage, if it fails, it is fine, just log it.
@@ -137,8 +133,21 @@ impl EventHandler {
                     }
                 };
 
+                let label = format!("LN Channel: {}", counterparty_node_id.to_hex());
+                let labels = params_opt
+                    .and_then(|p| p.labels)
+                    .unwrap_or_else(|| vec![label]);
+
                 let psbt = match psbt_result {
-                    Ok(psbt) => psbt,
+                    Ok(psbt) => {
+                        if let Err(e) = self.wallet.label_psbt(&psbt, labels) {
+                            log_warn!(
+                                self.logger,
+                                "ERROR: Could not label PSBT, but continuing: {e}"
+                            );
+                        };
+                        psbt
+                    }
                     Err(e) => {
                         log_error!(self.logger, "ERROR: Could not create a signed transaction to open channel with: {e}");
                         return;
