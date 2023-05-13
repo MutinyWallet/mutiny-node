@@ -148,16 +148,16 @@ impl OnChainWallet {
         Ok(self.wallet.try_read()?.get_tx(txid, include_raw))
     }
 
-    fn label_psbt(
+    #[allow(dead_code)]
+    fn get_psbt_previous_labels(
         &self,
         psbt: &PartiallySignedTransaction,
-        labels: Vec<String>,
-    ) -> Result<(), MutinyError> {
+    ) -> Result<Vec<String>, MutinyError> {
         // first get previous labels
         let address_labels = self.storage.get_address_labels()?;
 
         // get previous addresses
-        let mut prev_addresses = psbt
+        let prev_addresses = psbt
             .inputs
             .iter()
             .filter_map(|i| {
@@ -172,12 +172,23 @@ impl OnChainWallet {
             .collect::<Vec<_>>();
 
         // get addresses from previous labels
-        let mut prev_labels = prev_addresses
+        let prev_labels = prev_addresses
             .iter()
             .filter_map(|addr| address_labels.get(&addr.to_string()))
             .flatten()
             .cloned()
             .collect::<Vec<_>>();
+
+        Ok(prev_labels)
+    }
+
+    #[allow(dead_code)]
+    fn label_psbt(
+        &self,
+        psbt: &PartiallySignedTransaction,
+        labels: Vec<String>,
+    ) -> Result<(), MutinyError> {
+        let mut prev_labels = vec![];
 
         // add on new labels
         prev_labels.extend(labels);
@@ -191,15 +202,15 @@ impl OnChainWallet {
             .collect::<Vec<_>>();
 
         // add output addresses to previous addresses
-        prev_addresses.extend(
-            psbt.unsigned_tx
-                .output
-                .iter()
-                .filter_map(|o| Address::from_script(&o.script_pubkey, self.network).ok()),
-        );
+        let addresses = psbt
+            .unsigned_tx
+            .output
+            .iter()
+            .filter_map(|o| Address::from_script(&o.script_pubkey, self.network).ok())
+            .collect::<Vec<_>>();
 
         // set label for send to address
-        for addr in prev_addresses {
+        for addr in addresses {
             self.storage.set_address_labels(addr, agg_labels.clone())?;
         }
 
@@ -476,7 +487,7 @@ mod tests {
         let prev_label = "previous".to_string();
         wallet
             .storage
-            .set_address_labels(input_addr.clone(), vec![prev_label.clone()])
+            .set_address_labels(input_addr, vec![prev_label])
             .unwrap();
 
         let send_to_addr = Address::from_str("mrKjeffvbnmKJURrLNdqLkfrptLrFtnkFx").unwrap();
@@ -486,7 +497,7 @@ mod tests {
         let result = wallet.label_psbt(&psbt, vec![label.clone()]);
         assert!(result.is_ok());
 
-        let expected_labels = vec![prev_label, label.clone()];
+        let expected_labels = vec![label.clone()];
 
         let addr_labels = wallet.storage.get_address_labels().unwrap();
         assert_eq!(addr_labels.len(), 3);
@@ -501,8 +512,7 @@ mod tests {
 
         let label = wallet.storage.get_label(&label).unwrap();
         assert!(label.is_some());
-        assert_eq!(label.clone().unwrap().addresses.len(), 3);
-        assert!(label.clone().unwrap().addresses.contains(&input_addr));
+        assert_eq!(label.clone().unwrap().addresses.len(), 2);
         assert!(label.clone().unwrap().addresses.contains(&send_to_addr));
         assert!(label.unwrap().addresses.contains(&change_addr));
     }
