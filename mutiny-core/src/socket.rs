@@ -4,12 +4,12 @@ use crate::utils;
 use bitcoin::hashes::hex::ToHex;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use futures::lock::Mutex;
+use futures::{pin_mut, select, FutureExt};
 use gloo_net::websocket::events::CloseEvent;
 use gloo_net::websocket::Message;
-use lightning::ln::peer_handler;
-use lightning::ln::peer_handler::SocketDescriptor;
+use lightning::{ln::peer_handler, log_debug, log_error, log_info, util::logger::Logger};
+use lightning::{ln::peer_handler::SocketDescriptor, log_trace};
 use ln_websocket_proxy::MutinyProxyCommand;
-use log::{debug, error, trace};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -116,9 +116,10 @@ impl std::fmt::Debug for WsTcpSocketDescriptor {
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct MultiWsSocketDescriptor {
-    conn: Arc<dyn Proxy>,
+    /// Once `conn` has been set, it MUST NOT be unset.
+    /// This is typically set via `connect`
+    conn: Option<Arc<dyn Proxy>>,
     read_from_sub_socket: Receiver<Message>,
     send_to_multi_socket: Sender<Message>,
     socket_map: SubSocketMap,
@@ -126,31 +127,36 @@ pub(crate) struct MultiWsSocketDescriptor {
     our_peer_pubkey: Vec<u8>,
     connected: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
+    logger: Arc<dyn Logger>,
 }
 
 impl MultiWsSocketDescriptor {
+    /// Set up a new MultiWsSocketDescriptor that prepares for connections.
+    /// Passing in the Proxy connection is required before listening can begin.
     pub fn new(
-        conn: Arc<dyn Proxy>,
         peer_manager: Arc<dyn PeerManager>,
         our_peer_pubkey: Vec<u8>,
         stop: Arc<AtomicBool>,
+        logger: Arc<dyn Logger>,
     ) -> Self {
-        trace!("setting up multi websocket descriptor");
+        log_info!(logger, "setting up multi websocket descriptor");
 
         let (send_to_multi_socket, read_from_sub_socket): (Sender<Message>, Receiver<Message>) =
             unbounded();
 
         let socket_map: SubSocketMap = Arc::new(Mutex::new(HashMap::new()));
 
+        let connected = Arc::new(AtomicBool::new(false));
         Self {
-            conn,
+            conn: None,
             send_to_multi_socket,
             read_from_sub_socket,
             socket_map,
             peer_manager,
             our_peer_pubkey,
             stop,
-            connected: Arc::new(AtomicBool::new(true)),
+            connected,
+            logger,
         }
     }
 
@@ -159,14 +165,18 @@ impl MultiWsSocketDescriptor {
     }
 
     pub fn attempt_keep_alive(&self) {
-        self.conn.send(Message::Text(
-            serde_json::to_string(&MutinyProxyCommand::Ping {}).unwrap(),
-        ));
+        log_trace!(self.logger, "sending keep alive message to proxy");
+        if let Some(conn) = &self.conn {
+            conn.send(Message::Text(
+                serde_json::to_string(&MutinyProxyCommand::Ping {}).unwrap(),
+            ));
+            log_trace!(self.logger, "initiated keep alive message to proxy");
+        }
     }
 
-    pub async fn reconnect(&mut self, conn: Arc<dyn Proxy>) {
+    pub async fn connect(&mut self, conn: Arc<dyn Proxy>) {
         let mut socket_map = self.socket_map.lock().await;
-        trace!("setting up multi websocket descriptor");
+        log_trace!(self.logger, "connecting new multi websocket descriptor");
         // if reconnecting master socket, disconnect and clear all subsockets
         for (_id, (subsocket, _sender)) in socket_map.iter_mut() {
             // tell the subsocket to stop processing
@@ -177,7 +187,10 @@ impl MultiWsSocketDescriptor {
         }
 
         socket_map.clear();
-        self.conn = conn;
+        // Once `conn` has been set, it must not be unset.
+        // It should not panic if it unset, but it will ruin the reconnection logic
+        // and the expectations around calling `listen`.
+        self.conn = Some(conn);
         self.connected.store(true, Ordering::Relaxed);
 
         self.listen();
@@ -193,11 +206,20 @@ impl MultiWsSocketDescriptor {
             read_from_multi_socket,
             id,
             self.our_peer_pubkey.clone(),
+            self.logger.clone(),
         )
         .await
     }
 
-    pub fn listen(&self) {
+    /// Listen starts listening to the socket.
+    /// This should only be called if `connect` has created `Some(conn)`
+    fn listen(&self) {
+        // sanity check to make sure conn has been set first
+        if self.conn.is_none() {
+            self.connected.store(false, Ordering::Relaxed);
+            return;
+        }
+
         // This first part will take in messages from the websocket connection
         // to the proxy and decide what to do with them. If it is a binary message
         // then it is a message from one mutiny peer to another with the first bytes
@@ -208,170 +230,67 @@ impl MultiWsSocketDescriptor {
         // A disconnection message indicates that a subsocket descriptor needs to be
         // closed but the underlying connection should stay open. This indicates that
         // the other peer went away or there was an issue connecting / sending to them.
-        let conn_copy = self.conn.clone();
+        let conn_copy = self.conn.clone().unwrap().clone();
         let socket_map_copy = self.socket_map.clone();
         let send_to_multi_socket_copy = self.send_to_multi_socket.clone();
         let peer_manager_copy = self.peer_manager.clone();
         let connected_copy = self.connected.clone();
         let our_peer_pubkey_copy = self.our_peer_pubkey.clone();
         let stop_copy = self.stop.clone();
-        trace!("spawning multi socket connection reader");
+        let logger_copy = self.logger.clone();
+        log_trace!(self.logger, "spawning multi socket connection reader");
         spawn_local(async move {
-            while let Some(msg) = conn_copy.read().await {
-                // check if we are supposed to stop reading,
-                // this might happen after the next message
-                // or error comes through
-                if stop_copy.load(Ordering::Relaxed) {
-                    break;
-                }
-                if let Ok(msg) = msg {
-                    match msg {
-                        Message::Text(msg) => {
-                            // This is a text command from the server. Parse the type
-                            // of command it is and act accordingly.
-                            // parse and implement subsocket disconnections.
-                            // Right now subsocket is very tied to a specific node,
-                            // later we should share a single connection amongst all pubkeys and in
-                            // which case "to" will be important to parse.
-                            let command: MutinyProxyCommand = match serde_json::from_str(&msg) {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    error!("couldn't parse text command from proxy, ignoring: {e}");
-                                    continue;
+            loop {
+                let mut read_fut = conn_copy.read().fuse();
+                let delay_fut = Box::pin(utils::sleep(1_000)).fuse();
+                pin_mut!(delay_fut);
+                select! {
+                    msg_option = read_fut => {
+                        match msg_option {
+                            Some(Ok(msg)) => {
+                                handle_incoming_msg(
+                                    msg,
+                                    socket_map_copy.clone(),
+                                    peer_manager_copy.clone(),
+                                    send_to_multi_socket_copy.clone(),
+                                    our_peer_pubkey_copy.clone(),
+                                    logger_copy.clone(),
+                                    stop_copy.clone(),
+                                ).await;
                                 }
-                            };
-                            match command {
-                                MutinyProxyCommand::Disconnect { to: _to, from } => {
-                                    let mut locked_socket_map = socket_map_copy.lock().await;
-                                    match locked_socket_map.get_mut(&from) {
-                                        Some((subsocket, _sender)) => {
-                                            // if we got told by server to disconnect then stop
-                                            // reading from the socket and tell LDK that the socket
-                                            // is disconnected.
-                                            debug!("was told by server to disconnect subsocket connection with {}", from.to_hex());
-                                            subsocket.stop_reading();
-                                            peer_manager_copy.socket_disconnected(
-                                                &mut WsSocketDescriptor::Mutiny(subsocket.clone()),
-                                            );
-                                            locked_socket_map.remove(&from);
-                                        }
-                                        None => {
-                                            error!("tried to disconnect a subsocket that doesn't exist...");
-                                        }
-                                    }
-                                }
-                                MutinyProxyCommand::Ping => {
-                                    // Ignore, we send to them
-                                }
-                            };
-                        }
-                        Message::Bytes(msg) => {
-                            // This is a mutiny to mutiny connection with pubkey + bytes
-                            // as the binary message. Parse the msg and see which pubkey
-                            // it belongs to.
-                            trace!("received a binary message on multi socket...");
-                            if msg.len() < PUBKEY_BYTES_LEN {
-                                error!("msg not long enough to have pubkey, ignoring...");
-                                continue;
+                            Some(Err(e)) => {
+                                log_trace!(logger_copy, "could not read from proxy connection: {e}");
+                                break;
                             }
-                            let (id_bytes, message_bytes) = msg.split_at(PUBKEY_BYTES_LEN);
+                            None => {
+                                log_trace!(logger_copy, "nothing from the future, ignoring...");
 
-                            // now send that data to the right subsocket;
-                            let socket_lock = socket_map_copy.lock().await;
-                            let found_subsocket = socket_lock.get(id_bytes);
-                            match found_subsocket {
-                                Some((_subsocket, sender)) => {
-                                    match sender.send(Message::Bytes(message_bytes.to_vec())) {
-                                        Ok(_) => {
-                                            trace!(
-                                                "found subsocket to forward bytes to: {:?}",
-                                                id_bytes
-                                            );
-                                        }
-                                        Err(e) => error!("error sending msg to channel: {}", e),
-                                    };
-                                }
-                                None => {
-                                    drop(socket_lock);
-
-                                    // create a new subsocket and pass it to peer_manager
-                                    trace!(
-                                        "no connection found for socket address, creating new: {:?}",
-                                        id_bytes
-                                    );
-                                    let (send_to_sub_socket, read_from_multi_socket): (
-                                        Sender<Message>,
-                                        Receiver<Message>,
-                                    ) = unbounded();
-                                    let mut inbound_subsocket = WsSocketDescriptor::Mutiny(
-                                        create_new_subsocket(
-                                            socket_map_copy.clone(),
-                                            send_to_multi_socket_copy.clone(),
-                                            send_to_sub_socket.clone(),
-                                            read_from_multi_socket,
-                                            id_bytes.to_vec(),
-                                            our_peer_pubkey_copy.clone(),
-                                        )
-                                        .await,
-                                    );
-                                    trace!("created new subsocket: {:?}", id_bytes);
-                                    match peer_manager_copy
-                                        .new_inbound_connection(inbound_subsocket.clone(), None)
-                                    {
-                                        Ok(_) => {
-                                            trace!(
-                                                "gave new subsocket to peer manager: {:?}",
-                                                id_bytes
-                                            );
-                                            schedule_descriptor_read(
-                                                inbound_subsocket,
-                                                peer_manager_copy.clone(),
-                                            );
-
-                                            // now that we have the inbound connection, send the original
-                                            // message to our new subsocket descriptor
-                                            match send_to_sub_socket
-                                                .send(Message::Bytes(message_bytes.to_vec()))
-                                            {
-                                                Ok(_) => {
-                                                    trace!("sent incoming message to new subsocket channel: {:?}", id_bytes)
-                                                }
-                                                Err(e) => {
-                                                    error!("error sending msg to channel: {}", e)
-                                                }
-                                            };
-                                        }
-                                        Err(_) => {
-                                            error!(
-                                                "peer manager could not handle subsocket for: {:?}, deleting...",
-                                                id_bytes
-                                            );
-                                            let mut locked_socket_map =
-                                                socket_map_copy.lock().await;
-                                            inbound_subsocket.disconnect_socket();
-                                            peer_manager_copy
-                                                .socket_disconnected(&mut inbound_subsocket);
-                                            locked_socket_map.remove(id_bytes);
-                                        }
-                                    };
-                                }
-                            };
+                            }
+                        }
+                    }
+                    _ = delay_fut => {
+                        if stop_copy.load(Ordering::Relaxed) {
+                            break;
                         }
                     }
                 }
             }
-            trace!("leaving multi socket connection reader");
+            log_trace!(logger_copy, "leaving multi socket connection reader");
             connected_copy.store(false, Ordering::Relaxed)
         });
 
         let read_channel_copy = self.read_from_sub_socket.clone();
-        let conn_copy_send = self.conn.clone();
+        let conn_copy_send = self.conn.clone().unwrap().clone();
         let connected_copy_send = self.connected.clone();
-        trace!("spawning multi socket channel reader");
+        let logger_send_copy = self.logger.clone();
+        log_trace!(self.logger, "spawning multi socket channel reader");
         spawn_local(async move {
             loop {
                 if let Ok(msg) = read_channel_copy.try_recv() {
-                    trace!("multi socket channel reader sending data to proxy");
+                    log_trace!(
+                        logger_send_copy,
+                        "multi socket channel reader sending data to proxy"
+                    );
                     conn_copy_send.send(msg)
                 }
                 if !connected_copy_send.load(Ordering::Relaxed) {
@@ -379,69 +298,238 @@ impl MultiWsSocketDescriptor {
                 }
                 utils::sleep(50).await;
             }
-            trace!("leaving multi socket channel reader");
+            log_trace!(logger_send_copy, "leaving multi socket channel reader");
         });
     }
 }
 
-pub(crate) fn schedule_descriptor_read(
-    descriptor: WsSocketDescriptor,
+async fn handle_incoming_msg(
+    msg: Message,
+    socket_map: SubSocketMap,
     peer_manager: Arc<dyn PeerManager>,
+    send_to_multi_socket: Sender<Message>,
+    our_peer_pubkey: Vec<u8>,
+    logger: Arc<dyn Logger>,
+    stop: Arc<AtomicBool>,
 ) {
-    trace!("scheduling descriptor reader");
-    let mut descriptor = descriptor;
-    spawn_local(async move {
-        while let Some(msg) = descriptor.read().await {
-            match msg {
-                Ok(msg_contents) => {
-                    match msg_contents {
-                        Message::Text(_) => {
-                            // text should not directly be sent to these sockets
-                            // the multi ws socket descriptor intercepts the m2m
-                            // sockets, meanwhile the tcp socket proxy never deals
-                            // with command messages.
-                            trace!("ignoring text sent directly to ldk socket");
+    match msg {
+        Message::Text(msg) => {
+            // This is a text command from the server. Parse the type
+            // of command it is and act accordingly.
+            // parse and implement subsocket disconnections.
+            // Right now subsocket is very tied to a specific node,
+            // later we should share a single connection amongst all pubkeys and in
+            // which case "to" will be important to parse.
+            let command: MutinyProxyCommand = match serde_json::from_str(&msg) {
+                Ok(c) => c,
+                Err(e) => {
+                    log_error!(
+                        logger,
+                        "couldn't parse text command from proxy, ignoring: {e}"
+                    );
+                    return;
+                }
+            };
+            match command {
+                MutinyProxyCommand::Disconnect { to: _to, from } => {
+                    let mut locked_socket_map = socket_map.lock().await;
+                    match locked_socket_map.get_mut(&from) {
+                        Some((subsocket, _sender)) => {
+                            // if we got told by server to disconnect then stop
+                            // reading from the socket and tell LDK that the socket
+                            // is disconnected.
+                            log_debug!(
+                                logger,
+                                "was told by server to disconnect subsocket connection with {}",
+                                from.to_hex()
+                            );
+                            subsocket.stop_reading();
+                            peer_manager.socket_disconnected(&mut WsSocketDescriptor::Mutiny(
+                                subsocket.clone(),
+                            ));
+                            locked_socket_map.remove(&from);
                         }
-                        Message::Bytes(b) => {
-                            trace!("received binary data from websocket");
+                        None => {
+                            log_error!(
+                                logger,
+                                "tried to disconnect a subsocket that doesn't exist..."
+                            );
+                        }
+                    }
+                }
+                MutinyProxyCommand::Ping => {
+                    // Ignore, we send to them
+                }
+            };
+        }
+        Message::Bytes(msg) => {
+            // This is a mutiny to mutiny connection with pubkey + bytes
+            // as the binary message. Parse the msg and see which pubkey
+            // it belongs to.
+            log_trace!(logger, "received a binary message on multi socket...");
+            if msg.len() < PUBKEY_BYTES_LEN {
+                log_error!(logger, "msg not long enough to have pubkey, ignoring...");
+                return;
+            }
+            let (id_bytes, message_bytes) = msg.split_at(PUBKEY_BYTES_LEN);
 
-                            let read_res = peer_manager.read_event(&mut descriptor, &b);
-                            match read_res {
-                                // TODO handle read boolean event
-                                Ok(_read_bool) => {
-                                    trace!("read event from the node");
-                                    peer_manager.process_events();
+            // now send that data to the right subsocket;
+            let socket_lock = socket_map.lock().await;
+            let found_subsocket = socket_lock.get(id_bytes);
+            match found_subsocket {
+                Some((_subsocket, sender)) => {
+                    match sender.send(Message::Bytes(message_bytes.to_vec())) {
+                        Ok(_) => {
+                            log_trace!(
+                                logger,
+                                "found subsocket to forward bytes to: {:?}",
+                                id_bytes
+                            );
+                        }
+                        Err(e) => log_error!(logger, "error sending msg to channel: {}", e),
+                    };
+                }
+                None => {
+                    drop(socket_lock);
+
+                    // create a new subsocket and pass it to peer_manager
+                    log_trace!(
+                        logger,
+                        "no connection found for socket address, creating new: {:?}",
+                        id_bytes
+                    );
+                    let (send_to_sub_socket, read_from_multi_socket): (
+                        Sender<Message>,
+                        Receiver<Message>,
+                    ) = unbounded();
+                    let mut inbound_subsocket = WsSocketDescriptor::Mutiny(
+                        create_new_subsocket(
+                            socket_map.clone(),
+                            send_to_multi_socket.clone(),
+                            send_to_sub_socket.clone(),
+                            read_from_multi_socket,
+                            id_bytes.to_vec(),
+                            our_peer_pubkey.clone(),
+                            logger.clone(),
+                        )
+                        .await,
+                    );
+                    log_trace!(logger, "created new subsocket: {:?}", id_bytes);
+                    match peer_manager.new_inbound_connection(inbound_subsocket.clone(), None) {
+                        Ok(_) => {
+                            log_trace!(
+                                logger,
+                                "gave new subsocket to peer manager: {:?}",
+                                id_bytes
+                            );
+                            schedule_descriptor_read(
+                                inbound_subsocket,
+                                peer_manager.clone(),
+                                logger.clone(),
+                                stop.clone(),
+                            );
+
+                            // now that we have the inbound connection, send the original
+                            // message to our new subsocket descriptor
+                            match send_to_sub_socket.send(Message::Bytes(message_bytes.to_vec())) {
+                                Ok(_) => {
+                                    log_trace!(
+                                        logger,
+                                        "sent incoming message to new subsocket channel: {:?}",
+                                        id_bytes
+                                    )
                                 }
-                                Err(e) => error!("got an error reading event: {}", e),
-                            }
+                                Err(e) => {
+                                    log_error!(logger, "error sending msg to channel: {}", e)
+                                }
+                            };
+                        }
+                        Err(_) => {
+                            log_error!(
+                                logger,
+                                "peer manager could not handle subsocket for: {:?}, deleting...",
+                                id_bytes
+                            );
+                            let mut locked_socket_map = socket_map.lock().await;
+                            inbound_subsocket.disconnect_socket();
+                            peer_manager.socket_disconnected(&mut inbound_subsocket);
+                            locked_socket_map.remove(id_bytes);
                         }
                     };
                 }
-                Err(e) => {
-                    match e {
-                        gloo_net::websocket::WebSocketError::ConnectionError => {
-                            error!("got connection error");
+            };
+        }
+    }
+}
+
+pub(crate) fn schedule_descriptor_read(
+    mut descriptor: WsSocketDescriptor,
+    peer_manager: Arc<dyn PeerManager>,
+    logger: Arc<dyn Logger>,
+    stop: Arc<AtomicBool>,
+) {
+    log_trace!(logger, "scheduling descriptor reader");
+    let descriptor_clone = descriptor.clone();
+    spawn_local(async move {
+        loop {
+            let mut read_fut = Box::pin(descriptor_clone.read()).fuse();
+            let delay_fut = Box::pin(utils::sleep(1_000)).fuse();
+            pin_mut!(delay_fut);
+            select! {
+                msg_option = read_fut => {
+                    if let Some(msg) = msg_option {
+                        match msg {
+                            Ok(msg_contents) => {
+                                match msg_contents {
+                                    Message::Text(_) => {
+                                        log_trace!(logger, "ignoring text sent directly to ldk socket");
+                                    }
+                                    Message::Bytes(b) => {
+                                        log_trace!(logger, "received binary data from websocket");
+
+                                        let read_res = peer_manager.read_event(&mut descriptor, &b);
+                                        match read_res {
+                                            Ok(_read_bool) => {
+                                                log_trace!(logger, "read event from the node");
+                                                peer_manager.process_events();
+                                            }
+                                            Err(e) => log_error!(logger, "got an error reading event: {}", e),
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                match e {
+                                    gloo_net::websocket::WebSocketError::ConnectionError => {
+                                        log_error!(logger, "got connection error");
+                                    }
+                                    gloo_net::websocket::WebSocketError::ConnectionClose(e) => match e.code {
+                                        1000 => log_trace!(logger, "normal connection closure"),
+                                        1006 => log_debug!(logger, "abnormal connection closure"),
+                                        _ => log_error!(logger, "connection closed due to: {:?}", e),
+                                    },
+                                    gloo_net::websocket::WebSocketError::MessageSendError(e) => {
+                                        log_error!(logger, "got an error sending msg: {}", e);
+                                    }
+                                    _ => {
+                                        log_error!(logger, "got an error reading msg: {}", e);
+                                    }
+                                }
+                                descriptor.disconnect_socket();
+                                peer_manager.socket_disconnected(&mut descriptor);
+                                break;
+                            }
                         }
-                        gloo_net::websocket::WebSocketError::ConnectionClose(e) => match e.code {
-                            // TODO make connection closes from proxy be 1000
-                            1000 => trace!("normal connection closure"),
-                            1006 => debug!("abnormal connection closure"),
-                            _ => error!("connection closed due to: {:?}", e),
-                        },
-                        gloo_net::websocket::WebSocketError::MessageSendError(e) => {
-                            error!("got an error sending msg: {}", e);
-                        }
-                        _ => {
-                            error!("got an error reading msg: {}", e);
-                        }
-                    };
-                    break;
+                    }
+                }
+                _ = delay_fut => {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
                 }
             }
         }
-
-        // TODO when we detect an error, lock the writes and close connection.
-        trace!("WebSocket Closed")
+        log_trace!(logger, "WebSocket Closed")
     });
 }
 
@@ -452,12 +540,14 @@ async fn create_new_subsocket(
     read_from_multi_socket: Receiver<Message>,
     peer_pubkey: Vec<u8>,
     our_pubkey: Vec<u8>,
+    logger: Arc<dyn Logger>,
 ) -> SubWsSocketDescriptor {
     let new_subsocket = SubWsSocketDescriptor::new(
         send_to_multi_socket,
         read_from_multi_socket,
         peer_pubkey.clone(),
         our_pubkey,
+        logger,
     );
 
     socket_map
@@ -475,6 +565,7 @@ pub(crate) struct SubWsSocketDescriptor {
     our_pubkey_bytes: Vec<u8>,
     id: u64,
     stop: Arc<AtomicBool>,
+    logger: Arc<dyn Logger>,
 }
 impl SubWsSocketDescriptor {
     pub fn new(
@@ -482,6 +573,7 @@ impl SubWsSocketDescriptor {
         read_channel: Receiver<Message>,
         peer_pubkey_bytes: Vec<u8>,
         our_pubkey_bytes: Vec<u8>,
+        logger: Arc<dyn Logger>,
     ) -> Self {
         let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
         Self {
@@ -491,6 +583,7 @@ impl SubWsSocketDescriptor {
             our_pubkey_bytes,
             id,
             stop: Arc::new(AtomicBool::new(false)),
+            logger,
         }
     }
 
@@ -503,7 +596,7 @@ impl ReadDescriptor for SubWsSocketDescriptor {
     async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>> {
         loop {
             if self.stop.load(Ordering::Relaxed) {
-                trace!("stopping subsocket channel reader");
+                log_trace!(self.logger, "stopping subsocket channel reader");
                 return Some(Err(gloo_net::websocket::WebSocketError::ConnectionClose(
                     CloseEvent {
                         code: 1000,
@@ -523,7 +616,10 @@ impl ReadDescriptor for SubWsSocketDescriptor {
 impl peer_handler::SocketDescriptor for SubWsSocketDescriptor {
     fn send_data(&mut self, data: &[u8], _resume_read: bool) -> usize {
         if self.stop.load(Ordering::Relaxed) {
-            trace!("ignoring request to send down stopped subsocket");
+            log_trace!(
+                self.logger,
+                "ignoring request to send down stopped subsocket"
+            );
             return 0;
         }
 
@@ -539,7 +635,7 @@ impl peer_handler::SocketDescriptor for SubWsSocketDescriptor {
     }
 
     fn disconnect_socket(&mut self) {
-        trace!("disconnecting socket from LDK");
+        log_trace!(self.logger, "disconnecting socket from LDK");
         let res = self.send_channel.send(Message::Text(
             serde_json::to_string(&MutinyProxyCommand::Disconnect {
                 to: self.peer_pubkey_bytes.clone(),
@@ -548,7 +644,10 @@ impl peer_handler::SocketDescriptor for SubWsSocketDescriptor {
             .unwrap(),
         ));
         if res.is_err() {
-            error!("tried to send disconnect message to proxy but failed..")
+            log_error!(
+                self.logger,
+                "tried to send disconnect message to proxy but failed.."
+            )
         }
         self.stop.store(true, Ordering::Relaxed)
     }
@@ -566,6 +665,7 @@ impl Clone for SubWsSocketDescriptor {
             our_pubkey_bytes: self.our_pubkey_bytes.clone(),
             id: self.id,
             stop: self.stop.clone(),
+            logger: self.logger.clone(),
         }
     }
 }
@@ -589,7 +689,7 @@ impl std::fmt::Debug for SubWsSocketDescriptor {
 
 #[cfg(test)]
 mod tests {
-    use crate::proxy::MockProxy;
+    use crate::{logging::TestLogger, proxy::MockProxy};
 
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
@@ -640,6 +740,7 @@ mod tests {
             read_from_multi_socket,
             PublicKey::from_str(OTHER_PEER_PUBKEY).unwrap().encode(),
             PublicKey::from_str(PEER_PUBKEY).unwrap().encode(),
+            Arc::new(TestLogger {}),
         )
         .await;
         let mutiny_ws = WsSocketDescriptor::Mutiny(sub_ws_socket);
@@ -656,6 +757,7 @@ mod tests {
             read_from_multi_socket_2,
             PublicKey::from_str(OTHER_PEER_PUBKEY).unwrap().encode(),
             PublicKey::from_str(PEER_PUBKEY).unwrap().encode(),
+            Arc::new(TestLogger {}),
         )
         .await;
         let mutiny_ws_2 = WsSocketDescriptor::Mutiny(sub_ws_socket_2);
@@ -673,6 +775,7 @@ mod tests {
             read_from_multi_socket_3,
             PublicKey::from_str(OTHER_PEER_PUBKEY).unwrap().encode(),
             PublicKey::from_str(PEER_PUBKEY).unwrap().encode(),
+            Arc::new(TestLogger {}),
         )
         .await;
         let mutiny_ws_3 = WsSocketDescriptor::Mutiny(sub_ws_socket_3);

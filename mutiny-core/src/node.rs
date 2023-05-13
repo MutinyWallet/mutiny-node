@@ -30,6 +30,8 @@ use bip39::Mnemonic;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
 use bitcoin::secp256k1::rand;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint};
+use core::time::Duration;
+use futures::lock::Mutex;
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::ln::channelmanager::RecipientOnionFields;
 use lightning::{
@@ -65,6 +67,7 @@ use lightning_invoice::{
     utils::{create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice},
     Invoice,
 };
+use std::collections::HashMap;
 use std::{
     net::SocketAddr,
     str::FromStr,
@@ -76,6 +79,8 @@ use std::{
 use wasm_bindgen_futures::spawn_local;
 
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
+const INITIAL_RECONNECTION_DELAY: u64 = 5;
+const MAX_RECONNECTION_DELAY: u64 = 60;
 
 pub(crate) type RapidGossipSync =
     lightning_rapid_gossip_sync::RapidGossipSync<Arc<NetworkGraph>, Arc<MutinyLogger>>;
@@ -155,8 +160,9 @@ pub(crate) struct Node {
     wallet: Arc<OnChainWallet>,
     logger: Arc<MutinyLogger>,
     websocket_proxy_addr: String,
-    multi_socket: MultiWsSocketDescriptor,
+    multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
     pub(crate) lsp_client: Option<LspClient>,
+    stop: Arc<AtomicBool>,
 }
 
 impl Node {
@@ -402,30 +408,21 @@ impl Node {
             }
         });
 
-        // create a connection immediately to the user's
-        // specified mutiny websocket proxy provider.
+        // set up the connection handlers to start in the background
         let self_connection = PubkeyConnectionInfo {
             pubkey,
             connection_type: ConnectionType::Mutiny(websocket_proxy_addr.to_string()),
             original_connection_string: format!("mutiny:{pubkey}@{websocket_proxy_addr}"),
         };
-        let main_proxy = WsProxy::new(
-            &websocket_proxy_addr,
-            self_connection.clone(),
-            logger.clone(),
-        )
-        .await?;
-        let multi_socket = MultiWsSocketDescriptor::new(
-            Arc::new(main_proxy),
+        let multi_socket = Arc::new(Mutex::new(MultiWsSocketDescriptor::new(
             peer_man.clone(),
             pubkey.serialize().to_vec(),
             stop.clone(),
-        );
-        multi_socket.listen();
-
+            logger.clone(),
+        )));
         start_reconnection_handling(
             pubkey,
-            &multi_socket,
+            multi_socket.clone(),
             websocket_proxy_addr.clone(),
             self_connection,
             peer_man.clone(),
@@ -453,6 +450,7 @@ impl Node {
             websocket_proxy_addr,
             multi_socket,
             lsp_client,
+            stop,
         })
     }
 
@@ -495,6 +493,7 @@ impl Node {
             &peer_connection_info,
             self.logger.clone(),
             self.peer_manager.clone(),
+            self.stop.clone(),
         )
         .await
         {
@@ -1095,7 +1094,7 @@ impl Node {
 #[allow(clippy::too_many_arguments)]
 async fn start_reconnection_handling(
     node_pubkey: PublicKey,
-    multi_socket: &MultiWsSocketDescriptor,
+    multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
     websocket_proxy_addr: String,
     self_connection: PubkeyConnectionInfo,
     peer_man: Arc<dyn PeerManager>,
@@ -1105,133 +1104,169 @@ async fn start_reconnection_handling(
     stop: Arc<AtomicBool>,
     stopped_components: Arc<RwLock<Vec<bool>>>,
 ) -> Result<(), MutinyError> {
-    // Attempt connection to LSP first
-    if let Some(lsp) = lsp_client.clone() {
-        let node_id = NodeId::from_pubkey(&lsp.pubkey);
-
-        match connect_peer_if_necessary(
-            multi_socket.clone(),
-            &websocket_proxy_addr,
-            &PubkeyConnectionInfo::new(lsp.connection_string.as_str())?,
-            logger.clone(),
-            peer_man.clone(),
+    // Attempt initial connections first in the background
+    let multi_socket_proxy = multi_socket.clone();
+    let self_connection_proxy = self_connection.clone();
+    let websocket_proxy_addr_copy_proxy = websocket_proxy_addr.clone();
+    let proxy_logger = logger.clone();
+    let peer_man_proxy = peer_man.clone();
+    let lsp_client_copy = lsp_client.clone();
+    let uuid_copy = uuid.clone();
+    let stop_copy = stop.clone();
+    spawn_local(async move {
+        log_trace!(proxy_logger, "setting up multi proxy socket");
+        match WsProxy::new(
+            &websocket_proxy_addr_copy_proxy,
+            self_connection_proxy.clone(),
+            proxy_logger.clone(),
         )
         .await
         {
-            Ok(_) => {
-                log_trace!(logger, "auto connected lsp: {node_id}");
+            Ok(main_proxy) => {
+                multi_socket_proxy
+                    .lock()
+                    .await
+                    .connect(Arc::new(main_proxy))
+                    .await;
             }
             Err(e) => {
-                log_trace!(logger, "could not connect to lsp {node_id}: {e}");
+                log_error!(proxy_logger, "could not create new multi socket proxy: {e}",);
             }
-        }
+        };
 
-        if let Err(e) =
-            save_peer_connection_info(&uuid, &node_id, &lsp.connection_string, None).await
-        {
-            log_error!(logger, "could not save connection to lsp: {e}");
-        }
-    };
+        // Now try to connect to the client's LSP
+        if let Some(lsp) = lsp_client_copy.clone() {
+            let node_id = NodeId::from_pubkey(&lsp.pubkey);
 
-    let mut multi_socket_reconnect = multi_socket.clone();
+            match connect_peer_if_necessary(
+                multi_socket_proxy.clone(),
+                &websocket_proxy_addr_copy_proxy,
+                &PubkeyConnectionInfo::new(lsp.connection_string.as_str()).unwrap(),
+                proxy_logger.clone(),
+                peer_man_proxy.clone(),
+                stop_copy.clone(),
+            )
+            .await
+            {
+                Ok(_) => {
+                    log_trace!(proxy_logger, "auto connected lsp: {node_id}");
+                }
+                Err(e) => {
+                    log_trace!(proxy_logger, "could not connect to lsp {node_id}: {e}");
+                }
+            }
+
+            if let Err(e) =
+                save_peer_connection_info(&uuid_copy, &node_id, &lsp.connection_string, None).await
+            {
+                log_error!(proxy_logger, "could not save connection to lsp: {e}");
+            }
+        };
+    });
+
+    // keep trying to reconnect the proxy if it gets disconnected
+    let multi_socket_reconnect = multi_socket.clone();
     let websocket_proxy_addr_copy = websocket_proxy_addr.clone();
-    let self_connection_copy = self_connection.clone();
     let reconnection_stop = stop.clone();
     let reconnection_logger = logger.clone();
     stopped_components.try_write()?.push(false);
     let reconnection_stopped_components = stopped_components.clone();
     spawn_local(async move {
+        let mut delay = INITIAL_RECONNECTION_DELAY;
         loop {
-            if reconnection_stop.load(Ordering::Relaxed) {
-                log_debug!(
-                    reconnection_logger,
-                    "stopping reconnection component for node: {}",
-                    node_pubkey.to_hex(),
-                );
-                stop_component(&reconnection_stopped_components);
-                log_debug!(
-                    reconnection_logger,
-                    "stopped reconnection component for node: {}",
-                    node_pubkey.to_hex(),
-                );
-                break;
+            // run through reconnection logic every delay seconds,
+            // check if it should stop once every second.
+            for _ in 0..delay {
+                if reconnection_stop.load(Ordering::Relaxed) {
+                    log_debug!(
+                        reconnection_logger,
+                        "stopping reconnection component for node: {}",
+                        node_pubkey.to_hex(),
+                    );
+                    stop_component(&reconnection_stopped_components);
+                    log_debug!(
+                        reconnection_logger,
+                        "stopped reconnection component for node: {}",
+                        node_pubkey.to_hex(),
+                    );
+                    return;
+                }
+                sleep(1_000).await;
             }
 
-            if !multi_socket_reconnect.connected() {
+            let connected = { multi_socket_reconnect.lock().await.connected() };
+            if !connected {
                 log_debug!(
                     reconnection_logger,
                     "got disconnected from multi socket proxy, going to reconnect"
                 );
                 match WsProxy::new(
                     &websocket_proxy_addr_copy,
-                    self_connection_copy.clone(),
+                    self_connection.clone(),
                     reconnection_logger.clone(),
                 )
                 .await
                 {
                     Ok(main_proxy) => {
-                        multi_socket_reconnect.reconnect(Arc::new(main_proxy)).await;
+                        multi_socket_reconnect
+                            .lock()
+                            .await
+                            .connect(Arc::new(main_proxy))
+                            .await;
+                        // reset delay to initial value if reconnection successful
+                        delay = 5;
                     }
-                    Err(_) => {
-                        sleep(5 * 1000).await;
-                        continue;
+                    Err(e) => {
+                        log_error!(
+                            reconnection_logger,
+                            "could not create new multi socket proxy: {e}",
+                        );
+                        // double the delay if reconnection fails, but do not exceed max
+                        delay = (delay * 2).min(MAX_RECONNECTION_DELAY);
                     }
                 };
             } else {
                 // send a keep alive message if connected
-                multi_socket_reconnect.attempt_keep_alive();
+                multi_socket_reconnect.lock().await.attempt_keep_alive();
+                // reset delay to initial value if connection is healthy
+                delay = INITIAL_RECONNECTION_DELAY;
             }
-
-            if reconnection_stop.load(Ordering::Relaxed) {
-                log_debug!(
-                    reconnection_logger,
-                    "stopping reconnection component for node: {}",
-                    node_pubkey.to_hex(),
-                );
-                stop_component(&reconnection_stopped_components);
-                log_debug!(
-                    reconnection_logger,
-                    "stopped reconnection component for node: {}",
-                    node_pubkey.to_hex(),
-                );
-                break;
-            }
-            sleep(5 * 1000).await;
         }
     });
 
+    // keep trying to connect each lightning peer if they get disconnected
     let connect_peer_man = peer_man.clone();
-    let connect_proxy = websocket_proxy_addr.clone();
     let connect_logger = logger.clone();
-    let connect_multi_socket = multi_socket.clone();
-    let connect_uuid = uuid.clone();
-    let connect_stop = stop.clone();
     stopped_components.try_write()?.push(false);
-    let connect_stopped_components = stopped_components.clone();
     spawn_local(async move {
-        // wait for things to start up first before starting reconnecting logic
-        sleep(5 * 1000).await;
+        // hashMap to store backoff times for each pubkey
+        let mut backoff_times = HashMap::new();
+
         loop {
-            if connect_stop.load(Ordering::Relaxed) {
-                log_debug!(
-                    connect_logger,
-                    "stopping connection component and disconnecting peers for node: {}",
-                    node_pubkey.to_hex(),
-                );
-                connect_peer_man.disconnect_all_peers();
-                stop_component(&connect_stopped_components);
-                log_debug!(
-                    connect_logger,
-                    "stopped connection component and disconnected peers for node: {}",
-                    node_pubkey.to_hex(),
-                );
-                break;
+            for _ in 0..5 {
+                if stop.load(Ordering::Relaxed) {
+                    log_debug!(
+                        connect_logger,
+                        "stopping connection component and disconnecting peers for node: {}",
+                        node_pubkey.to_hex(),
+                    );
+                    connect_peer_man.disconnect_all_peers();
+                    stop_component(&stopped_components);
+                    log_debug!(
+                        connect_logger,
+                        "stopped connection component and disconnected peers for node: {}",
+                        node_pubkey.to_hex(),
+                    );
+                    return;
+                }
+                sleep(1_000).await;
             }
 
-            // if we aren't connected to master socket
-            // then don't try to connect peer
-            if !connect_multi_socket.connected() {
-                sleep(5 * 1000).await;
+            // if we aren't connected to master socket then skip
+            // this is either an indication that there's a network issue or another instance of the
+            // same node is already connected (we do checking server side), in which case we probably
+            // shouldn't connect to the same peers again anyways.
+            if !multi_socket.lock().await.connected() {
                 continue;
             }
 
@@ -1242,7 +1277,7 @@ async fn start_reconnection_handling(
                 .into_iter()
                 .filter(|(_, d)| {
                     d.connection_string.is_some()
-                        && d.nodes.binary_search(&connect_uuid.to_string()).is_ok()
+                        && d.nodes.binary_search(&uuid.to_string()).is_ok()
                 })
                 .map(|(n, d)| (n, d.connection_string.unwrap()))
                 .filter(|(n, _)| {
@@ -1253,6 +1288,21 @@ async fn start_reconnection_handling(
                 .collect();
 
             for (pubkey, conn_str) in not_connected.into_iter() {
+                let now = crate::utils::now();
+
+                // initialize backoff time and last attempt time if they do not exist
+                let backoff_entry = backoff_times
+                    .entry(pubkey)
+                    .or_insert((INITIAL_RECONNECTION_DELAY, now));
+
+                // skip this pubkey if not enough time has passed since the last attempt
+                if now - backoff_entry.1 < Duration::from_secs(backoff_entry.0) {
+                    continue;
+                }
+
+                // Update the last attempt time
+                backoff_entry.1 = now;
+
                 log_trace!(connect_logger, "going to auto connect to peer: {pubkey}");
                 let peer_connection_info = match PubkeyConnectionInfo::new(&conn_str) {
                     Ok(p) => p,
@@ -1261,39 +1311,29 @@ async fn start_reconnection_handling(
                         continue;
                     }
                 };
+
                 match connect_peer_if_necessary(
-                    connect_multi_socket.clone(),
-                    &connect_proxy,
+                    multi_socket.clone(),
+                    &websocket_proxy_addr,
                     &peer_connection_info,
                     connect_logger.clone(),
                     connect_peer_man.clone(),
+                    stop.clone(),
                 )
                 .await
                 {
                     Ok(_) => {
                         log_trace!(connect_logger, "auto connected peer: {pubkey}");
+                        // reset backoff time to initial value if connection is successful
+                        backoff_entry.0 = INITIAL_RECONNECTION_DELAY;
                     }
                     Err(e) => {
                         log_warn!(connect_logger, "could not auto connect peer: {e}");
+                        // double the backoff time if connection fails, but do not exceed max
+                        backoff_entry.0 = (backoff_entry.0 * 2).min(MAX_RECONNECTION_DELAY);
                     }
                 }
-                if connect_stop.load(Ordering::Relaxed) {
-                    log_debug!(
-                        connect_logger,
-                        "stopping connection component and disconnecting peers for node: {}",
-                        node_pubkey.to_hex(),
-                    );
-                    connect_peer_man.disconnect_all_peers();
-                    stop_component(&connect_stopped_components);
-                    log_debug!(
-                        connect_logger,
-                        "stopped connection component and disconnected peers for node: {}",
-                        node_pubkey.to_hex(),
-                    );
-                    break;
-                }
             }
-            sleep(5 * 1000).await;
         }
     });
     Ok(())
@@ -1309,11 +1349,12 @@ fn stop_component(stopped_components: &Arc<RwLock<Vec<bool>>>) {
 }
 
 pub(crate) async fn connect_peer_if_necessary(
-    multi_socket: MultiWsSocketDescriptor,
+    multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
     websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
     logger: Arc<MutinyLogger>,
     peer_manager: Arc<dyn PeerManager>,
+    stop: Arc<AtomicBool>,
 ) -> Result<(), MutinyError> {
     if peer_manager
         .get_peer_node_ids()
@@ -1327,17 +1368,19 @@ pub(crate) async fn connect_peer_if_necessary(
             peer_connection_info,
             logger,
             peer_manager,
+            stop,
         )
         .await
     }
 }
 
 pub(crate) async fn connect_peer(
-    multi_socket: MultiWsSocketDescriptor,
+    multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
     websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
     logger: Arc<MutinyLogger>,
     peer_manager: Arc<dyn PeerManager>,
+    stop: Arc<AtomicBool>,
 ) -> Result<(), MutinyError> {
     // first make a connection to the node
     log_debug!(
@@ -1358,14 +1401,15 @@ pub(crate) async fn connect_peer(
                 try_get_net_addr_from_socket(t),
             )
         }
-        ConnectionType::Mutiny(_) => (
-            WsSocketDescriptor::Mutiny(
-                multi_socket
-                    .create_new_subsocket(peer_connection_info.pubkey.encode())
-                    .await,
-            ),
-            None,
-        ),
+        ConnectionType::Mutiny(_) => {
+            let sub_socket = multi_socket
+                .lock()
+                .await
+                .create_new_subsocket(peer_connection_info.pubkey.encode())
+                .await;
+
+            (WsSocketDescriptor::Mutiny(sub_socket), None)
+        }
     };
 
     // then give that connection to the peer manager
@@ -1384,7 +1428,12 @@ pub(crate) async fn connect_peer(
     );
 
     // schedule a reader on the connection
-    schedule_descriptor_read(descriptor, peer_manager.clone());
+    schedule_descriptor_read(
+        descriptor,
+        peer_manager.clone(),
+        logger.clone(),
+        stop.clone(),
+    );
 
     Ok(())
 }
