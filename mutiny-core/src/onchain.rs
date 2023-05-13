@@ -3,6 +3,7 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
 use bdk::chain::{BlockId, ConfirmationTime};
+use bdk::psbt::PsbtUtils;
 use bdk::template::DescriptorTemplateOut;
 use bdk::{FeeRate, LocalUtxo, SignOptions, TransactionDetails, Wallet};
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
@@ -183,7 +184,7 @@ impl OnChainWallet {
     }
 
     #[allow(dead_code)]
-    fn label_psbt(
+    pub(crate) fn label_psbt(
         &self,
         psbt: &PartiallySignedTransaction,
         labels: Vec<String>,
@@ -221,21 +222,19 @@ impl OnChainWallet {
         &self,
         send_to: Address,
         amount: u64,
-        labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<PartiallySignedTransaction, MutinyError> {
         if !send_to.is_valid_for_network(self.network) {
             return Err(MutinyError::IncorrectNetwork(send_to.network));
         }
 
-        self.create_signed_psbt_to_spk(send_to.script_pubkey(), amount, labels, fee_rate)
+        self.create_signed_psbt_to_spk(send_to.script_pubkey(), amount, fee_rate)
     }
 
     pub fn create_signed_psbt_to_spk(
         &self,
         spk: Script,
         amount: u64,
-        labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<PartiallySignedTransaction, MutinyError> {
         let mut wallet = self.wallet.try_write()?;
@@ -260,7 +259,6 @@ impl OnChainWallet {
         log_debug!(self.logger, "Unsigned PSBT: {psbt}");
         let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
         log_debug!(self.logger, "finalized: {finalized}");
-        self.label_psbt(&psbt, labels)?;
         Ok(psbt)
     }
 
@@ -271,7 +269,8 @@ impl OnChainWallet {
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        let psbt = self.create_signed_psbt(destination_address, amount, labels, fee_rate)?;
+        let psbt = self.create_signed_psbt(destination_address, amount, fee_rate)?;
+        self.label_psbt(&psbt, labels)?;
 
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
@@ -284,7 +283,6 @@ impl OnChainWallet {
     pub fn create_sweep_psbt(
         &self,
         destination_address: Address,
-        labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<PartiallySignedTransaction, MutinyError> {
         if !destination_address.is_valid_for_network(self.network) {
@@ -315,7 +313,6 @@ impl OnChainWallet {
         log_debug!(self.logger, "Unsigned PSBT: {psbt}");
         let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
         log_debug!(self.logger, "finalized: {finalized}");
-        self.label_psbt(&psbt, labels)?;
         Ok(psbt)
     }
 
@@ -325,7 +322,8 @@ impl OnChainWallet {
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        let psbt = self.create_sweep_psbt(destination_address, labels, fee_rate)?;
+        let psbt = self.create_sweep_psbt(destination_address, fee_rate)?;
+        self.label_psbt(&psbt, labels)?;
 
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
@@ -335,16 +333,15 @@ impl OnChainWallet {
         Ok(txid)
     }
 
-    /// Spend all the selected utxos a given output.
+    /// Creates a PSBT that spends all the selected utxos a given output.
     /// A fee rate is not specified because it should be precalculated
     /// in the output's amount.
-    pub(crate) fn spend_utxos_to_output(
+    pub(crate) fn create_sweep_psbt_to_output(
         &self,
         utxos: &[OutPoint],
         spk: Script,
         amount_sats: u64,
         sat_per_kwu: u32,
-        labels: Vec<String>,
     ) -> Result<PartiallySignedTransaction, MutinyError> {
         let mut wallet = self.wallet.try_write()?;
         let (mut psbt, details) = {
@@ -360,8 +357,19 @@ impl OnChainWallet {
         log_debug!(self.logger, "Unsigned PSBT: {psbt}");
         let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
         log_debug!(self.logger, "finalized: {finalized}");
-        self.label_psbt(&psbt, labels)?;
         Ok(psbt)
+    }
+
+    pub fn estimate_tx_fee(
+        &self,
+        destination_address: Address,
+        amount: u64,
+        fee_rate: Option<f32>,
+    ) -> Result<u64, MutinyError> {
+        let psbt =
+            self.create_signed_psbt_to_spk(destination_address.script_pubkey(), amount, fee_rate)?;
+
+        psbt.fee_amount().ok_or(MutinyError::WalletOperationFailed)
     }
 }
 

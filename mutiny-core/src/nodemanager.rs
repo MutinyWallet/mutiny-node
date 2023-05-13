@@ -722,6 +722,18 @@ impl NodeManager {
         self.wallet.sweep(send_to, labels, fee_rate).await
     }
 
+    /// Estimates the onchain fee for a transaction sending to the given address.
+    /// The amount is in satoshis and the fee rate is in sat/vbyte.
+    pub fn estimate_tx_fee(
+        &self,
+        destination_address: Address,
+        amount: u64,
+        fee_rate: Option<f32>,
+    ) -> Result<u64, MutinyError> {
+        self.wallet
+            .estimate_tx_fee(destination_address, amount, fee_rate)
+    }
+
     /// Checks if the given address has any transactions.
     /// If it does, it returns the details of the first transaction.
     ///
