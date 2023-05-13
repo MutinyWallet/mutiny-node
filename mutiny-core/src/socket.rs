@@ -246,16 +246,26 @@ impl MultiWsSocketDescriptor {
                 pin_mut!(delay_fut);
                 select! {
                     msg_option = read_fut => {
-                        if let Some(Ok(msg)) = msg_option {
-                            handle_incoming_msg(
-                                msg,
-                                socket_map_copy.clone(),
-                                peer_manager_copy.clone(),
-                                send_to_multi_socket_copy.clone(),
-                                our_peer_pubkey_copy.clone(),
-                                logger_copy.clone(),
-                                stop_copy.clone(),
-                            ).await;
+                        match msg_option {
+                            Some(Ok(msg)) => {
+                                handle_incoming_msg(
+                                    msg,
+                                    socket_map_copy.clone(),
+                                    peer_manager_copy.clone(),
+                                    send_to_multi_socket_copy.clone(),
+                                    our_peer_pubkey_copy.clone(),
+                                    logger_copy.clone(),
+                                    stop_copy.clone(),
+                                ).await;
+                                }
+                            Some(Err(e)) => {
+                                log_trace!(logger_copy, "could not read from proxy connection: {e}");
+                                break;
+                            }
+                            None => {
+                                log_trace!(logger_copy, "nothing from the future, ignoring...");
+
+                            }
                         }
                     }
                     _ = delay_fut => {
@@ -505,6 +515,8 @@ pub(crate) fn schedule_descriptor_read(
                                         log_error!(logger, "got an error reading msg: {}", e);
                                     }
                                 }
+                                descriptor.disconnect_socket();
+                                peer_manager.socket_disconnected(&mut descriptor);
                                 break;
                             }
                         }
