@@ -205,6 +205,21 @@ impl MutinyWallet {
             .to_string())
     }
 
+    /// Estimates the onchain fee for a transaction sending to the given address.
+    /// The amount is in satoshis and the fee rate is in sat/vbyte.
+    pub fn estimate_tx_fee(
+        &self,
+        destination_address: String,
+        amount: u64,
+        fee_rate: Option<f32>,
+    ) -> Result<u64, MutinyJsError> {
+        let addr = Address::from_str(&destination_address)?;
+        Ok(self
+            .inner
+            .node_manager
+            .estimate_tx_fee(addr, amount, fee_rate)?)
+    }
+
     /// Checks if the given address has any transactions.
     /// If it does, it returns the details of the first transaction.
     ///

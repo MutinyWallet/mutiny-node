@@ -3,6 +3,7 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
 use bdk::chain::{BlockId, ConfirmationTime};
+use bdk::psbt::PsbtUtils;
 use bdk::template::DescriptorTemplateOut;
 use bdk::{FeeRate, LocalUtxo, SignOptions, TransactionDetails, Wallet};
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
@@ -357,6 +358,18 @@ impl OnChainWallet {
         let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
         log_debug!(self.logger, "finalized: {finalized}");
         Ok(psbt)
+    }
+
+    pub fn estimate_tx_fee(
+        &self,
+        destination_address: Address,
+        amount: u64,
+        fee_rate: Option<f32>,
+    ) -> Result<u64, MutinyError> {
+        let psbt =
+            self.create_signed_psbt_to_spk(destination_address.script_pubkey(), amount, fee_rate)?;
+
+        psbt.fee_amount().ok_or(MutinyError::WalletOperationFailed)
     }
 }
 
