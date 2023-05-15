@@ -33,6 +33,7 @@ use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{rand, PublicKey};
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
+use core::time::Duration;
 use futures::{future::join_all, lock::Mutex};
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
 use lightning::chain::keysinterface::{NodeSigner, Recipient};
@@ -50,6 +51,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 use wasm_bindgen_futures::spawn_local;
+
+const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 
 // This is the NodeStorage object saved to the DB
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -333,6 +336,7 @@ pub struct NodeManager {
     lnurl_client: LnUrlClient,
     pub(crate) lsp_clients: Vec<LspClient>,
     pub(crate) logger: Arc<MutinyLogger>,
+    bitcoin_price_cache: Arc<Mutex<Option<(f32, Duration)>>>,
     #[cfg(test)]
     db_prefix: String,
 }
@@ -535,6 +539,7 @@ impl NodeManager {
             lnurl_client,
             lsp_clients,
             logger,
+            bitcoin_price_cache: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             db_prefix: c.db_prefix,
         };
@@ -1512,7 +1517,47 @@ impl NodeManager {
 
     /// Gets the current bitcoin price in USD.
     pub async fn get_bitcoin_price(&self) -> Result<f32, MutinyError> {
-        let client = Client::builder().build().unwrap();
+        let now = crate::utils::now();
+
+        let mut bitcoin_price_cache = self.bitcoin_price_cache.lock().await;
+
+        let (price, timestamp) = match bitcoin_price_cache.as_ref() {
+            Some((price, timestamp))
+                if *timestamp + Duration::from_secs(BITCOIN_PRICE_CACHE_SEC) > now =>
+            {
+                // Cache is not expired
+                log_debug!(self.logger, "got price from cache");
+                (*price, *timestamp)
+            }
+            _ => {
+                // Cache is either expired or empty, fetch new price
+                match self.fetch_bitcoin_price().await {
+                    Ok(new_price) => (new_price, now),
+                    Err(e) => {
+                        // If fetching price fails, return the cached price (if any)
+                        if let Some((price, timestamp)) = bitcoin_price_cache.as_ref() {
+                            log_warn!(self.logger, "price api failed, returning cached price");
+                            (*price, *timestamp)
+                        } else {
+                            // If there is no cached price, return the error
+                            log_error!(self.logger, "no cached price and price api failed");
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+        };
+
+        *bitcoin_price_cache = Some((price, timestamp));
+        Ok(price)
+    }
+
+    async fn fetch_bitcoin_price(&self) -> Result<f32, MutinyError> {
+        log_debug!(self.logger, "fetching new bitcoin price");
+
+        let client = Client::builder()
+            .build()
+            .map_err(|_| MutinyError::BitcoinPriceError)?;
 
         let resp = client
             .get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd")
