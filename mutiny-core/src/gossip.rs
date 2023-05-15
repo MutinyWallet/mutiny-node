@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::Network;
 use gloo_utils::format::JsValueSerdeExt;
@@ -18,22 +17,19 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::error::{MutinyError, MutinyStorageError};
+use crate::error::MutinyError;
 use crate::logging::MutinyLogger;
 use crate::node::{NetworkGraph, ProbScorer, RapidGossipSync};
-use crate::onchain::get_rgs_url;
 use crate::utils;
 
 pub(crate) const GOSSIP_DATABASE_NAME: &str = "gossip";
 pub(crate) const GOSSIP_OBJECT_STORE_NAME: &str = "gossip_store";
 pub(crate) const LN_PEER_METADATA_STORE_NAME: &str = "ln_peer_store";
 
-pub(crate) const GOSSIP_SYNC_TIME_KEY: &str = "last_sync_timestamp";
-pub(crate) const NETWORK_GRAPH_KEY: &str = "network_graph";
+pub(crate) const RGS_DATA_KEY: &str = "rapid_gossip_sync_data";
 pub(crate) const PROB_SCORER_KEY: &str = "prob_scorer";
 
 struct Gossip {
-    pub last_sync_timestamp: u32,
     pub network_graph: Arc<NetworkGraph>,
     pub scorer: Option<ProbScorer>,
 }
@@ -41,7 +37,6 @@ struct Gossip {
 impl Gossip {
     pub fn new(network: Network, logger: Arc<MutinyLogger>) -> Self {
         Self {
-            last_sync_timestamp: 0,
             network_graph: Arc::new(NetworkGraph::new(network, logger)),
             scorer: None,
         }
@@ -63,6 +58,7 @@ async fn build_gossip_database() -> Result<Rexie, MutinyError> {
 
 async fn get_gossip_data(
     rexie: &Rexie,
+    network: Network,
     logger: Arc<MutinyLogger>,
 ) -> Result<Option<Gossip>, MutinyError> {
     // Create a new read-only transaction
@@ -70,38 +66,9 @@ async fn get_gossip_data(
 
     let store = transaction.store(GOSSIP_OBJECT_STORE_NAME)?;
 
-    // Get the `last_sync_timestamp`
-    let last_sync_timestamp_js = store.get(&JsValue::from(GOSSIP_SYNC_TIME_KEY)).await?;
+    let network_graph = Arc::new(NetworkGraph::new(network, logger.clone()));
 
-    // If the key doesn't exist, we return None
-    if last_sync_timestamp_js.is_null() || last_sync_timestamp_js.is_undefined() {
-        return Ok(None);
-    }
-
-    let last_sync_timestamp: u32 =
-        last_sync_timestamp_js
-            .as_f64()
-            .ok_or_else(|| MutinyError::ReadError {
-                source: MutinyStorageError::Other(anyhow!(
-                    "could not read last_sync_timestamp, got {:?}",
-                    last_sync_timestamp_js
-                )),
-            })? as u32;
-
-    // Get the `network_graph`
-    let network_graph_js = store.get(&JsValue::from(NETWORK_GRAPH_KEY)).await?;
-
-    // If the key doesn't exist, we return None
-    if network_graph_js.is_null() || network_graph_js.is_undefined() {
-        return Ok(None);
-    }
-
-    let network_graph_str: String = network_graph_js.into_serde()?;
-    let network_graph_bytes: Vec<u8> = Vec::from_hex(&network_graph_str)?;
-    let mut readable_bytes = lightning::io::Cursor::new(network_graph_bytes);
-    let network_graph = Arc::new(NetworkGraph::read(&mut readable_bytes, logger.clone())?);
-
-    log_debug!(logger, "Got network graph, getting scorer...");
+    log_debug!(logger, "Getting scorer...");
 
     // Get the probabilistic scorer
     let prob_scorer_js = store.get(&JsValue::from(PROB_SCORER_KEY)).await?;
@@ -109,7 +76,6 @@ async fn get_gossip_data(
     // If the key doesn't exist, we return None for the scorer
     if prob_scorer_js.is_null() || prob_scorer_js.is_undefined() {
         let gossip = Gossip {
-            last_sync_timestamp,
             network_graph,
             scorer: None,
         };
@@ -131,65 +97,27 @@ async fn get_gossip_data(
     }
 
     let gossip = Gossip {
-        last_sync_timestamp,
         network_graph,
         scorer: scorer.ok(),
     };
 
-    transaction.done().await?;
-
     Ok(Some(gossip))
 }
 
-async fn write_gossip_data(
-    rexie: &Rexie,
-    last_sync_timestamp: u32,
-    network_graph: &NetworkGraph,
-) -> Result<(), MutinyError> {
+async fn write_gossip_data(rexie: &Rexie, rgs_update_data: &[u8]) -> Result<(), MutinyError> {
     // Create a new read-write transaction
     let transaction = rexie.transaction(&[GOSSIP_OBJECT_STORE_NAME], TransactionMode::ReadWrite)?;
 
     let store = transaction.store(GOSSIP_OBJECT_STORE_NAME)?;
 
-    // Save the last sync timestamp
+    // Save the rgs data
+    let update_data_str = rgs_update_data.to_hex();
     store
         .put(
-            &JsValue::from(last_sync_timestamp),
-            Some(&JsValue::from(GOSSIP_SYNC_TIME_KEY)),
+            &JsValue::from(update_data_str),
+            Some(&JsValue::from(RGS_DATA_KEY)),
         )
         .await?;
-
-    // Save the network graph
-    let network_graph_str = network_graph.encode().to_hex();
-    write_network_graph_to_store(&store, &network_graph_str).await?;
-
-    // Waits for the transaction to complete
-    transaction.done().await?;
-
-    Ok(())
-}
-
-/// Write the Network Graph to indexedDB
-/// This is done in a spawn_local so that it can be done for sync functions
-pub fn persist_network_graph(network_graph: &NetworkGraph) -> Result<(), lightning::io::Error> {
-    let network_graph_str = network_graph.encode().to_hex();
-    spawn_local(async move {
-        write_network_graph(&network_graph_str)
-            .await
-            .expect("Failed to write network graph")
-    });
-    Ok(())
-}
-
-async fn write_network_graph(network_graph_str: &str) -> Result<(), MutinyError> {
-    let rexie = build_gossip_database().await?;
-    // Create a new read-write transaction
-    let transaction = rexie.transaction(&[GOSSIP_OBJECT_STORE_NAME], TransactionMode::ReadWrite)?;
-
-    let store = transaction.store(GOSSIP_OBJECT_STORE_NAME)?;
-
-    // Save the network graph
-    write_network_graph_to_store(&store, network_graph_str).await?;
 
     // Waits for the transaction to complete
     transaction.done().await?;
@@ -225,18 +153,6 @@ async fn write_scorer(scorer_str: &str) -> Result<(), MutinyError> {
     Ok(())
 }
 
-async fn write_network_graph_to_store(
-    store: &Store,
-    network_graph_str: &str,
-) -> Result<(), MutinyError> {
-    let network_graph_js = JsValue::from_serde(network_graph_str)?;
-    store
-        .put(&network_graph_js, Some(&JsValue::from(NETWORK_GRAPH_KEY)))
-        .await?;
-
-    Ok(())
-}
-
 async fn write_scorer_to_store(store: &Store, scorer_str: &str) -> Result<(), MutinyError> {
     let scorer_js = JsValue::from_serde(scorer_str)?;
     store
@@ -246,15 +162,40 @@ async fn write_scorer_to_store(store: &Store, scorer_str: &str) -> Result<(), Mu
     Ok(())
 }
 
+async fn read_and_apply_rgs_data(
+    rexie: Rexie,
+    gossip_sync: Arc<RapidGossipSync>,
+) -> Result<(), MutinyError> {
+    // Get the rgs data from indexedDB
+    let rgs_data_js = {
+        // Create a new read-only transaction
+        let transaction =
+            rexie.transaction(&[GOSSIP_OBJECT_STORE_NAME], TransactionMode::ReadOnly)?;
+        let store = transaction.store(GOSSIP_OBJECT_STORE_NAME)?;
+
+        store.get(&JsValue::from(RGS_DATA_KEY)).await?
+    };
+
+    // Only attempt to update the network graph if we have rgs data
+    if !rgs_data_js.is_null() && !rgs_data_js.is_undefined() {
+        let rgs_data_str: String = rgs_data_js.into_serde()?;
+        let rgs_data_bytes: Vec<u8> = Vec::from_hex(&rgs_data_str)?;
+        let now = utils::now().as_secs();
+
+        gossip_sync.update_network_graph_no_std(&rgs_data_bytes, Some(now))?;
+    }
+
+    Ok(())
+}
+
 pub async fn get_gossip_sync(
-    user_rgs_url: Option<String>,
     network: Network,
     logger: Arc<MutinyLogger>,
-) -> Result<(RapidGossipSync, ProbScorer), MutinyError> {
+) -> Result<(Arc<RapidGossipSync>, Arc<utils::Mutex<ProbScorer>>), MutinyError> {
     let rexie = build_gossip_database().await?;
 
     // if we error out, we just use the default gossip data
-    let gossip_data = match get_gossip_data(&rexie, logger.clone()).await {
+    let gossip_data = match get_gossip_data(&rexie, network, logger.clone()).await {
         Ok(Some(gossip_data)) => gossip_data,
         Ok(None) => Gossip::new(network, logger.clone()),
         Err(e) => {
@@ -266,14 +207,10 @@ pub async fn get_gossip_sync(
         }
     };
 
-    log_debug!(
-        &logger,
-        "Previous gossip sync timestamp: {}",
-        gossip_data.last_sync_timestamp
-    );
-
-    // get network graph
-    let gossip_sync = RapidGossipSync::new(gossip_data.network_graph.clone(), logger.clone());
+    let gossip_sync = Arc::new(RapidGossipSync::new(
+        gossip_data.network_graph.clone(),
+        logger.clone(),
+    ));
 
     let prob_scorer = match gossip_data.scorer {
         Some(scorer) => scorer,
@@ -282,51 +219,36 @@ pub async fn get_gossip_sync(
             ProbScorer::new(params, gossip_data.network_graph.clone(), logger.clone())
         }
     };
+    let prob_scorer = Arc::new(utils::Mutex::new(prob_scorer));
 
-    let now = utils::now().as_secs();
-
-    // remove stale channels
-    gossip_sync
-        .network_graph()
-        .remove_stale_channels_and_tracking_with_time(now);
-
-    // if the last sync was less than 24 hours ago, we don't need to sync
-    let time_since_sync = now - gossip_data.last_sync_timestamp as u64;
-    if time_since_sync < 86_400 {
-        return Ok((gossip_sync, prob_scorer));
-    };
-
-    let rgs_url = get_rgs_url(network, user_rgs_url, Some(gossip_data.last_sync_timestamp));
-    log_info!(&logger, "RGS URL: {}", rgs_url);
-
-    let fetch_result = fetch_updated_gossip(
-        rgs_url,
-        now,
-        gossip_data.last_sync_timestamp,
-        &gossip_sync,
-        &rexie,
-        &logger,
-    )
-    .await;
-
-    if fetch_result.is_err() {
-        log_warn!(
-            logger,
-            "Failed to fetch updated gossip, using default gossip data"
-        );
-    }
+    // update network graph with saved rgs data in background
+    let gs_clone = gossip_sync.clone();
+    spawn_local(async move {
+        if let Err(e) = read_and_apply_rgs_data(rexie, gs_clone).await {
+            log_error!(logger, "Error reading and applying rgs data: {e}");
+        }
+    });
 
     Ok((gossip_sync, prob_scorer))
 }
 
-async fn fetch_updated_gossip(
+pub(crate) async fn fetch_updated_gossip(
     rgs_url: String,
     now: u64,
     last_sync_timestamp: u32,
     gossip_sync: &RapidGossipSync,
-    rexie: &Rexie,
     logger: &MutinyLogger,
-) -> Result<(), MutinyError> {
+) -> Result<Option<u32>, MutinyError> {
+    // if the last sync was less than 24 hours ago, we don't need to sync
+    let time_since_sync = now.saturating_sub(last_sync_timestamp as u64);
+    if time_since_sync < 86_400 {
+        return Ok(None);
+    };
+
+    log_info!(logger, "Fetching RGS... URL: {rgs_url}");
+
+    let rexie = build_gossip_database().await?;
+
     let http_client = Client::builder()
         .build()
         .map_err(|_| MutinyError::RapidGossipSyncError)?;
@@ -345,23 +267,37 @@ async fn fetch_updated_gossip(
     let new_last_sync_timestamp_result =
         gossip_sync.update_network_graph_no_std(&rgs_data, Some(now))?;
 
-    log_info!(
-        logger,
-        "RGS sync result: {}",
-        new_last_sync_timestamp_result
-    );
+    log_info!(logger, "RGS sync result: {new_last_sync_timestamp_result}");
 
-    // save the network graph if has been updated
-    if new_last_sync_timestamp_result != last_sync_timestamp {
-        write_gossip_data(
-            rexie,
-            new_last_sync_timestamp_result,
-            gossip_sync.network_graph(),
-        )
-        .await?;
+    // save the rgs data to storage if it not a partial sync
+    if last_sync_timestamp == 0 {
+        write_gossip_data(&rexie, &rgs_data).await?;
     }
 
-    Ok(())
+    Ok(Some(new_last_sync_timestamp_result))
+}
+
+pub(crate) fn get_rgs_url(
+    network: Network,
+    user_provided_url: Option<&str>,
+    last_sync_timestamp: Option<u32>,
+) -> Option<String> {
+    let last_sync = last_sync_timestamp.unwrap_or(0);
+    if let Some(url) = user_provided_url.filter(|url| !url.is_empty()) {
+        let url = url.strip_suffix('/').unwrap_or(url);
+        Some(format!("{url}/{last_sync}"))
+    } else {
+        match network {
+            Network::Bitcoin => Some(format!(
+                "https://rapidsync.lightningdevkit.org/snapshot/{last_sync}"
+            )),
+            Network::Testnet => Some(format!(
+                "https://rapidsync.lightningdevkit.org/testnet/snapshot/{last_sync}"
+            )),
+            Network::Signet => Some(format!("https://rgs.mutinynet.com/snapshot/{last_sync}")),
+            Network::Regtest => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -640,23 +576,6 @@ pub(crate) async fn save_ln_peer_info(
 }
 
 #[cfg(test)]
-pub fn get_dummy_gossip(
-    _user_rgs_url: Option<String>,
-    network: Network,
-    logger: Arc<MutinyLogger>,
-) -> (RapidGossipSync, ProbScorer) {
-    let network_graph = Arc::new(NetworkGraph::new(network, logger.clone()));
-    let gossip_sync = RapidGossipSync::new(network_graph.clone(), logger.clone());
-    let scorer = ProbScorer::new(
-        ProbabilisticScoringParameters::default(),
-        network_graph,
-        logger,
-    );
-
-    (gossip_sync, scorer)
-}
-
-#[cfg(test)]
 mod test {
     use bitcoin::secp256k1::{Secp256k1, SecretKey};
     use uuid::Uuid;
@@ -714,8 +633,6 @@ mod test {
     }
 
     #[test]
-    // hack to disable this test
-    #[cfg(feature = "ignored_tests")]
     async fn test_gossip() {
         crate::test_utils::log!("test RGS sync");
         // delete the database if it exists
@@ -724,19 +641,18 @@ mod test {
         let rexie = build_gossip_database().await.unwrap();
 
         let logger = Arc::new(MutinyLogger::default());
-        let _gossip_sync = get_gossip_sync(None, Network::Testnet, logger.clone())
+        let _gossip_sync = get_gossip_sync(Network::Signet, logger.clone())
             .await
             .unwrap();
 
-        let data = get_gossip_data(&rexie, logger).await.unwrap();
+        let data = get_gossip_data(&rexie, Network::Signet, logger)
+            .await
+            .unwrap();
 
         assert!(data.is_some());
-        assert!(data.unwrap().last_sync_timestamp > 0);
     }
 
     #[test]
-    // hack to disable this test
-    #[cfg(feature = "ignored_tests")]
     async fn test_peer_info() {
         // delete the database if it exists
         Rexie::delete(GOSSIP_DATABASE_NAME).await.unwrap();

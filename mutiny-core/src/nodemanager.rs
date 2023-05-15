@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use crate::event::{HTLCStatus, PaymentInfo};
+use crate::gossip::get_rgs_url;
 use crate::indexed_db::MutinyStorage;
 use crate::labels::LabelStorage;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
@@ -325,6 +326,7 @@ pub struct NodeManager {
     websocket_proxy_addr: String,
     esplora: Arc<AsyncClient>,
     wallet: Arc<OnChainWallet>,
+    user_rgs_url: Option<String>,
     gossip_sync: Arc<RapidGossipSync>,
     scorer: Arc<utils::Mutex<ProbScorer>>,
     chain: Arc<MutinyChain>,
@@ -367,7 +369,7 @@ impl NodeManager {
             .unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
 
         // todo we should eventually have default mainnet
-        let network: Network = c.network.unwrap_or(Network::Testnet);
+        let network: Network = c.network.unwrap_or(Network::Signet);
 
         #[cfg(test)]
         let storage = MutinyStorage::new(c.password.clone(), Some(c.db_prefix.clone())).await?;
@@ -416,18 +418,7 @@ impl NodeManager {
 
         let chain = Arc::new(MutinyChain::new(tx_sync, logger.clone()));
 
-        // We don't need to actually sync gossip in tests unless we need to test gossip
-        #[cfg(test)]
-        let (gossip_sync, scorer) =
-            gossip::get_dummy_gossip(c.user_rgs_url.clone(), network, logger.clone());
-
-        #[cfg(not(test))]
-        let (gossip_sync, scorer) =
-            gossip::get_gossip_sync(c.user_rgs_url, network, logger.clone()).await?;
-
-        let scorer = Arc::new(utils::Mutex::new(scorer));
-
-        let gossip_sync = Arc::new(gossip_sync);
+        let (gossip_sync, scorer) = gossip::get_gossip_sync(network, logger.clone()).await?;
 
         // load lsp clients, if any
         let lsp_clients: Vec<LspClient> = match c.lsp_url.clone() {
@@ -526,6 +517,7 @@ impl NodeManager {
             mnemonic,
             network,
             wallet,
+            user_rgs_url: c.user_rgs_url,
             gossip_sync,
             scorer,
             chain,
@@ -900,6 +892,47 @@ impl NodeManager {
         self.wallet.list_utxos()
     }
 
+    /// Initializes a background task to sync gossip data.
+    async fn sync_gossip(&self) -> Result<(), MutinyError> {
+        let last_sync_timestamp = self
+            .gossip_sync
+            .network_graph()
+            .get_last_rapid_gossip_sync_timestamp();
+
+        // fetch latest gossip data if available
+        if let Some(rgs_url) = get_rgs_url(
+            self.network,
+            self.user_rgs_url.as_deref(),
+            last_sync_timestamp,
+        ) {
+            let gossip_sync = self.gossip_sync.clone();
+            let logger = self.logger.clone();
+            spawn_local(async move {
+                let now = utils::now().as_secs();
+
+                let fetch_result = gossip::fetch_updated_gossip(
+                    rgs_url,
+                    now,
+                    last_sync_timestamp.unwrap_or(0),
+                    &gossip_sync,
+                    &logger,
+                )
+                .await;
+
+                match fetch_result {
+                    Ok(None) => {}
+                    Ok(Some(timestamp)) => log_info!(
+                        logger,
+                        "Successfully fetched updated gossip data. Timestamp: {timestamp}"
+                    ),
+                    Err(e) => log_warn!(logger, "Failed to fetch updated gossip: {e}"),
+                }
+            });
+        }
+
+        Ok(())
+    }
+
     /// Syncs the lightning wallet with the blockchain.
     /// This will update the wallet with any lightning channels
     /// that have been opened or closed.
@@ -923,6 +956,8 @@ impl NodeManager {
             .sync(confirmables)
             .await
             .map_err(|_e| MutinyError::ChainAccessFailed)?;
+
+        self.sync_gossip().await?;
 
         Ok(())
     }
@@ -1764,7 +1799,7 @@ mod tests {
             "password".to_string(),
             None,
             None,
-            Some(Network::Testnet),
+            Some(Network::Signet),
             None,
             None,
             None,
@@ -1786,7 +1821,7 @@ mod tests {
             "password".to_string(),
             Some(seed.clone()),
             None,
-            Some(Network::Testnet),
+            Some(Network::Signet),
             None,
             None,
             None,
@@ -1808,7 +1843,7 @@ mod tests {
             "password".to_string(),
             Some(seed),
             None,
-            Some(Network::Testnet),
+            Some(Network::Signet),
             None,
             None,
             None,
@@ -1844,7 +1879,7 @@ mod tests {
 
     #[test]
     async fn created_label_transaction() {
-        let test_name = "created_new_nodes";
+        let test_name = "created_label_transaction";
         log!("{}", test_name);
 
         let seed = generate_seed(12).expect("Failed to gen seed");
