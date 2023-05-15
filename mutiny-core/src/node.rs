@@ -184,7 +184,7 @@ impl Node {
         lsp_clients: &[LspClient],
         logger: Arc<MutinyLogger>,
     ) -> Result<Self, MutinyError> {
-        log_info!(logger, "initialized a new node: {uuid}");
+        log_info!(logger, "initializing a new node: {uuid}");
 
         // a list of components that need to be stopped and whether or not they are stopped
         let stopped_components = Arc::new(RwLock::new(vec![]));
