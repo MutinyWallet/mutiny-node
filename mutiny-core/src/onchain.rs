@@ -417,35 +417,6 @@ pub(crate) fn get_esplora_url(network: Network, user_provided_url: Option<String
     }
 }
 
-pub(crate) fn get_rgs_url(
-    network: Network,
-    user_provided_url: Option<String>,
-    last_sync_time: Option<u32>,
-) -> String {
-    let last_sync_time = last_sync_time.unwrap_or(0);
-    if let Some(url) = user_provided_url.filter(|url| !url.is_empty()) {
-        let url = url.strip_suffix('/').unwrap_or(&url);
-        format!("{url}/{last_sync_time}")
-    } else {
-        // todo - handle regtest
-        match network {
-            Network::Bitcoin => {
-                format!("https://rapidsync.lightningdevkit.org/snapshot/{last_sync_time}")
-            }
-            Network::Testnet => {
-                format!("https://rapidsync.lightningdevkit.org/testnet/snapshot/{last_sync_time}")
-            }
-            Network::Signet => {
-                format!("https://rgs.mutinynet.com/snapshot/{last_sync_time}")
-            }
-            Network::Regtest => {
-                // for now use the signet rgs because it is the least amount of data
-                format!("https://rgs.mutinynet.com/snapshot/{last_sync_time}")
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
