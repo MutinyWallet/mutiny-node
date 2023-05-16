@@ -1,5 +1,6 @@
 use crate::error::MutinyError;
 use crate::onchain::OnChainWallet;
+use crate::storage::MutinyStorage;
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
 use bitcoin::bech32::u5;
@@ -18,14 +19,14 @@ use lightning::ln::msgs::{DecodeError, UnsignedGossipMessage};
 use lightning::ln::script::ShutdownScript;
 use std::sync::Arc;
 
-pub struct PhantomKeysManager {
+pub struct PhantomKeysManager<S: MutinyStorage> {
     inner: LdkPhantomKeysManager,
-    wallet: Arc<OnChainWallet>,
+    wallet: Arc<OnChainWallet<S>>,
 }
 
-impl PhantomKeysManager {
+impl<S: MutinyStorage> PhantomKeysManager<S> {
     pub fn new(
-        wallet: Arc<OnChainWallet>,
+        wallet: Arc<OnChainWallet<S>>,
         seed: &[u8; 32],
         starting_time_secs: u64,
         starting_time_nanos: u32,
@@ -61,13 +62,13 @@ impl PhantomKeysManager {
     }
 }
 
-impl EntropySource for PhantomKeysManager {
+impl<S: MutinyStorage> EntropySource for PhantomKeysManager<S> {
     fn get_secure_random_bytes(&self) -> [u8; 32] {
         self.inner.get_secure_random_bytes()
     }
 }
 
-impl NodeSigner for PhantomKeysManager {
+impl<S: MutinyStorage> NodeSigner for PhantomKeysManager<S> {
     fn get_inbound_payment_key_material(&self) -> KeyMaterial {
         self.inner.get_inbound_payment_key_material()
     }
@@ -99,7 +100,7 @@ impl NodeSigner for PhantomKeysManager {
     }
 }
 
-impl SignerProvider for PhantomKeysManager {
+impl<S: MutinyStorage> SignerProvider for PhantomKeysManager<S> {
     type Signer = InMemorySigner;
 
     fn generate_channel_keys_id(
@@ -143,7 +144,7 @@ impl SignerProvider for PhantomKeysManager {
     }
 }
 
-pub(crate) fn generate_seed(num_words: u8) -> Result<Mnemonic, MutinyError> {
+pub fn generate_seed(num_words: u8) -> Result<Mnemonic, MutinyError> {
     // the bip39 library supports 12. 15, 18, 21, and 24 word mnemonics
     // we only support 12 & 24 for backwards compatibility with other wallets
     let entropy_size = match num_words {
@@ -162,11 +163,11 @@ pub(crate) fn generate_seed(num_words: u8) -> Result<Mnemonic, MutinyError> {
 // A node private key will be derived from `m/0'/X'`, where its node pubkey will
 // be derived from the LDK default being `m/0'/X'/0'`. The PhantomKeysManager shared
 // key secret will be derived from `m/0'`.
-pub(crate) fn create_keys_manager(
-    wallet: Arc<OnChainWallet>,
+pub(crate) fn create_keys_manager<S: MutinyStorage>(
+    wallet: Arc<OnChainWallet<S>>,
     mnemonic: &Mnemonic,
     child_index: u32,
-) -> Result<PhantomKeysManager, MutinyError> {
+) -> Result<PhantomKeysManager<S>, MutinyError> {
     let context = Secp256k1::new();
 
     let seed = mnemonic.to_seed("");
@@ -192,7 +193,9 @@ pub(crate) fn create_keys_manager(
     ))
 }
 
-pub(crate) fn pubkey_from_keys_manager(keys_manager: &PhantomKeysManager) -> PublicKey {
+pub(crate) fn pubkey_from_keys_manager<S: MutinyStorage>(
+    keys_manager: &PhantomKeysManager<S>,
+) -> PublicKey {
     keys_manager
         .get_node_id(Recipient::Node)
         .expect("cannot parse node id")
@@ -208,9 +211,9 @@ mod tests {
 
     use super::create_keys_manager;
     use crate::fees::MutinyFeeEstimator;
-    use crate::indexed_db::MutinyStorage;
     use crate::logging::MutinyLogger;
     use crate::onchain::OnChainWallet;
+    use crate::storage::MemoryStorage;
     use bip39::Mnemonic;
     use bitcoin::Network;
     use esplora_client::Builder;
@@ -228,9 +231,7 @@ mod tests {
                 .build_async()
                 .unwrap(),
         );
-        let db = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
-            .await
-            .unwrap();
+        let db = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
         let logger = Arc::new(MutinyLogger::default());
         let fees = Arc::new(MutinyFeeEstimator::new(
             db.clone(),

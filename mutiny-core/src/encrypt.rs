@@ -28,7 +28,8 @@ pub fn encrypt(content: &str, password: &str) -> String {
 }
 
 pub fn decrypt(encrypted: &str, password: &str) -> String {
-    let buffer = base64::decode(encrypted).expect("Error reading ciphertext");
+    let buffer = base64::decode(encrypted)
+        .unwrap_or_else(|_| panic!("Error reading ciphertext: {encrypted}"));
     let buffer_slice = buffer.as_slice();
     let salt = &buffer_slice[0..16];
     let iv = &buffer_slice[16..28];

@@ -19,29 +19,29 @@ use lightning::util::logger::Logger;
 
 use crate::error::MutinyError;
 use crate::fees::MutinyFeeEstimator;
-use crate::indexed_db::MutinyStorage;
 use crate::labels::*;
 use crate::logging::MutinyLogger;
+use crate::storage::{MutinyStorage, OnChainStorage};
 
 #[derive(Clone)]
-pub struct OnChainWallet {
-    pub wallet: Arc<RwLock<Wallet<MutinyStorage>>>,
-    storage: MutinyStorage,
+pub struct OnChainWallet<S: MutinyStorage> {
+    pub wallet: Arc<RwLock<Wallet<OnChainStorage<S>>>>,
+    pub(crate) storage: S,
     pub network: Network,
     pub blockchain: Arc<AsyncClient>,
-    pub fees: Arc<MutinyFeeEstimator>,
+    pub fees: Arc<MutinyFeeEstimator<S>>,
     logger: Arc<MutinyLogger>,
 }
 
-impl OnChainWallet {
+impl<S: MutinyStorage> OnChainWallet<S> {
     pub fn new(
         mnemonic: &Mnemonic,
-        db: MutinyStorage,
+        db: S,
         network: Network,
         esplora: Arc<AsyncClient>,
-        fees: Arc<MutinyFeeEstimator>,
+        fees: Arc<MutinyFeeEstimator<S>>,
         logger: Arc<MutinyLogger>,
-    ) -> Result<OnChainWallet, MutinyError> {
+    ) -> Result<OnChainWallet<S>, MutinyError> {
         let seed = mnemonic.to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(network, &seed)?;
         let account_number = 0;
@@ -51,7 +51,7 @@ impl OnChainWallet {
         let wallet = Wallet::new(
             receive_descriptor_template,
             Some(change_descriptor_template),
-            db.clone(),
+            OnChainStorage(db.clone()),
             network,
         )?;
 
@@ -420,6 +420,7 @@ pub(crate) fn get_esplora_url(network: Network, user_provided_url: Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::MemoryStorage;
     use crate::test_utils::*;
     use bitcoin::Address;
     use esplora_client::Builder;
@@ -427,19 +428,14 @@ mod tests {
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
     wasm_bindgen_test_configure!(run_in_browser);
 
-    async fn create_wallet() -> OnChainWallet {
-        let test_name = "create_wallet";
-        log!("{}", test_name);
-
+    async fn create_wallet() -> OnChainWallet<MemoryStorage> {
         let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
         let esplora = Arc::new(
             Builder::new("https://blockstream.info/testnet/api/")
                 .build_async()
                 .unwrap(),
         );
-        let db = MutinyStorage::new("".to_string(), Some(test_name.to_string()))
-            .await
-            .unwrap();
+        let db = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
         let logger = Arc::new(MutinyLogger::default());
         let fees = Arc::new(MutinyFeeEstimator::new(
             db.clone(),
@@ -452,11 +448,15 @@ mod tests {
 
     #[test]
     async fn test_create_wallet() {
+        let test_name = "create_wallet";
+        log!("{}", test_name);
         let _wallet = create_wallet().await;
     }
 
     #[test]
     async fn test_label_psbt() {
+        let test_name = "label_psbt";
+        log!("{}", test_name);
         let wallet = create_wallet().await;
 
         let psbt = PartiallySignedTransaction::from_str("cHNidP8BAKACAAAAAqsJSaCMWvfEm4IS9Bfi8Vqz9cM9zxU4IagTn4d6W3vkAAAAAAD+////qwlJoIxa98SbghL0F+LxWrP1wz3PFTghqBOfh3pbe+QBAAAAAP7///8CYDvqCwAAAAAZdqkUdopAu9dAy+gdmI5x3ipNXHE5ax2IrI4kAAAAAAAAGXapFG9GILVT+glechue4O/p+gOcykWXiKwAAAAAAAEHakcwRAIgR1lmF5fAGwNrJZKJSGhiGDR9iYZLcZ4ff89X0eURZYcCIFMJ6r9Wqk2Ikf/REf3xM286KdqGbX+EhtdVRs7tr5MZASEDXNxh/HupccC1AaZGoqg7ECy0OIEhfKaC3Ibi1z+ogpIAAQEgAOH1BQAAAAAXqRQ1RebjO4MsRwUPJNPuuTycA5SLx4cBBBYAFIXRNTfy4mVAWjTbr6nj3aAfuCMIAAAA").unwrap();

@@ -2,10 +2,8 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::Network;
-use gloo_utils::format::JsValueSerdeExt;
 use lightning::ln::msgs::NodeAnnouncement;
 use lightning::routing::gossip::NodeId;
 use lightning::routing::scoring::ProbabilisticScoringParameters;
@@ -13,20 +11,15 @@ use lightning::util::logger::Logger;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use lightning::{log_debug, log_error, log_info, log_warn};
 use reqwest::Client;
-use rexie::{ObjectStore, Rexie, Store, TransactionMode};
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::JsValue;
-use wasm_bindgen_futures::spawn_local;
 
-use crate::error::{MutinyError, MutinyStorageError};
+use crate::error::MutinyError;
 use crate::logging::MutinyLogger;
 use crate::node::{NetworkGraph, ProbScorer, RapidGossipSync};
+use crate::storage::MutinyStorage;
 use crate::utils;
 
-pub(crate) const GOSSIP_DATABASE_NAME: &str = "gossip";
-pub(crate) const GOSSIP_OBJECT_STORE_NAME: &str = "gossip_store";
-pub(crate) const LN_PEER_METADATA_STORE_NAME: &str = "ln_peer_store";
-
+pub(crate) const LN_PEER_METADATA_KEY_PREFIX: &str = "ln_peer/";
 pub(crate) const GOSSIP_SYNC_TIME_KEY: &str = "last_sync_timestamp";
 pub(crate) const NETWORK_GRAPH_KEY: &str = "network_graph";
 pub(crate) const PROB_SCORER_KEY: &str = "prob_scorer";
@@ -47,80 +40,46 @@ impl Gossip {
     }
 }
 
-async fn build_gossip_database() -> Result<Rexie, MutinyError> {
-    // Create a new database
-    let rexie = Rexie::builder(GOSSIP_DATABASE_NAME)
-        .version(2)
-        .add_object_store(ObjectStore::new(GOSSIP_OBJECT_STORE_NAME))
-        .add_object_store(ObjectStore::new(LN_PEER_METADATA_STORE_NAME))
-        // Build the database
-        .build()
-        .await?;
-
-    Ok(rexie)
-}
-
 async fn get_gossip_data(
-    rexie: &Rexie,
+    storage: &impl MutinyStorage,
     logger: Arc<MutinyLogger>,
 ) -> Result<Option<Gossip>, MutinyError> {
-    // Create a new read-only transaction
-    let transaction = rexie.transaction(&[GOSSIP_OBJECT_STORE_NAME], TransactionMode::ReadOnly)?;
-
-    let store = transaction.store(GOSSIP_OBJECT_STORE_NAME)?;
-
     // Get the `last_sync_timestamp`
-    let last_sync_timestamp_js = store.get(&JsValue::from(GOSSIP_SYNC_TIME_KEY)).await?;
-
-    // If the key doesn't exist, we return None
-    if last_sync_timestamp_js.is_null() || last_sync_timestamp_js.is_undefined() {
-        return Ok(None);
-    }
-
-    let last_sync_timestamp: u32 =
-        last_sync_timestamp_js
-            .as_f64()
-            .ok_or_else(|| MutinyError::ReadError {
-                source: MutinyStorageError::Other(anyhow!(
-                    "could not read last_sync_timestamp, got {:?}",
-                    last_sync_timestamp_js
-                )),
-            })? as u32;
+    let last_sync_timestamp: u32 = match storage.get_data(GOSSIP_SYNC_TIME_KEY)? {
+        Some(last_sync_timestamp) => last_sync_timestamp,
+        None => return Ok(None),
+    };
 
     // Get the `network_graph`
-    let network_graph_js = store.get(&JsValue::from(NETWORK_GRAPH_KEY)).await?;
-
-    // If the key doesn't exist, we return None
-    if network_graph_js.is_null() || network_graph_js.is_undefined() {
-        return Ok(None);
-    }
-
-    let network_graph_str: String = network_graph_js.into_serde()?;
-    let network_graph_bytes: Vec<u8> = Vec::from_hex(&network_graph_str)?;
-    let mut readable_bytes = lightning::io::Cursor::new(network_graph_bytes);
-    let network_graph = Arc::new(NetworkGraph::read(&mut readable_bytes, logger.clone())?);
+    let network_graph: Arc<NetworkGraph> = match storage.get_data::<String>(NETWORK_GRAPH_KEY)? {
+        Some(network_graph_str) => {
+            let network_graph_bytes: Vec<u8> = Vec::from_hex(&network_graph_str)?;
+            let mut readable_bytes = lightning::io::Cursor::new(network_graph_bytes);
+            Arc::new(NetworkGraph::read(&mut readable_bytes, logger.clone())?)
+        }
+        None => return Ok(None),
+    };
 
     log_debug!(logger, "Got network graph, getting scorer...");
 
     // Get the probabilistic scorer
-    let prob_scorer_js = store.get(&JsValue::from(PROB_SCORER_KEY)).await?;
-
-    // If the key doesn't exist, we return None for the scorer
-    if prob_scorer_js.is_null() || prob_scorer_js.is_undefined() {
-        let gossip = Gossip {
-            last_sync_timestamp,
-            network_graph,
-            scorer: None,
-        };
-        return Ok(Some(gossip));
-    }
-
-    let prob_scorer_str: String = prob_scorer_js.into_serde()?;
-    let prob_scorer_bytes: Vec<u8> = Vec::from_hex(&prob_scorer_str)?;
-    let mut readable_bytes = lightning::io::Cursor::new(prob_scorer_bytes);
-    let params = ProbabilisticScoringParameters::default();
-    let args = (params, Arc::clone(&network_graph), Arc::clone(&logger));
-    let scorer = ProbScorer::read(&mut readable_bytes, args);
+    let scorer = match storage.get_data::<String>(PROB_SCORER_KEY)? {
+        Some(prob_scorer_str) => {
+            let prob_scorer_bytes: Vec<u8> = Vec::from_hex(&prob_scorer_str)?;
+            let mut readable_bytes = lightning::io::Cursor::new(prob_scorer_bytes);
+            let params = ProbabilisticScoringParameters::default();
+            let args = (params, Arc::clone(&network_graph), Arc::clone(&logger));
+            ProbScorer::read(&mut readable_bytes, args)
+        }
+        None => {
+            let gossip = Gossip {
+                last_sync_timestamp,
+                network_graph,
+                scorer: None,
+            };
+            return Ok(Some(gossip));
+        }
+    };
 
     if let Err(e) = scorer.as_ref() {
         log_warn!(
@@ -135,125 +94,31 @@ async fn get_gossip_data(
         scorer: scorer.ok(),
     };
 
-    transaction.done().await?;
-
     Ok(Some(gossip))
 }
 
-async fn write_gossip_data(
-    rexie: &Rexie,
+fn write_gossip_data(
+    storage: &impl MutinyStorage,
     last_sync_timestamp: u32,
     network_graph: &NetworkGraph,
 ) -> Result<(), MutinyError> {
-    // Create a new read-write transaction
-    let transaction = rexie.transaction(&[GOSSIP_OBJECT_STORE_NAME], TransactionMode::ReadWrite)?;
-
-    let store = transaction.store(GOSSIP_OBJECT_STORE_NAME)?;
-
     // Save the last sync timestamp
-    store
-        .put(
-            &JsValue::from(last_sync_timestamp),
-            Some(&JsValue::from(GOSSIP_SYNC_TIME_KEY)),
-        )
-        .await?;
+    storage.set_data(GOSSIP_SYNC_TIME_KEY, last_sync_timestamp)?;
 
     // Save the network graph
-    let network_graph_str = network_graph.encode().to_hex();
-    write_network_graph_to_store(&store, &network_graph_str).await?;
-
-    // Waits for the transaction to complete
-    transaction.done().await?;
-
-    Ok(())
-}
-
-/// Write the Network Graph to indexedDB
-/// This is done in a spawn_local so that it can be done for sync functions
-pub fn persist_network_graph(network_graph: &NetworkGraph) -> Result<(), lightning::io::Error> {
-    let network_graph_str = network_graph.encode().to_hex();
-    spawn_local(async move {
-        write_network_graph(&network_graph_str)
-            .await
-            .expect("Failed to write network graph")
-    });
-    Ok(())
-}
-
-async fn write_network_graph(network_graph_str: &str) -> Result<(), MutinyError> {
-    let rexie = build_gossip_database().await?;
-    // Create a new read-write transaction
-    let transaction = rexie.transaction(&[GOSSIP_OBJECT_STORE_NAME], TransactionMode::ReadWrite)?;
-
-    let store = transaction.store(GOSSIP_OBJECT_STORE_NAME)?;
-
-    // Save the network graph
-    write_network_graph_to_store(&store, network_graph_str).await?;
-
-    // Waits for the transaction to complete
-    transaction.done().await?;
-
-    Ok(())
-}
-
-/// Write the Probabilistic Scorer to indexedDB
-/// This is done in a spawn_local so that it can be done for sync functions
-pub fn persist_scorer(scorer: &utils::Mutex<ProbScorer>) -> Result<(), lightning::io::Error> {
-    let scorer_str = scorer.encode().to_hex();
-    spawn_local(async move {
-        write_scorer(&scorer_str)
-            .await
-            .expect("Failed to write scorer")
-    });
-    Ok(())
-}
-
-async fn write_scorer(scorer_str: &str) -> Result<(), MutinyError> {
-    let rexie = build_gossip_database().await?;
-    // Create a new read-write transaction
-    let transaction = rexie.transaction(&[GOSSIP_OBJECT_STORE_NAME], TransactionMode::ReadWrite)?;
-
-    let store = transaction.store(GOSSIP_OBJECT_STORE_NAME)?;
-
-    // Save the scorer
-    write_scorer_to_store(&store, scorer_str).await?;
-
-    // Waits for the transaction to complete
-    transaction.done().await?;
-
-    Ok(())
-}
-
-async fn write_network_graph_to_store(
-    store: &Store,
-    network_graph_str: &str,
-) -> Result<(), MutinyError> {
-    let network_graph_js = JsValue::from_serde(network_graph_str)?;
-    store
-        .put(&network_graph_js, Some(&JsValue::from(NETWORK_GRAPH_KEY)))
-        .await?;
-
-    Ok(())
-}
-
-async fn write_scorer_to_store(store: &Store, scorer_str: &str) -> Result<(), MutinyError> {
-    let scorer_js = JsValue::from_serde(scorer_str)?;
-    store
-        .put(&scorer_js, Some(&JsValue::from(PROB_SCORER_KEY)))
-        .await?;
+    storage.set_data(NETWORK_GRAPH_KEY, network_graph.encode().to_hex())?;
 
     Ok(())
 }
 
 pub async fn get_gossip_sync(
+    storage: &impl MutinyStorage,
     user_rgs_url: Option<String>,
     network: Network,
     logger: Arc<MutinyLogger>,
 ) -> Result<(RapidGossipSync, ProbScorer), MutinyError> {
-    let rexie = build_gossip_database().await?;
-
     // if we error out, we just use the default gossip data
-    let gossip_data = match get_gossip_data(&rexie, logger.clone()).await {
+    let gossip_data = match get_gossip_data(storage, logger.clone()).await {
         Ok(Some(gossip_data)) => gossip_data,
         Ok(None) => Gossip::new(network, logger.clone()),
         Err(e) => {
@@ -304,7 +169,7 @@ pub async fn get_gossip_sync(
             now,
             gossip_data.last_sync_timestamp,
             &gossip_sync,
-            &rexie,
+            storage,
             &logger,
         )
         .await;
@@ -325,7 +190,7 @@ async fn fetch_updated_gossip(
     now: u64,
     last_sync_timestamp: u32,
     gossip_sync: &RapidGossipSync,
-    rexie: &Rexie,
+    storage: &impl MutinyStorage,
     logger: &MutinyLogger,
 ) -> Result<(), MutinyError> {
     let http_client = Client::builder()
@@ -355,11 +220,10 @@ async fn fetch_updated_gossip(
     // save the network graph if has been updated
     if new_last_sync_timestamp_result != last_sync_timestamp {
         write_gossip_data(
-            rexie,
+            storage,
             new_last_sync_timestamp_result,
             gossip_sync.network_graph(),
-        )
-        .await?;
+        )?;
     }
 
     Ok(())
@@ -460,67 +324,39 @@ impl From<NodeAnnouncement> for LnPeerMetadata {
     }
 }
 
-pub(crate) async fn read_peer_info(
+pub(crate) fn read_peer_info(
+    storage: &impl MutinyStorage,
     node_id: &NodeId,
 ) -> Result<Option<LnPeerMetadata>, MutinyError> {
-    let rexie = build_gossip_database().await?;
-    // Create a new read-write transaction
-    let transaction =
-        rexie.transaction(&[LN_PEER_METADATA_STORE_NAME], TransactionMode::ReadOnly)?;
-    let store = transaction.store(LN_PEER_METADATA_STORE_NAME)?;
-
-    let key = JsValue::from(node_id.to_string());
-
-    let json: JsValue = store.get(&key).await?;
-    let data: Option<LnPeerMetadata> = json.into_serde()?;
-
-    // Waits for the transaction to complete
-    transaction.done().await?;
-
-    Ok(data)
+    let key = format!("{LN_PEER_METADATA_KEY_PREFIX}{node_id}");
+    storage.get_data(key)
 }
 
-pub(crate) async fn get_all_peers() -> Result<HashMap<NodeId, LnPeerMetadata>, MutinyError> {
-    let rexie = build_gossip_database().await?;
-    // Create a new read-write transaction
-    let transaction =
-        rexie.transaction(&[LN_PEER_METADATA_STORE_NAME], TransactionMode::ReadOnly)?;
-    let store = transaction.store(LN_PEER_METADATA_STORE_NAME)?;
-
+pub(crate) fn get_all_peers(
+    storage: &impl MutinyStorage,
+) -> Result<HashMap<NodeId, LnPeerMetadata>, MutinyError> {
     let mut peers = HashMap::new();
 
-    let all_json = store.get_all(None, None, None, None).await?;
-    for (key, value) in all_json {
-        let node_id = NodeId::from_str(&key.as_string().unwrap())?;
-        let data: Option<LnPeerMetadata> = value.into_serde()?;
-
-        if let Some(peer_metadata) = data {
-            peers.insert(node_id, peer_metadata);
-        }
+    let all: HashMap<String, LnPeerMetadata> = storage.scan(LN_PEER_METADATA_KEY_PREFIX, None)?;
+    for (key, value) in all {
+        // remove the prefix from the key
+        let key = key.replace(LN_PEER_METADATA_KEY_PREFIX, "");
+        let node_id = NodeId::from_str(&key)?;
+        peers.insert(node_id, value);
     }
-
-    // Waits for the transaction to complete
-    transaction.done().await?;
-
     Ok(peers)
 }
 
-pub(crate) async fn save_peer_connection_info(
+pub(crate) fn save_peer_connection_info(
+    storage: &impl MutinyStorage,
     our_node_id: &str,
     node_id: &NodeId,
     connection_string: &str,
     label: Option<String>,
 ) -> Result<(), MutinyError> {
-    let rexie = build_gossip_database().await?;
-    // Create a new read-write transaction
-    let transaction =
-        rexie.transaction(&[LN_PEER_METADATA_STORE_NAME], TransactionMode::ReadWrite)?;
-    let store = transaction.store(LN_PEER_METADATA_STORE_NAME)?;
+    let key = format!("{LN_PEER_METADATA_KEY_PREFIX}{node_id}");
 
-    let key = JsValue::from(node_id.to_string());
-
-    let current_js: JsValue = store.get(&key).await?;
-    let current: Option<LnPeerMetadata> = current_js.into_serde()?;
+    let current: Option<LnPeerMetadata> = storage.get_data(&key)?;
 
     // If there is already some metadata, we add the connection string to it
     // Otherwise we create a new metadata with the connection string
@@ -537,31 +373,20 @@ pub(crate) async fn save_peer_connection_info(
         },
     };
 
-    let json = JsValue::from_serde(&new_info)?;
-    store.put(&json, Some(&key)).await?;
-
-    // Waits for the transaction to complete
-    transaction.done().await?;
-
+    storage.set_data(key, new_info)?;
     Ok(())
 }
 
-pub(crate) async fn set_peer_label(
+pub(crate) fn set_peer_label(
+    storage: &impl MutinyStorage,
     node_id: &NodeId,
     label: Option<String>,
 ) -> Result<(), MutinyError> {
     // We filter out empty labels
     let label = label.filter(|l| !l.is_empty());
-    let rexie = build_gossip_database().await?;
-    // Create a new read-write transaction
-    let transaction =
-        rexie.transaction(&[LN_PEER_METADATA_STORE_NAME], TransactionMode::ReadWrite)?;
-    let store = transaction.store(LN_PEER_METADATA_STORE_NAME)?;
+    let key = format!("{LN_PEER_METADATA_KEY_PREFIX}{node_id}");
 
-    let key = JsValue::from(node_id.to_string());
-
-    let current_js: JsValue = store.get(&key).await?;
-    let current: Option<LnPeerMetadata> = current_js.into_serde()?;
+    let current: Option<LnPeerMetadata> = storage.get_data(&key)?;
 
     // If there is already some metadata, we add the label to it
     // Otherwise we create a new metadata with the label
@@ -574,68 +399,46 @@ pub(crate) async fn set_peer_label(
         },
     };
 
-    let json = JsValue::from_serde(&new_info)?;
-    store.put(&json, Some(&key)).await?;
-
-    // Waits for the transaction to complete
-    transaction.done().await?;
-
+    storage.set_data(key, new_info)?;
     Ok(())
 }
 
-pub(crate) async fn delete_peer_info(uuid: &str, node_id: &NodeId) -> Result<(), MutinyError> {
-    let rexie = build_gossip_database().await?;
-    // Create a new read-write transaction
-    let transaction =
-        rexie.transaction(&[LN_PEER_METADATA_STORE_NAME], TransactionMode::ReadWrite)?;
-    let store = transaction.store(LN_PEER_METADATA_STORE_NAME)?;
+pub(crate) fn delete_peer_info(
+    storage: &impl MutinyStorage,
+    uuid: &str,
+    node_id: &NodeId,
+) -> Result<(), MutinyError> {
+    let key = format!("{LN_PEER_METADATA_KEY_PREFIX}{node_id}");
 
-    let key = JsValue::from(node_id.to_string());
-
-    let current_js: JsValue = store.get(&key).await?;
-    let current: Option<LnPeerMetadata> = current_js.into_serde()?;
+    let current: Option<LnPeerMetadata> = storage.get_data(&key)?;
 
     if let Some(mut current) = current {
         current.nodes.retain(|n| n != uuid);
         if current.nodes.is_empty() {
-            store.delete(&key).await?;
+            storage.delete(&key)?;
         } else {
-            let json = JsValue::from_serde(&current)?;
-            store.put(&json, Some(&key)).await?;
+            storage.set_data(key, current)?;
         }
     }
-
-    // Waits for the transaction to complete
-    transaction.done().await?;
 
     Ok(())
 }
 
-pub(crate) async fn save_ln_peer_info(
+pub(crate) fn save_ln_peer_info(
+    storage: &impl MutinyStorage,
     node_id: &NodeId,
     info: &LnPeerMetadata,
 ) -> Result<(), MutinyError> {
-    let rexie = build_gossip_database().await?;
-    // Create a new read-write transaction
-    let transaction =
-        rexie.transaction(&[LN_PEER_METADATA_STORE_NAME], TransactionMode::ReadWrite)?;
-    let store = transaction.store(LN_PEER_METADATA_STORE_NAME)?;
+    let key = format!("{LN_PEER_METADATA_KEY_PREFIX}{node_id}");
 
-    let key = JsValue::from(node_id.to_string());
-
-    let current_js: JsValue = store.get(&key).await?;
-    let current: Option<LnPeerMetadata> = current_js.into_serde()?;
+    let current: Option<LnPeerMetadata> = storage.get_data(&key)?;
 
     let new_info = info.merge_opt(&current);
 
     // if the new info is different than the current info, we should to save it
     if !current.is_some_and(|c| c == new_info) {
-        let json = JsValue::from_serde(&new_info)?;
-        store.put(&json, Some(&key)).await?;
+        storage.set_data(key, new_info)?;
     }
-
-    // Waits for the transaction to complete
-    transaction.done().await?;
 
     Ok(())
 }
@@ -667,6 +470,7 @@ pub(crate) fn get_rgs_url(
 
 #[cfg(test)]
 mod test {
+    use crate::storage::MemoryStorage;
     use bitcoin::secp256k1::{Secp256k1, SecretKey};
     use uuid::Uuid;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
@@ -727,60 +531,53 @@ mod test {
     #[cfg(feature = "ignored_tests")]
     async fn test_gossip() {
         crate::test_utils::log!("test RGS sync");
-        // delete the database if it exists
-        Rexie::delete(GOSSIP_DATABASE_NAME).await.unwrap();
-
-        let rexie = build_gossip_database().await.unwrap();
+        let storage = MemoryStorage::default();
 
         let logger = Arc::new(MutinyLogger::default());
-        let _gossip_sync = get_gossip_sync(None, Network::Regtest, logger.clone())
+        let _gossip_sync = get_gossip_sync(&storage, None, Network::Regtest, logger.clone())
             .await
             .unwrap();
 
-        let data = get_gossip_data(&rexie, logger).await.unwrap();
+        let data = get_gossip_data(&storage, logger).await.unwrap();
 
         assert!(data.is_some());
         assert!(data.unwrap().last_sync_timestamp > 0);
     }
 
     #[test]
-    // hack to disable this test
-    #[cfg(feature = "ignored_tests")]
-    async fn test_peer_info() {
-        // delete the database if it exists
-        Rexie::delete(GOSSIP_DATABASE_NAME).await.unwrap();
-
+    fn test_peer_info() {
+        let storage = MemoryStorage::default();
         let (node_id, data) = dummy_peer_info();
 
-        save_ln_peer_info(&node_id, &data).await.unwrap();
+        save_ln_peer_info(&storage, &node_id, &data).unwrap();
 
-        let read = read_peer_info(&node_id).await.unwrap();
+        let read = read_peer_info(&storage, &node_id).unwrap();
+        let all = get_all_peers(&storage).unwrap();
 
         assert!(read.is_some());
         assert_eq!(read.unwrap(), data);
+        assert_eq!(all.len(), 1);
+        assert_eq!(*all.get(&node_id).unwrap(), data);
 
-        delete_peer_info(data.nodes.first().unwrap(), &node_id)
-            .await
-            .unwrap();
+        delete_peer_info(&storage, data.nodes.first().unwrap(), &node_id).unwrap();
 
-        let read = read_peer_info(&node_id).await.unwrap();
+        let read = read_peer_info(&storage, &node_id).unwrap();
 
         assert!(read.is_none());
     }
 
     #[test]
-    async fn test_delete_label() {
-        // delete the database if it exists
-        Rexie::delete(GOSSIP_DATABASE_NAME).await.unwrap();
+    fn test_delete_label() {
+        let storage = MemoryStorage::default();
 
         let (node_id, data) = dummy_peer_info();
 
-        save_ln_peer_info(&node_id, &data).await.unwrap();
+        save_ln_peer_info(&storage, &node_id, &data).unwrap();
 
         // remove the label
-        set_peer_label(&node_id, None).await.unwrap();
+        set_peer_label(&storage, &node_id, None).unwrap();
 
-        let read = read_peer_info(&node_id).await.unwrap();
+        let read = read_peer_info(&storage, &node_id).unwrap();
 
         let expected = LnPeerMetadata {
             label: None,

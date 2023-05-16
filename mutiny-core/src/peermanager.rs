@@ -1,6 +1,7 @@
 use crate::gossip::read_peer_info;
 use crate::keymanager::PhantomKeysManager;
 use crate::node::NetworkGraph;
+use crate::storage::MutinyStorage;
 use crate::{
     gossip, ldkstorage::PhantomChannelManager, logging::MutinyLogger, socket::WsSocketDescriptor,
 };
@@ -17,7 +18,6 @@ use lightning::routing::gossip::NodeId;
 use lightning::routing::utxo::{UtxoLookup, UtxoLookupError, UtxoResult};
 use lightning::util::logger::Logger;
 use std::sync::Arc;
-use wasm_bindgen_futures::spawn_local;
 
 pub(crate) trait PeerManager {
     fn get_peer_node_ids(&self) -> Vec<PublicKey>;
@@ -64,17 +64,17 @@ pub(crate) trait PeerManager {
     );
 }
 
-pub(crate) type PeerManagerImpl = LdkPeerManager<
+pub(crate) type PeerManagerImpl<S: MutinyStorage> = LdkPeerManager<
     WsSocketDescriptor,
-    Arc<PhantomChannelManager>,
-    Arc<GossipMessageHandler>,
+    Arc<PhantomChannelManager<S>>,
+    Arc<GossipMessageHandler<S>>,
     Arc<IgnoringMessageHandler>,
     Arc<MutinyLogger>,
     Arc<IgnoringMessageHandler>,
-    Arc<PhantomKeysManager>,
+    Arc<PhantomKeysManager<S>>,
 >;
 
-impl PeerManager for PeerManagerImpl {
+impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
     fn get_peer_node_ids(&self) -> Vec<PublicKey> {
         self.get_peer_node_ids().into_iter().map(|x| x.0).collect()
     }
@@ -142,12 +142,13 @@ impl PeerManager for PeerManagerImpl {
 }
 
 #[derive(Clone)]
-pub struct GossipMessageHandler {
+pub struct GossipMessageHandler<S: MutinyStorage> {
+    pub(crate) storage: S,
     pub(crate) network_graph: Arc<NetworkGraph>,
     pub(crate) logger: Arc<MutinyLogger>,
 }
 
-impl MessageSendEventsProvider for GossipMessageHandler {
+impl<S: MutinyStorage> MessageSendEventsProvider for GossipMessageHandler<S> {
     fn get_and_clear_pending_msg_events(&self) -> Vec<MessageSendEvent> {
         Vec::new()
     }
@@ -163,31 +164,28 @@ impl UtxoLookup for ErroringUtxoLookup {
     }
 }
 
-impl RoutingMessageHandler for GossipMessageHandler {
+impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
     fn handle_node_announcement(
         &self,
         msg: &msgs::NodeAnnouncement,
     ) -> Result<bool, LightningError> {
         let msg_clone = msg.clone();
         let logger = self.logger.clone();
-        spawn_local(async move {
-            // We use RGS to sync gossip, but we can save the node's metadata (alias and color)
-            // we should only save it for relevant peers however (i.e. peers we have a channel with)
-            if read_peer_info(&msg_clone.contents.node_id)
-                .await
-                .ok()
-                .flatten()
-                .is_some()
-            {
-                let node_id = msg_clone.contents.node_id;
-                if let Err(e) = gossip::save_ln_peer_info(&node_id, &msg_clone.into()).await {
-                    log_warn!(
-                        logger,
-                        "Failed to save node announcement for {node_id}: {e}"
-                    );
-                }
+        // We use RGS to sync gossip, but we can save the node's metadata (alias and color)
+        // we should only save it for relevant peers however (i.e. peers we have a channel with)
+        if read_peer_info(&self.storage, &msg_clone.contents.node_id)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            let node_id = msg_clone.contents.node_id;
+            if let Err(e) = gossip::save_ln_peer_info(&self.storage, &node_id, &msg_clone.into()) {
+                log_warn!(
+                    logger,
+                    "Failed to save node announcement for {node_id}: {e}"
+                );
             }
-        });
+        }
 
         // because we got the announcement, may as well update our network graph
         self.network_graph.update_node_from_announcement(msg)?;

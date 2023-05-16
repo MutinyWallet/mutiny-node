@@ -241,14 +241,6 @@ impl From<serde_json::Error> for MutinyError {
     }
 }
 
-impl From<rexie::Error> for MutinyError {
-    fn from(_e: rexie::Error) -> Self {
-        MutinyError::PersistenceFailed {
-            source: MutinyStorageError::IndexedDBError,
-        }
-    }
-}
-
 impl<G> From<std::sync::PoisonError<G>> for MutinyStorageError {
     fn from(_e: std::sync::PoisonError<G>) -> Self {
         MutinyStorageError::LockError

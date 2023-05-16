@@ -1,5 +1,5 @@
 use crate::error::MutinyError;
-use crate::indexed_db::MutinyStorage;
+use crate::storage::MutinyStorage;
 use anyhow::anyhow;
 use bitcoin::hashes::{sha256, Hash, HashEngine, Hmac, HmacEngine};
 use bitcoin::secp256k1::{ecdsa, All, Message, PublicKey, Secp256k1, SecretKey};
@@ -86,15 +86,15 @@ impl SigningProfile {
 }
 
 #[derive(Clone)]
-pub struct AuthManager {
+pub struct AuthManager<S: MutinyStorage> {
     profiles: Arc<RwLock<Vec<SigningProfile>>>,
     xprivkey: ExtendedPrivKey,
-    storage: MutinyStorage,
+    storage: S,
     context: Secp256k1<All>,
 }
 
-impl AuthManager {
-    pub fn new(xprivkey: ExtendedPrivKey, storage: MutinyStorage) -> Result<Self, MutinyError> {
+impl<S: MutinyStorage> AuthManager<S> {
+    pub fn new(xprivkey: ExtendedPrivKey, storage: S) -> Result<Self, MutinyError> {
         let context = Secp256k1::new();
         let mut auth_profiles = storage.get_auth_profiles()?;
         // Sort profiles by index so we can just iterate over them
@@ -216,6 +216,7 @@ impl AuthManager {
 #[cfg(test)]
 mod test {
     use crate::keymanager::generate_seed;
+    use crate::storage::MemoryStorage;
     use crate::test_utils::*;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::Network;
@@ -224,10 +225,8 @@ mod test {
 
     use super::*;
 
-    async fn create_manager(db_prefix: String) -> AuthManager {
-        let storage = MutinyStorage::new("".to_string(), Some(db_prefix))
-            .await
-            .unwrap();
+    fn create_manager() -> AuthManager<MemoryStorage> {
+        let storage = MemoryStorage::default();
         let mnemonic = generate_seed(12).unwrap();
         let seed = mnemonic.to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &seed).unwrap();
@@ -264,7 +263,7 @@ mod test {
         let test_name = "test_create_signature";
         log!("{}", test_name);
 
-        let auth = create_manager(test_name.to_string()).await;
+        let auth = create_manager();
 
         let k1 = [0; 32];
 
@@ -282,7 +281,7 @@ mod test {
         let test_name = "test_add_used_service";
         log!("{}", test_name);
 
-        let auth = create_manager(test_name.to_string()).await;
+        let auth = create_manager();
 
         let url = Url::parse("https://mutinywallet.com").unwrap();
 
@@ -301,7 +300,7 @@ mod test {
         let test_name = "test_add_profile";
         log!("{}", test_name);
 
-        let auth = create_manager(test_name.to_string()).await;
+        let auth = create_manager();
 
         let url = Url::parse("https://mutinywallet.com").unwrap();
         let k1 = [0; 32];

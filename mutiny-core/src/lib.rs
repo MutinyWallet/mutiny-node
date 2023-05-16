@@ -1,6 +1,10 @@
 #![crate_name = "mutiny_core"]
 // wasm is considered "extra_unused_type_parameters"
-#![allow(incomplete_features, clippy::extra_unused_type_parameters)]
+#![allow(
+    incomplete_features,
+    clippy::extra_unused_type_parameters,
+    type_alias_bounds
+)]
 #![feature(io_error_other)]
 #![feature(async_fn_in_trait)]
 // background file is mostly an LDK copy paste
@@ -8,17 +12,16 @@ mod background;
 
 mod auth;
 mod chain;
-mod encrypt;
+pub mod encrypt;
 pub mod error;
 pub mod esplora;
 mod event;
 mod fees;
 mod gossip;
-mod indexed_db;
 mod keymanager;
 pub mod labels;
 mod ldkstorage;
-mod logging;
+pub mod logging;
 mod lspclient;
 mod node;
 pub mod nodemanager;
@@ -27,12 +30,16 @@ mod peermanager;
 mod proxy;
 pub mod redshift;
 mod socket;
+pub mod storage;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 mod utils;
 
+pub use crate::keymanager::generate_seed;
+
 use crate::error::MutinyError;
 use crate::nodemanager::NodeManager;
+use crate::storage::MutinyStorage;
 pub use auth::AuthProfile;
 use bip39::Mnemonic;
 use bitcoin::Network;
@@ -40,39 +47,31 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct MutinyWalletConfig {
-    password: String,
     mnemonic: Option<Mnemonic>,
     websocket_proxy_addr: Option<String>,
     network: Option<Network>,
     user_esplora_url: Option<String>,
     user_rgs_url: Option<String>,
     lsp_url: Option<String>,
-    #[cfg(test)]
-    db_prefix: String,
 }
 
 impl MutinyWalletConfig {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        password: String,
         mnemonic: Option<Mnemonic>,
         websocket_proxy_addr: Option<String>,
         network: Option<Network>,
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
-        #[cfg(test)] db_prefix: String,
     ) -> Self {
         Self {
-            password,
             mnemonic,
             websocket_proxy_addr,
             network,
             user_esplora_url,
             user_rgs_url,
             lsp_url,
-            #[cfg(test)]
-            db_prefix,
         }
     }
 }
@@ -81,39 +80,37 @@ impl MutinyWalletConfig {
 /// MutinyWallet is the main entry point for the library.
 /// It contains the NodeManager, which is the main interface to manage the
 /// bitcoin and the lightning functionality.
-pub struct MutinyWallet {
+pub struct MutinyWallet<S: MutinyStorage> {
     config: MutinyWalletConfig,
-    pub node_manager: Arc<NodeManager>,
+    storage: S,
+    pub node_manager: Arc<NodeManager<S>>,
 }
 
-impl MutinyWallet {
+impl<S: MutinyStorage> MutinyWallet<S> {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        password: String,
+        storage: S,
         mnemonic: Option<Mnemonic>,
         websocket_proxy_addr: Option<String>,
         network: Option<Network>,
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
-        #[cfg(test)] db_prefix: String,
-    ) -> Result<MutinyWallet, MutinyError> {
+    ) -> Result<MutinyWallet<S>, MutinyError> {
         let config = MutinyWalletConfig::new(
-            password,
             mnemonic,
             websocket_proxy_addr,
             network,
             user_esplora_url,
             user_rgs_url,
             lsp_url,
-            #[cfg(test)]
-            db_prefix,
         );
 
-        let node_manager = Arc::new(NodeManager::new(config.clone()).await?);
+        let node_manager = Arc::new(NodeManager::new(config.clone(), storage.clone()).await?);
 
         Ok(Self {
             config,
+            storage,
             node_manager,
         })
     }
@@ -121,7 +118,8 @@ impl MutinyWallet {
     /// Starts up all the nodes again.
     /// Not needed after [NodeManager]'s `new()` function.
     pub async fn start(&mut self) -> Result<(), MutinyError> {
-        self.node_manager = Arc::new(NodeManager::new(self.config.clone()).await?);
+        self.node_manager =
+            Arc::new(NodeManager::new(self.config.clone(), self.storage.clone()).await?);
         NodeManager::start_redshifts(self.node_manager.clone());
         Ok(())
     }
@@ -141,6 +139,7 @@ mod tests {
 
     use crate::test_utils::*;
 
+    use crate::storage::MemoryStorage;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -150,20 +149,20 @@ mod tests {
         let test_name = "create_mutiny_wallet";
         log!("{}", test_name);
 
-        assert!(!NodeManager::has_node_manager(test_name.to_string()).await);
+        let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        assert!(!NodeManager::has_node_manager(storage.clone()));
         MutinyWallet::new(
-            "".to_string(),
+            storage.clone(),
             None,
             None,
             Some(Network::Regtest),
             None,
             None,
             None,
-            test_name.to_string(),
         )
         .await
         .expect("mutiny wallet should initialize");
-        assert!(NodeManager::has_node_manager(test_name.to_string()).await);
+        assert!(NodeManager::has_node_manager(storage));
     }
 
     #[test]
@@ -171,20 +170,20 @@ mod tests {
         let test_name = "restart_mutiny_wallet";
         log!("{}", test_name);
 
-        assert!(!NodeManager::has_node_manager(test_name.to_string()).await);
+        let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        assert!(!NodeManager::has_node_manager(storage.clone()));
         let mut mw = MutinyWallet::new(
-            "".to_string(),
+            storage.clone(),
             None,
             None,
             Some(Network::Regtest),
             None,
             None,
             None,
-            test_name.to_string(),
         )
         .await
         .expect("mutiny wallet should initialize");
-        assert!(NodeManager::has_node_manager(test_name.to_string()).await);
+        assert!(NodeManager::has_node_manager(storage));
 
         let first_seed = mw.node_manager.show_seed();
 
@@ -198,20 +197,21 @@ mod tests {
         let test_name = "restart_mutiny_wallet_with_nodes";
         log!("{}", test_name);
 
-        assert!(!NodeManager::has_node_manager(test_name.to_string()).await);
+        let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+
+        assert!(!NodeManager::has_node_manager(storage.clone()));
         let mut mw = MutinyWallet::new(
-            "".to_string(),
+            storage.clone(),
             None,
             None,
             Some(Network::Regtest),
             None,
             None,
             None,
-            test_name.to_string(),
         )
         .await
         .expect("mutiny wallet should initialize");
-        assert!(NodeManager::has_node_manager(test_name.to_string()).await);
+        assert!(NodeManager::has_node_manager(storage));
 
         assert!(mw.node_manager.list_nodes().await.unwrap().is_empty());
         assert!(mw.node_manager.new_node().await.is_ok());

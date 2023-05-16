@@ -1,13 +1,16 @@
 // wasm is considered "extra_unused_type_parameters"
-#![allow(clippy::extra_unused_type_parameters)]
+#![allow(incomplete_features, clippy::extra_unused_type_parameters)]
+#![feature(async_fn_in_trait)]
 
 extern crate mutiny_core;
 
 mod error;
+mod indexed_db;
 mod models;
 mod utils;
 
 use crate::error::MutinyJsError;
+use crate::indexed_db::IndexedDbStorage;
 use crate::models::*;
 use bip39::Mnemonic;
 use bitcoin::consensus::deserialize;
@@ -20,15 +23,18 @@ use lightning::routing::gossip::NodeId;
 use lightning_invoice::Invoice;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::labels::LabelStorage;
+use mutiny_core::logging::MutinyLogger;
 use mutiny_core::redshift::RedshiftManager;
+use mutiny_core::storage::MutinyStorage;
 use mutiny_core::{nodemanager, redshift::RedshiftRecipient};
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct MutinyWallet {
-    inner: mutiny_core::MutinyWallet,
+    inner: mutiny_core::MutinyWallet<IndexedDbStorage>,
 }
 
 /// The [MutinyWallet] is the main entry point for interacting with the Mutiny Wallet.
@@ -45,7 +51,7 @@ impl MutinyWallet {
     /// If no mnemonic is provided, a new one is generated and stored.
     #[wasm_bindgen(constructor)]
     pub async fn new(
-        password: String,
+        password: Option<String>,
         mnemonic_str: Option<String>,
         websocket_proxy_addr: Option<String>,
         network_str: Option<String>,
@@ -62,8 +68,11 @@ impl MutinyWallet {
             None => None,
         };
 
+        let logger = Arc::new(MutinyLogger::default());
+        let storage = IndexedDbStorage::new(password, logger).await?;
+
         let inner = mutiny_core::MutinyWallet::new(
-            password,
+            storage,
             mnemonic,
             websocket_proxy_addr,
             network,
@@ -78,8 +87,12 @@ impl MutinyWallet {
     /// Returns if there is a saved wallet in storage.
     /// This is checked by seeing if a mnemonic seed exists in storage.
     #[wasm_bindgen]
-    pub async fn has_node_manager() -> bool {
-        nodemanager::NodeManager::has_node_manager().await
+    pub async fn has_node_manager(password: Option<String>) -> bool {
+        let logger = Arc::new(MutinyLogger::default());
+        let storage = IndexedDbStorage::new(password, logger)
+            .await
+            .expect("Failed to init");
+        nodemanager::NodeManager::has_node_manager(storage)
     }
 
     /// Starts up all the nodes again.
@@ -362,13 +375,9 @@ impl MutinyWallet {
 
     /// Sets the label of a peer from the selected node.
     #[wasm_bindgen]
-    pub async fn label_peer(
-        &self,
-        node_id: String,
-        label: Option<String>,
-    ) -> Result<(), MutinyJsError> {
+    pub fn label_peer(&self, node_id: String, label: Option<String>) -> Result<(), MutinyJsError> {
         let node_id = NodeId::from_str(&node_id)?;
-        self.inner.node_manager.label_peer(&node_id, label).await?;
+        self.inner.node_manager.label_peer(&node_id, label)?;
         Ok(())
     }
 
@@ -773,10 +782,8 @@ impl MutinyWallet {
 
     /// Exports the current state of the node manager to a json object.
     #[wasm_bindgen]
-    pub async fn get_logs(&self) -> Result<JsValue /* Option<Vec<String>> */, MutinyJsError> {
-        Ok(JsValue::from_serde(
-            &self.inner.node_manager.get_logs().await?,
-        )?)
+    pub fn get_logs(&self) -> Result<JsValue /* Option<Vec<String>> */, MutinyJsError> {
+        Ok(JsValue::from_serde(&self.inner.node_manager.get_logs()?)?)
     }
 
     /// Exports the current state of the node manager to a json object.
@@ -790,20 +797,29 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn import_json(json: String) -> Result<(), MutinyJsError> {
         let json: serde_json::Value = serde_json::from_str(&json)?;
-        nodemanager::NodeManager::import_json(json).await?;
+        IndexedDbStorage::import(json).await?;
         Ok(())
     }
 
     /// Converts a bitcoin amount in BTC to satoshis.
     #[wasm_bindgen]
     pub fn convert_btc_to_sats(btc: f64) -> Result<u64, MutinyJsError> {
-        Ok(nodemanager::NodeManager::convert_btc_to_sats(btc)?)
+        // rust bitcoin doesn't like extra precision in the float
+        // so we round to the nearest satoshi
+        // explained here: https://stackoverflow.com/questions/28655362/how-does-one-round-a-floating-point-number-to-a-specified-number-of-digits
+        let truncated = 10i32.pow(8) as f64;
+        let btc = (btc * truncated).round() / truncated;
+        if let Ok(amount) = bitcoin::Amount::from_btc(btc) {
+            Ok(amount.to_sat())
+        } else {
+            Err(MutinyJsError::BadAmountError)
+        }
     }
 
     /// Converts a satoshi amount to BTC.
     #[wasm_bindgen]
     pub fn convert_sats_to_btc(sats: u64) -> f64 {
-        nodemanager::NodeManager::convert_sats_to_btc(sats)
+        bitcoin::Amount::from_sat(sats).to_btc()
     }
 }
 
@@ -811,8 +827,9 @@ impl MutinyWallet {
 mod tests {
     use crate::utils::test::*;
     use crate::MutinyWallet;
-    use mutiny_core::test_utils::*;
 
+    use crate::indexed_db::IndexedDbStorage;
+    use mutiny_core::storage::MutinyStorage;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -820,10 +837,11 @@ mod tests {
     #[test]
     async fn create_mutiny_wallet() {
         log!("creating mutiny wallet!");
+        let password = Some("password".to_string());
 
-        assert!(!MutinyWallet::has_node_manager().await);
+        assert!(!MutinyWallet::has_node_manager(password.clone()).await);
         MutinyWallet::new(
-            "password".to_string(),
+            password.clone(),
             None,
             None,
             Some("regtest".to_owned()),
@@ -833,21 +851,24 @@ mod tests {
         )
         .await
         .expect("mutiny wallet should initialize");
-        assert!(MutinyWallet::has_node_manager().await);
+        super::utils::sleep(1_000).await;
+        assert!(MutinyWallet::has_node_manager(password).await);
 
-        cleanup_all(None).await;
+        IndexedDbStorage::clear()
+            .await
+            .expect("failed to clear storage");
     }
 
     #[test]
     async fn correctly_show_seed() {
         log!("showing seed");
 
-        let mut entropy = [0u8; 32];
-        getrandom::getrandom(&mut entropy).unwrap();
-        let seed = bip39::Mnemonic::from_entropy(&entropy).unwrap();
+        let seed = mutiny_core::generate_seed(12).unwrap();
+
+        let password = Some("password".to_string());
 
         let nm = MutinyWallet::new(
-            "password".to_string(),
+            password.clone(),
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
@@ -858,10 +879,14 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(MutinyWallet::has_node_manager().await);
+        log!("checking nm");
+        assert!(MutinyWallet::has_node_manager(password).await);
+        log!("checking seed");
         assert_eq!(seed.to_string(), nm.show_seed());
 
-        cleanup_all(None).await;
+        IndexedDbStorage::clear()
+            .await
+            .expect("failed to clear storage");
     }
 
     #[test]
@@ -873,7 +898,7 @@ mod tests {
         let seed = bip39::Mnemonic::from_entropy(&entropy).unwrap();
 
         let nm = MutinyWallet::new(
-            "password".to_string(),
+            Some("password".to_string()),
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
@@ -896,6 +921,8 @@ mod tests {
         assert_ne!("", node_identity.uuid());
         assert_ne!("", node_identity.pubkey());
 
-        cleanup_all(None).await;
+        IndexedDbStorage::clear()
+            .await
+            .expect("failed to clear storage");
     }
 }
