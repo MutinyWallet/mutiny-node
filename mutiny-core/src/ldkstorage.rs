@@ -179,16 +179,23 @@ impl MutinyNodePersister {
             Err(_) => {
                 // no key manager stored, start a new one
 
-                let height_future = esplora
-                    .get_height()
-                    .map_err(|_| MutinyError::ChainAccessFailed);
-                let hash_future = esplora
-                    .get_tip_hash()
-                    .map_err(|_| MutinyError::ChainAccessFailed);
-                let (height, hash) = try_join!(height_future, hash_future)?;
+                // if regtest, we don't need to get the tip hash and can
+                // just use genesis, this also lets us use regtest in tests
+                let best_block = if network == Network::Regtest {
+                    BestBlock::from_network(network)
+                } else {
+                    let height_future = esplora
+                        .get_height()
+                        .map_err(|_| MutinyError::ChainAccessFailed);
+                    let hash_future = esplora
+                        .get_tip_hash()
+                        .map_err(|_| MutinyError::ChainAccessFailed);
+                    let (height, hash) = try_join!(height_future, hash_future)?;
+                    BestBlock::new(hash, height)
+                };
                 let chain_params = ChainParameters {
                     network,
-                    best_block: BestBlock::new(hash, height),
+                    best_block,
                 };
 
                 let fresh_channel_manager: PhantomChannelManager =

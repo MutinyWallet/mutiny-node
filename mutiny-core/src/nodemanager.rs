@@ -367,7 +367,7 @@ impl NodeManager {
             .unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
 
         // todo we should eventually have default mainnet
-        let network: Network = c.network.unwrap_or(Network::Testnet);
+        let network: Network = c.network.unwrap_or(Network::Signet);
 
         #[cfg(test)]
         let storage = MutinyStorage::new(c.password.clone(), Some(c.db_prefix.clone())).await?;
@@ -416,12 +416,6 @@ impl NodeManager {
 
         let chain = Arc::new(MutinyChain::new(tx_sync, logger.clone()));
 
-        // We don't need to actually sync gossip in tests unless we need to test gossip
-        #[cfg(test)]
-        let (gossip_sync, scorer) =
-            gossip::get_dummy_gossip(c.user_rgs_url.clone(), network, logger.clone());
-
-        #[cfg(not(test))]
         let (gossip_sync, scorer) =
             gossip::get_gossip_sync(c.user_rgs_url, network, logger.clone()).await?;
 
@@ -1764,7 +1758,7 @@ mod tests {
             "password".to_string(),
             None,
             None,
-            Some(Network::Testnet),
+            Some(Network::Regtest),
             None,
             None,
             None,
@@ -1786,7 +1780,7 @@ mod tests {
             "password".to_string(),
             Some(seed.clone()),
             None,
-            Some(Network::Testnet),
+            Some(Network::Regtest),
             None,
             None,
             None,
@@ -1808,7 +1802,7 @@ mod tests {
             "password".to_string(),
             Some(seed),
             None,
-            Some(Network::Testnet),
+            Some(Network::Regtest),
             None,
             None,
             None,

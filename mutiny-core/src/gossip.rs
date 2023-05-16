@@ -21,7 +21,6 @@ use wasm_bindgen_futures::spawn_local;
 use crate::error::{MutinyError, MutinyStorageError};
 use crate::logging::MutinyLogger;
 use crate::node::{NetworkGraph, ProbScorer, RapidGossipSync};
-use crate::onchain::get_rgs_url;
 use crate::utils;
 
 pub(crate) const GOSSIP_DATABASE_NAME: &str = "gossip";
@@ -296,24 +295,26 @@ pub async fn get_gossip_sync(
         return Ok((gossip_sync, prob_scorer));
     };
 
-    let rgs_url = get_rgs_url(network, user_rgs_url, Some(gossip_data.last_sync_timestamp));
-    log_info!(&logger, "RGS URL: {}", rgs_url);
+    if let Some(rgs_url) = get_rgs_url(network, user_rgs_url, Some(gossip_data.last_sync_timestamp))
+    {
+        log_info!(&logger, "RGS URL: {}", rgs_url);
 
-    let fetch_result = fetch_updated_gossip(
-        rgs_url,
-        now,
-        gossip_data.last_sync_timestamp,
-        &gossip_sync,
-        &rexie,
-        &logger,
-    )
-    .await;
+        let fetch_result = fetch_updated_gossip(
+            rgs_url,
+            now,
+            gossip_data.last_sync_timestamp,
+            &gossip_sync,
+            &rexie,
+            &logger,
+        )
+        .await;
 
-    if fetch_result.is_err() {
-        log_warn!(
-            logger,
-            "Failed to fetch updated gossip, using default gossip data"
-        );
+        if fetch_result.is_err() {
+            log_warn!(
+                logger,
+                "Failed to fetch updated gossip, using default gossip data"
+            );
+        }
     }
 
     Ok((gossip_sync, prob_scorer))
@@ -639,21 +640,29 @@ pub(crate) async fn save_ln_peer_info(
     Ok(())
 }
 
-#[cfg(test)]
-pub fn get_dummy_gossip(
-    _user_rgs_url: Option<String>,
+pub(crate) fn get_rgs_url(
     network: Network,
-    logger: Arc<MutinyLogger>,
-) -> (RapidGossipSync, ProbScorer) {
-    let network_graph = Arc::new(NetworkGraph::new(network, logger.clone()));
-    let gossip_sync = RapidGossipSync::new(network_graph.clone(), logger.clone());
-    let scorer = ProbScorer::new(
-        ProbabilisticScoringParameters::default(),
-        network_graph,
-        logger,
-    );
-
-    (gossip_sync, scorer)
+    user_provided_url: Option<String>,
+    last_sync_time: Option<u32>,
+) -> Option<String> {
+    let last_sync_time = last_sync_time.unwrap_or(0);
+    if let Some(url) = user_provided_url.filter(|url| !url.is_empty()) {
+        let url = url.strip_suffix('/').unwrap_or(&url);
+        Some(format!("{url}/{last_sync_time}"))
+    } else {
+        match network {
+            Network::Bitcoin => Some(format!(
+                "https://rapidsync.lightningdevkit.org/snapshot/{last_sync_time}"
+            )),
+            Network::Testnet => Some(format!(
+                "https://rapidsync.lightningdevkit.org/testnet/snapshot/{last_sync_time}"
+            )),
+            Network::Signet => Some(format!(
+                "https://rgs.mutinynet.com/snapshot/{last_sync_time}"
+            )),
+            Network::Regtest => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -724,7 +733,7 @@ mod test {
         let rexie = build_gossip_database().await.unwrap();
 
         let logger = Arc::new(MutinyLogger::default());
-        let _gossip_sync = get_gossip_sync(None, Network::Testnet, logger.clone())
+        let _gossip_sync = get_gossip_sync(None, Network::Regtest, logger.clone())
             .await
             .unwrap();
 
