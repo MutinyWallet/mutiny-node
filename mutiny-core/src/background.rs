@@ -13,7 +13,7 @@
 #[cfg(any(test, feature = "std"))]
 extern crate core;
 
-use lightning::{log_error, log_trace, log_warn};
+use lightning::{log_error, log_trace};
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;
@@ -354,7 +354,7 @@ macro_rules! define_run_body {
 						network_graph.remove_stale_channels_and_tracking();
 					}
 					#[cfg(not(feature = "std"))] {
-						log_warn!($logger, "Not pruning network graph, consider enabling `std` or doing so manually with remove_stale_channels_and_tracking_with_time.");
+						// log_warn!($logger, "Not pruning network graph, consider enabling `std` or doing so manually with remove_stale_channels_and_tracking_with_time.");
 						log_trace!($logger, "Persisting network graph.");
 					}
 
