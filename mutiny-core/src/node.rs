@@ -32,8 +32,11 @@ use bitcoin::secp256k1::rand;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint};
 use core::time::Duration;
 use futures::lock::Mutex;
-use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::ln::channelmanager::RecipientOnionFields;
+use lightning::{
+    chain::chaininterface::{ConfirmationTarget, FeeEstimator},
+    util::config::ChannelConfig,
+};
 use lightning::{
     chain::{
         chainmonitor,
@@ -1517,6 +1520,13 @@ pub(crate) fn default_user_config() -> UserConfig {
             ..Default::default()
         },
         manually_accept_inbound_channels: true,
+        channel_config: ChannelConfig {
+            // 20k sats, 4x more than normal due to high fee rates
+            // Any lightning payment above this, but below current
+            // HTLC fees will have issues paying until anchor outputs
+            max_dust_htlc_exposure_msat: 20_000_000,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
