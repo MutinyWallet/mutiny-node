@@ -25,6 +25,7 @@ pub mod logging;
 mod lspclient;
 mod node;
 pub mod nodemanager;
+mod nostr;
 mod onchain;
 mod peermanager;
 mod proxy;
@@ -39,11 +40,21 @@ pub use crate::keymanager::generate_seed;
 
 use crate::error::MutinyError;
 use crate::nodemanager::NodeManager;
+use crate::nostr::NostrManager;
 use crate::storage::MutinyStorage;
+use ::nostr::Kind;
 pub use auth::AuthProfile;
 use bip39::Mnemonic;
+use bitcoin::secp256k1::PublicKey;
+use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::Network;
+use futures::{pin_mut, select, FutureExt};
+use lightning::util::logger::Logger;
+use lightning::{log_error, log_warn};
+use nostr_sdk::{Client, RelayPoolNotification};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use wasm_bindgen_futures::spawn_local;
 
 #[derive(Clone)]
 pub struct MutinyWalletConfig {
@@ -84,6 +95,7 @@ pub struct MutinyWallet<S: MutinyStorage> {
     config: MutinyWalletConfig,
     storage: S,
     pub node_manager: Arc<NodeManager<S>>,
+    pub nostr: Arc<NostrManager>,
 }
 
 impl<S: MutinyStorage> MutinyWallet<S> {
@@ -108,10 +120,17 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         let node_manager = Arc::new(NodeManager::new(config.clone(), storage.clone()).await?);
 
+        // create nostr manager
+        let seed = node_manager.show_seed().to_seed("");
+        let xprivkey = ExtendedPrivKey::new_master(node_manager.get_network(), &seed)?;
+        let relays = vec!["wss://relay.damus.io".to_string()]; // todo make configurable
+        let nostr = Arc::new(NostrManager::from_mnemonic(xprivkey, relays)?);
+
         Ok(Self {
             config,
             storage,
             node_manager,
+            nostr,
         })
     }
 
@@ -124,10 +143,79 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(())
     }
 
+    /// Starts a background process that will watch for nostr wallet connect events
+    pub async fn start_nostr_wallet_connect(&self, from_node: PublicKey) {
+        let nostr = self.nostr.clone();
+        let nm = self.node_manager.clone();
+        spawn_local(async move {
+            let mut broadcasted_info = false;
+            loop {
+                if nm.stop.load(Ordering::Relaxed) {
+                    utils::sleep(1_000).await;
+                    continue;
+                };
+
+                let client = Client::new(&nostr.primary_key);
+                client
+                    .add_relays(nostr.relays.clone())
+                    .await
+                    .expect("Failed to add relays");
+                client.connect().await;
+                client.subscribe(vec![nostr.create_nwc_filter()]).await;
+
+                // broadcast NWC info event
+                // todo we only need to broadcast on creation
+                if !broadcasted_info {
+                    if let Ok(event) = nostr.create_nwc_info_event() {
+                        if let Err(e) = client.send_event(event).await {
+                            log_warn!(nm.logger, "Error sending NWC info event: {e}");
+                        } else {
+                            broadcasted_info = true;
+                        }
+                    }
+                }
+
+                // handle NWC requests
+                let mut notifications = client.notifications();
+
+                loop {
+                    let read_fut = notifications.recv().fuse();
+                    let delay_fut = Box::pin(utils::sleep(1_000)).fuse();
+                    pin_mut!(read_fut);
+                    pin_mut!(delay_fut);
+                    select! {
+                        notification = read_fut => {
+                            if let Ok(RelayPoolNotification::Event(_url, event)) = notification {
+                                if event.kind == Kind::Custom(23194) {
+                                    match nostr.handle_nwc_request(event, &nm, &from_node).await {
+                                        Ok(Some(event)) => {
+                                            if let Err(e) = client.send_event(event).await {
+                                                log_warn!(nm.logger, "Error sending NWC event: {e}");
+                                            }
+                                        }
+                                        Ok(None) => {} // no response
+                                        Err(e) => {
+                                            log_error!(nm.logger, "Error handling NWC request: {e}");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ = delay_fut => {
+                            if nm.stop.load(Ordering::Relaxed) {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     /// Stops all of the nodes and background processes.
     /// Returns after node has been stopped.
     pub async fn stop(&self) -> Result<(), MutinyError> {
-        // TODO stop redshift as well
+        // TODO stop redshift and NWC as well
         self.node_manager.stop().await
     }
 }
