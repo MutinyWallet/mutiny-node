@@ -786,6 +786,20 @@ impl MutinyWallet {
         Ok(JsValue::from_serde(&self.inner.node_manager.get_logs()?)?)
     }
 
+    /// Get nostr wallet connect URI
+    #[wasm_bindgen]
+    pub fn get_nwc_uri(&self) -> String {
+        self.inner.nostr.get_nwc_uri()
+    }
+
+    #[wasm_bindgen]
+    pub async fn start_nostr_wallet_connect(&self, from_node: String) -> Result<(), MutinyJsError> {
+        let from_node = PublicKey::from_str(&from_node)?;
+        self.inner.start_nostr_wallet_connect(from_node).await;
+
+        Ok(())
+    }
+
     /// Exports the current state of the node manager to a json object.
     #[wasm_bindgen]
     pub async fn export_json(&self) -> Result<String, MutinyJsError> {

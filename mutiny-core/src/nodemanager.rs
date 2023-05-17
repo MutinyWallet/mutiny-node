@@ -322,7 +322,7 @@ pub struct LnUrlParams {
 /// It can be configured to use all different custom backend services, or to use the default
 /// services provided by Mutiny.
 pub struct NodeManager<S: MutinyStorage> {
-    stop: Arc<AtomicBool>,
+    pub(crate) stop: Arc<AtomicBool>,
     mnemonic: Mnemonic,
     network: Network,
     websocket_proxy_addr: String,
