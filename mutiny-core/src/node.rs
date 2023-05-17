@@ -776,7 +776,7 @@ impl<S: MutinyStorage> Node<S> {
         let payment_hash = PaymentHash(payment_hash.into_inner());
         if let Some(payment_info) =
             self.persister
-                .read_payment_info(&payment_hash, true, self.logger.clone())
+                .read_payment_info(&payment_hash, true, &self.logger)
         {
             return Ok((payment_info, true));
         }
@@ -784,7 +784,7 @@ impl<S: MutinyStorage> Node<S> {
         // if no inbound check outbound
         match self
             .persister
-            .read_payment_info(&payment_hash, false, self.logger.clone())
+            .read_payment_info(&payment_hash, false, &self.logger)
         {
             Some(payment_info) => Ok((payment_info, false)),
             None => Err(MutinyError::InvoiceInvalid),
@@ -880,9 +880,9 @@ impl<S: MutinyStorage> Node<S> {
                 return Err(MutinyError::PaymentTimeout);
             }
 
-            let payment_info =
-                self.persister
-                    .read_payment_info(&payment_hash, false, self.logger.clone());
+            let payment_info = self
+                .persister
+                .read_payment_info(&payment_hash, false, &self.logger);
 
             if let Some(info) = payment_info {
                 match info.status {
