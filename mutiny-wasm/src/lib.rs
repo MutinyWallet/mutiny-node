@@ -788,8 +788,11 @@ impl MutinyWallet {
 
     /// Get nostr wallet connect URI
     #[wasm_bindgen]
-    pub fn get_nwc_uri(&self) -> String {
-        self.inner.nostr.get_nwc_uri()
+    pub fn get_nwc_uri(&self) -> Result<String, MutinyJsError> {
+        self.inner
+            .nostr
+            .get_nwc_uri()
+            .map_err(|_| MutinyJsError::JsonReadWriteError)
     }
 
     #[wasm_bindgen]

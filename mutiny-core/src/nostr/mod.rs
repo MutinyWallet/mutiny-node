@@ -1,21 +1,20 @@
-mod nip47;
-
 use crate::error::MutinyError;
 use crate::nodemanager::NodeManager;
-use crate::nostr::nip47::Nip47Request;
 use crate::storage::MutinyStorage;
 use crate::utils;
 use anyhow::anyhow;
-use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::util::bip32::{DerivationPath, ExtendedPrivKey};
 use lightning::util::logger::Logger;
 use lightning::{log_error, log_warn};
+use lightning_invoice::Invoice;
 use nostr::key::SecretKey;
+use nostr::nips::nip47::{
+    ErrorCode, Method, NIP47Error, NostrWalletConnectURI, Request, Response, ResponseResult,
+};
 use nostr::prelude::{decrypt, encrypt};
 use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag, Timestamp};
 use nostr_sdk::Client;
-use serde_json::json;
 use std::str::FromStr;
 
 const MAX_ZAP_AMOUNT_SATS: u64 = 10_000;
@@ -68,19 +67,16 @@ impl NostrManager {
         })
     }
 
-    pub fn get_nwc_uri(&self) -> String {
-        // unwrap is safe because we check for empty relays in the constructor
-        let encoded_relay = urlencoding::encode(self.relays.first().unwrap());
-        format!(
-            "nostr+walletconnect://{}?relay={}&secret={}",
-            self.nwc_server_key.public_key().to_hex(),
-            &encoded_relay,
-            self.nwc_client_key
-                .secret_key()
-                .unwrap()
-                .secret_bytes()
-                .to_hex()
-        )
+    pub fn get_nwc_uri(&self) -> anyhow::Result<String> {
+        let relay_url = self.relays.first().ok_or(anyhow!("No relays"))?;
+        let uri = NostrWalletConnectURI::new(
+            self.nwc_server_key.public_key(),
+            relay_url.parse()?,
+            Some(self.nwc_client_key.secret_key().unwrap()),
+            None,
+        )?;
+
+        Ok(uri.to_string())
     }
 
     pub fn create_nwc_filter(&self) -> Filter {
@@ -90,7 +86,7 @@ impl NostrManager {
         let now = utils::now().as_secs();
 
         Filter::new()
-            .kinds(vec![Kind::Custom(23194)])
+            .kinds(vec![Kind::WalletConnectRequest])
             .author(client_pubkey.to_string())
             .pubkey(server_pubkey)
             .since(Timestamp::from(now))
@@ -98,7 +94,7 @@ impl NostrManager {
 
     /// Create Nostr Wallet Connect Info event
     pub fn create_nwc_info_event(&self) -> anyhow::Result<Event> {
-        let info = EventBuilder::new(Kind::Custom(13194), "pay_invoice".to_string(), &[])
+        let info = EventBuilder::new(Kind::WalletConnectInfo, "pay_invoice".to_string(), &[])
             .to_event(&self.nwc_server_key)?;
         Ok(info)
     }
@@ -122,46 +118,48 @@ impl NostrManager {
         from_node: &PublicKey,
     ) -> anyhow::Result<Option<Event>> {
         let client_pubkey = self.nwc_client_key.public_key();
-        if event.kind == Kind::Custom(23194) && event.pubkey == client_pubkey {
+        if event.kind == Kind::WalletConnectRequest && event.pubkey == client_pubkey {
             let server_key = self.nwc_server_key.secret_key()?;
 
             let decrypted = decrypt(&server_key, &client_pubkey, &event.content)?;
-            let req: Nip47Request = serde_json::from_str(&decrypted)?;
+            let req: Request = Request::from_json(decrypted)?;
 
             // only respond to pay invoice requests
-            if req.method != "pay_invoice" {
+            if req.method != Method::PayInvoice {
                 return Ok(None);
             }
 
-            let msats = req.params.invoice.amount_milli_satoshis().unwrap_or(0);
+            let invoice = Invoice::from_str(&req.params.invoice)
+                .map_err(|_| anyhow!("Failed to parse invoice"))?;
+            let msats = invoice.amount_milli_satoshis().unwrap_or(0);
 
             // verify amount is under 10k sats
             let content = if msats <= MAX_ZAP_AMOUNT_SATS * 1_000 {
                 // todo we could get the author of the event we zapping and use that as the label
                 let labels = vec!["Zap!".to_string()];
                 match node_manager
-                    .pay_invoice(from_node, &req.params.invoice, None, labels)
+                    .pay_invoice(from_node, &invoice, None, labels)
                     .await
                 {
                     Ok(inv) => {
                         // preimage should be set after a successful payment
                         let preimage = inv.preimage.expect("preimage not set");
-                        json!({
-                            "result_type": "pay_invoice",
-                            "result": {
-                                "preimage": preimage
-                            }
-                        })
+                        Response {
+                            result_type: Method::PayInvoice,
+                            error: None,
+                            result: Some(ResponseResult { preimage }),
+                        }
                     }
                     Err(e) => {
                         log_error!(node_manager.logger, "failed to pay invoice: {e}");
-                        json!({
-                            "result_type": "pay_invoice",
-                            "result": {
-                                "code": "INSUFFICIENT_BALANCE",
-                                "error": format!("Failed to pay invoice: {e}")
-                            }
-                        })
+                        Response {
+                            result_type: Method::PayInvoice,
+                            error: Some(NIP47Error {
+                                code: ErrorCode::InsufficantBalance,
+                                message: format!("Failed to pay invoice: {e}"),
+                            }),
+                            result: None,
+                        }
                     }
                 }
             } else {
@@ -170,21 +168,23 @@ impl NostrManager {
                     "Invoice amount too high: {msats} msats"
                 );
 
-                json!({
-                    "result_type": "pay_invoice",
-                    "result": {
-                        "code": "QUOTA_EXCEEDED",
-                        "error": format!("Invoice amount too high: {msats} msats")
-                    }
-                })
+                Response {
+                    result_type: Method::PayInvoice,
+                    error: Some(NIP47Error {
+                        code: ErrorCode::QuotaExceeded,
+                        message: format!("Invoice amount too high: {msats} msats"),
+                    }),
+                    result: None,
+                }
             };
 
-            let encrypted = encrypt(&server_key, &client_pubkey, content.to_string())?;
+            let encrypted = encrypt(&server_key, &client_pubkey, content.as_json())?;
 
             let p_tag = Tag::PubKey(event.pubkey, None);
             let e_tag = Tag::Event(event.id, None, None);
-            let response = EventBuilder::new(Kind::Custom(23195), encrypted, &[p_tag, e_tag])
-                .to_event(&self.nwc_server_key)?;
+            let response =
+                EventBuilder::new(Kind::WalletConnectResponse, encrypted, &[p_tag, e_tag])
+                    .to_event(&self.nwc_server_key)?;
 
             return Ok(Some(response));
         }
