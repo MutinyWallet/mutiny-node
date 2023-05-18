@@ -207,7 +207,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 };
                 match self
                     .persister
-                    .read_payment_info(&payment_hash, true, self.logger.clone())
+                    .read_payment_info(&payment_hash, true, &self.logger)
                 {
                     Some(mut saved_payment_info) => {
                         let payment_preimage = payment_preimage.map(|p| p.0);
@@ -272,7 +272,7 @@ impl<S: MutinyStorage> EventHandler<S> {
 
                 match self
                     .persister
-                    .read_payment_info(&payment_hash, false, self.logger.clone())
+                    .read_payment_info(&payment_hash, false, &self.logger)
                 {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Succeeded;
@@ -365,7 +365,7 @@ impl<S: MutinyStorage> EventHandler<S> {
 
                 match self
                     .persister
-                    .read_payment_info(&payment_hash, false, self.logger.clone())
+                    .read_payment_info(&payment_hash, false, &self.logger)
                 {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Failed;

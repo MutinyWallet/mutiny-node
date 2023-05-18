@@ -237,7 +237,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         &self,
         payment_hash: &PaymentHash,
         inbound: bool,
-        logger: Arc<MutinyLogger>,
+        logger: &MutinyLogger,
     ) -> Option<PaymentInfo> {
         let key = self.get_key(payment_key(inbound, payment_hash).as_str());
         log_trace!(logger, "Trace: checking payment key: {key}");
@@ -504,8 +504,7 @@ mod test {
         let result = persister.persist_payment_info(&payment_hash, &payment_info, true);
         assert!(result.is_ok());
 
-        let result =
-            persister.read_payment_info(&payment_hash, true, Arc::new(MutinyLogger::default()));
+        let result = persister.read_payment_info(&payment_hash, true, &MutinyLogger::default());
 
         assert!(result.is_some());
         assert_eq!(result.clone().unwrap().preimage, Some(preimage));
@@ -516,8 +515,7 @@ mod test {
         assert_eq!(list[0].0, payment_hash);
         assert_eq!(list[0].1.preimage, Some(preimage));
 
-        let result =
-            persister.read_payment_info(&payment_hash, true, Arc::new(MutinyLogger::default()));
+        let result = persister.read_payment_info(&payment_hash, true, &MutinyLogger::default());
 
         assert!(result.is_some());
         assert_eq!(result.clone().unwrap().preimage, Some(preimage));

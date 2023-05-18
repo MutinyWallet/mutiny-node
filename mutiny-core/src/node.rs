@@ -776,7 +776,7 @@ impl<S: MutinyStorage> Node<S> {
         let payment_hash = PaymentHash(payment_hash.into_inner());
         if let Some(payment_info) =
             self.persister
-                .read_payment_info(&payment_hash, true, self.logger.clone())
+                .read_payment_info(&payment_hash, true, &self.logger)
         {
             return Ok((payment_info, true));
         }
@@ -784,7 +784,7 @@ impl<S: MutinyStorage> Node<S> {
         // if no inbound check outbound
         match self
             .persister
-            .read_payment_info(&payment_hash, false, self.logger.clone())
+            .read_payment_info(&payment_hash, false, &self.logger)
         {
             Some(payment_info) => Ok((payment_info, false)),
             None => Err(MutinyError::InvoiceInvalid),
@@ -799,6 +799,24 @@ impl<S: MutinyStorage> Node<S> {
         amt_sats: Option<u64>,
         labels: Vec<String>,
     ) -> Result<PaymentHash, MutinyError> {
+        let payment_hash = PaymentHash(invoice.payment_hash().into_inner());
+
+        if self
+            .persister
+            .read_payment_info(&payment_hash, false, &self.logger)
+            .is_some_and(|p| p.status != HTLCStatus::Failed)
+        {
+            return Err(MutinyError::NonUniquePaymentHash);
+        }
+
+        if self
+            .persister
+            .read_payment_info(&payment_hash, true, &self.logger)
+            .is_some_and(|p| p.status != HTLCStatus::Failed)
+        {
+            return Err(MutinyError::NonUniquePaymentHash);
+        }
+
         let (pay_result, amt_msat) = if invoice.amount_milli_satoshis().is_none() {
             if amt_sats.is_none() {
                 return Err(MutinyError::InvoiceInvalid);
@@ -843,7 +861,6 @@ impl<S: MutinyStorage> Node<S> {
             last_update,
         };
 
-        let payment_hash = PaymentHash(invoice.payment_hash().into_inner());
         self.persister
             .persist_payment_info(&payment_hash, &payment_info, false)?;
 
@@ -880,9 +897,9 @@ impl<S: MutinyStorage> Node<S> {
                 return Err(MutinyError::PaymentTimeout);
             }
 
-            let payment_info =
-                self.persister
-                    .read_payment_info(&payment_hash, false, self.logger.clone());
+            let payment_info = self
+                .persister
+                .read_payment_info(&payment_hash, false, &self.logger);
 
             if let Some(info) = payment_info {
                 match info.status {
