@@ -1,7 +1,6 @@
 use crate::error::MutinyError;
 use crate::nodemanager::NodeManager;
 use crate::storage::MutinyStorage;
-use crate::utils;
 use crate::utils::sleep;
 use anyhow::anyhow;
 use bitcoin::hashes::hex::ToHex;
@@ -122,16 +121,6 @@ impl<S: MutinyStorage> RedshiftStorage for S {
 }
 
 pub trait RedshiftManager {
-    /// Waits until the channel's funding transaction has been broadcast.
-    ///
-    /// Returns the channel's funding utxo outpoint
-    async fn await_chan_funding_tx(
-        &self,
-        sending_node: &PublicKey,
-        user_channel_id: u128,
-        timeout: u64,
-    ) -> Result<OutPoint, MutinyError>;
-
     /// Initializes a redshift. Creates a new node and attempts
     /// to open a channel to the introduction node.
     async fn init_redshift(
@@ -148,33 +137,6 @@ pub trait RedshiftManager {
 }
 
 impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
-    async fn await_chan_funding_tx(
-        &self,
-        sending_node: &PublicKey,
-        user_channel_id: u128,
-        timeout: u64,
-    ) -> Result<OutPoint, MutinyError> {
-        let node = self.get_node(sending_node).await?;
-        let start = utils::now().as_secs();
-        loop {
-            let channels = node.channel_manager.list_channels();
-            let channel = channels
-                .iter()
-                .find(|c| c.user_channel_id == user_channel_id);
-
-            if let Some(outpoint) = channel.and_then(|c| c.funding_txo) {
-                return Ok(outpoint.into_bitcoin_outpoint());
-            }
-
-            let now = utils::now().as_secs();
-            if now - start > timeout {
-                return Err(MutinyError::PaymentTimeout);
-            }
-
-            sleep(250).await;
-        }
-    }
-
     async fn init_redshift(
         &self,
         utxo: OutPoint,
@@ -237,10 +199,6 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
         // fees paid for opening channel.
         let fees = u.txout.value - channel.size;
 
-        let channel_outpoint = self
-            .await_chan_funding_tx(&node.pubkey, user_chan_id, 60)
-            .await?;
-
         // save to db
         let redshift = Redshift {
             id: user_chan_id.to_be_bytes(),
@@ -249,7 +207,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
             sending_node: node.pubkey,
             recipient,
             output_utxo: None,
-            introduction_channel: Some(channel_outpoint),
+            introduction_channel: channel.outpoint,
             output_channel: None,
             introduction_node,
             amount_sats: u.txout.value,
