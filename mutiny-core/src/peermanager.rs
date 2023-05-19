@@ -187,7 +187,8 @@ impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
         }
 
         // because we got the announcement, may as well update our network graph
-        self.network_graph.update_node_from_announcement(msg)?;
+        self.network_graph
+            .update_node_from_unsigned_announcement(&msg.contents)?;
 
         Ok(false)
     }
@@ -198,13 +199,16 @@ impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
     ) -> Result<bool, LightningError> {
         // because we got the channel, may as well update our network graph
         self.network_graph
-            .update_channel_from_announcement::<Arc<ErroringUtxoLookup>>(msg, &None)?;
+            .update_channel_from_unsigned_announcement::<Arc<ErroringUtxoLookup>>(
+                &msg.contents,
+                &None,
+            )?;
         Ok(false)
     }
 
     fn handle_channel_update(&self, msg: &msgs::ChannelUpdate) -> Result<bool, LightningError> {
         // because we got the update, may as well update our network graph
-        self.network_graph.update_channel(msg)?;
+        self.network_graph.update_channel_unsigned(&msg.contents)?;
         Ok(false)
     }
 
