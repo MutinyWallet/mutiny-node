@@ -1019,6 +1019,12 @@ impl<S: MutinyStorage> Node<S> {
     ) -> Result<OutPoint, MutinyError> {
         let start = utils::now().as_secs();
         loop {
+            // We will get a channel closure event if the peer rejects the channel
+            // todo return closure reason to user
+            if let Ok(Some(_closure)) = self.persister.get_channel_closure(user_channel_id) {
+                return Err(MutinyError::ChannelCreationFailed);
+            }
+
             let channels = self.channel_manager.list_channels_with_counterparty(pubkey);
             let channel = channels
                 .iter()

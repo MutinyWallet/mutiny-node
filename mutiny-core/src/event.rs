@@ -10,7 +10,7 @@ use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
 use lightning::chain::keysinterface::SpendableOutputDescriptor;
-use lightning::events::{Event, PaymentPurpose};
+use lightning::events::{ClosureReason, Event, PaymentPurpose};
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
     log_debug, log_error, log_info, log_warn,
@@ -54,6 +54,22 @@ pub(crate) enum HTLCStatus {
     InFlight,
     Succeeded,
     Failed,
+}
+
+/// Information about a channel that was closed.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ChannelClosure {
+    pub reason: String,
+    pub timestamp: u64,
+}
+
+impl ChannelClosure {
+    pub fn new(reason: ClosureReason) -> Self {
+        Self {
+            reason: reason.to_string(),
+            timestamp: crate::utils::now().as_secs(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -151,6 +167,15 @@ impl<S: MutinyStorage> EventHandler<S> {
                     }
                     Err(e) => {
                         log_error!(self.logger, "ERROR: Could not create a signed transaction to open channel with: {e}");
+                        if let Err(e) = self.channel_manager.force_close_without_broadcasting_txn(
+                            &temporary_channel_id,
+                            &counterparty_node_id,
+                        ) {
+                            log_error!(
+                                self.logger,
+                                "ERROR: Could not force close failed channel: {e:?}"
+                            );
+                        }
                         return;
                     }
                 };
@@ -423,7 +448,7 @@ impl<S: MutinyStorage> EventHandler<S> {
             Event::ChannelClosed {
                 channel_id,
                 reason,
-                user_channel_id: _,
+                user_channel_id,
             } => {
                 log_debug!(
                     self.logger,
@@ -431,6 +456,14 @@ impl<S: MutinyStorage> EventHandler<S> {
                     channel_id.to_hex(),
                     reason
                 );
+
+                let closure = ChannelClosure::new(reason);
+                if let Err(e) = self
+                    .persister
+                    .persist_channel_closure(user_channel_id, closure)
+                {
+                    log_error!(self.logger, "Failed to persist channel closure: {e}");
+                }
             }
             Event::DiscardFunding { .. } => {
                 // A "real" node should probably "lock" the UTXOs spent in funding transactions until

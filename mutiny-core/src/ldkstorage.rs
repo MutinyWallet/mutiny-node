@@ -1,6 +1,6 @@
 use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyStorageError};
-use crate::event::PaymentInfo;
+use crate::event::{ChannelClosure, PaymentInfo};
 use crate::fees::MutinyFeeEstimator;
 use crate::gossip::{NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 use crate::keymanager::PhantomKeysManager;
@@ -269,6 +269,44 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             .collect())
     }
 
+    pub(crate) fn persist_channel_closure(
+        &self,
+        user_channel_id: u128,
+        closure: ChannelClosure,
+    ) -> Result<(), MutinyError> {
+        let key = self.get_key(&format!("channel_closure_{}", user_channel_id.to_hex()));
+        self.storage.set_data(key, closure)?;
+        Ok(())
+    }
+
+    pub(crate) fn get_channel_closure(
+        &self,
+        user_channel_id: u128,
+    ) -> Result<Option<ChannelClosure>, MutinyError> {
+        let key = self.get_key(&format!("channel_closure_{}", user_channel_id.to_hex()));
+        self.storage.get_data(key)
+    }
+
+    #[allow(dead_code)] // todo expose to front end
+    pub(crate) fn list_channel_closures(&self) -> Result<Vec<(u128, ChannelClosure)>, MutinyError> {
+        let prefix = "channel_closure_";
+        let suffix = format!("_{}", self.node_id);
+        let map: HashMap<String, ChannelClosure> = self.storage.scan(prefix, Some(&suffix))?;
+
+        Ok(map
+            .into_iter()
+            .map(|(key, value)| {
+                // convert keys to u128
+                let user_channel_id_str = key.trim_start_matches(prefix).trim_end_matches(&suffix);
+                let user_channel_id: [u8; 16] =
+                    FromHex::from_hex(user_channel_id_str).expect("key should be a u128");
+
+                let user_channel_id = u128::from_be_bytes(user_channel_id);
+                (user_channel_id, value)
+            })
+            .collect())
+    }
+
     /// Persists the failed spendable outputs to storage.
     /// Previously failed spendable outputs are not overwritten.
     ///
@@ -525,6 +563,28 @@ mod test {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].0, payment_hash);
         assert_eq!(list[0].1.preimage, Some(preimage));
+    }
+
+    #[test]
+    async fn test_persist_channel_closure() {
+        let test_name = "test_persist_channel_closure";
+        log!("{}", test_name);
+
+        let persister = get_test_persister().await;
+
+        let user_channel_id: u128 = 123456789;
+        let closure = ChannelClosure {
+            reason: "This is a test.".to_string(),
+            timestamp: utils::now().as_secs(),
+        };
+        let result = persister.persist_channel_closure(user_channel_id, closure.clone());
+        assert!(result.is_ok());
+
+        let result = persister.list_channel_closures().unwrap();
+        assert_eq!(result, vec![(user_channel_id, closure.clone())]);
+
+        let result = persister.get_channel_closure(user_channel_id).unwrap();
+        assert_eq!(result, Some(closure));
     }
 
     #[test]
