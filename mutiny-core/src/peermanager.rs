@@ -169,19 +169,18 @@ impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
         &self,
         msg: &msgs::NodeAnnouncement,
     ) -> Result<bool, LightningError> {
-        let msg_clone = msg.clone();
-        let logger = self.logger.clone();
         // We use RGS to sync gossip, but we can save the node's metadata (alias and color)
         // we should only save it for relevant peers however (i.e. peers we have a channel with)
-        if read_peer_info(&self.storage, &msg_clone.contents.node_id)
+        let node_id = msg.contents.node_id;
+        if read_peer_info(&self.storage, &node_id)
             .ok()
             .flatten()
             .is_some()
         {
-            let node_id = msg_clone.contents.node_id;
-            if let Err(e) = gossip::save_ln_peer_info(&self.storage, &node_id, &msg_clone.into()) {
+            if let Err(e) = gossip::save_ln_peer_info(&self.storage, &node_id, &msg.clone().into())
+            {
                 log_warn!(
-                    logger,
+                    self.logger,
                     "Failed to save node announcement for {node_id}: {e}"
                 );
             }
