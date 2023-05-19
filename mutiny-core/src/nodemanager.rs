@@ -562,44 +562,66 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(())
     }
 
+    /// Starts a background tasks to poll redshifts until they are ready and then start attempting payments.
+    ///
+    /// This function will first find redshifts that are in the [RedshiftStatus::AttemptingPayments] state and start attempting payments
+    /// and redshifts that are in the [RedshiftStatus::ClosingChannels] state and finish closing channels.
+    /// This is done in case the node manager was shutdown while attempting payments or closing channels.
     pub(crate) fn start_redshifts(nm: Arc<NodeManager<S>>) {
+        // find AttemptingPayments redshifts and restart attempting payments
+        // find ClosingChannels redshifts and restart closing channels
+        // use unwrap_or_default() to handle errors
+        let all = nm.storage.get_redshifts().unwrap_or_default();
+        for redshift in all {
+            match redshift.status {
+                RedshiftStatus::AttemptingPayments => {
+                    // start attempting payments
+                    let nm_clone = nm.clone();
+                    spawn_local(async move {
+                        if let Err(e) = nm_clone.attempt_payments(redshift).await {
+                            log_error!(nm_clone.logger, "Error attempting redshift payments: {e}");
+                        }
+                    });
+                }
+                RedshiftStatus::ClosingChannels => {
+                    // finish closing channels
+                    let nm_clone = nm.clone();
+                    spawn_local(async move {
+                        if let Err(e) = nm_clone.close_channels(redshift).await {
+                            log_error!(nm_clone.logger, "Error closing redshift channels: {e}");
+                        }
+                    });
+                }
+                _ => {} // ignore other statuses
+            }
+        }
+
         spawn_local(async move {
             loop {
+                if nm.stop.load(Ordering::Relaxed) {
+                    break;
+                }
                 // find redshifts with channels ready
-                let all = nm.storage.get_redshifts().unwrap();
+                // use unwrap_or_default() to handle errors
+                let all = nm.storage.get_redshifts().unwrap_or_default();
                 for mut redshift in all {
-                    if redshift.status == RedshiftStatus::ChannelOpening {
-                        let node = nm
-                            .get_node(&redshift.sending_node)
-                            .await
-                            .expect("node not found");
-
-                        // check if channel is ready
-                        // using list_usable_channels because it checks for channel status
-                        if let Some(chan) = node
-                            .channel_manager
-                            .list_usable_channels()
-                            .iter()
-                            .find(|c| c.user_channel_id == u128::from_be_bytes(redshift.id))
-                        {
-                            // update redshift status and save to storage
-                            redshift
-                                .channel_opened(chan.funding_txo.unwrap().into_bitcoin_outpoint());
-                            nm.storage
-                                .persist_redshift(redshift.clone())
-                                .expect("failed to persist redshift");
-
-                            // start attempting payments
-                            let payment_nm = nm.clone();
-                            spawn_local(async move {
-                                if let Err(e) = payment_nm.attempt_payments(redshift).await {
-                                    log_error!(
-                                        payment_nm.logger,
-                                        "Error attempting redshift payments: {e}"
-                                    );
-                                }
-                            });
+                    if redshift.status == RedshiftStatus::ChannelOpened {
+                        // update status
+                        redshift.status = RedshiftStatus::AttemptingPayments;
+                        if let Err(e) = nm.storage.persist_redshift(redshift.clone()) {
+                            log_error!(nm.logger, "Error persisting redshift status update: {e}");
                         }
+
+                        // start attempting payments
+                        let payment_nm = nm.clone();
+                        spawn_local(async move {
+                            if let Err(e) = payment_nm.attempt_payments(redshift).await {
+                                log_error!(
+                                    payment_nm.logger,
+                                    "Error attempting redshift payments: {e}"
+                                );
+                            }
+                        });
                     }
                 }
 
