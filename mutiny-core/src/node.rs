@@ -383,7 +383,7 @@ impl<S: MutinyStorage> Node<S> {
             {
                 Ok(_) => {
                     log_info!(logger, "Successfully retried spendable outputs");
-                    persister.clear_failed_spendable_outputs().await?;
+                    persister.clear_failed_spendable_outputs()?;
                 }
                 Err(e) => log_warn!(logger, "Failed to retry spendable outputs {e}"),
             }
