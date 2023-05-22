@@ -579,11 +579,18 @@ impl MutinyWallet {
     pub async fn open_channel(
         &self,
         from_node: String,
-        to_pubkey: String,
+        to_pubkey: Option<String>,
         amount: u64,
     ) -> Result<MutinyChannel, MutinyJsError> {
         let from_node = PublicKey::from_str(&from_node)?;
-        let to_pubkey = PublicKey::from_str(&to_pubkey)?;
+
+        let to_pubkey = match to_pubkey {
+            Some(pubkey_str) if !pubkey_str.trim().is_empty() => {
+                Some(PublicKey::from_str(&pubkey_str)?)
+            }
+            _ => None,
+        };
+
         Ok(self
             .inner
             .node_manager

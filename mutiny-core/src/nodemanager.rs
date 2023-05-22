@@ -1335,11 +1335,21 @@ impl<S: MutinyStorage> NodeManager<S> {
     pub async fn open_channel(
         &self,
         from_node: &PublicKey,
-        to_pubkey: PublicKey,
+        to_pubkey: Option<PublicKey>,
         amount: u64,
         user_channel_id: Option<u128>,
     ) -> Result<MutinyChannel, MutinyError> {
         let node = self.get_node(from_node).await?;
+
+        let to_pubkey = match to_pubkey {
+            Some(pubkey) => pubkey,
+            None => {
+                node.lsp_client
+                    .as_ref()
+                    .ok_or(MutinyError::PubkeyInvalid)?
+                    .pubkey
+            }
+        };
 
         let outpoint = node
             .open_channel_with_timeout(to_pubkey, amount, user_channel_id, 60)
