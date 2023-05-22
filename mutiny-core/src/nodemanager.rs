@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use crate::event::{HTLCStatus, PaymentInfo};
-use crate::gossip::NETWORK_GRAPH_KEY;
+use crate::gossip::*;
 use crate::labels::LabelStorage;
 use crate::logging::LOGGING_KEY;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
@@ -1566,6 +1566,26 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Retrieves the logs from storage.
     pub fn get_logs(&self) -> Result<Option<Vec<String>>, MutinyError> {
         self.logger.get_logs(&self.storage)
+    }
+
+    /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.
+    pub async fn reset_router(&self) -> Result<(), MutinyError> {
+        let needs_db_connection = self.storage.clone().connected().unwrap_or(false);
+        if needs_db_connection {
+            self.storage.clone().start().await?;
+        }
+
+        // delete all the keys we use to store routing data
+        self.storage.delete(GOSSIP_SYNC_TIME_KEY)?;
+        self.storage.delete(NETWORK_GRAPH_KEY)?;
+        self.storage.delete(PROB_SCORER_KEY)?;
+
+        // shut back down after reading if it was already closed
+        if needs_db_connection {
+            self.storage.clone().stop();
+        }
+
+        Ok(())
     }
 
     /// Exports the current state of the node manager to a json object.
