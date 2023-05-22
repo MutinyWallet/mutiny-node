@@ -803,6 +803,13 @@ impl MutinyWallet {
         Ok(())
     }
 
+    /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.
+    #[wasm_bindgen]
+    pub async fn reset_router(&self) -> Result<(), MutinyJsError> {
+        self.inner.node_manager.reset_router().await?;
+        Ok(())
+    }
+
     /// Exports the current state of the node manager to a json object.
     #[wasm_bindgen]
     pub async fn export_json(&self) -> Result<String, MutinyJsError> {
