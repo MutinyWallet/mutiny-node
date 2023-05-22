@@ -383,7 +383,7 @@ impl<S: MutinyStorage> Node<S> {
             {
                 Ok(_) => {
                     log_info!(logger, "Successfully retried spendable outputs");
-                    persister.clear_failed_spendable_outputs().await?;
+                    persister.clear_failed_spendable_outputs()?;
                 }
                 Err(e) => log_warn!(logger, "Failed to retry spendable outputs {e}"),
             }
@@ -1011,11 +1011,44 @@ impl<S: MutinyStorage> Node<S> {
         self.await_payment(payment_hash, timeout, labels).await
     }
 
-    pub async fn open_channel(
+    async fn await_chan_funding_tx(
+        &self,
+        user_channel_id: u128,
+        pubkey: &PublicKey,
+        timeout: u64,
+    ) -> Result<OutPoint, MutinyError> {
+        let start = utils::now().as_secs();
+        loop {
+            // We will get a channel closure event if the peer rejects the channel
+            // todo return closure reason to user
+            if let Ok(Some(_closure)) = self.persister.get_channel_closure(user_channel_id) {
+                return Err(MutinyError::ChannelCreationFailed);
+            }
+
+            let channels = self.channel_manager.list_channels_with_counterparty(pubkey);
+            let channel = channels
+                .iter()
+                .find(|c| c.user_channel_id == user_channel_id);
+
+            if let Some(outpoint) = channel.and_then(|c| c.funding_txo) {
+                return Ok(outpoint.into_bitcoin_outpoint());
+            }
+
+            let now = utils::now().as_secs();
+            if now - start > timeout {
+                return Err(MutinyError::ChannelCreationFailed);
+            }
+
+            sleep(250).await;
+        }
+    }
+
+    pub async fn init_open_channel(
         &self,
         pubkey: PublicKey,
         amount_sat: u64,
-    ) -> Result<[u8; 32], MutinyError> {
+        user_channel_id: Option<u128>,
+    ) -> Result<u128, MutinyError> {
         let mut config = default_user_config();
 
         // if we are opening channel to LSP, turn off SCID alias until CLN is updated
@@ -1026,16 +1059,26 @@ impl<S: MutinyStorage> Node<S> {
             }
         }
 
-        match self
-            .channel_manager
-            .create_channel(pubkey, amount_sat, 0, 0, Some(config))
-        {
-            Ok(res) => {
+        let user_channel_id = user_channel_id.unwrap_or_else(|| {
+            // generate random user channel id
+            let mut user_channel_id_bytes = [0u8; 16];
+            getrandom::getrandom(&mut user_channel_id_bytes).unwrap();
+            u128::from_be_bytes(user_channel_id_bytes)
+        });
+
+        match self.channel_manager.create_channel(
+            pubkey,
+            amount_sat,
+            0,
+            user_channel_id,
+            Some(config),
+        ) {
+            Ok(_) => {
                 log_info!(
                     self.logger,
                     "SUCCESS: channel initiated with peer: {pubkey:?}"
                 );
-                Ok(res)
+                Ok(user_channel_id)
             }
             Err(e) => {
                 log_error!(
@@ -1047,12 +1090,26 @@ impl<S: MutinyStorage> Node<S> {
         }
     }
 
-    pub async fn sweep_utxos_to_channel(
+    pub async fn open_channel_with_timeout(
+        &self,
+        pubkey: PublicKey,
+        amount_sat: u64,
+        user_channel_id: Option<u128>,
+        timeout: u64,
+    ) -> Result<OutPoint, MutinyError> {
+        let init = self
+            .init_open_channel(pubkey, amount_sat, user_channel_id)
+            .await?;
+
+        self.await_chan_funding_tx(init, &pubkey, timeout).await
+    }
+
+    pub async fn init_sweep_utxos_to_channel(
         &self,
         user_chan_id: Option<u128>,
         utxos: &[OutPoint],
         pubkey: PublicKey,
-    ) -> Result<[u8; 32], MutinyError> {
+    ) -> Result<u128, MutinyError> {
         // Calculate the total value of the selected utxos
         let utxo_value: u64 = {
             // find the wallet utxos
@@ -1116,12 +1173,12 @@ impl<S: MutinyStorage> Node<S> {
             user_channel_id,
             Some(config),
         ) {
-            Ok(res) => {
+            Ok(_) => {
                 log_info!(
                     self.logger,
                     "SUCCESS: channel initiated with peer: {pubkey:?}"
                 );
-                Ok(res)
+                Ok(user_channel_id)
             }
             Err(e) => {
                 log_error!(
@@ -1133,6 +1190,20 @@ impl<S: MutinyStorage> Node<S> {
                 Err(MutinyError::ChannelCreationFailed)
             }
         }
+    }
+
+    pub async fn sweep_utxos_to_channel_with_timeout(
+        &self,
+        user_chan_id: Option<u128>,
+        utxos: &[OutPoint],
+        pubkey: PublicKey,
+        timeout: u64,
+    ) -> Result<OutPoint, MutinyError> {
+        let init = self
+            .init_sweep_utxos_to_channel(user_chan_id, utxos, pubkey)
+            .await?;
+
+        self.await_chan_funding_tx(init, &pubkey, timeout).await
     }
 }
 

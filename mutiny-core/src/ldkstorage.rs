@@ -1,6 +1,6 @@
 use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyStorageError};
-use crate::event::PaymentInfo;
+use crate::event::{ChannelClosure, PaymentInfo};
 use crate::fees::MutinyFeeEstimator;
 use crate::gossip::{NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 use crate::keymanager::PhantomKeysManager;
@@ -41,6 +41,7 @@ const MONITORS_PREFIX_KEY: &str = "monitors/";
 const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
 const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
 const CHANNEL_OPENING_PARAMS_PREFIX: &str = "chan_open_params/";
+const CHANNEL_CLOSURE_PREFIX: &str = "channel_closure/";
 const FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY: &str = "failed_spendable_outputs";
 
 pub(crate) type PhantomChannelManager<S: MutinyStorage> = LdkChannelManager<
@@ -269,6 +270,52 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             .collect())
     }
 
+    pub(crate) fn persist_channel_closure(
+        &self,
+        user_channel_id: u128,
+        closure: ChannelClosure,
+    ) -> Result<(), MutinyError> {
+        let key = self.get_key(&format!(
+            "{CHANNEL_CLOSURE_PREFIX}{}",
+            user_channel_id.to_be_bytes().to_hex()
+        ));
+        self.storage.set_data(key, closure)?;
+        Ok(())
+    }
+
+    pub(crate) fn get_channel_closure(
+        &self,
+        user_channel_id: u128,
+    ) -> Result<Option<ChannelClosure>, MutinyError> {
+        let key = self.get_key(&format!(
+            "{CHANNEL_CLOSURE_PREFIX}{}",
+            user_channel_id.to_be_bytes().to_hex()
+        ));
+        self.storage.get_data(key)
+    }
+
+    #[allow(dead_code)] // todo expose to front end
+    pub(crate) fn list_channel_closures(&self) -> Result<Vec<(u128, ChannelClosure)>, MutinyError> {
+        let suffix = format!("_{}", self.node_id);
+        let map: HashMap<String, ChannelClosure> =
+            self.storage.scan(CHANNEL_CLOSURE_PREFIX, Some(&suffix))?;
+
+        Ok(map
+            .into_iter()
+            .map(|(key, value)| {
+                // convert keys to u128
+                let user_channel_id_str = key
+                    .trim_start_matches(CHANNEL_CLOSURE_PREFIX)
+                    .trim_end_matches(&suffix);
+                let user_channel_id: [u8; 16] = FromHex::from_hex(user_channel_id_str)
+                    .expect(&format!("key should be a u128 got {user_channel_id_str}"));
+
+                let user_channel_id = u128::from_be_bytes(user_channel_id);
+                (user_channel_id, value)
+            })
+            .collect())
+    }
+
     /// Persists the failed spendable outputs to storage.
     /// Previously failed spendable outputs are not overwritten.
     ///
@@ -320,7 +367,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
 
     /// Clears the failed spendable outputs from storage
     /// This is used when the failed spendable outputs have been successfully spent
-    pub async fn clear_failed_spendable_outputs(&self) -> anyhow::Result<()> {
+    pub fn clear_failed_spendable_outputs(&self) -> anyhow::Result<()> {
         let key = self.get_key(FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY);
         self.storage.delete(key)?;
 
@@ -472,18 +519,18 @@ mod test {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
-    async fn get_test_persister() -> MutinyNodePersister<MemoryStorage> {
+    fn get_test_persister() -> MutinyNodePersister<MemoryStorage> {
         let id = Uuid::new_v4().to_string();
         let storage = MemoryStorage::default();
         MutinyNodePersister::new(id, storage)
     }
 
     #[test]
-    async fn test_persist_payment_info() {
+    fn test_persist_payment_info() {
         let test_name = "test_persist_payment_info";
         log!("{}", test_name);
 
-        let persister = get_test_persister().await;
+        let persister = get_test_persister();
         let preimage = [1; 32];
         let payment_hash = PaymentHash([0; 32]);
         let pubkey = PublicKey::from_str(
@@ -528,11 +575,33 @@ mod test {
     }
 
     #[test]
-    async fn test_persist_spendable_output_descriptor() {
+    fn test_persist_channel_closure() {
+        let test_name = "test_persist_channel_closure";
+        log!("{}", test_name);
+
+        let persister = get_test_persister();
+
+        let user_channel_id: u128 = 123456789;
+        let closure = ChannelClosure {
+            reason: "This is a test.".to_string(),
+            timestamp: utils::now().as_secs(),
+        };
+        let result = persister.persist_channel_closure(user_channel_id, closure.clone());
+        assert!(result.is_ok());
+
+        let result = persister.list_channel_closures().unwrap();
+        assert_eq!(result, vec![(user_channel_id, closure.clone())]);
+
+        let result = persister.get_channel_closure(user_channel_id).unwrap();
+        assert_eq!(result, Some(closure));
+    }
+
+    #[test]
+    fn test_persist_spendable_output_descriptor() {
         let test_name = "test_persist_spendable_output_descriptor";
         log!("{}", test_name);
 
-        let persister = get_test_persister().await;
+        let persister = get_test_persister();
 
         let static_output_0 = SpendableOutputDescriptor::StaticOutput {
             outpoint: OutPoint {
@@ -560,7 +629,7 @@ mod test {
         let result = persister.get_failed_spendable_outputs().unwrap();
         assert_eq!(result, vec![static_output_0, static_output_1]);
 
-        let result = persister.clear_failed_spendable_outputs().await;
+        let result = persister.clear_failed_spendable_outputs();
         assert!(result.is_ok());
 
         let result = persister.get_failed_spendable_outputs().unwrap();

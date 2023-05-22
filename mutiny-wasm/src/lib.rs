@@ -587,7 +587,7 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .open_channel(&from_node, to_pubkey, amount)
+            .open_channel(&from_node, to_pubkey, amount, None)
             .await?
             .into())
     }

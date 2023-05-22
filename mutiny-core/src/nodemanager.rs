@@ -229,6 +229,7 @@ impl Ord for MutinyPeer {
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct MutinyChannel {
+    pub user_chan_id: String,
     pub balance: u64,
     pub size: u64,
     pub reserve: u64,
@@ -241,6 +242,7 @@ pub struct MutinyChannel {
 impl From<&ChannelDetails> for MutinyChannel {
     fn from(c: &ChannelDetails) -> Self {
         MutinyChannel {
+            user_chan_id: c.user_channel_id.to_hex(),
             balance: c.outbound_capacity_msat / 1_000,
             size: c.channel_value_satoshis,
             reserve: c.unspendable_punishment_reserve.unwrap_or(0),
@@ -1335,13 +1337,18 @@ impl<S: MutinyStorage> NodeManager<S> {
         from_node: &PublicKey,
         to_pubkey: PublicKey,
         amount: u64,
+        user_channel_id: Option<u128>,
     ) -> Result<MutinyChannel, MutinyError> {
         let node = self.get_node(from_node).await?;
 
-        let chan_id = node.open_channel(to_pubkey, amount).await?;
+        let outpoint = node
+            .open_channel_with_timeout(to_pubkey, amount, user_channel_id, 60)
+            .await?;
 
         let all_channels = node.channel_manager.list_channels();
-        let found_channel = all_channels.iter().find(|chan| chan.channel_id == chan_id);
+        let found_channel = all_channels
+            .iter()
+            .find(|chan| chan.funding_txo.map(|a| a.into_bitcoin_outpoint()) == Some(outpoint));
 
         match found_channel {
             Some(channel) => Ok(channel.into()),
@@ -1363,12 +1370,14 @@ impl<S: MutinyStorage> NodeManager<S> {
     ) -> Result<MutinyChannel, MutinyError> {
         let node = self.get_node(from_node).await?;
 
-        let chan_id = node
-            .sweep_utxos_to_channel(user_chan_id, utxos, to_pubkey)
+        let outpoint = node
+            .sweep_utxos_to_channel_with_timeout(user_chan_id, utxos, to_pubkey, 60)
             .await?;
 
         let all_channels = node.channel_manager.list_channels();
-        let found_channel = all_channels.iter().find(|chan| chan.channel_id == chan_id);
+        let found_channel = all_channels
+            .iter()
+            .find(|chan| chan.funding_txo.map(|a| a.into_bitcoin_outpoint()) == Some(outpoint));
 
         match found_channel {
             Some(channel) => Ok(channel.into()),
