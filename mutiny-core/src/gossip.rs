@@ -147,23 +147,11 @@ pub async fn get_gossip_sync(
         }
     };
 
-    let now = utils::now().as_secs();
-
-    // remove stale channels
-    gossip_sync
-        .network_graph()
-        .remove_stale_channels_and_tracking_with_time(now);
-
-    // if the last sync was less than 24 hours ago, we don't need to sync
-    let time_since_sync = now - gossip_data.last_sync_timestamp as u64;
-    if time_since_sync < 86_400 {
-        return Ok((gossip_sync, prob_scorer));
-    };
-
     if let Some(rgs_url) = get_rgs_url(network, user_rgs_url, Some(gossip_data.last_sync_timestamp))
     {
         log_info!(&logger, "RGS URL: {}", rgs_url);
 
+        let now = utils::now().as_secs();
         let fetch_result = fetch_updated_gossip(
             rgs_url,
             now,
