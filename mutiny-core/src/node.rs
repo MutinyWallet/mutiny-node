@@ -32,7 +32,7 @@ use bitcoin::secp256k1::rand;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint};
 use core::time::Duration;
 use futures::lock::Mutex;
-use lightning::ln::channelmanager::RecipientOnionFields;
+use lightning::ln::channelmanager::{RecipientOnionFields, RetryableSendFailure};
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
     util::config::ChannelConfig,
@@ -65,6 +65,7 @@ use lightning::{
         ser::Writeable,
     },
 };
+use lightning_invoice::payment::PaymentError;
 use lightning_invoice::{
     payment::{pay_invoice, pay_zero_value_invoice},
     utils::{create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice},
@@ -879,6 +880,27 @@ impl<S: MutinyStorage> Node<S> {
                 payment_info.status = HTLCStatus::Failed;
                 self.persister
                     .persist_payment_info(&payment_hash, &payment_info, false)?;
+
+                // If the payment failed because of a route not found, check if the amount was
+                // valid and return the correct error
+                if let PaymentError::Sending(RetryableSendFailure::RouteNotFound) = e {
+                    // If the amount was greater than our balance, return an InsufficientBalance error
+                    let ln_balance: u64 = current_channels.iter().map(|c| c.balance_msat).sum();
+                    if amt_msat > ln_balance {
+                        return Err(MutinyError::InsufficientBalance);
+                    }
+
+                    // If the amount was within our balance but we couldn't pay because of
+                    // the channel reserve, return a ReserveAmountError
+                    let reserved_amt: u64 = current_channels
+                        .iter()
+                        .flat_map(|c| c.unspendable_punishment_reserve)
+                        .sum();
+                    if ln_balance - reserved_amt < amt_msat {
+                        return Err(MutinyError::ReserveAmountError);
+                    }
+                }
+
                 Err(MutinyError::RoutingFailed)
             }
         }
