@@ -369,7 +369,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
     /// This is used when the failed spendable outputs have been successfully spent
     pub fn clear_failed_spendable_outputs(&self) -> anyhow::Result<()> {
         let key = self.get_key(FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY);
-        self.storage.delete(key)?;
+        self.storage.delete(&[key])?;
 
         Ok(())
     }
@@ -393,7 +393,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
 
     pub(crate) fn delete_channel_open_params(&self, id: u128) -> Result<(), MutinyError> {
         let key = self.get_key(&channel_open_params_key(id));
-        self.storage.delete(key)
+        self.storage.delete(&[key])
     }
 }
 

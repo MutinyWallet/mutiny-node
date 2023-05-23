@@ -2,6 +2,7 @@ use anyhow::anyhow;
 use gloo_utils::format::JsValueSerdeExt;
 use lightning::log_error;
 use lightning::util::logger::Logger;
+use log::error;
 use mutiny_core::error::{MutinyError, MutinyStorageError};
 use mutiny_core::logging::MutinyLogger;
 use mutiny_core::storage::MutinyStorage;
@@ -87,34 +88,42 @@ impl IndexedDbStorage {
 
     async fn delete_from_indexed_db(
         indexed_db: &Arc<RwLock<Option<Rexie>>>,
-        key: &str,
+        keys: &[String],
     ) -> Result<(), MutinyError> {
         let tx = indexed_db
             .try_write()
-            .map_err(|e| MutinyError::read_err(e.into()))
+            .map_err(|e| {
+                error!("Failed to acquire indexed db lock: {e}");
+                MutinyError::read_err(e.into())
+            })
             .and_then(|mut indexed_db_lock| {
                 if let Some(indexed_db) = &mut *indexed_db_lock {
                     indexed_db
                         .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)
                         .map_err(|e| {
+                            error!("Failed to create indexed db transaction: {e}");
                             MutinyError::read_err(
                                 anyhow!("Failed to create indexed db transaction: {e}").into(),
                             )
                         })
                 } else {
+                    error!("No indexed db instance found");
                     Err(MutinyError::read_err(MutinyStorageError::IndexedDBError))
                 }
             })?;
 
         let store = tx.store(WALLET_OBJECT_STORE_NAME).map_err(|e| {
+            error!("Failed to create indexed db store: {e}");
             MutinyError::read_err(anyhow!("Failed to create indexed db store {e}").into())
         })?;
 
         // delete from indexed db
-        store
-            .delete(&JsValue::from(key))
-            .await
-            .map_err(|_| MutinyError::write_err(MutinyStorageError::IndexedDBError))?;
+        for key in keys {
+            store
+                .delete(&JsValue::from(key))
+                .await
+                .map_err(|_| MutinyError::write_err(MutinyStorageError::IndexedDBError))?;
+        }
 
         tx.done()
             .await
@@ -241,17 +250,17 @@ impl MutinyStorage for IndexedDbStorage {
         }
     }
 
-    fn delete(&self, key: impl AsRef<str>) -> Result<(), MutinyError> {
-        let key = key.as_ref().to_string();
+    fn delete(&self, keys: &[impl AsRef<str>]) -> Result<(), MutinyError> {
+        let keys: Vec<String> = keys.iter().map(|k| k.as_ref().to_string()).collect();
 
         let indexed_db = self.indexed_db.clone();
-        let key_clone = key.clone();
+        let keys_clone = keys.clone();
         let logger = self.logger.clone();
         spawn_local(async move {
-            if let Err(e) = Self::delete_from_indexed_db(&indexed_db, &key_clone).await {
+            if let Err(e) = Self::delete_from_indexed_db(&indexed_db, &keys_clone).await {
                 log_error!(
                     logger,
-                    "Failed to delete ({key_clone}) from indexed db: {e}"
+                    "Failed to delete ({keys_clone:?}) from indexed db: {e}"
                 );
             }
         });
@@ -260,7 +269,10 @@ impl MutinyStorage for IndexedDbStorage {
             .memory
             .try_write()
             .map_err(|e| MutinyError::write_err(e.into()))?;
-        map.remove(&key);
+
+        for key in keys {
+            map.remove(&key);
+        }
 
         Ok(())
     }
@@ -420,7 +432,7 @@ mod tests {
         let result: Option<String> = storage.get(key).unwrap();
         assert_eq!(result, Some(value.to_string()));
 
-        storage.delete(key).unwrap();
+        storage.delete(&[key]).unwrap();
 
         let result: Option<String> = storage.get(key).unwrap();
         assert_eq!(result, None);

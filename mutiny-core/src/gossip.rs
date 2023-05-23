@@ -403,7 +403,7 @@ pub(crate) fn delete_peer_info(
     if let Some(mut current) = current {
         current.nodes.retain(|n| n != uuid);
         if current.nodes.is_empty() {
-            storage.delete(&key)?;
+            storage.delete(&[key])?;
         } else {
             storage.set_data(key, current)?;
         }

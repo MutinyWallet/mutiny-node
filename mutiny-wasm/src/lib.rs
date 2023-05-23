@@ -12,6 +12,7 @@ mod utils;
 use crate::error::MutinyJsError;
 use crate::indexed_db::IndexedDbStorage;
 use crate::models::*;
+use crate::utils::sleep;
 use bip39::Mnemonic;
 use bitcoin::consensus::deserialize;
 use bitcoin::hashes::hex::FromHex;
@@ -814,6 +815,8 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn reset_router(&self) -> Result<(), MutinyJsError> {
         self.inner.node_manager.reset_router().await?;
+        // Sleep to wait for indexed db to finish writing
+        sleep(500).await;
         Ok(())
     }
 
