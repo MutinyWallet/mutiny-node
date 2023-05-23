@@ -362,12 +362,11 @@ impl<S: MutinyStorage> OnChainWallet<S> {
 
     pub fn estimate_tx_fee(
         &self,
-        destination_address: Address,
+        spk: Script,
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<u64, MutinyError> {
-        let psbt =
-            self.create_signed_psbt_to_spk(destination_address.script_pubkey(), amount, fee_rate)?;
+        let psbt = self.create_signed_psbt_to_spk(spk, amount, fee_rate)?;
 
         psbt.fee_amount().ok_or(MutinyError::WalletOperationFailed)
     }

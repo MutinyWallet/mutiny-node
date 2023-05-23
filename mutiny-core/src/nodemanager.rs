@@ -30,6 +30,7 @@ use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::{wallet::AddressIndex, LocalUtxo};
 use bdk_esplora::esplora_client::AsyncClient;
 use bip39::Mnemonic;
+use bitcoin::blockdata::script;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{rand, PublicKey};
@@ -712,7 +713,22 @@ impl<S: MutinyStorage> NodeManager<S> {
         fee_rate: Option<f32>,
     ) -> Result<u64, MutinyError> {
         self.wallet
-            .estimate_tx_fee(destination_address, amount, fee_rate)
+            .estimate_tx_fee(destination_address.script_pubkey(), amount, fee_rate)
+    }
+
+    /// Estimates the onchain fee for a opening a lightning channel.
+    /// The amount is in satoshis and the fee rate is in sat/vbyte.
+    pub fn estimate_channel_open_fee(
+        &self,
+        amount: u64,
+        fee_rate: Option<f32>,
+    ) -> Result<u64, MutinyError> {
+        // Dummy p2wsh script for the channel output
+        let script = script::Builder::new()
+            .push_int(0)
+            .push_slice(&[0; 32])
+            .into_script();
+        self.wallet.estimate_tx_fee(script, amount, fee_rate)
     }
 
     /// Checks if the given address has any transactions.
