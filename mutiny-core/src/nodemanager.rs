@@ -908,6 +908,11 @@ impl<S: MutinyStorage> NodeManager<S> {
     ///
     /// This also updates the fee estimates.
     pub async fn sync(&self) -> Result<(), MutinyError> {
+        // If we are stopped, don't sync
+        if self.stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+
         // update fee estimates before sync in case we need to
         // broadcast a transaction
         self.fee_estimator.update_fee_estimates().await?;
