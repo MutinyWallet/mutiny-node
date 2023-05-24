@@ -859,13 +859,13 @@ impl<S: MutinyStorage> NodeManager<S> {
         let lightning_msats: u64 = nodes
             .iter()
             .flat_map(|(_, n)| n.channel_manager.list_channels())
-            .map(|c| c.outbound_capacity_msat)
+            .map(|c| c.balance_msat)
             .sum();
 
         Ok(MutinyBalance {
             confirmed: onchain.confirmed + onchain.trusted_pending,
             unconfirmed: onchain.untrusted_pending + onchain.immature,
-            lightning: lightning_msats / 1000,
+            lightning: lightning_msats / 1_000,
         })
     }
 

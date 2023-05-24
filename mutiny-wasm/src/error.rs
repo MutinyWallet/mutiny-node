@@ -36,6 +36,13 @@ pub enum MutinyJsError {
     /// Invoice creation failed.
     #[error("Failed to create invoice.")]
     InvoiceCreationFailed,
+    /// We have enough balance to pay an invoice, but
+    /// the this would take from our reserve amount which is not allowed.
+    #[error("Channel reserve amount is too high.")]
+    ReserveAmountError,
+    /// We do not have enough balance to pay the given amount.
+    #[error("We do not have enough balance to pay the given amount.")]
+    InsufficientBalance,
     /// Failed to call on the given LNURL
     #[error("Failed to call on the given LNURL.")]
     LnUrlFailure,
@@ -123,6 +130,8 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::PaymentTimeout => MutinyJsError::PaymentTimeout,
             MutinyError::InvoiceInvalid => MutinyJsError::InvoiceInvalid,
             MutinyError::InvoiceCreationFailed => MutinyJsError::InvoiceCreationFailed,
+            MutinyError::ReserveAmountError => MutinyJsError::ReserveAmountError,
+            MutinyError::InsufficientBalance => MutinyJsError::InsufficientBalance,
             MutinyError::LnUrlFailure => MutinyJsError::LnUrlFailure,
             MutinyError::LspFailure => MutinyJsError::LspFailure,
             MutinyError::RoutingFailed => MutinyJsError::RoutingFailed,

@@ -41,6 +41,13 @@ pub enum MutinyError {
     /// Invoice creation failed.
     #[error("Failed to create invoice.")]
     InvoiceCreationFailed,
+    /// We have enough balance to pay an invoice, but
+    /// the this would take from our reserve amount which is not allowed.
+    #[error("Channel reserve amount is too high.")]
+    ReserveAmountError,
+    /// We do not have enough balance to pay the given amount.
+    #[error("We do not have enough balance to pay the given amount.")]
+    InsufficientBalance,
     /// Failed to call on the given LNURL
     #[error("Failed to call on the given LNURL.")]
     LnUrlFailure,
@@ -141,6 +148,7 @@ impl From<bdk::Error> for MutinyError {
     fn from(e: bdk::Error) -> Self {
         match e {
             bdk::Error::Signer(_) => Self::WalletSigningFailed,
+            bdk::Error::InsufficientFunds { .. } => Self::InsufficientBalance,
             _ => Self::WalletOperationFailed,
         }
     }
