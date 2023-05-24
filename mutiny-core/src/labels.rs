@@ -265,7 +265,7 @@ impl<S: MutinyStorage> LabelStorage for S {
                 self.set_data(key, contact)?;
 
                 // delete old label item
-                self.delete(get_label_item_key(&label))?;
+                self.delete(&[get_label_item_key(&label)])?;
                 Ok(id)
             }
         }

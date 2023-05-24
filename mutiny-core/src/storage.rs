@@ -105,8 +105,8 @@ pub trait MutinyStorage: Clone + Sized + 'static {
         }
     }
 
-    /// Delete a value from the storage
-    fn delete(&self, key: impl AsRef<str>) -> Result<(), MutinyError>;
+    /// Delete a set of values from the storage
+    fn delete(&self, keys: &[impl AsRef<str>]) -> Result<(), MutinyError>;
 
     /// Start the storage, this will be called before any other methods
     async fn start(&mut self) -> Result<(), MutinyError>;
@@ -270,14 +270,17 @@ impl MutinyStorage for MemoryStorage {
         }
     }
 
-    fn delete(&self, key: impl AsRef<str>) -> Result<(), MutinyError> {
-        let key = key.as_ref().to_string();
+    fn delete(&self, keys: &[impl AsRef<str>]) -> Result<(), MutinyError> {
+        let keys: Vec<String> = keys.iter().map(|k| k.as_ref().to_string()).collect();
 
         let mut map = self
             .memory
             .try_write()
             .map_err(|e| MutinyError::write_err(e.into()))?;
-        map.remove(&key);
+
+        for key in keys {
+            map.remove(&key);
+        }
 
         Ok(())
     }
@@ -336,7 +339,7 @@ impl MutinyStorage for () {
         Ok(None)
     }
 
-    fn delete(&self, _key: impl AsRef<str>) -> Result<(), MutinyError> {
+    fn delete(&self, _keys: &[impl AsRef<str>]) -> Result<(), MutinyError> {
         Ok(())
     }
 

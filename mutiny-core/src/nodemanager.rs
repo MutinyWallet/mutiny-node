@@ -1570,15 +1570,15 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.
     pub async fn reset_router(&self) -> Result<(), MutinyError> {
-        let needs_db_connection = self.storage.clone().connected().unwrap_or(false);
+        // if we're not connected to the db, start it up
+        let needs_db_connection = !self.storage.clone().connected().unwrap_or(true);
         if needs_db_connection {
             self.storage.clone().start().await?;
         }
 
         // delete all the keys we use to store routing data
-        self.storage.delete(GOSSIP_SYNC_TIME_KEY)?;
-        self.storage.delete(NETWORK_GRAPH_KEY)?;
-        self.storage.delete(PROB_SCORER_KEY)?;
+        self.storage
+            .delete(&[GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY])?;
 
         // shut back down after reading if it was already closed
         if needs_db_connection {
@@ -1590,7 +1590,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Exports the current state of the node manager to a json object.
     pub async fn export_json(&self) -> Result<Value, MutinyError> {
-        let needs_db_connection = self.storage.clone().connected().unwrap_or(false);
+        let needs_db_connection = !self.storage.clone().connected().unwrap_or(true);
         if needs_db_connection {
             self.storage.clone().start().await?;
         }
