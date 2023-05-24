@@ -234,6 +234,19 @@ impl MutinyWallet {
             .estimate_tx_fee(addr, amount, fee_rate)?)
     }
 
+    /// Estimates the onchain fee for a opening a lightning channel.
+    /// The amount is in satoshis and the fee rate is in sat/vbyte.
+    pub fn estimate_channel_open_fee(
+        &self,
+        amount: u64,
+        fee_rate: Option<f32>,
+    ) -> Result<u64, MutinyJsError> {
+        Ok(self
+            .inner
+            .node_manager
+            .estimate_channel_open_fee(amount, fee_rate)?)
+    }
+
     /// Checks if the given address has any transactions.
     /// If it does, it returns the details of the first transaction.
     ///
