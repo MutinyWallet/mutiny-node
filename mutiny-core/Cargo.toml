@@ -63,7 +63,7 @@ gloo-net = "0.2.4"
 gloo-utils = { version = "0.1.6", features = ["serde"] }
 futures = "0.3.25"
 thiserror = "1.0"
-web-sys = { version = "0.3.60", features = ["console"] }
+web-sys = { version = "0.3.60", features = ["console"], optional = true }
 anyhow = "1.0"
 miniscript = { version = "9.0.0", default-features = false, features = ["no-std"] }
 
@@ -77,6 +77,9 @@ default = ["console_error_panic_hook", "async-interface"]
 async-interface = []
 ignored_tests = ["test-utils"]
 test-utils = []
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3.60", features = ["console"] }
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = true
