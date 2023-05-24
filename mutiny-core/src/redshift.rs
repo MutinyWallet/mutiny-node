@@ -10,6 +10,7 @@ use lightning::{log_debug, log_error, log_info};
 use lightning::{log_warn, util::logger::Logger};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 
 // When creating a new node sleep for 5 seconds to give it time to start up.
 const NEW_NODE_SLEEP_DURATION: i32 = 5_000;
@@ -21,11 +22,14 @@ pub enum RedshiftStatus {
     /// send the payment.
     ChannelOpening,
     /// The channel to the introduction node is open.
+    /// We are ready to being attempting payments.
+    ChannelOpened,
+    /// The channel to the introduction node is open.
     /// We are attempting to pay the receiving node.
-    ///
-    /// The u64 is the amount of sats we've successfully
-    /// sent to the receiving node.
     AttemptingPayments,
+    /// The payments have been completed and now
+    /// we are attempting to close the channels.
+    ClosingChannels,
     /// The redshift was success and is now complete.
     Completed,
     /// The redshift failed. The error is given.
@@ -37,7 +41,9 @@ impl RedshiftStatus {
     pub fn is_in_progress(&self) -> bool {
         match self {
             RedshiftStatus::ChannelOpening => true,
+            RedshiftStatus::ChannelOpened => true,
             RedshiftStatus::AttemptingPayments => true,
+            RedshiftStatus::ClosingChannels => true,
             RedshiftStatus::Completed => false,
             RedshiftStatus::Failed(_) => false,
         }
@@ -64,6 +70,9 @@ pub struct Redshift {
     pub status: RedshiftStatus,
     pub sending_node: PublicKey,
     pub recipient: RedshiftRecipient,
+    /// The node that will receive the lightning payment.
+    /// This will be one of Mutiny's internal nodes.
+    pub receiving_node: Option<PublicKey>,
     pub output_utxo: Option<OutPoint>,
     pub introduction_channel: Option<OutPoint>,
     /// output_channel will be None if being kept in lightning, this is only relevant when the
@@ -79,7 +88,7 @@ pub struct Redshift {
 impl Redshift {
     pub fn channel_opened(&mut self, chan_id: OutPoint) {
         self.introduction_channel = Some(chan_id);
-        self.status = RedshiftStatus::AttemptingPayments;
+        self.status = RedshiftStatus::ChannelOpened;
     }
 
     pub fn payment_successful(&mut self, amount: u64, fees_paid: u64) {
@@ -134,6 +143,8 @@ pub trait RedshiftManager {
     fn get_redshift(&self, id: &[u8; 16]) -> Result<Option<Redshift>, MutinyError>;
 
     async fn attempt_payments(&self, rs: Redshift) -> Result<(), MutinyError>;
+
+    async fn close_channels(&self, rs: Redshift) -> Result<(), MutinyError>;
 }
 
 impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
@@ -206,6 +217,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
             status: RedshiftStatus::ChannelOpening,
             sending_node: node.pubkey,
             recipient,
+            receiving_node: None,
             output_utxo: None,
             introduction_channel: channel.outpoint,
             output_channel: None,
@@ -269,11 +281,19 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
                 self.get_node(&new_receiving_node).await?
             }
         };
+        // save receiving node to db
+        rs.receiving_node = Some(receiving_node.pubkey);
+        self.storage.persist_redshift(rs.clone())?;
 
         // attempt payments in loop until we sent all or hit min sats
         let mut local_max_sats = max_sats;
         let get_invoice_failures = 0;
         loop {
+            // stop looping if ordered to stop
+            if self.stop.load(Ordering::Relaxed) {
+                break;
+            }
+
             log_debug!(
                 &self.logger,
                 "Looping through payments for redshift {}: sats={}",
@@ -298,7 +318,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
                     );
                     rs.fail("no payments were made".to_string());
                 } else {
-                    rs.status = RedshiftStatus::Completed;
+                    rs.status = RedshiftStatus::ClosingChannels;
                 }
                 break;
             }
@@ -353,7 +373,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
 
                         // check if the max amount was sent on all tries
                         if rs.sats_sent >= max_sats {
-                            rs.status = RedshiftStatus::Completed;
+                            rs.status = RedshiftStatus::ClosingChannels;
                             break;
                         }
 
@@ -387,19 +407,40 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
         // save to db
         self.storage.persist_redshift(rs.clone())?;
 
+        // begin closing channels
+        self.close_channels(rs).await?;
+
+        Ok(())
+    }
+
+    async fn close_channels(&self, mut rs: Redshift) -> Result<(), MutinyError> {
         // close introduction channel
-        match rs.introduction_channel {
+        match rs.introduction_channel.as_ref() {
             Some(chan) => {
-                self.close_channel(&chan).await?
+                self.close_channel(chan).await?
                 // todo need to set change amount to on the amount we get back
             }
             None => log_debug!(&self.logger, "no introduction channel to close"),
         }
 
         // close receiving channel(s)
-        match rs.recipient {
+        match &rs.recipient {
             RedshiftRecipient::Lightning(_) => {} // Keep channel open in lightning case
             RedshiftRecipient::OnChain(_addr) => {
+                let receiving_node = match &rs.receiving_node {
+                    None => {
+                        log_error!(
+                            &self.logger,
+                            "no receiving node for redshift {}, cannot close channels",
+                            rs.id.to_hex()
+                        );
+                        return Err(MutinyError::Other(anyhow!(
+                            "No receiving node for on-chain redshift"
+                        )));
+                    }
+                    Some(node) => self.get_node(node).await?,
+                };
+
                 // close all the channels that were opened on the receiving node, if the receiving
                 // node was only created temporarily for the purpose of being thrown away
                 // record all of the channel outpoints.
@@ -425,6 +466,10 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
         }
 
         // TODO archive nodes afterwards
+
+        rs.status = RedshiftStatus::Completed;
+        // save to db
+        self.storage.persist_redshift(rs)?;
 
         Ok(())
     }
@@ -455,6 +500,7 @@ mod test {
             status: RedshiftStatus::ChannelOpening,
             sending_node: pubkey,
             recipient: RedshiftRecipient::OnChain(None),
+            receiving_node: None,
             output_utxo: None,
             introduction_channel: None,
             output_channel: None,

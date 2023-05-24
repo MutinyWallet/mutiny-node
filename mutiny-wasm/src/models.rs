@@ -404,7 +404,9 @@ impl Redshift {
     pub fn status(&self) -> String {
         match self.status {
             RedshiftStatus::ChannelOpening => "ChannelOpening".to_string(),
+            RedshiftStatus::ChannelOpened => "ChannelOpened".to_string(),
             RedshiftStatus::AttemptingPayments => "AttemptingPayments".to_string(),
+            RedshiftStatus::ClosingChannels => "ClosingChannels".to_string(),
             RedshiftStatus::Completed => "Completed".to_string(),
             RedshiftStatus::Failed(_) => "Failed".to_string(),
         }
