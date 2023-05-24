@@ -80,7 +80,6 @@ use std::{
         Arc, RwLock,
     },
 };
-use wasm_bindgen_futures::spawn_local;
 
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 const INITIAL_RECONNECTION_DELAY: u64 = 5;
@@ -401,7 +400,7 @@ impl<S: MutinyStorage> Node<S> {
         let background_stop = stop.clone();
         stopped_components.try_write()?.push(false);
         let background_stopped_components = stopped_components.clone();
-        spawn_local(async move {
+        utils::spawn(async move {
             loop {
                 let gs = crate::background::GossipSync::rapid(background_gossip_sync.clone());
                 let ev = background_event_handler.clone();
@@ -1253,7 +1252,7 @@ async fn start_reconnection_handling(
     let storage_copy = storage.clone();
     let uuid_copy = uuid.clone();
     let stop_copy = stop.clone();
-    spawn_local(async move {
+    utils::spawn(async move {
         log_trace!(proxy_logger, "setting up multi proxy socket");
         match WsProxy::new(
             &websocket_proxy_addr_copy_proxy,
@@ -1315,7 +1314,7 @@ async fn start_reconnection_handling(
     let reconnection_logger = logger.clone();
     stopped_components.try_write()?.push(false);
     let reconnection_stopped_components = stopped_components.clone();
-    spawn_local(async move {
+    utils::spawn(async move {
         let mut delay = INITIAL_RECONNECTION_DELAY;
         loop {
             // run through reconnection logic every delay seconds,
@@ -1383,7 +1382,7 @@ async fn start_reconnection_handling(
     let connect_logger = logger.clone();
     let connect_storage = storage.clone();
     stopped_components.try_write()?.push(false);
-    spawn_local(async move {
+    utils::spawn(async move {
         // hashMap to store backoff times for each pubkey
         let mut backoff_times = HashMap::new();
 

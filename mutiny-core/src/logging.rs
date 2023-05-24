@@ -5,11 +5,10 @@ use std::sync::{
 
 use crate::storage::MutinyStorage;
 use crate::utils::Mutex;
-use crate::{error::MutinyError, utils::sleep};
+use crate::{error::MutinyError, utils, utils::sleep};
 use chrono::Utc;
 use lightning::util::logger::{Level, Logger, Record};
 use log::*;
-use wasm_bindgen_futures::spawn_local;
 
 pub(crate) const LOGGING_KEY: &str = "logs";
 
@@ -29,7 +28,7 @@ impl MutinyLogger {
         };
 
         let log_copy = l.clone();
-        spawn_local(async move {
+        utils::spawn(async move {
             loop {
                 // wait up to 5s, checking graceful shutdown check each 1s.
                 for _ in 0..5 {

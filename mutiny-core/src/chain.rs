@@ -7,9 +7,9 @@ use lightning::chain::chaininterface::BroadcasterInterface;
 use lightning::chain::{Filter, WatchedOutput};
 use lightning::log_error;
 use lightning::util::logger::Logger;
-use wasm_bindgen_futures::spawn_local;
 
 use crate::logging::MutinyLogger;
+use crate::utils;
 
 pub struct MutinyChain {
     pub tx_sync: Arc<EsploraSyncClient<Arc<MutinyLogger>>>,
@@ -40,7 +40,7 @@ impl BroadcasterInterface for MutinyChain {
         let blockchain = self.tx_sync.clone();
         let tx_clone = tx.clone();
         let logger = self.logger.clone();
-        spawn_local(async move {
+        utils::spawn(async move {
             maybe_await!(blockchain.client().broadcast(&tx_clone)).unwrap_or_else(|_| {
                 log_error!(logger, "failed to broadcast tx! {}", tx_clone.txid())
             })

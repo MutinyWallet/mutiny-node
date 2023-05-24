@@ -56,7 +56,9 @@ crossbeam-channel = "0.5.6"
 # code size when deploying.
 console_error_panic_hook = { version = "0.1.6", optional = true }
 
-wasm-bindgen-futures = "0.4.33"
+tokio = { version = "1", features = ["rt"], optional = true }
+
+wasm-bindgen-futures = { version = "0.4.33", optional = true }
 wasm-logger = "0.2.0"
 log = "0.4.17"
 gloo-net = "0.2.4"
@@ -79,7 +81,11 @@ ignored_tests = ["test-utils"]
 test-utils = []
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = { version = "0.4.33" }
 web-sys = { version = "0.3.60", features = ["console"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1", features = ["rt"] }
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = true

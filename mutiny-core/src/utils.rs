@@ -94,3 +94,17 @@ impl<'a, S: Writeable> Writeable for MutexGuard<'a, S> {
         S::write(&**self, writer)
     }
 }
+
+pub fn spawn<F>(future: F)
+where
+    F: core::future::Future<Output = ()> + 'static,
+{
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        tokio::task::spawn(future);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        wasm_bindgen_futures::spawn_local(future);
+    }
+}

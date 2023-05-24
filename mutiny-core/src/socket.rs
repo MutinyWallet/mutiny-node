@@ -14,7 +14,6 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use wasm_bindgen_futures::spawn_local;
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 const PUBKEY_BYTES_LEN: usize = 33;
@@ -85,7 +84,7 @@ impl peer_handler::SocketDescriptor for WsTcpSocketDescriptor {
 
     fn disconnect_socket(&mut self) {
         let cloned = self.conn.clone();
-        spawn_local(async move {
+        utils::spawn(async move {
             cloned.close().await;
         });
     }
@@ -239,7 +238,7 @@ impl MultiWsSocketDescriptor {
         let stop_copy = self.stop.clone();
         let logger_copy = self.logger.clone();
         log_trace!(self.logger, "spawning multi socket connection reader");
-        spawn_local(async move {
+        utils::spawn(async move {
             loop {
                 let mut read_fut = conn_copy.read().fuse();
                 let delay_fut = Box::pin(utils::sleep(1_000)).fuse();
@@ -284,7 +283,7 @@ impl MultiWsSocketDescriptor {
         let connected_copy_send = self.connected.clone();
         let logger_send_copy = self.logger.clone();
         log_trace!(self.logger, "spawning multi socket channel reader");
-        spawn_local(async move {
+        utils::spawn(async move {
             loop {
                 if let Ok(msg) = read_channel_copy.try_recv() {
                     log_trace!(
@@ -470,7 +469,7 @@ pub(crate) fn schedule_descriptor_read(
 ) {
     log_trace!(logger, "scheduling descriptor reader");
     let descriptor_clone = descriptor.clone();
-    spawn_local(async move {
+    utils::spawn(async move {
         loop {
             let mut read_fut = Box::pin(descriptor_clone.read()).fuse();
             let delay_fut = Box::pin(utils::sleep(1_000)).fuse();
