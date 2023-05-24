@@ -1,6 +1,6 @@
 use crate::node::ConnectionType;
 use crate::node::PubkeyConnectionInfo;
-use crate::{error::MutinyError, utils::sleep};
+use crate::{error::MutinyError, utils, utils::sleep};
 use async_trait::async_trait;
 use futures::stream::SplitStream;
 use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
@@ -8,7 +8,6 @@ use gloo_net::websocket::{futures::WebSocket, Message, State};
 use lightning::{log_debug, log_trace};
 use lightning::{log_error, util::logger::Logger};
 use std::sync::Arc;
-use wasm_bindgen_futures::spawn_local;
 
 use crate::logging::MutinyLogger;
 #[cfg(test)]
@@ -92,7 +91,7 @@ impl Proxy for WsProxy {
         // TODO check if the connection is closed before trying to send.
         let cloned_conn = self.write.clone();
         let logger = self.logger.clone();
-        spawn_local(async move {
+        utils::spawn(async move {
             let mut write = cloned_conn.lock().await;
             match write.send(data).await {
                 Ok(_) => {

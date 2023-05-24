@@ -54,7 +54,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 use uuid::Uuid;
-use wasm_bindgen_futures::spawn_local;
 
 const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 
@@ -578,7 +577,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                 RedshiftStatus::AttemptingPayments => {
                     // start attempting payments
                     let nm_clone = nm.clone();
-                    spawn_local(async move {
+                    utils::spawn(async move {
                         if let Err(e) = nm_clone.attempt_payments(redshift).await {
                             log_error!(nm_clone.logger, "Error attempting redshift payments: {e}");
                         }
@@ -587,7 +586,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                 RedshiftStatus::ClosingChannels => {
                     // finish closing channels
                     let nm_clone = nm.clone();
-                    spawn_local(async move {
+                    utils::spawn(async move {
                         if let Err(e) = nm_clone.close_channels(redshift).await {
                             log_error!(nm_clone.logger, "Error closing redshift channels: {e}");
                         }
@@ -597,7 +596,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             }
         }
 
-        spawn_local(async move {
+        utils::spawn(async move {
             loop {
                 if nm.stop.load(Ordering::Relaxed) {
                     break;
@@ -615,7 +614,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
                         // start attempting payments
                         let payment_nm = nm.clone();
-                        spawn_local(async move {
+                        utils::spawn(async move {
                             if let Err(e) = payment_nm.attempt_payments(redshift).await {
                                 log_error!(
                                     payment_nm.logger,
@@ -817,7 +816,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         // if we found a tx we should try to import it into the wallet
         if let Some((details, block_id)) = details_opt.clone() {
             let wallet = self.wallet.clone();
-            spawn_local(async move {
+            utils::spawn(async move {
                 let tx = details.transaction.expect("tx must be present");
                 wallet
                     .insert_tx(tx, details.confirmation_time, block_id)

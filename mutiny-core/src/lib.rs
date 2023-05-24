@@ -54,7 +54,6 @@ use lightning::{log_error, log_warn};
 use nostr_sdk::{Client, RelayPoolNotification};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use wasm_bindgen_futures::spawn_local;
 
 #[derive(Clone)]
 pub struct MutinyWalletConfig {
@@ -147,7 +146,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     pub async fn start_nostr_wallet_connect(&self, from_node: PublicKey) {
         let nostr = self.nostr.clone();
         let nm = self.node_manager.clone();
-        spawn_local(async move {
+        utils::spawn(async move {
             let mut broadcasted_info = false;
             loop {
                 if nm.stop.load(Ordering::Relaxed) {
