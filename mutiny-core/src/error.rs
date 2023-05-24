@@ -116,11 +116,6 @@ pub enum MutinyError {
 
 #[derive(Error, Debug)]
 pub enum MutinyStorageError {
-    #[error("Failed to use browser storage")]
-    StorageError {
-        #[from]
-        source: gloo_storage::errors::StorageError,
-    },
     #[error("Failed to serialize or deserialize")]
     SerdeError {
         #[from]
