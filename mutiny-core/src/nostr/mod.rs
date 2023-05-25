@@ -83,13 +83,13 @@ impl NostrManager {
         let client_pubkey = self.nwc_client_key.public_key();
         let server_pubkey = self.nwc_server_key.public_key();
 
-        let now = utils::now().as_secs();
+        let fifteen_mins_ago = utils::now().as_secs() - 15 * 60;
 
         Filter::new()
             .kinds(vec![Kind::WalletConnectRequest])
             .author(client_pubkey.to_string())
             .pubkey(server_pubkey)
-            .since(Timestamp::from(now))
+            .since(Timestamp::from(fifteen_mins_ago))
     }
 
     /// Create Nostr Wallet Connect Info event
