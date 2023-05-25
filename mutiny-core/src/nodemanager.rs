@@ -1311,17 +1311,25 @@ impl<S: MutinyStorage> NodeManager<S> {
         let k1: [u8; 32] = FromHex::from_hex(k1).map_err(|_| MutinyError::LnUrlFailure)?;
         let (sig, key) = self.auth.sign(profile_index, url.clone(), &k1)?;
 
-        let response = self.lnurl_client.lnurl_auth(lnurl, sig, key).await?;
+        let response = self.lnurl_client.lnurl_auth(lnurl, sig, key).await;
         match response {
-            Response::Ok { .. } => {
+            Ok(Response::Ok { .. }) => {
                 // don't fail if we just can't save the service
                 if let Err(e) = self.auth.add_used_service(profile_index, url) {
                     log_error!(self.logger, "Failed to save used lnurl auth service: {e}");
                 }
 
+                log_info!(self.logger, "LNURL auth successful!");
                 Ok(())
             }
-            Response::Error { .. } => Err(MutinyError::LnUrlFailure),
+            Ok(Response::Error { reason }) => {
+                log_error!(self.logger, "LNURL auth failed: {reason}");
+                Err(MutinyError::LnUrlFailure)
+            }
+            Err(e) => {
+                log_error!(self.logger, "LNURL auth failed: {e}");
+                Err(MutinyError::LnUrlFailure)
+            }
         }
     }
 
