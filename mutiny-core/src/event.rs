@@ -132,11 +132,11 @@ impl<S: MutinyStorage> EventHandler<S> {
                         None,
                     ),
                     Some(params) => {
+                        log_debug!(self.logger, "Opening channel with params: {params:?}");
                         let psbt = self.wallet.create_sweep_psbt_to_output(
                             &params.utxos,
                             output_script,
                             channel_value_satoshis,
-                            params.sats_per_kw,
                         );
 
                         // delete from storage, if it fails, it is fine, just log it.
