@@ -122,7 +122,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // create nostr manager
         let seed = node_manager.show_seed().to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(node_manager.get_network(), &seed)?;
-        let relays = vec!["wss://relay.damus.io".to_string()]; // todo make configurable
+        let relays = vec!["wss://nostr.mutinywallet.com".to_string()]; // todo make configurable
         let nostr = Arc::new(NostrManager::from_mnemonic(xprivkey, relays)?);
 
         Ok(Self {
