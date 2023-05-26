@@ -204,7 +204,12 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
 
         // initiate channel open
         let channel = self
-            .sweep_utxos_to_channel(Some(user_chan_id), &node.pubkey, &[utxo], introduction_node)
+            .sweep_utxos_to_channel(
+                Some(user_chan_id),
+                &node.pubkey,
+                &[utxo],
+                Some(introduction_node),
+            )
             .await?;
 
         // fees paid for opening channel.
