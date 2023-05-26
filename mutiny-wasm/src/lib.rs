@@ -613,6 +613,32 @@ impl MutinyWallet {
             .into())
     }
 
+    /// Opens a channel from our selected node to the given pubkey.
+    /// It will spend the all the on-chain utxo in full to fund the channel.
+    ///
+    /// The node must be online and have a connection to the peer.
+    pub async fn sweep_all_to_channel(
+        &self,
+        from_node: String,
+        to_pubkey: Option<String>,
+    ) -> Result<MutinyChannel, MutinyJsError> {
+        let from_node = PublicKey::from_str(&from_node)?;
+
+        let to_pubkey = match to_pubkey {
+            Some(pubkey_str) if !pubkey_str.trim().is_empty() => {
+                Some(PublicKey::from_str(&pubkey_str)?)
+            }
+            _ => None,
+        };
+
+        Ok(self
+            .inner
+            .node_manager
+            .sweep_all_to_channel(None, &from_node, to_pubkey)
+            .await?
+            .into())
+    }
+
     /// Closes a channel with the given outpoint.
     #[wasm_bindgen]
     pub async fn close_channel(&self, outpoint: String) -> Result<(), MutinyJsError> {

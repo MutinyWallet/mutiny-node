@@ -1426,9 +1426,19 @@ impl<S: MutinyStorage> NodeManager<S> {
         user_chan_id: Option<u128>,
         from_node: &PublicKey,
         utxos: &[OutPoint],
-        to_pubkey: PublicKey,
+        to_pubkey: Option<PublicKey>,
     ) -> Result<MutinyChannel, MutinyError> {
         let node = self.get_node(from_node).await?;
+
+        let to_pubkey = match to_pubkey {
+            Some(pubkey) => pubkey,
+            None => {
+                node.lsp_client
+                    .as_ref()
+                    .ok_or(MutinyError::PubkeyInvalid)?
+                    .pubkey
+            }
+        };
 
         let outpoint = node
             .sweep_utxos_to_channel_with_timeout(user_chan_id, utxos, to_pubkey, 60)
@@ -1443,6 +1453,26 @@ impl<S: MutinyStorage> NodeManager<S> {
             Some(channel) => Ok(channel.into()),
             None => Err(MutinyError::ChannelCreationFailed), // what should we do here?
         }
+    }
+
+    /// Opens a channel from our selected node to the given pubkey.
+    /// It will spend the all the on-chain utxo in full to fund the channel.
+    ///
+    /// The node must be online and have a connection to the peer.
+    pub async fn sweep_all_to_channel(
+        &self,
+        user_chan_id: Option<u128>,
+        from_node: &PublicKey,
+        to_pubkey: Option<PublicKey>,
+    ) -> Result<MutinyChannel, MutinyError> {
+        let utxos = self
+            .list_utxos()?
+            .iter()
+            .map(|u| u.outpoint)
+            .collect::<Vec<_>>();
+
+        self.sweep_utxos_to_channel(user_chan_id, from_node, &utxos, to_pubkey)
+            .await
     }
 
     /// Closes a channel with the given outpoint.
