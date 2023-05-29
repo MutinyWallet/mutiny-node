@@ -51,7 +51,7 @@ use bitcoin::Network;
 use futures::{pin_mut, select, FutureExt};
 use lightning::util::logger::Logger;
 use lightning::{log_error, log_warn};
-use nostr_sdk::{Client, RelayPoolNotification};
+use nostr_sdk::{Client, RelayMessage, RelayPoolNotification};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -150,9 +150,19 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             let mut broadcasted_info = false;
             loop {
                 if nm.stop.load(Ordering::Relaxed) {
+                    break;
+                };
+
+                // check we have lightning channels ready
+                if nm
+                    .get_node(&from_node)
+                    .await
+                    .map(|n| n.channel_manager.list_usable_channels().is_empty())
+                    .unwrap_or(true)
+                {
                     utils::sleep(1_000).await;
                     continue;
-                };
+                }
 
                 let client = Client::new(&nostr.primary_key);
                 client
@@ -184,20 +194,38 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     pin_mut!(delay_fut);
                     select! {
                         notification = read_fut => {
-                            if let Ok(RelayPoolNotification::Event(_url, event)) = notification {
-                                if event.kind == Kind::WalletConnectRequest {
-                                    match nostr.handle_nwc_request(event, &nm, &from_node).await {
-                                        Ok(Some(event)) => {
-                                            if let Err(e) = client.send_event(event).await {
-                                                log_warn!(nm.logger, "Error sending NWC event: {e}");
+                            match notification {
+                                Ok(RelayPoolNotification::Event(_url, event)) => {
+                                    if event.kind == Kind::WalletConnectRequest {
+                                        match nostr.handle_nwc_request(event, &nm, &from_node).await {
+                                            Ok(Some(event)) => {
+                                                if let Err(e) = client.send_event(event).await {
+                                                    log_warn!(nm.logger, "Error sending NWC event: {e}");
+                                                }
                                             }
-                                        }
-                                        Ok(None) => {} // no response
-                                        Err(e) => {
-                                            log_error!(nm.logger, "Error handling NWC request: {e}");
+                                            Ok(None) => {} // no response
+                                            Err(e) => {
+                                                log_error!(nm.logger, "Error handling NWC request: {e}");
+                                            }
                                         }
                                     }
                                 }
+                                Ok(RelayPoolNotification::Message(_url, RelayMessage::EndOfStoredEvents(_))) => {
+                                    // after we process all events, sleep for 10 seconds
+                                    // and then we will reconnect to the relay
+                                    if let Err(e) = client.disconnect().await {
+                                        log_warn!(nm.logger, "Error disconnecting from nostr relay: {e}");
+                                    }
+                                    // wait up to 10s, checking graceful shutdown check each 1s.
+                                    for _ in 0..10 {
+                                        if nm.stop.load(Ordering::Relaxed) {
+                                            break;
+                                        }
+                                        utils::sleep(1_000).await;
+                                    }
+                                    break;
+                                }
+                                _ => {} // ignore
                             }
                         }
                         _ = delay_fut => {
