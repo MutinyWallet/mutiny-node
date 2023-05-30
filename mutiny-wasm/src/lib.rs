@@ -663,6 +663,29 @@ impl MutinyWallet {
         )?)
     }
 
+    /// Returns all the on-chain and lightning activity from the wallet.
+    #[wasm_bindgen]
+    pub async fn get_activity(&self) -> Result<JsValue /* Vec<ActivityItem> */, MutinyJsError> {
+        // get activity from the node manager
+        let activity = self.inner.node_manager.get_activity().await?;
+        let mut activity: Vec<ActivityItem> = activity.into_iter().map(|a| a.into()).collect();
+
+        // add contacts to the activity
+        let contacts = self.inner.node_manager.get_contacts()?;
+        for a in activity.iter_mut() {
+            // find labels that have a contact and add them to the item
+            for label in a.labels.iter() {
+                if let Some(contact) = contacts.get(label) {
+                    a.contacts.push(Contact::from(contact.clone()));
+                }
+            }
+            // remove labels that have a contact to prevent duplicates
+            a.labels.retain(|l| !contacts.contains_key(l));
+        }
+
+        Ok(JsValue::from_serde(&activity)?)
+    }
+
     /// Initiates a redshift
     #[wasm_bindgen]
     pub async fn init_redshift(
