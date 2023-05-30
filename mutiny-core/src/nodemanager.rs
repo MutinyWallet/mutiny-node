@@ -631,6 +631,50 @@ impl<S: MutinyStorage> NodeManager<S> {
         });
     }
 
+    /// Creates a background process that will sync the wallet with the blockchain.
+    /// This will also update the fee estimates every 10 minutes.
+    pub fn start_sync(nm: Arc<NodeManager<S>>) {
+        // If we are stopped, don't sync
+        if nm.stop.load(Ordering::Relaxed) {
+            return;
+        }
+
+        utils::spawn(async move {
+            let mut sync_count: u64 = 0;
+            loop {
+                // If we are stopped, don't sync
+                if nm.stop.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                // we don't need to re-sync fees every time
+                // just do it every 10 minutes
+                if sync_count % 10 == 0 {
+                    if let Err(e) = nm.fee_estimator.update_fee_estimates().await {
+                        log_error!(nm.logger, "Failed to update fee estimates: {e}");
+                    } else {
+                        log_info!(nm.logger, "Updated fee estimates!");
+                    }
+                }
+
+                if let Err(e) = nm.sync().await {
+                    log_error!(nm.logger, "Failed to sync: {e}");
+                }
+
+                // sleep for 1 minute, checking graceful shutdown check each 1s.
+                for _ in 0..60 {
+                    if nm.stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    sleep(1_000).await;
+                }
+
+                // increment sync count
+                sync_count += 1;
+            }
+        });
+    }
+
     /// Broadcast a transaction to the network.
     /// The transaction is broadcast through the configured esplora server.
     pub fn broadcast_transaction(&self, tx: &Transaction) -> Result<(), MutinyError> {
@@ -942,18 +986,11 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// This will update the on-chain wallet with any new
     /// transactions and update the lightning wallet with
     /// any channels that have been opened or closed.
-    ///
-    /// This also updates the fee estimates.
-    pub async fn sync(&self) -> Result<(), MutinyError> {
+    async fn sync(&self) -> Result<(), MutinyError> {
         // If we are stopped, don't sync
         if self.stop.load(Ordering::Relaxed) {
             return Ok(());
         }
-
-        // update fee estimates before sync in case we need to
-        // broadcast a transaction
-        self.fee_estimator.update_fee_estimates().await?;
-        log_info!(self.logger, "Updated cached fees!");
 
         // Sync ldk first because it may broadcast transactions
         // to addresses that are in our bdk wallet. This way
