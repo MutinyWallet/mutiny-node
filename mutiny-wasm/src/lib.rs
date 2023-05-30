@@ -298,17 +298,6 @@ impl MutinyWallet {
         Ok(JsValue::from_serde(&self.inner.node_manager.list_utxos()?)?)
     }
 
-    /// Syncs the on-chain wallet and lightning wallet.
-    /// This will update the on-chain wallet with any new
-    /// transactions and update the lightning wallet with
-    /// any channels that have been opened or closed.
-    ///
-    /// This also updates the fee estimates.
-    #[wasm_bindgen]
-    pub async fn sync(&self) -> Result<(), MutinyJsError> {
-        Ok(self.inner.node_manager.sync().await?)
-    }
-
     /// Gets a fee estimate for an average priority transaction.
     /// Value is in sat/vbyte.
     #[wasm_bindgen]

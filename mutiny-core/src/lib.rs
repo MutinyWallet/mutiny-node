@@ -119,6 +119,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         let node_manager = Arc::new(NodeManager::new(config.clone(), storage.clone()).await?);
 
+        NodeManager::start_sync(node_manager.clone());
+
         // create nostr manager
         let seed = node_manager.show_seed().to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(node_manager.get_network(), &seed)?;
@@ -138,6 +140,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     pub async fn start(&mut self) -> Result<(), MutinyError> {
         self.node_manager =
             Arc::new(NodeManager::new(self.config.clone(), self.storage.clone()).await?);
+        NodeManager::start_sync(self.node_manager.clone());
         NodeManager::start_redshifts(self.node_manager.clone());
         Ok(())
     }
