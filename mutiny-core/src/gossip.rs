@@ -20,9 +20,9 @@ use crate::storage::MutinyStorage;
 use crate::utils;
 
 pub(crate) const LN_PEER_METADATA_KEY_PREFIX: &str = "ln_peer/";
-pub(crate) const GOSSIP_SYNC_TIME_KEY: &str = "last_sync_timestamp";
-pub(crate) const NETWORK_GRAPH_KEY: &str = "network_graph";
-pub(crate) const PROB_SCORER_KEY: &str = "prob_scorer";
+pub const GOSSIP_SYNC_TIME_KEY: &str = "last_sync_timestamp";
+pub const NETWORK_GRAPH_KEY: &str = "network_graph";
+pub const PROB_SCORER_KEY: &str = "prob_scorer";
 
 struct Gossip {
     pub last_sync_timestamp: u32,

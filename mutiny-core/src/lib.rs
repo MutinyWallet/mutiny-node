@@ -36,6 +36,7 @@ pub mod storage;
 pub mod test_utils;
 mod utils;
 
+pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 
 use crate::error::MutinyError;
