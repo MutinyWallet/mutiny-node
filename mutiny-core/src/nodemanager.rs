@@ -103,7 +103,7 @@ pub struct MutinyInvoice {
     pub expire: u64,
     pub paid: bool,
     pub fees_paid: Option<u64>,
-    pub is_send: bool,
+    pub inbound: bool,
     pub labels: Vec<String>,
     pub last_updated: u64,
 }
@@ -138,7 +138,7 @@ impl From<Invoice> for MutinyInvoice {
             expire: expiry,
             paid: false,
             fees_paid: None,
-            is_send: false, // todo this could be bad
+            inbound: true,
             labels: vec![],
             last_updated: timestamp,
         }
@@ -164,16 +164,17 @@ impl MutinyInvoice {
                 } else {
                     i.amt_msat.0.map(|a| a / 1_000)
                 };
-                let mut mutiny_invoice: MutinyInvoice = invoice.into();
-                mutiny_invoice.is_send = !inbound;
-                mutiny_invoice.last_updated = i.last_update;
-                mutiny_invoice.paid = i.status == HTLCStatus::Succeeded;
-                mutiny_invoice.amount_sats = amount_sats;
-                mutiny_invoice.preimage = i.preimage.map(|p| p.to_hex());
-                mutiny_invoice.fees_paid = i.fee_paid_msat.map(|f| f / 1_000);
-                mutiny_invoice.payee_pubkey = i.payee_pubkey;
-                mutiny_invoice.labels = labels;
-                Ok(mutiny_invoice)
+                Ok(MutinyInvoice {
+                    inbound,
+                    last_updated: i.last_update,
+                    paid: i.status == HTLCStatus::Succeeded,
+                    labels,
+                    amount_sats,
+                    payee_pubkey: i.payee_pubkey,
+                    preimage: i.preimage.map(|p| p.to_hex()),
+                    fees_paid: i.fee_paid_msat.map(|f| f / 1_000),
+                    ..invoice.into()
+                })
             }
             None => {
                 let paid = i.status == HTLCStatus::Succeeded;
@@ -191,7 +192,7 @@ impl MutinyInvoice {
                     expire: i.last_update,
                     paid,
                     fees_paid,
-                    is_send: !inbound,
+                    inbound,
                     labels,
                     last_updated: i.last_update,
                 };
@@ -301,6 +302,52 @@ impl From<bdk::TransactionDetails> for TransactionDetails {
             confirmation_time: t.confirmation_time,
             labels: vec![],
         }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum ActivityItem {
+    OnChain(TransactionDetails),
+    Lightning(Box<MutinyInvoice>),
+}
+
+impl ActivityItem {
+    pub fn last_updated(&self) -> u64 {
+        match self {
+            ActivityItem::OnChain(t) => match t.confirmation_time {
+                ConfirmationTime::Confirmed { time, .. } => time,
+                ConfirmationTime::Unconfirmed => u64::MAX,
+            },
+            ActivityItem::Lightning(i) => i.last_updated,
+        }
+    }
+
+    pub fn labels(&self) -> Vec<String> {
+        match self {
+            ActivityItem::OnChain(t) => t.labels.clone(),
+            ActivityItem::Lightning(i) => i.labels.clone(),
+        }
+    }
+
+    pub fn is_channel_open(&self) -> bool {
+        match self {
+            ActivityItem::OnChain(onchain) => {
+                onchain.labels.iter().any(|l| l.contains("LN Channel:"))
+            }
+            ActivityItem::Lightning(_) => false,
+        }
+    }
+}
+
+impl PartialOrd for ActivityItem {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ActivityItem {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.last_updated().cmp(&other.last_updated())
     }
 }
 
@@ -870,6 +917,23 @@ impl<S: MutinyStorage> NodeManager<S> {
         }
 
         Ok(details_opt.map(|(d, _)| d))
+    }
+
+    /// Returns all the on-chain and lightning activity from the wallet.
+    pub async fn get_activity(&self) -> Result<Vec<ActivityItem>, MutinyError> {
+        // todo add contacts to the activity
+        let lightning = self.list_invoices().await?;
+        let onchain = self.list_onchain()?;
+        let mut activity = Vec::with_capacity(lightning.len() + onchain.len());
+        for ln in lightning {
+            activity.push(ActivityItem::Lightning(Box::new(ln)));
+        }
+        for on in onchain {
+            activity.push(ActivityItem::OnChain(on));
+        }
+
+        activity.sort();
+        Ok(activity)
     }
 
     /// Adds labels to the TransactionDetails based on the address labels.
@@ -2015,7 +2079,7 @@ mod tests {
             expire: 1681781649 + 86400,
             paid: true,
             fees_paid: None,
-            is_send: false,
+            inbound: true,
             labels: labels.clone(),
             last_updated: 1681781585,
         };
@@ -2068,7 +2132,7 @@ mod tests {
             expire: 1681781585,
             paid: true,
             fees_paid: Some(1),
-            is_send: true,
+            inbound: false,
             labels: vec![],
             last_updated: 1681781585,
         };

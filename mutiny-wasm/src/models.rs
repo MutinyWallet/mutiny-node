@@ -14,6 +14,92 @@ use wasm_bindgen::prelude::*;
 
 use crate::{error::MutinyJsError, utils};
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[wasm_bindgen]
+pub enum ActivityType {
+    OnChain,
+    Lightning,
+    ChannelOpen,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[wasm_bindgen]
+pub struct ActivityItem {
+    pub kind: ActivityType,
+    id: String,
+    pub amount_sats: Option<u64>,
+    pub inbound: bool,
+    pub(crate) labels: Vec<String>,
+    pub(crate) contacts: Vec<Contact>,
+    pub last_updated: u64,
+}
+
+#[wasm_bindgen]
+impl ActivityItem {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> String {
+        self.id.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn labels(&self) -> JsValue /* Vec<String> */ {
+        JsValue::from_serde(&self.labels).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn contacts(&self) -> JsValue /* Vec<Contact> */ {
+        JsValue::from_serde(&self.contacts).unwrap()
+    }
+}
+
+impl From<nodemanager::ActivityItem> for ActivityItem {
+    fn from(a: nodemanager::ActivityItem) -> Self {
+        let kind = match a {
+            nodemanager::ActivityItem::OnChain(_) => {
+                if a.is_channel_open() {
+                    ActivityType::ChannelOpen
+                } else {
+                    ActivityType::OnChain
+                }
+            }
+            nodemanager::ActivityItem::Lightning(_) => ActivityType::Lightning,
+        };
+
+        let id = match a {
+            nodemanager::ActivityItem::OnChain(ref t) => t.txid.to_hex(),
+            nodemanager::ActivityItem::Lightning(ref ln) => ln.payment_hash.to_hex(),
+        };
+
+        let (inbound, amount_sats) = match a {
+            nodemanager::ActivityItem::OnChain(ref t) => {
+                let inbound = t.received > t.sent;
+                let amount_sats = if inbound {
+                    Some(t.received - t.sent)
+                } else {
+                    Some(t.sent - t.received)
+                };
+                (inbound, amount_sats)
+            }
+            nodemanager::ActivityItem::Lightning(ref ln) => (ln.inbound, ln.amount_sats),
+        };
+
+        ActivityItem {
+            kind,
+            id,
+            amount_sats,
+            inbound,
+            labels: a.labels(),
+            contacts: vec![],
+            last_updated: a.last_updated(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
 pub struct MutinyInvoice {
@@ -26,7 +112,7 @@ pub struct MutinyInvoice {
     pub expire: u64,
     pub paid: bool,
     pub fees_paid: Option<u64>,
-    pub is_send: bool,
+    pub inbound: bool,
     pub last_updated: u64,
     labels: Vec<String>,
 }
@@ -81,7 +167,7 @@ impl From<nodemanager::MutinyInvoice> for MutinyInvoice {
             expire: m.expire,
             paid: m.paid,
             fees_paid: m.fees_paid,
-            is_send: m.is_send,
+            inbound: m.inbound,
             last_updated: m.last_updated,
             labels: m.labels,
         }
