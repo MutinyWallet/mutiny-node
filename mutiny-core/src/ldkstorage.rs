@@ -36,8 +36,8 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 
-pub(crate) const CHANNEL_MANAGER_KEY: &str = "manager";
-const MONITORS_PREFIX_KEY: &str = "monitors/";
+pub const CHANNEL_MANAGER_KEY: &str = "manager";
+pub const MONITORS_PREFIX_KEY: &str = "monitors/";
 const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
 const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
 const CHANNEL_OPENING_PARAMS_PREFIX: &str = "chan_open_params/";

@@ -38,6 +38,7 @@ mod utils;
 
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
+pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
 use crate::error::MutinyError;
 use crate::nodemanager::NodeManager;
