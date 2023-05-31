@@ -1,4 +1,3 @@
-use crate::fees::P2WSH_OUTPUT_SIZE;
 use crate::keymanager::PhantomKeysManager;
 use crate::labels::LabelStorage;
 use crate::ldkstorage::ChannelOpenParams;
@@ -17,12 +16,10 @@ use crate::{
     onchain::OnChainWallet,
     peermanager::{GossipMessageHandler, PeerManager, PeerManagerImpl},
     proxy::WsProxy,
-    socket::{
-        schedule_descriptor_read, MultiWsSocketDescriptor, WsSocketDescriptor,
-        WsTcpSocketDescriptor,
-    },
+    socket::MultiWsSocketDescriptor,
     utils::{self, sleep},
 };
+use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{lspclient::FeeRequest, storage::MutinyStorage};
 use anyhow::{anyhow, Context};
 use bdk_esplora::esplora_client::AsyncClient;
@@ -45,11 +42,7 @@ use lightning::{
     },
     ln::{
         channelmanager::{PaymentId, PhantomRouteHints, Retry},
-        msgs::NetAddress,
-        peer_handler::{
-            IgnoringMessageHandler, MessageHandler as LdkMessageHandler,
-            SocketDescriptor as LdkSocketDescriptor,
-        },
+        peer_handler::{IgnoringMessageHandler, MessageHandler as LdkMessageHandler},
         PaymentHash, PaymentPreimage,
     },
     log_debug, log_error, log_info, log_trace, log_warn,
@@ -62,7 +55,6 @@ use lightning::{
     util::{
         config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig},
         logger::Logger,
-        ser::Writeable,
     },
 };
 use lightning_invoice::payment::PaymentError;
@@ -73,7 +65,6 @@ use lightning_invoice::{
 };
 use std::collections::HashMap;
 use std::{
-    net::SocketAddr,
     str::FromStr,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -1518,112 +1509,6 @@ fn stop_component(stopped_components: &Arc<RwLock<Vec<bool>>>) {
     if let Some(first_false) = stopped.iter_mut().find(|x| !**x) {
         *first_false = true;
     }
-}
-
-pub(crate) async fn connect_peer_if_necessary(
-    multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
-    websocket_proxy_addr: &str,
-    peer_connection_info: &PubkeyConnectionInfo,
-    logger: Arc<MutinyLogger>,
-    peer_manager: Arc<dyn PeerManager>,
-    stop: Arc<AtomicBool>,
-) -> Result<(), MutinyError> {
-    if peer_manager
-        .get_peer_node_ids()
-        .contains(&peer_connection_info.pubkey)
-    {
-        Ok(())
-    } else {
-        connect_peer(
-            multi_socket,
-            websocket_proxy_addr,
-            peer_connection_info,
-            logger,
-            peer_manager,
-            stop,
-        )
-        .await
-    }
-}
-
-pub(crate) async fn connect_peer(
-    multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
-    websocket_proxy_addr: &str,
-    peer_connection_info: &PubkeyConnectionInfo,
-    logger: Arc<MutinyLogger>,
-    peer_manager: Arc<dyn PeerManager>,
-    stop: Arc<AtomicBool>,
-) -> Result<(), MutinyError> {
-    // first make a connection to the node
-    log_debug!(
-        logger,
-        "making connection to peer: {:?}",
-        peer_connection_info
-    );
-    let (mut descriptor, socket_addr_opt) = match peer_connection_info.connection_type {
-        ConnectionType::Tcp(ref t) => {
-            let proxy = WsProxy::new(
-                websocket_proxy_addr,
-                peer_connection_info.clone(),
-                logger.clone(),
-            )
-            .await?;
-            (
-                WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
-                try_get_net_addr_from_socket(t),
-            )
-        }
-        ConnectionType::Mutiny(_) => {
-            let sub_socket = multi_socket
-                .lock()
-                .await
-                .create_new_subsocket(peer_connection_info.pubkey.encode())
-                .await;
-
-            (WsSocketDescriptor::Mutiny(sub_socket), None)
-        }
-    };
-
-    // then give that connection to the peer manager
-    let initial_bytes = peer_manager.new_outbound_connection(
-        peer_connection_info.pubkey,
-        descriptor.clone(),
-        socket_addr_opt,
-    )?;
-    log_debug!(logger, "connected to peer: {:?}", peer_connection_info);
-
-    let sent_bytes = descriptor.send_data(&initial_bytes, true);
-    log_trace!(
-        logger,
-        "sent {sent_bytes} to node: {}",
-        peer_connection_info.pubkey
-    );
-
-    // schedule a reader on the connection
-    schedule_descriptor_read(
-        descriptor,
-        peer_manager.clone(),
-        logger.clone(),
-        stop.clone(),
-    );
-
-    Ok(())
-}
-
-fn try_get_net_addr_from_socket(socket_addr: &str) -> Option<NetAddress> {
-    socket_addr
-        .parse::<SocketAddr>()
-        .ok()
-        .map(|socket_addr| match socket_addr {
-            SocketAddr::V4(sockaddr) => NetAddress::IPv4 {
-                addr: sockaddr.ip().octets(),
-                port: sockaddr.port(),
-            },
-            SocketAddr::V6(sockaddr) => NetAddress::IPv6 {
-                addr: sockaddr.ip().octets(),
-                port: sockaddr.port(),
-            },
-        })
 }
 
 pub(crate) fn create_peer_manager<S: MutinyStorage>(

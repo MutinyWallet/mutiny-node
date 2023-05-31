@@ -1,16 +1,29 @@
-use crate::gossip::read_peer_info;
-use crate::keymanager::PhantomKeysManager;
 use crate::node::NetworkGraph;
 use crate::storage::MutinyStorage;
 use crate::{
+    error::MutinyError,
+    proxy::WsProxy,
+    socket::{schedule_descriptor_read, MultiWsSocketDescriptor, WsTcpSocketDescriptor},
+};
+use crate::{
     gossip, ldkstorage::PhantomChannelManager, logging::MutinyLogger, socket::WsSocketDescriptor,
 };
+use crate::{gossip::read_peer_info, node::PubkeyConnectionInfo};
+use crate::{keymanager::PhantomKeysManager, node::ConnectionType};
 use bitcoin::secp256k1::PublicKey;
+use futures::lock::Mutex;
+use lightning::{
+    ln::{msgs::NetAddress, peer_handler::SocketDescriptor as LdkSocketDescriptor},
+    log_debug, log_trace,
+    util::ser::Writeable,
+};
+use std::{net::SocketAddr, sync::atomic::AtomicBool};
+
 use bitcoin::BlockHash;
 use lightning::events::{MessageSendEvent, MessageSendEventsProvider};
 use lightning::ln::features::{InitFeatures, NodeFeatures};
 use lightning::ln::msgs;
-use lightning::ln::msgs::{LightningError, NetAddress, RoutingMessageHandler};
+use lightning::ln::msgs::{LightningError, RoutingMessageHandler};
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning::ln::peer_handler::{IgnoringMessageHandler, PeerManager as LdkPeerManager};
 use lightning::log_warn;
@@ -282,4 +295,110 @@ impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
     fn provided_init_features(&self, _their_node_id: &PublicKey) -> InitFeatures {
         InitFeatures::empty()
     }
+}
+
+pub(crate) async fn connect_peer_if_necessary(
+    multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
+    websocket_proxy_addr: &str,
+    peer_connection_info: &PubkeyConnectionInfo,
+    logger: Arc<MutinyLogger>,
+    peer_manager: Arc<dyn PeerManager>,
+    stop: Arc<AtomicBool>,
+) -> Result<(), MutinyError> {
+    if peer_manager
+        .get_peer_node_ids()
+        .contains(&peer_connection_info.pubkey)
+    {
+        Ok(())
+    } else {
+        connect_peer(
+            multi_socket,
+            websocket_proxy_addr,
+            peer_connection_info,
+            logger,
+            peer_manager,
+            stop,
+        )
+        .await
+    }
+}
+
+pub(crate) async fn connect_peer(
+    multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
+    websocket_proxy_addr: &str,
+    peer_connection_info: &PubkeyConnectionInfo,
+    logger: Arc<MutinyLogger>,
+    peer_manager: Arc<dyn PeerManager>,
+    stop: Arc<AtomicBool>,
+) -> Result<(), MutinyError> {
+    // first make a connection to the node
+    log_debug!(
+        logger,
+        "making connection to peer: {:?}",
+        peer_connection_info
+    );
+    let (mut descriptor, socket_addr_opt) = match peer_connection_info.connection_type {
+        ConnectionType::Tcp(ref t) => {
+            let proxy = WsProxy::new(
+                websocket_proxy_addr,
+                peer_connection_info.clone(),
+                logger.clone(),
+            )
+            .await?;
+            (
+                WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
+                try_get_net_addr_from_socket(t),
+            )
+        }
+        ConnectionType::Mutiny(_) => {
+            let sub_socket = multi_socket
+                .lock()
+                .await
+                .create_new_subsocket(peer_connection_info.pubkey.encode())
+                .await;
+
+            (WsSocketDescriptor::Mutiny(sub_socket), None)
+        }
+    };
+
+    // then give that connection to the peer manager
+    let initial_bytes = peer_manager.new_outbound_connection(
+        peer_connection_info.pubkey,
+        descriptor.clone(),
+        socket_addr_opt,
+    )?;
+    log_debug!(logger, "connected to peer: {:?}", peer_connection_info);
+
+    let sent_bytes = descriptor.send_data(&initial_bytes, true);
+    log_trace!(
+        logger,
+        "sent {sent_bytes} to node: {}",
+        peer_connection_info.pubkey
+    );
+
+    // schedule a reader on the connection
+    schedule_descriptor_read(
+        descriptor,
+        peer_manager.clone(),
+        logger.clone(),
+        stop.clone(),
+    );
+
+    Ok(())
+}
+
+fn try_get_net_addr_from_socket(socket_addr: &str) -> Option<NetAddress> {
+    socket_addr
+        .parse::<SocketAddr>()
+        .ok()
+        .map(|socket_addr| match socket_addr {
+            SocketAddr::V4(sockaddr) => NetAddress::IPv4 {
+                addr: sockaddr.ip().octets(),
+                port: sockaddr.port(),
+            },
+            SocketAddr::V6(sockaddr) => NetAddress::IPv6 {
+                addr: sockaddr.ip().octets(),
+                port: sockaddr.port(),
+            },
+        })
 }
