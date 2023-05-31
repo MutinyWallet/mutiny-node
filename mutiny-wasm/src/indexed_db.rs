@@ -6,6 +6,7 @@ use log::error;
 use mutiny_core::error::{MutinyError, MutinyStorageError};
 use mutiny_core::logging::MutinyLogger;
 use mutiny_core::storage::MutinyStorage;
+use mutiny_core::*;
 use rexie::{ObjectStore, Rexie, TransactionMode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -200,6 +201,17 @@ impl IndexedDbStorage {
     }
 }
 
+/// Some values only are read once, so we can remove them from memory after reading them
+/// to save memory.
+///
+/// We also need to skip writing them to the in memory storage on updates.
+fn used_once(key: &str) -> bool {
+    matches!(
+        key,
+        NETWORK_GRAPH_KEY | PROB_SCORER_KEY | GOSSIP_SYNC_TIME_KEY
+    )
+}
+
 impl MutinyStorage for IndexedDbStorage {
     fn password(&self) -> Option<&str> {
         self.password.as_deref()
@@ -224,11 +236,15 @@ impl MutinyStorage for IndexedDbStorage {
             }
         });
 
-        let mut map = self
-            .memory
-            .try_write()
-            .map_err(|e| MutinyError::write_err(e.into()))?;
-        map.insert(key, data);
+        // some values only are read once, so we don't need to write them to memory,
+        // just need them in indexed db for next time
+        if !used_once(key.as_ref()) {
+            let mut map = self
+                .memory
+                .try_write()
+                .map_err(|e| MutinyError::write_err(e.into()))?;
+            map.insert(key, data);
+        }
 
         Ok(())
     }
@@ -241,10 +257,24 @@ impl MutinyStorage for IndexedDbStorage {
             .memory
             .try_read()
             .map_err(|e| MutinyError::read_err(e.into()))?;
-        match map.get(key.as_ref()) {
+        match map.get(key.as_ref()).cloned() {
             None => Ok(None),
             Some(value) => {
-                let data: T = serde_json::from_value(value.to_owned())?;
+                // drop the map so we aren't holding the lock while deserializing
+                // we also need to drop if we are going to remove the value from memory
+                drop(map);
+
+                let data: T = serde_json::from_value(value)?;
+
+                // some values only are read once, so we can remove them from memory
+                if used_once(key.as_ref()) {
+                    let mut map = self
+                        .memory
+                        .try_write()
+                        .map_err(|e| MutinyError::write_err(e.into()))?;
+                    map.remove(key.as_ref());
+                }
+
                 Ok(Some(data))
             }
         }
