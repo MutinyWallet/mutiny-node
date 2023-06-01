@@ -520,7 +520,8 @@ impl<S: MutinyStorage> Node<S> {
         peer_connection_info: PubkeyConnectionInfo,
         label: Option<String>,
     ) -> Result<(), MutinyError> {
-        match connect_peer_if_necessary(
+        #[cfg(target_arch = "wasm32")]
+        let connect_res = connect_peer_if_necessary(
             self.multi_socket.clone(),
             &self.websocket_proxy_addr,
             &peer_connection_info,
@@ -528,8 +529,20 @@ impl<S: MutinyStorage> Node<S> {
             self.peer_manager.clone(),
             self.stop.clone(),
         )
-        .await
-        {
+        .await;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let connect_res = connect_peer_if_necessary(
+            self.multi_socket.clone(),
+            &self.websocket_proxy_addr,
+            &peer_connection_info,
+            self.logger.clone(),
+            self.peer_manager.clone(),
+            self.stop.clone(),
+        )
+        .await;
+
+        match connect_res {
             Ok(_) => {
                 let node_id = NodeId::from_pubkey(&peer_connection_info.pubkey);
 
@@ -1296,7 +1309,8 @@ async fn start_reconnection_handling(
         if let Some(lsp) = lsp_client_copy.clone() {
             let node_id = NodeId::from_pubkey(&lsp.pubkey);
 
-            match connect_peer_if_necessary(
+            #[cfg(target_arch = "wasm32")]
+            let connect_res = connect_peer_if_necessary(
                 multi_socket_proxy.clone(),
                 &websocket_proxy_addr_copy_proxy,
                 &PubkeyConnectionInfo::new(lsp.connection_string.as_str()).unwrap(),
@@ -1304,8 +1318,20 @@ async fn start_reconnection_handling(
                 peer_man_proxy.clone(),
                 stop_copy.clone(),
             )
-            .await
-            {
+            .await;
+
+            #[cfg(not(target_arch = "wasm32"))]
+            let connect_res = connect_peer_if_necessary(
+                multi_socket_proxy.clone(),
+                &websocket_proxy_addr_copy_proxy,
+                &PubkeyConnectionInfo::new(lsp.connection_string.as_str()).unwrap(),
+                proxy_logger.clone(),
+                peer_man_proxy.clone(),
+                stop_copy.clone(),
+            )
+            .await;
+
+            match connect_res {
                 Ok(_) => {
                     log_trace!(proxy_logger, "auto connected lsp: {node_id}");
                 }
@@ -1475,7 +1501,8 @@ async fn start_reconnection_handling(
                     }
                 };
 
-                match connect_peer_if_necessary(
+                #[cfg(target_arch = "wasm32")]
+                let connect_res = connect_peer_if_necessary(
                     multi_socket.clone(),
                     &websocket_proxy_addr,
                     &peer_connection_info,
@@ -1483,8 +1510,20 @@ async fn start_reconnection_handling(
                     connect_peer_man.clone(),
                     stop.clone(),
                 )
-                .await
-                {
+                .await;
+
+                #[cfg(not(target_arch = "wasm32"))]
+                let connect_res = connect_peer_if_necessary(
+                    multi_socket.clone(),
+                    &websocket_proxy_addr,
+                    &peer_connection_info,
+                    connect_logger.clone(),
+                    connect_peer_man.clone(),
+                    stop.clone(),
+                )
+                .await;
+
+                match connect_res {
                     Ok(_) => {
                         log_trace!(connect_logger, "auto connected peer: {pubkey}");
                         // reset backoff time to initial value if connection is successful

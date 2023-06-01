@@ -5,7 +5,6 @@ name = "mutiny-core"
 version = "0.3.7"
 edition = "2021"
 authors = ["Tony Giorgio <tony@mutinywallet.com>", "benthecarman <ben@mutinywallet.com>"]
-forced-target = "wasm32-unknown-unknown"
 description = "The core SDK for the mutiny node"
 license = "MIT"
 documentation = "https://docs.rs/mutiny-core"
@@ -47,11 +46,8 @@ aes-gcm = "0.10.1"
 rand_core = { version = "0.6", features = ["std"] }
 crossbeam-channel = "0.5.6"
 
-tokio = { version = "1", features = ["rt"], optional = true }
-
 wasm-bindgen-futures = { version = "0.4.33", optional = true }
 log = "0.4.17"
-gloo-net = "0.2.4"
 futures = "0.3.25"
 thiserror = "1.0"
 web-sys = { version = "0.3.60", features = ["console"], optional = true }
@@ -73,9 +69,11 @@ test-utils = []
 wasm-bindgen-futures = { version = "0.4.33" }
 web-sys = { version = "0.3.60", features = ["console"] }
 js-sys = { version = "0.3.60" }
+gloo-net = { version = "0.2.4" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["rt"] }
+#lightning-net-tokio = { version = "0.0.115" }
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = true

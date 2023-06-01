@@ -1,13 +1,7 @@
+use crate::error::MutinyError;
 use crate::node::NetworkGraph;
 use crate::storage::MutinyStorage;
-use crate::{
-    error::MutinyError,
-    proxy::WsProxy,
-    socket::{schedule_descriptor_read, MultiWsSocketDescriptor, WsTcpSocketDescriptor},
-};
-use crate::{
-    gossip, ldkstorage::PhantomChannelManager, logging::MutinyLogger, socket::WsSocketDescriptor,
-};
+use crate::{gossip, ldkstorage::PhantomChannelManager, logging::MutinyLogger};
 use crate::{gossip::read_peer_info, node::PubkeyConnectionInfo};
 use crate::{keymanager::PhantomKeysManager, node::ConnectionType};
 use bitcoin::secp256k1::PublicKey;
@@ -31,6 +25,14 @@ use lightning::routing::gossip::NodeId;
 use lightning::routing::utxo::{UtxoLookup, UtxoLookupError, UtxoResult};
 use lightning::util::logger::Logger;
 use std::sync::Arc;
+
+#[cfg(target_arch = "wasm32")]
+use crate::socket::{
+    schedule_descriptor_read, MultiWsSocketDescriptor, WsSocketDescriptor, WsTcpSocketDescriptor,
+};
+
+#[cfg(target_arch = "wasm32")]
+use crate::proxy::WsProxy;
 
 pub(crate) trait PeerManager {
     fn get_peer_node_ids(&self) -> Vec<PublicKey>;
@@ -297,6 +299,7 @@ impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 pub(crate) async fn connect_peer_if_necessary(
     multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
     websocket_proxy_addr: &str,
@@ -323,7 +326,20 @@ pub(crate) async fn connect_peer_if_necessary(
     }
 }
 
-pub(crate) async fn connect_peer(
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) async fn connect_peer_if_necessary(
+    multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
+    websocket_proxy_addr: &str,
+    peer_connection_info: &PubkeyConnectionInfo,
+    logger: Arc<MutinyLogger>,
+    peer_manager: Arc<dyn PeerManager>,
+    stop: Arc<AtomicBool>,
+) -> Result<(), MutinyError> {
+    todo!()
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn connect_peer(
     multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
     websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
@@ -385,6 +401,18 @@ pub(crate) async fn connect_peer(
     );
 
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn connect_peer(
+    multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
+    websocket_proxy_addr: &str,
+    peer_connection_info: &PubkeyConnectionInfo,
+    logger: Arc<MutinyLogger>,
+    peer_manager: Arc<dyn PeerManager>,
+    stop: Arc<AtomicBool>,
+) -> Result<(), MutinyError> {
+    todo!()
 }
 
 fn try_get_net_addr_from_socket(socket_addr: &str) -> Option<NetAddress> {

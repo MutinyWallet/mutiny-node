@@ -28,10 +28,15 @@ pub mod nodemanager;
 mod nostr;
 mod onchain;
 mod peermanager;
-mod proxy;
 pub mod redshift;
-mod socket;
 pub mod storage;
+
+#[cfg(target_arch = "wasm32")]
+mod socket;
+
+#[cfg(target_arch = "wasm32")]
+mod proxy;
+
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 mod utils;
