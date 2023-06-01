@@ -615,9 +615,22 @@ impl<S: MutinyStorage> Node<S> {
                     amount_msat: amount_sat * 1000,
                 })
                 .await?;
-            let amount_minus_fee = amount_sat
-                .checked_sub(lsp_fee_msat / 1000)
-                .ok_or(MutinyError::BadAmountError)?;
+
+            // Convert the fee from msat to sat for comparison and subtraction
+            let lsp_fee_sat = lsp_fee_msat / 1000;
+
+            // Ensure that the fee is less than the amount being requested.
+            // If it isn't, we don't subtract it.
+            // This prevents amount from being subtracted down to 0.
+            // This will mean that the LSP fee will be paid by the payer instead.
+            let amount_minus_fee = if lsp_fee_sat < amount_sat {
+                amount_sat
+                    .checked_sub(lsp_fee_sat)
+                    .ok_or(MutinyError::BadAmountError)?
+            } else {
+                amount_sat
+            };
+
             (Some(amount_minus_fee), Some(lsp_fee_msat))
         } else {
             (amount_sat, None)
