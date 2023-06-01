@@ -926,13 +926,18 @@ impl<S: MutinyStorage> NodeManager<S> {
         let onchain = self.list_onchain()?;
         let mut activity = Vec::with_capacity(lightning.len() + onchain.len());
         for ln in lightning {
-            activity.push(ActivityItem::Lightning(Box::new(ln)));
+            // Only show paid invoices
+            if ln.paid {
+                activity.push(ActivityItem::Lightning(Box::new(ln)));
+            }
         }
         for on in onchain {
             activity.push(ActivityItem::OnChain(on));
         }
 
-        activity.sort();
+        // Newest first
+        activity.sort_by(|a, b| b.cmp(a));
+
         Ok(activity)
     }
 
