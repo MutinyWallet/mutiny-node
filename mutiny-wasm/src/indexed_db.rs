@@ -1,7 +1,8 @@
 use anyhow::anyhow;
+use gloo_storage::{LocalStorage, Storage};
 use gloo_utils::format::JsValueSerdeExt;
-use lightning::log_error;
 use lightning::util::logger::Logger;
+use lightning::{log_debug, log_error};
 use log::error;
 use mutiny_core::error::{MutinyError, MutinyStorageError};
 use mutiny_core::logging::MutinyLogger;
@@ -36,7 +37,7 @@ impl IndexedDbStorage {
     ) -> Result<IndexedDbStorage, MutinyError> {
         let indexed_db = Arc::new(RwLock::new(Some(Self::build_indexed_db_database().await?)));
 
-        let map = Self::read_all(&indexed_db).await?;
+        let map = Self::read_all(&indexed_db, &logger).await?;
         let memory = Arc::new(RwLock::new(map));
 
         let password = password.filter(|p| !p.is_empty());
@@ -135,6 +136,7 @@ impl IndexedDbStorage {
 
     pub(crate) async fn read_all(
         indexed_db: &Arc<RwLock<Option<Rexie>>>,
+        logger: &MutinyLogger,
     ) -> Result<HashMap<String, Value>, MutinyError> {
         let store = {
             let tx = indexed_db
@@ -173,6 +175,24 @@ impl IndexedDbStorage {
             map.insert(key, json);
         }
 
+        // get the local storage data, this should take priority if it is being used
+        log_debug!(logger, "Reading from local storage");
+        let local_storage = LocalStorage::raw();
+        let length = LocalStorage::length();
+        for index in 0..length {
+            let key_opt: Option<String> = local_storage.key(index).unwrap();
+
+            if let Some(key) = key_opt {
+                // only add to the map if it is a key we expect
+                // this is to prevent any unexpected data from being added to the map
+                // from either malicious 3rd party or a previous version of the wallet
+                if write_to_local_storage(&key) {
+                    let value: Value = LocalStorage::get(&key).unwrap();
+                    map.insert(key, value);
+                }
+            }
+        }
+
         Ok(map)
     }
 
@@ -191,7 +211,7 @@ impl IndexedDbStorage {
 
     #[cfg(test)]
     pub(crate) async fn reload_from_indexed_db(&self) -> Result<(), MutinyError> {
-        let map = Self::read_all(&self.indexed_db).await?;
+        let map = Self::read_all(&self.indexed_db, &self.logger).await?;
         let mut memory = self
             .memory
             .try_write()
@@ -210,6 +230,18 @@ fn used_once(key: &str) -> bool {
         key,
         NETWORK_GRAPH_KEY | PROB_SCORER_KEY | GOSSIP_SYNC_TIME_KEY
     )
+}
+
+/// To help prevent force closes we save to local storage as well as indexed db.
+/// This is because indexed db is not always reliable.
+///
+/// We need to do this for the channel manager and channel monitors.
+fn write_to_local_storage(key: &str) -> bool {
+    match key {
+        str if str.starts_with(CHANNEL_MANAGER_KEY) => true,
+        str if str.starts_with(MONITORS_PREFIX_KEY) => true,
+        _ => false,
+    }
 }
 
 impl MutinyStorage for IndexedDbStorage {
@@ -235,6 +267,15 @@ impl MutinyStorage for IndexedDbStorage {
                 log_error!(logger, "Failed to save ({key_clone}) to indexed db: {e}");
             }
         });
+
+        // Some values we want to write to local storage as well as indexed db
+        if write_to_local_storage(&key) {
+            LocalStorage::set(&key, &data).map_err(|e| {
+                MutinyError::write_err(MutinyStorageError::Other(anyhow!(format!(
+                    "Failed to write to local storage: {e}"
+                ))))
+            })?;
+        }
 
         // some values only are read once, so we don't need to write them to memory,
         // just need them in indexed db for next time
@@ -301,6 +342,11 @@ impl MutinyStorage for IndexedDbStorage {
             .map_err(|e| MutinyError::write_err(e.into()))?;
 
         for key in keys {
+            // Some values we want to write to local storage as well as indexed db
+            // we should delete them from local storage as well
+            if write_to_local_storage(&key) {
+                LocalStorage::delete(&key)
+            }
             map.remove(&key);
         }
 
@@ -314,7 +360,7 @@ impl MutinyStorage for IndexedDbStorage {
             self.indexed_db.clone()
         };
 
-        let map = Self::read_all(&indexed_db).await?;
+        let map = Self::read_all(&indexed_db, &self.logger).await?;
         let memory = Arc::new(RwLock::new(map));
         self.indexed_db = indexed_db;
         self.memory = memory;
