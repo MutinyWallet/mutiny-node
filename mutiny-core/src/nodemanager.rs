@@ -1695,7 +1695,6 @@ impl<S: MutinyStorage> NodeManager<S> {
                 if *timestamp + Duration::from_secs(BITCOIN_PRICE_CACHE_SEC) > now =>
             {
                 // Cache is not expired
-                log_debug!(self.logger, "got price from cache");
                 (*price, *timestamp)
             }
             _ => {
