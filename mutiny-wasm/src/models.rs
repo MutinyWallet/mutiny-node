@@ -289,6 +289,7 @@ pub struct MutinyBalance {
     pub confirmed: u64,
     pub unconfirmed: u64,
     pub lightning: u64,
+    pub force_close: u64,
 }
 
 #[wasm_bindgen]
@@ -305,6 +306,7 @@ impl From<nodemanager::MutinyBalance> for MutinyBalance {
             confirmed: m.confirmed,
             unconfirmed: m.unconfirmed,
             lightning: m.lightning,
+            force_close: m.force_close,
         }
     }
 }

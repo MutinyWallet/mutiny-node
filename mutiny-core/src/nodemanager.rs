@@ -39,6 +39,7 @@ use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use core::time::Duration;
 use futures::{future::join_all, lock::Mutex};
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
+use lightning::chain::channelmonitor::Balance;
 use lightning::chain::keysinterface::{NodeSigner, Recipient};
 use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
@@ -355,6 +356,7 @@ pub struct MutinyBalance {
     pub confirmed: u64,
     pub unconfirmed: u64,
     pub lightning: u64,
+    pub force_close: u64,
 }
 
 pub struct LnUrlParams {
@@ -1012,10 +1014,46 @@ impl<S: MutinyStorage> NodeManager<S> {
             .map(|c| c.balance_msat)
             .sum();
 
+        // get the amount in limbo from force closes
+        let force_close: u64 = nodes
+            .iter()
+            .flat_map(|(_, n)| {
+                let channels = n.channel_manager.list_channels();
+                let ignored_channels: Vec<&ChannelDetails> = channels.iter().collect();
+                n.chain_monitor.get_claimable_balances(&ignored_channels)
+            })
+            .map(|bal| match bal {
+                Balance::ClaimableOnChannelClose {
+                    claimable_amount_satoshis,
+                } => claimable_amount_satoshis,
+                Balance::ClaimableAwaitingConfirmations {
+                    claimable_amount_satoshis,
+                    ..
+                } => claimable_amount_satoshis,
+                Balance::ContentiousClaimable {
+                    claimable_amount_satoshis,
+                    ..
+                } => claimable_amount_satoshis,
+                Balance::MaybeTimeoutClaimableHTLC {
+                    claimable_amount_satoshis,
+                    ..
+                } => claimable_amount_satoshis,
+                Balance::MaybePreimageClaimableHTLC {
+                    claimable_amount_satoshis,
+                    ..
+                } => claimable_amount_satoshis,
+                Balance::CounterpartyRevokedOutputClaimable {
+                    claimable_amount_satoshis,
+                    ..
+                } => claimable_amount_satoshis,
+            })
+            .sum();
+
         Ok(MutinyBalance {
             confirmed: onchain.confirmed + onchain.trusted_pending,
             unconfirmed: onchain.untrusted_pending + onchain.immature,
             lightning: lightning_msats / 1_000,
+            force_close,
         })
     }
 
