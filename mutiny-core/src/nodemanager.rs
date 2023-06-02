@@ -312,13 +312,13 @@ pub enum ActivityItem {
 }
 
 impl ActivityItem {
-    pub fn last_updated(&self) -> u64 {
+    pub fn last_updated(&self) -> Option<u64> {
         match self {
             ActivityItem::OnChain(t) => match t.confirmation_time {
-                ConfirmationTime::Confirmed { time, .. } => time,
-                ConfirmationTime::Unconfirmed => u64::MAX,
+                ConfirmationTime::Confirmed { time, .. } => Some(time),
+                ConfirmationTime::Unconfirmed => None,
             },
-            ActivityItem::Lightning(i) => i.last_updated,
+            ActivityItem::Lightning(i) => Some(i.last_updated),
         }
     }
 

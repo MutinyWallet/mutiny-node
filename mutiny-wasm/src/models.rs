@@ -31,7 +31,7 @@ pub struct ActivityItem {
     pub inbound: bool,
     pub(crate) labels: Vec<String>,
     pub(crate) contacts: Vec<Contact>,
-    pub last_updated: u64,
+    pub last_updated: Option<u64>,
 }
 
 #[wasm_bindgen]
