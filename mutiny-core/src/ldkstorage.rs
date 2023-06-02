@@ -76,14 +76,14 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         format!("{}_{}", key, self.node_id)
     }
 
-    fn persist_local_storage<W: Writeable>(
+    fn persist_value<W: Writeable>(
         &self,
         key: &str,
         object: &W,
     ) -> Result<(), lightning::io::Error> {
         let key_with_node = self.get_key(key);
         self.storage
-            .set_data(key_with_node, object.encode())
+            .set_data(key_with_node, object.encode().to_hex())
             .map_err(|_| lightning::io::ErrorKind::Other.into())
     }
 
@@ -91,12 +91,26 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
     // that has the concatenated node_id
     fn read_value(&self, _key: &str) -> Result<Vec<u8>, MutinyError> {
         let key = self.get_key(_key);
-        match self.storage.get_data(&key) {
-            Ok(Some(value)) => Ok(value),
+        // first try to read as hex, then as array of numbers
+        match self.storage.get_data::<String>(&key) {
+            Ok(Some(value)) => {
+                let value = Vec::from_hex(&value).map_err(|_| {
+                    MutinyError::read_err(MutinyStorageError::Other(anyhow!(
+                        "Failed to deserialize value for key: {key}"
+                    )))
+                })?;
+                Ok(value)
+            }
             Ok(None) => Err(MutinyError::read_err(MutinyStorageError::Other(anyhow!(
                 "No value found for key: {key}"
             )))),
-            Err(e) => Err(e),
+            Err(_) => match self.storage.get_data(&key) {
+                Ok(Some(value)) => Ok(value),
+                Ok(None) => Err(MutinyError::read_err(MutinyStorageError::Other(anyhow!(
+                    "No value found for key: {key}"
+                )))),
+                Err(e) => Err(e),
+            },
         }
     }
 
@@ -443,7 +457,7 @@ impl<S: MutinyStorage>
         &self,
         channel_manager: &PhantomChannelManager<S>,
     ) -> Result<(), lightning::io::Error> {
-        self.persist_local_storage(CHANNEL_MANAGER_KEY, channel_manager)
+        self.persist_value(CHANNEL_MANAGER_KEY, channel_manager)
     }
 
     fn persist_graph(&self, network_graph: &NetworkGraph) -> Result<(), lightning::io::Error> {
@@ -477,7 +491,7 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
             funding_txo.txid.to_hex(),
             funding_txo.index
         );
-        match self.persist_local_storage(&key, monitor) {
+        match self.persist_value(&key, monitor) {
             Ok(()) => chain::ChannelMonitorUpdateStatus::Completed,
             Err(_) => chain::ChannelMonitorUpdateStatus::PermanentFailure,
         }
@@ -495,7 +509,7 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
             funding_txo.txid.to_hex(),
             funding_txo.index
         );
-        match self.persist_local_storage(&key, monitor) {
+        match self.persist_value(&key, monitor) {
             Ok(()) => chain::ChannelMonitorUpdateStatus::Completed,
             Err(_) => chain::ChannelMonitorUpdateStatus::PermanentFailure,
         }
