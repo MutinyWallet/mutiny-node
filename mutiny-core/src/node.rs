@@ -200,7 +200,11 @@ impl<S: MutinyStorage> Node<S> {
         let pubkey = pubkey_from_keys_manager(&keys_manager);
 
         // init the persister
-        let persister = Arc::new(MutinyNodePersister::new(uuid.clone(), storage));
+        let persister = Arc::new(MutinyNodePersister::new(
+            uuid.clone(),
+            storage,
+            logger.clone(),
+        ));
 
         // init chain monitor
         let chain_monitor: Arc<ChainMonitor<S>> = Arc::new(ChainMonitor::new(
@@ -404,7 +408,7 @@ impl<S: MutinyStorage> Node<S> {
             loop {
                 let gs = crate::background::GossipSync::rapid(background_gossip_sync.clone());
                 let ev = background_event_handler.clone();
-                process_events_async(
+                if let Err(e) = process_events_async(
                     background_persister.clone(),
                     |e| ev.handle_event(e),
                     background_chain_monitor.clone(),
@@ -423,7 +427,9 @@ impl<S: MutinyStorage> Node<S> {
                     true,
                 )
                 .await
-                .expect("Failed to process events");
+                {
+                    log_error!(background_logger, "error running background processor: {e}",);
+                }
 
                 if background_stop.load(Ordering::Relaxed) {
                     log_debug!(

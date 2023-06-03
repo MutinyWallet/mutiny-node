@@ -15,7 +15,6 @@ use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::BlockHash;
 use bitcoin::Network;
 use futures::{try_join, TryFutureExt};
-use lightning::chain::chainmonitor::{MonitorUpdateId, Persist};
 use lightning::chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate};
 use lightning::chain::keysinterface::{
     InMemorySigner, SpendableOutputDescriptor, WriteableEcdsaChannelSigner,
@@ -31,6 +30,10 @@ use lightning::util::logger::Logger;
 use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
 use lightning::{chain, log_trace};
+use lightning::{
+    chain::chainmonitor::{MonitorUpdateId, Persist},
+    log_error,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
@@ -59,6 +62,7 @@ pub(crate) type PhantomChannelManager<S: MutinyStorage> = LdkChannelManager<
 pub struct MutinyNodePersister<S: MutinyStorage> {
     node_id: String,
     pub(crate) storage: S,
+    logger: Arc<MutinyLogger>,
 }
 
 pub(crate) struct ReadChannelManager<S: MutinyStorage> {
@@ -68,49 +72,49 @@ pub(crate) struct ReadChannelManager<S: MutinyStorage> {
 }
 
 impl<S: MutinyStorage> MutinyNodePersister<S> {
-    pub fn new(node_id: String, storage: S) -> Self {
-        MutinyNodePersister { node_id, storage }
+    pub fn new(node_id: String, storage: S, logger: Arc<MutinyLogger>) -> Self {
+        MutinyNodePersister {
+            node_id,
+            storage,
+            logger,
+        }
     }
 
     fn get_key(&self, key: &str) -> String {
         format!("{}_{}", key, self.node_id)
     }
 
-    fn persist_value<W: Writeable>(
+    fn persist_local_storage<W: Writeable>(
         &self,
         key: &str,
         object: &W,
     ) -> Result<(), lightning::io::Error> {
         let key_with_node = self.get_key(key);
         self.storage
-            .set_data(key_with_node, object.encode().to_hex())
-            .map_err(|_| lightning::io::ErrorKind::Other.into())
+            .set_data(key_with_node, object.encode())
+            .map_err(|e| {
+                match e {
+                    MutinyError::PersistenceFailed { source } => {
+                        log_error!(self.logger, "Persistence failed on {key}: {source}");
+                    }
+                    _ => {
+                        log_error!(self.logger, "Error storing {key}: {e}");
+                    }
+                };
+                lightning::io::ErrorKind::Other.into()
+            })
     }
 
     // name this param _key so it is not confused with the key
     // that has the concatenated node_id
     fn read_value(&self, _key: &str) -> Result<Vec<u8>, MutinyError> {
         let key = self.get_key(_key);
-        // first try to read as hex, then as array of numbers
-        match self.storage.get_data::<String>(&key) {
-            Ok(Some(value)) => {
-                let value = Vec::from_hex(&value).map_err(|_| {
-                    MutinyError::read_err(MutinyStorageError::Other(anyhow!(
-                        "Failed to deserialize value for key: {key}"
-                    )))
-                })?;
-                Ok(value)
-            }
+        match self.storage.get_data(&key) {
+            Ok(Some(value)) => Ok(value),
             Ok(None) => Err(MutinyError::read_err(MutinyStorageError::Other(anyhow!(
                 "No value found for key: {key}"
             )))),
-            Err(_) => match self.storage.get_data(&key) {
-                Ok(Some(value)) => Ok(value),
-                Ok(None) => Err(MutinyError::read_err(MutinyStorageError::Other(anyhow!(
-                    "No value found for key: {key}"
-                )))),
-                Err(e) => Err(e),
-            },
+            Err(e) => Err(e),
         }
     }
 
@@ -457,7 +461,7 @@ impl<S: MutinyStorage>
         &self,
         channel_manager: &PhantomChannelManager<S>,
     ) -> Result<(), lightning::io::Error> {
-        self.persist_value(CHANNEL_MANAGER_KEY, channel_manager)
+        self.persist_local_storage(CHANNEL_MANAGER_KEY, channel_manager)
     }
 
     fn persist_graph(&self, network_graph: &NetworkGraph) -> Result<(), lightning::io::Error> {
@@ -491,7 +495,7 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
             funding_txo.txid.to_hex(),
             funding_txo.index
         );
-        match self.persist_value(&key, monitor) {
+        match self.persist_local_storage(&key, monitor) {
             Ok(()) => chain::ChannelMonitorUpdateStatus::Completed,
             Err(_) => chain::ChannelMonitorUpdateStatus::PermanentFailure,
         }
@@ -509,7 +513,7 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
             funding_txo.txid.to_hex(),
             funding_txo.index
         );
-        match self.persist_value(&key, monitor) {
+        match self.persist_local_storage(&key, monitor) {
             Ok(()) => chain::ChannelMonitorUpdateStatus::Completed,
             Err(_) => chain::ChannelMonitorUpdateStatus::PermanentFailure,
         }
@@ -536,7 +540,7 @@ mod test {
     fn get_test_persister() -> MutinyNodePersister<MemoryStorage> {
         let id = Uuid::new_v4().to_string();
         let storage = MemoryStorage::default();
-        MutinyNodePersister::new(id, storage)
+        MutinyNodePersister::new(id, storage, Arc::new(MutinyLogger::default()))
     }
 
     #[test]
