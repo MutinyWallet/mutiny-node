@@ -15,7 +15,6 @@ use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::BlockHash;
 use bitcoin::Network;
 use futures::{try_join, TryFutureExt};
-use lightning::chain::chainmonitor::{MonitorUpdateId, Persist};
 use lightning::chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate};
 use lightning::chain::keysinterface::{
     InMemorySigner, SpendableOutputDescriptor, WriteableEcdsaChannelSigner,
@@ -31,6 +30,10 @@ use lightning::util::logger::Logger;
 use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
 use lightning::{chain, log_trace};
+use lightning::{
+    chain::chainmonitor::{MonitorUpdateId, Persist},
+    log_error,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
@@ -59,6 +62,7 @@ pub(crate) type PhantomChannelManager<S: MutinyStorage> = LdkChannelManager<
 pub struct MutinyNodePersister<S: MutinyStorage> {
     node_id: String,
     pub(crate) storage: S,
+    logger: Arc<MutinyLogger>,
 }
 
 pub(crate) struct ReadChannelManager<S: MutinyStorage> {
@@ -68,8 +72,12 @@ pub(crate) struct ReadChannelManager<S: MutinyStorage> {
 }
 
 impl<S: MutinyStorage> MutinyNodePersister<S> {
-    pub fn new(node_id: String, storage: S) -> Self {
-        MutinyNodePersister { node_id, storage }
+    pub fn new(node_id: String, storage: S, logger: Arc<MutinyLogger>) -> Self {
+        MutinyNodePersister {
+            node_id,
+            storage,
+            logger,
+        }
     }
 
     fn get_key(&self, key: &str) -> String {
@@ -84,7 +92,17 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         let key_with_node = self.get_key(key);
         self.storage
             .set_data(key_with_node, object.encode())
-            .map_err(|_| lightning::io::ErrorKind::Other.into())
+            .map_err(|e| {
+                match e {
+                    MutinyError::PersistenceFailed { source } => {
+                        log_error!(self.logger, "Persistence failed on {key}: {source}");
+                    }
+                    _ => {
+                        log_error!(self.logger, "Error storing {key}: {e}");
+                    }
+                };
+                lightning::io::ErrorKind::Other.into()
+            })
     }
 
     // name this param _key so it is not confused with the key
@@ -522,7 +540,7 @@ mod test {
     fn get_test_persister() -> MutinyNodePersister<MemoryStorage> {
         let id = Uuid::new_v4().to_string();
         let storage = MemoryStorage::default();
-        MutinyNodePersister::new(id, storage)
+        MutinyNodePersister::new(id, storage, Arc::new(MutinyLogger::default()))
     }
 
     #[test]
