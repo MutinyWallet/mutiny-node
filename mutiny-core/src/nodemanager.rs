@@ -1498,7 +1498,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             nodes.iter().find_map(|(_, n)| n.get_invoice(invoice).ok());
         match inv_opt {
             Some(i) => Ok(i),
-            None => Err(MutinyError::InvoiceInvalid),
+            None => Err(MutinyError::NotFound),
         }
     }
 
@@ -1510,15 +1510,12 @@ impl<S: MutinyStorage> NodeManager<S> {
     ) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
         for (_, node) in nodes.iter() {
-            if let Ok(invs) = node.list_invoices() {
-                let inv_opt: Option<MutinyInvoice> =
-                    invs.into_iter().find(|i| i.payment_hash == *hash);
-                if let Some(i) = inv_opt {
-                    return Ok(i);
-                }
+            if let Ok(inv) = node.get_invoice_by_hash(hash) {
+                return Ok(inv);
             }
         }
-        Err(MutinyError::InvoiceInvalid)
+
+        Err(MutinyError::NotFound)
     }
 
     /// Gets an invoice from the node manager.
