@@ -6,7 +6,7 @@ use lightning::{log_debug, log_error};
 use log::error;
 use mutiny_core::error::{MutinyError, MutinyStorageError};
 use mutiny_core::logging::MutinyLogger;
-use mutiny_core::storage::MutinyStorage;
+use mutiny_core::storage::{MutinyStorage, KEYCHAIN_STORE_KEY};
 use mutiny_core::*;
 use rexie::{ObjectStore, Rexie, TransactionMode};
 use serde::{Deserialize, Serialize};
@@ -228,7 +228,7 @@ impl IndexedDbStorage {
 fn used_once(key: &str) -> bool {
     matches!(
         key,
-        NETWORK_GRAPH_KEY | PROB_SCORER_KEY | GOSSIP_SYNC_TIME_KEY
+        NETWORK_GRAPH_KEY | PROB_SCORER_KEY | GOSSIP_SYNC_TIME_KEY | KEYCHAIN_STORE_KEY
     )
 }
 
