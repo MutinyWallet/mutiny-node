@@ -196,6 +196,7 @@ impl<S: MutinyStorage> Node<S> {
             wallet.clone(),
             mnemonic,
             node_index.child_index,
+            logger.clone(),
         )?);
         let pubkey = pubkey_from_keys_manager(&keys_manager);
 

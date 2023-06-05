@@ -1,4 +1,6 @@
 use crate::error::MutinyError;
+use crate::labels::LabelStorage;
+use crate::logging::MutinyLogger;
 use crate::onchain::OnChainWallet;
 use crate::storage::MutinyStorage;
 use bdk::wallet::AddressIndex;
@@ -17,11 +19,14 @@ use lightning::chain::keysinterface::{
 };
 use lightning::ln::msgs::{DecodeError, UnsignedGossipMessage};
 use lightning::ln::script::ShutdownScript;
+use lightning::log_warn;
+use lightning::util::logger::Logger;
 use std::sync::Arc;
 
 pub struct PhantomKeysManager<S: MutinyStorage> {
     inner: LdkPhantomKeysManager,
     wallet: Arc<OnChainWallet<S>>,
+    logger: Arc<MutinyLogger>,
 }
 
 impl<S: MutinyStorage> PhantomKeysManager<S> {
@@ -31,6 +36,7 @@ impl<S: MutinyStorage> PhantomKeysManager<S> {
         starting_time_secs: u64,
         starting_time_nanos: u32,
         cross_node_seed: &[u8; 32],
+        logger: Arc<MutinyLogger>,
     ) -> Self {
         let inner = LdkPhantomKeysManager::new(
             seed,
@@ -38,7 +44,11 @@ impl<S: MutinyStorage> PhantomKeysManager<S> {
             starting_time_nanos,
             cross_node_seed,
         );
-        Self { inner, wallet }
+        Self {
+            inner,
+            wallet,
+            logger,
+        }
     }
 
     /// See [`KeysManager::spend_spendable_outputs`] for documentation on this method.
@@ -49,16 +59,36 @@ impl<S: MutinyStorage> PhantomKeysManager<S> {
         feerate_sat_per_1000_weight: u32,
         secp_ctx: &Secp256k1<C>,
     ) -> Result<Transaction, ()> {
-        let mut wallet = self.wallet.wallet.try_write().map_err(|_| ())?;
-        let address = wallet.get_internal_address(AddressIndex::New).address;
+        let address = {
+            let mut wallet = self.wallet.wallet.try_write().map_err(|_| ())?;
+            wallet.get_internal_address(AddressIndex::New).address
+        };
 
-        self.inner.spend_spendable_outputs(
+        let result = self.inner.spend_spendable_outputs(
             descriptors,
             outputs,
             address.script_pubkey(),
             feerate_sat_per_1000_weight,
             secp_ctx,
-        )
+        );
+
+        match result {
+            Ok(tx) => {
+                // Add a label to the address so that we can track that this was a force close
+                if let Err(e) = self
+                    .wallet
+                    .storage
+                    .set_address_labels(address, vec!["Swept Force Close".to_string()])
+                {
+                    log_warn!(
+                        self.logger,
+                        "Failed to set address label for spendable outputs: {e}"
+                    )
+                }
+                Ok(tx)
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -167,6 +197,7 @@ pub(crate) fn create_keys_manager<S: MutinyStorage>(
     wallet: Arc<OnChainWallet<S>>,
     mnemonic: &Mnemonic,
     child_index: u32,
+    logger: Arc<MutinyLogger>,
 ) -> Result<PhantomKeysManager<S>, MutinyError> {
     let context = Secp256k1::new();
 
@@ -190,6 +221,7 @@ pub(crate) fn create_keys_manager<S: MutinyStorage>(
         now.as_secs(),
         now.as_nanos() as u32,
         &shared_key.private_key.secret_bytes(),
+        logger,
     ))
 }
 
@@ -240,24 +272,32 @@ mod tests {
         ));
 
         let wallet = Arc::new(
-            OnChainWallet::new(&mnemonic, db, Network::Testnet, esplora, fees, logger).unwrap(),
+            OnChainWallet::new(
+                &mnemonic,
+                db,
+                Network::Testnet,
+                esplora,
+                fees,
+                logger.clone(),
+            )
+            .unwrap(),
         );
 
-        let km = create_keys_manager(wallet.clone(), &mnemonic, 1).unwrap();
+        let km = create_keys_manager(wallet.clone(), &mnemonic, 1, logger.clone()).unwrap();
         let pubkey = pubkey_from_keys_manager(&km);
         assert_eq!(
             "02cae09cf2c8842ace44068a5bf3117a494ebbf69a99e79712483c36f97cdb7b54",
             pubkey.to_string()
         );
 
-        let km = create_keys_manager(wallet.clone(), &mnemonic, 2).unwrap();
+        let km = create_keys_manager(wallet.clone(), &mnemonic, 2, logger.clone()).unwrap();
         let second_pubkey = pubkey_from_keys_manager(&km);
         assert_eq!(
             "03fcc9eaaf0b84946ea7935e3bc4f2b498893c2f53e5d2994d6877d149601ce553",
             second_pubkey.to_string()
         );
 
-        let km = create_keys_manager(wallet, &mnemonic, 2).unwrap();
+        let km = create_keys_manager(wallet, &mnemonic, 2, logger).unwrap();
         let second_pubkey_again = pubkey_from_keys_manager(&km);
 
         assert_eq!(second_pubkey, second_pubkey_again);
