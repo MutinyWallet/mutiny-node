@@ -12,7 +12,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-const KEYCHAIN_STORE_KEY: &str = "keychain_store";
+pub const KEYCHAIN_STORE_KEY: &str = "keychain_store";
 pub(crate) const MNEMONIC_KEY: &str = "mnemonic";
 const NODES_KEY: &str = "nodes";
 const AUTH_PROFILES_KEY: &str = "auth_profiles";
