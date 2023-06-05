@@ -348,7 +348,14 @@ impl PartialOrd for ActivityItem {
 
 impl Ord for ActivityItem {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.last_updated().cmp(&other.last_updated())
+        // We want None to be greater than Some because those are pending transactions
+        // so those should be at the top of the list
+        match (self.last_updated(), other.last_updated()) {
+            (Some(self_time), Some(other_time)) => self_time.cmp(&other_time),
+            (Some(_), None) => core::cmp::Ordering::Less,
+            (None, Some(_)) => core::cmp::Ordering::Greater,
+            (None, None) => core::cmp::Ordering::Equal,
+        }
     }
 }
 
@@ -1938,13 +1945,13 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
 
 #[cfg(test)]
 mod tests {
-    use crate::nodemanager::{MutinyInvoice, NodeManager};
+    use crate::nodemanager::{ActivityItem, MutinyInvoice, NodeManager, TransactionDetails};
     use crate::{keymanager::generate_seed, MutinyWalletConfig};
     use bdk::chain::ConfirmationTime;
     use bitcoin::hashes::hex::{FromHex, ToHex};
     use bitcoin::hashes::{sha256, Hash};
     use bitcoin::secp256k1::PublicKey;
-    use bitcoin::{Network, PackedLockTime, Transaction, TxOut};
+    use bitcoin::{Network, PackedLockTime, Transaction, TxOut, Txid};
     use lightning::ln::PaymentHash;
     use lightning_invoice::Invoice;
     use std::str::FromStr;
@@ -2188,5 +2195,93 @@ mod tests {
         .unwrap();
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_sort_activity_item() {
+        let preimage: [u8; 32] =
+            FromHex::from_hex("7600f5a9ad72452dea7ad86dabbc9cb46be96a1a2fcd961e041d066b38d93008")
+                .unwrap();
+
+        let payment_hash = sha256::Hash::from_hex(
+            "55ecf9169a6fa07e8ba181fdddf5b0bcc7860176659fa22a7cca9da2a359a33b",
+        )
+        .unwrap();
+
+        let pubkey = PublicKey::from_str(
+            "02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b",
+        )
+        .unwrap();
+
+        let tx1: TransactionDetails = TransactionDetails {
+            transaction: None,
+            txid: Txid::all_zeros(),
+            received: 0,
+            sent: 0,
+            fee: None,
+            confirmation_time: ConfirmationTime::Unconfirmed,
+            labels: vec![],
+        };
+
+        let tx2: TransactionDetails = TransactionDetails {
+            transaction: None,
+            txid: Txid::all_zeros(),
+            received: 0,
+            sent: 0,
+            fee: None,
+            confirmation_time: ConfirmationTime::Confirmed {
+                height: 1,
+                time: 1234,
+            },
+            labels: vec![],
+        };
+
+        let invoice1: MutinyInvoice = MutinyInvoice {
+            bolt11: None,
+            description: None,
+            payment_hash,
+            preimage: Some(preimage.to_hex()),
+            payee_pubkey: Some(pubkey),
+            amount_sats: Some(100),
+            expire: 1681781585,
+            paid: true,
+            fees_paid: Some(1),
+            inbound: false,
+            labels: vec![],
+            last_updated: 1681781585,
+        };
+
+        let invoice2: MutinyInvoice = MutinyInvoice {
+            bolt11: None,
+            description: None,
+            payment_hash,
+            preimage: Some(preimage.to_hex()),
+            payee_pubkey: Some(pubkey),
+            amount_sats: Some(100),
+            expire: 1681781585,
+            paid: true,
+            fees_paid: Some(1),
+            inbound: false,
+            labels: vec![],
+            last_updated: 1781781585,
+        };
+
+        let mut vec = vec![
+            ActivityItem::OnChain(tx1.clone()),
+            ActivityItem::OnChain(tx2.clone()),
+            ActivityItem::Lightning(Box::new(invoice1.clone())),
+            ActivityItem::Lightning(Box::new(invoice2.clone())),
+        ];
+        vec.sort();
+
+        assert_eq!(
+            vec,
+            vec![
+                ActivityItem::OnChain(tx2),
+                ActivityItem::Lightning(Box::new(invoice1)),
+                ActivityItem::Lightning(Box::new(invoice2)),
+                ActivityItem::OnChain(tx1),
+            ]
+        );
     }
 }
