@@ -84,8 +84,6 @@ impl WsProxy {
 #[async_trait(?Send)]
 impl Proxy for WsProxy {
     fn send(&self, data: Message) {
-        log_trace!(self.logger, "initiating sending down websocket");
-
         // There can only be one sender at a time
         // Cannot send and write at the same time either
         // TODO check if the connection is closed before trying to send.

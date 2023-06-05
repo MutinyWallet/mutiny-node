@@ -164,12 +164,10 @@ impl MultiWsSocketDescriptor {
     }
 
     pub fn attempt_keep_alive(&self) {
-        log_trace!(self.logger, "sending keep alive message to proxy");
         if let Some(conn) = &self.conn {
             conn.send(Message::Text(
                 serde_json::to_string(&MutinyProxyCommand::Ping {}).unwrap(),
             ));
-            log_trace!(self.logger, "initiated keep alive message to proxy");
         }
     }
 
@@ -365,7 +363,6 @@ async fn handle_incoming_msg(
             // This is a mutiny to mutiny connection with pubkey + bytes
             // as the binary message. Parse the msg and see which pubkey
             // it belongs to.
-            log_trace!(logger, "received a binary message on multi socket...");
             if msg.len() < PUBKEY_BYTES_LEN {
                 log_error!(logger, "msg not long enough to have pubkey, ignoring...");
                 return;
@@ -378,13 +375,7 @@ async fn handle_incoming_msg(
             match found_subsocket {
                 Some((_subsocket, sender)) => {
                     match sender.send(Message::Bytes(message_bytes.to_vec())) {
-                        Ok(_) => {
-                            log_trace!(
-                                logger,
-                                "found subsocket to forward bytes to: {:?}",
-                                id_bytes
-                            );
-                        }
+                        Ok(_) => {}
                         Err(e) => log_error!(logger, "error sending msg to channel: {}", e),
                     };
                 }
@@ -489,7 +480,6 @@ pub(crate) fn schedule_descriptor_read(
                                         let read_res = peer_manager.read_event(&mut descriptor, &b);
                                         match read_res {
                                             Ok(_read_bool) => {
-                                                log_trace!(logger, "read event from the node");
                                                 peer_manager.process_events();
                                             }
                                             Err(e) => log_error!(logger, "got an error reading event: {}", e),
