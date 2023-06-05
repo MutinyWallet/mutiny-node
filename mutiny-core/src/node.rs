@@ -741,10 +741,18 @@ impl<S: MutinyStorage> Node<S> {
     }
 
     pub fn get_invoice(&self, invoice: &Invoice) -> Result<MutinyInvoice, MutinyError> {
-        let payment_hash = invoice.payment_hash();
+        self.get_invoice_by_hash(invoice.payment_hash())
+    }
+
+    pub fn get_invoice_by_hash(&self, payment_hash: &Sha256) -> Result<MutinyInvoice, MutinyError> {
         let (payment_info, inbound) = self.get_payment_info_from_persisters(payment_hash)?;
         let labels_map = self.persister.storage.get_invoice_labels()?;
-        let labels = labels_map.get(invoice).cloned().unwrap_or_default();
+        let labels = payment_info
+            .bolt11
+            .as_ref()
+            .and_then(|inv| labels_map.get(inv).cloned())
+            .unwrap_or_default();
+
         MutinyInvoice::from(
             payment_info,
             PaymentHash(payment_hash.into_inner()),
