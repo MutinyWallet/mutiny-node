@@ -1110,12 +1110,18 @@ impl<S: MutinyStorage> NodeManager<S> {
         // to addresses that are in our bdk wallet. This way
         // they are found on this iteration of syncing instead
         // of the next one.
-        self.sync_ldk().await?;
+        if let Err(e) = self.sync_ldk().await {
+            log_error!(self.logger, "Failed to sync ldk: {e}");
+            return Err(e);
+        }
 
         // sync bdk wallet
         match self.wallet.sync().await {
             Ok(()) => Ok(log_info!(self.logger, "We are synced!")),
-            Err(e) => Err(e),
+            Err(e) => {
+                log_error!(self.logger, "Failed to sync on-chain wallet: {e}");
+                Err(e)
+            }
         }
     }
 
