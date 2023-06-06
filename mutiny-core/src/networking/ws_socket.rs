@@ -1,12 +1,11 @@
-use crate::networking::proxy::Proxy;
 use crate::networking::socket::{schedule_descriptor_read, MutinySocketDescriptor, ReadDescriptor};
 use crate::peermanager::PeerManager;
 use crate::utils;
+use crate::{error::MutinyError, networking::proxy::Proxy};
 use bitcoin::hashes::hex::ToHex;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use futures::lock::Mutex;
 use futures::{pin_mut, select, FutureExt};
-use gloo_net::websocket::events::CloseEvent;
 use gloo_net::websocket::Message;
 use lightning::{ln::peer_handler, log_debug, log_error, log_info, util::logger::Logger};
 use lightning::{ln::peer_handler::SocketDescriptor, log_trace};
@@ -34,8 +33,16 @@ impl WsTcpSocketDescriptor {
 }
 
 impl ReadDescriptor for WsTcpSocketDescriptor {
-    async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>> {
-        self.conn.read().await
+    async fn read(&self) -> Option<Result<Vec<u8>, MutinyError>> {
+        match self.conn.read().await {
+            Some(Ok(Message::Bytes(b))) => Some(Ok(b)),
+            Some(Ok(Message::Text(_))) => {
+                // Ignoring text messages sent through tcp socket
+                None
+            }
+            Some(Err(_)) => Some(Err(MutinyError::ConnectionFailed)),
+            None => None,
+        }
     }
 }
 
@@ -479,20 +486,14 @@ impl SubWsSocketDescriptor {
 }
 
 impl ReadDescriptor for SubWsSocketDescriptor {
-    async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>> {
+    async fn read(&self) -> Option<Result<Vec<u8>, MutinyError>> {
         loop {
             if self.stop.load(Ordering::Relaxed) {
                 log_trace!(self.logger, "stopping subsocket channel reader");
-                return Some(Err(gloo_net::websocket::WebSocketError::ConnectionClose(
-                    CloseEvent {
-                        code: 1000,
-                        reason: "subsocket told to stop".to_string(),
-                        was_clean: true,
-                    },
-                )));
+                return Some(Err(MutinyError::ConnectionFailed));
             }
-            if let Ok(msg) = self.read_channel.try_recv() {
-                return Some(Ok(msg));
+            if let Ok(Message::Bytes(b)) = self.read_channel.try_recv() {
+                return Some(Ok(b));
             }
             utils::sleep(50).await;
         }

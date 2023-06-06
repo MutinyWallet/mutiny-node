@@ -1,8 +1,7 @@
-use crate::peermanager::PeerManager;
 use crate::utils;
+use crate::{error::MutinyError, peermanager::PeerManager};
 use futures::{pin_mut, select, FutureExt};
-use gloo_net::websocket::Message;
-use lightning::{ln::peer_handler, log_debug, log_error, util::logger::Logger};
+use lightning::{ln::peer_handler, log_error, util::logger::Logger};
 use lightning::{ln::peer_handler::SocketDescriptor, log_trace};
 use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,7 +11,7 @@ use std::sync::Arc;
 use crate::networking::ws_socket::{SubWsSocketDescriptor, WsTcpSocketDescriptor};
 
 pub trait ReadDescriptor {
-    async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>>;
+    async fn read(&self) -> Option<Result<Vec<u8>, MutinyError>>;
 }
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
@@ -26,7 +25,7 @@ pub enum MutinySocketDescriptor {
 }
 
 impl ReadDescriptor for MutinySocketDescriptor {
-    async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>> {
+    async fn read(&self) -> Option<Result<Vec<u8>, MutinyError>> {
         match self {
             #[cfg(target_arch = "wasm32")]
             MutinySocketDescriptor::Tcp(s) => s.read().await,
@@ -79,41 +78,19 @@ pub fn schedule_descriptor_read(
                 msg_option = read_fut => {
                     if let Some(msg) = msg_option {
                         match msg {
-                            Ok(msg_contents) => {
-                                match msg_contents {
-                                    Message::Text(_) => {
-                                        log_trace!(logger, "ignoring text sent directly to ldk socket");
-                                    }
-                                    Message::Bytes(b) => {
-                                        log_trace!(logger, "received binary data from websocket");
+                            Ok(b) => {
+                                log_trace!(logger, "received binary data from websocket");
 
-                                        let read_res = peer_manager.read_event(&mut descriptor, &b);
-                                        match read_res {
-                                            Ok(_read_bool) => {
-                                                peer_manager.process_events();
-                                            }
-                                            Err(e) => log_error!(logger, "got an error reading event: {}", e),
-                                        }
+                                let read_res = peer_manager.read_event(&mut descriptor, &b);
+                                match read_res {
+                                    Ok(_read_bool) => {
+                                        peer_manager.process_events();
                                     }
+                                    Err(e) => log_error!(logger, "got an error reading event: {}", e),
                                 }
                             }
                             Err(e) => {
-                                match e {
-                                    gloo_net::websocket::WebSocketError::ConnectionError => {
-                                        log_error!(logger, "got connection error");
-                                    }
-                                    gloo_net::websocket::WebSocketError::ConnectionClose(e) => match e.code {
-                                        1000 => log_trace!(logger, "normal connection closure"),
-                                        1006 => log_debug!(logger, "abnormal connection closure"),
-                                        _ => log_error!(logger, "connection closed due to: {:?}", e),
-                                    },
-                                    gloo_net::websocket::WebSocketError::MessageSendError(e) => {
-                                        log_error!(logger, "got an error sending msg: {}", e);
-                                    }
-                                    _ => {
-                                        log_error!(logger, "got an error reading msg: {}", e);
-                                    }
-                                }
+                                log_error!(logger, "got an error reading msg: {}", e);
                                 descriptor.disconnect_socket();
                                 peer_manager.socket_disconnected(&mut descriptor);
                                 break;
