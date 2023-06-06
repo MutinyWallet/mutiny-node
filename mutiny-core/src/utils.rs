@@ -21,7 +21,7 @@ pub async fn sleep(millis: i32) {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::thread::sleep(Duration::from_millis(millis));
+        std::thread::sleep(Duration::from_millis(millis.try_into().unwrap()));
     }
 }
 
@@ -101,7 +101,7 @@ where
 {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        tokio::task::spawn(future);
+        tokio::task::spawn_local(future);
     }
     #[cfg(target_arch = "wasm32")]
     {

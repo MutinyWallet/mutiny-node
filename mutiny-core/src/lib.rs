@@ -170,10 +170,23 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 }
 
                 let client = Client::new(&nostr.primary_key);
-                client
-                    .add_relays(nostr.relays.clone())
-                    .await
-                    .expect("Failed to add relays");
+
+                #[cfg(target_arch = "wasm32")]
+                let add_relay_res = client.add_relays(nostr.relays.clone()).await;
+
+                #[cfg(not(target_arch = "wasm32"))]
+                let add_relay_res = client
+                    .add_relays(
+                        nostr
+                            .relays
+                            .clone()
+                            .into_iter()
+                            .map(|s| (s, None))
+                            .collect(),
+                    )
+                    .await;
+
+                add_relay_res.expect("Failed to add relays");
                 client.connect().await;
                 client.subscribe(vec![nostr.create_nwc_filter()]).await;
 
