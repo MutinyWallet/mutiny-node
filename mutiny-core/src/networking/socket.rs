@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 #[cfg(target_arch = "wasm32")]
-use crate::networking::ws_socket::{SubWsSocketDescriptor, WsTcpSocketDescriptor};
+use crate::networking::ws_socket::WsTcpSocketDescriptor;
 
 pub trait ReadDescriptor {
     async fn read(&self) -> Option<Result<Vec<u8>, MutinyError>>;
@@ -18,8 +18,6 @@ pub trait ReadDescriptor {
 pub enum MutinySocketDescriptor {
     #[cfg(target_arch = "wasm32")]
     Tcp(WsTcpSocketDescriptor),
-    #[cfg(target_arch = "wasm32")]
-    Mutiny(SubWsSocketDescriptor),
     #[cfg(not(target_arch = "wasm32"))]
     Native(), // TODO this might not be the best approach
 }
@@ -29,8 +27,6 @@ impl ReadDescriptor for MutinySocketDescriptor {
         match self {
             #[cfg(target_arch = "wasm32")]
             MutinySocketDescriptor::Tcp(s) => s.read().await,
-            #[cfg(target_arch = "wasm32")]
-            MutinySocketDescriptor::Mutiny(s) => s.read().await,
             #[cfg(not(target_arch = "wasm32"))]
             MutinySocketDescriptor::Native() => todo!(),
         }
@@ -42,8 +38,6 @@ impl peer_handler::SocketDescriptor for MutinySocketDescriptor {
         match self {
             #[cfg(target_arch = "wasm32")]
             MutinySocketDescriptor::Tcp(s) => s.send_data(data, resume_read),
-            #[cfg(target_arch = "wasm32")]
-            MutinySocketDescriptor::Mutiny(s) => s.send_data(data, resume_read),
             #[cfg(not(target_arch = "wasm32"))]
             MutinySocketDescriptor::Native() => todo!(),
         }
@@ -53,8 +47,6 @@ impl peer_handler::SocketDescriptor for MutinySocketDescriptor {
         match self {
             #[cfg(target_arch = "wasm32")]
             MutinySocketDescriptor::Tcp(s) => s.disconnect_socket(),
-            #[cfg(target_arch = "wasm32")]
-            MutinySocketDescriptor::Mutiny(s) => s.disconnect_socket(),
             #[cfg(not(target_arch = "wasm32"))]
             MutinySocketDescriptor::Native() => todo!(),
         }

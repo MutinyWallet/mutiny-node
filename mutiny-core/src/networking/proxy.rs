@@ -39,10 +39,6 @@ impl WsProxy {
         let ws = match peer_connection_info.connection_type {
             ConnectionType::Tcp(s) => WebSocket::open(&tcp_proxy_to_url(proxy_url, &s)?)
                 .map_err(|_| MutinyError::ConnectionFailed)?,
-            ConnectionType::Mutiny(url) => WebSocket::open(String::as_str(
-                &mutiny_conn_proxy_to_url(&url, &peer_connection_info.pubkey.to_string()),
-            ))
-            .map_err(|_| MutinyError::ConnectionFailed)?,
         };
 
         // wait for connected status or time out at 10s
@@ -123,10 +119,6 @@ pub fn tcp_proxy_to_url(proxy_url: &str, peer_addr: &str) -> Result<String, Muti
     ))
 }
 
-pub fn mutiny_conn_proxy_to_url(proxy_url: &str, peer_pubkey: &str) -> String {
-    format!("{proxy_url}/v1/mutiny/{peer_pubkey}",)
-}
-
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "ignored_tests")]
@@ -134,7 +126,7 @@ mod tests {
 
     use crate::test_utils::*;
 
-    use crate::networking::proxy::{mutiny_conn_proxy_to_url, tcp_proxy_to_url};
+    use crate::networking::proxy::tcp_proxy_to_url;
 
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
@@ -169,10 +161,5 @@ mod tests {
             "ws://127.0.0.1:3001/v1/127_0_0_1/4000".to_string(),
             tcp_proxy_to_url("ws://127.0.0.1:3001", "127.0.0.1:4000").unwrap()
         );
-
-        assert_eq!(
-            format!("ws://127.0.0.1:3001/v1/mutiny/{PEER_PUBKEY}"),
-            mutiny_conn_proxy_to_url("ws://127.0.0.1:3001", PEER_PUBKEY,)
-        )
     }
 }

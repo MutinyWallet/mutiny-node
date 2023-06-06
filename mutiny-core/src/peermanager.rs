@@ -5,11 +5,9 @@ use crate::{gossip, ldkstorage::PhantomChannelManager, logging::MutinyLogger};
 use crate::{gossip::read_peer_info, node::PubkeyConnectionInfo};
 use crate::{keymanager::PhantomKeysManager, node::ConnectionType};
 use bitcoin::secp256k1::PublicKey;
-use futures::lock::Mutex;
 use lightning::{
     ln::{msgs::NetAddress, peer_handler::SocketDescriptor as LdkSocketDescriptor},
     log_debug, log_trace,
-    util::ser::Writeable,
 };
 use std::{net::SocketAddr, sync::atomic::AtomicBool};
 
@@ -28,7 +26,7 @@ use lightning::util::logger::Logger;
 use std::sync::Arc;
 
 #[cfg(target_arch = "wasm32")]
-use crate::networking::ws_socket::{MultiWsSocketDescriptor, WsTcpSocketDescriptor};
+use crate::networking::ws_socket::WsTcpSocketDescriptor;
 
 #[cfg(target_arch = "wasm32")]
 use crate::networking::proxy::WsProxy;
@@ -300,7 +298,6 @@ impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) async fn connect_peer_if_necessary(
-    multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
     websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
     logger: Arc<MutinyLogger>,
@@ -314,7 +311,6 @@ pub(crate) async fn connect_peer_if_necessary(
         Ok(())
     } else {
         connect_peer(
-            multi_socket,
             websocket_proxy_addr,
             peer_connection_info,
             logger,
@@ -327,7 +323,6 @@ pub(crate) async fn connect_peer_if_necessary(
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn connect_peer_if_necessary(
-    multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
     websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
     logger: Arc<MutinyLogger>,
@@ -339,7 +334,6 @@ pub(crate) async fn connect_peer_if_necessary(
 
 #[cfg(target_arch = "wasm32")]
 async fn connect_peer(
-    multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
     websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
     logger: Arc<MutinyLogger>,
@@ -364,15 +358,6 @@ async fn connect_peer(
                 MutinySocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
                 try_get_net_addr_from_socket(t),
             )
-        }
-        ConnectionType::Mutiny(_) => {
-            let sub_socket = multi_socket
-                .lock()
-                .await
-                .create_new_subsocket(peer_connection_info.pubkey.encode())
-                .await;
-
-            (MutinySocketDescriptor::Mutiny(sub_socket), None)
         }
     };
 
@@ -404,7 +389,6 @@ async fn connect_peer(
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn connect_peer(
-    multi_socket: Arc<Mutex<MultiWsSocketDescriptor>>,
     websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
     logger: Arc<MutinyLogger>,
