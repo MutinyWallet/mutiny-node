@@ -15,13 +15,13 @@ use mockall::{automock, predicate::*};
 
 #[cfg_attr(test, automock)]
 #[async_trait(?Send)]
-pub(crate) trait Proxy {
+pub trait Proxy {
     fn send(&self, data: Message);
     async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>>;
     async fn close(&self);
 }
 
-pub(crate) struct WsProxy {
+pub struct WsProxy {
     write: WsSplit,
     read: ReadSplit,
     logger: Arc<MutinyLogger>,
@@ -130,11 +130,11 @@ pub fn mutiny_conn_proxy_to_url(proxy_url: &str, peer_pubkey: &str) -> String {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "ignored_tests")]
-    use crate::proxy::*;
+    use crate::networking::proxy::*;
 
     use crate::test_utils::*;
 
-    use crate::proxy::{mutiny_conn_proxy_to_url, tcp_proxy_to_url};
+    use crate::networking::proxy::{mutiny_conn_proxy_to_url, tcp_proxy_to_url};
 
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 

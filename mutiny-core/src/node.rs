@@ -12,13 +12,13 @@ use crate::{
     ldkstorage::{MutinyNodePersister, PhantomChannelManager},
     logging::MutinyLogger,
     lspclient::LspClient,
+    networking::socket::MultiWsSocketDescriptor,
     nodemanager::{MutinyInvoice, NodeIndex},
     onchain::OnChainWallet,
     peermanager::{GossipMessageHandler, PeerManager, PeerManagerImpl},
-    proxy::WsProxy,
-    socket::MultiWsSocketDescriptor,
     utils::{self, sleep},
 };
+
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{lspclient::FeeRequest, storage::MutinyStorage};
 use anyhow::{anyhow, Context};
@@ -72,6 +72,9 @@ use std::{
     },
 };
 
+#[cfg(target_arch = "wasm32")]
+use crate::networking::proxy::WsProxy;
+
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 const INITIAL_RECONNECTION_DELAY: u64 = 5;
 const MAX_RECONNECTION_DELAY: u64 = 60;
@@ -102,13 +105,13 @@ pub(crate) type Router =
 pub(crate) type ProbScorer = ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ConnectionType {
+pub enum ConnectionType {
     Tcp(String),
     Mutiny(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PubkeyConnectionInfo {
+pub struct PubkeyConnectionInfo {
     pub pubkey: PublicKey,
     pub connection_type: ConnectionType,
     pub original_connection_string: String,

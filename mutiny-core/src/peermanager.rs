@@ -27,14 +27,14 @@ use lightning::util::logger::Logger;
 use std::sync::Arc;
 
 #[cfg(target_arch = "wasm32")]
-use crate::socket::{
+use crate::networking::socket::{
     schedule_descriptor_read, MultiWsSocketDescriptor, WsSocketDescriptor, WsTcpSocketDescriptor,
 };
 
 #[cfg(target_arch = "wasm32")]
-use crate::proxy::WsProxy;
+use crate::networking::proxy::WsProxy;
 
-pub(crate) trait PeerManager {
+pub trait PeerManager {
     fn get_peer_node_ids(&self) -> Vec<PublicKey>;
 
     fn new_outbound_connection(

@@ -23,6 +23,7 @@ pub mod labels;
 mod ldkstorage;
 pub mod logging;
 mod lspclient;
+mod networking;
 mod node;
 pub mod nodemanager;
 mod nostr;
@@ -30,12 +31,6 @@ mod onchain;
 mod peermanager;
 pub mod redshift;
 pub mod storage;
-
-#[cfg(target_arch = "wasm32")]
-mod socket;
-
-#[cfg(target_arch = "wasm32")]
-mod proxy;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;

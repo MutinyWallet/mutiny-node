@@ -1,5 +1,4 @@
 use crate::peermanager::PeerManager;
-use crate::proxy::Proxy;
 use crate::utils;
 use bitcoin::hashes::hex::ToHex;
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -15,26 +14,36 @@ use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+#[cfg(target_arch = "wasm32")]
+use crate::networking::proxy::Proxy;
+
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 const PUBKEY_BYTES_LEN: usize = 33;
-pub(crate) type SubSocketMap =
-    Arc<Mutex<HashMap<Vec<u8>, (SubWsSocketDescriptor, Sender<Message>)>>>;
+pub type SubSocketMap = Arc<Mutex<HashMap<Vec<u8>, (SubWsSocketDescriptor, Sender<Message>)>>>;
 
-pub(crate) trait ReadDescriptor {
+pub trait ReadDescriptor {
     async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>>;
 }
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
-pub(crate) enum WsSocketDescriptor {
+pub enum WsSocketDescriptor {
+    #[cfg(target_arch = "wasm32")]
     Tcp(WsTcpSocketDescriptor),
+    #[cfg(target_arch = "wasm32")]
     Mutiny(SubWsSocketDescriptor),
+    #[cfg(not(target_arch = "wasm32"))]
+    Native(), // TODO this might not be the best approach
 }
 
 impl ReadDescriptor for WsSocketDescriptor {
     async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>> {
         match self {
+            #[cfg(target_arch = "wasm32")]
             WsSocketDescriptor::Tcp(s) => s.read().await,
+            #[cfg(target_arch = "wasm32")]
             WsSocketDescriptor::Mutiny(s) => s.read().await,
+            #[cfg(not(target_arch = "wasm32"))]
+            WsSocketDescriptor::Native() => todo!(),
         }
     }
 }
@@ -42,20 +51,28 @@ impl ReadDescriptor for WsSocketDescriptor {
 impl peer_handler::SocketDescriptor for WsSocketDescriptor {
     fn send_data(&mut self, data: &[u8], resume_read: bool) -> usize {
         match self {
+            #[cfg(target_arch = "wasm32")]
             WsSocketDescriptor::Tcp(s) => s.send_data(data, resume_read),
+            #[cfg(target_arch = "wasm32")]
             WsSocketDescriptor::Mutiny(s) => s.send_data(data, resume_read),
+            #[cfg(not(target_arch = "wasm32"))]
+            WsSocketDescriptor::Native() => todo!(),
         }
     }
 
     fn disconnect_socket(&mut self) {
         match self {
+            #[cfg(target_arch = "wasm32")]
             WsSocketDescriptor::Tcp(s) => s.disconnect_socket(),
+            #[cfg(target_arch = "wasm32")]
             WsSocketDescriptor::Mutiny(s) => s.disconnect_socket(),
+            #[cfg(not(target_arch = "wasm32"))]
+            WsSocketDescriptor::Native() => todo!(),
         }
     }
 }
 
-pub(crate) struct WsTcpSocketDescriptor {
+pub struct WsTcpSocketDescriptor {
     conn: Arc<dyn Proxy>,
     id: u64,
 }
@@ -115,7 +132,7 @@ impl std::fmt::Debug for WsTcpSocketDescriptor {
     }
 }
 
-pub(crate) struct MultiWsSocketDescriptor {
+pub struct MultiWsSocketDescriptor {
     /// Once `conn` has been set, it MUST NOT be unset.
     /// This is typically set via `connect`
     conn: Option<Arc<dyn Proxy>>,
@@ -452,7 +469,7 @@ async fn handle_incoming_msg(
     }
 }
 
-pub(crate) fn schedule_descriptor_read(
+pub fn schedule_descriptor_read(
     mut descriptor: WsSocketDescriptor,
     peer_manager: Arc<dyn PeerManager>,
     logger: Arc<dyn Logger>,
@@ -547,7 +564,7 @@ async fn create_new_subsocket(
     new_subsocket
 }
 
-pub(crate) struct SubWsSocketDescriptor {
+pub struct SubWsSocketDescriptor {
     send_channel: Sender<Message>,
     read_channel: Receiver<Message>,
     peer_pubkey_bytes: Vec<u8>,
@@ -678,14 +695,14 @@ impl std::fmt::Debug for SubWsSocketDescriptor {
 
 #[cfg(test)]
 mod tests {
-    use crate::{logging::TestLogger, proxy::MockProxy};
+    use crate::{logging::TestLogger, networking::proxy::MockProxy};
 
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     use super::WsSocketDescriptor;
-    use crate::socket::create_new_subsocket;
-    use crate::socket::SubSocketMap;
-    use crate::socket::WsTcpSocketDescriptor;
+    use crate::networking::socket::create_new_subsocket;
+    use crate::networking::socket::SubSocketMap;
+    use crate::networking::socket::WsTcpSocketDescriptor;
     use bitcoin::secp256k1::PublicKey;
     use crossbeam_channel::{unbounded, Receiver, Sender};
     use futures::lock::Mutex;
