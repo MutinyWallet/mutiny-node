@@ -12,7 +12,6 @@ use crate::{
     ldkstorage::{MutinyNodePersister, PhantomChannelManager},
     logging::MutinyLogger,
     lspclient::LspClient,
-    networking::socket::MultiWsSocketDescriptor,
     nodemanager::{MutinyInvoice, NodeIndex},
     onchain::OnChainWallet,
     peermanager::{GossipMessageHandler, PeerManager, PeerManagerImpl},
@@ -74,6 +73,9 @@ use std::{
 
 #[cfg(target_arch = "wasm32")]
 use crate::networking::proxy::WsProxy;
+
+#[cfg(target_arch = "wasm32")]
+use crate::networking::ws_socket::MultiWsSocketDescriptor;
 
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 const INITIAL_RECONNECTION_DELAY: u64 = 5;

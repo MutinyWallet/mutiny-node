@@ -13,6 +13,7 @@ use lightning::{
 };
 use std::{net::SocketAddr, sync::atomic::AtomicBool};
 
+use crate::networking::socket::{schedule_descriptor_read, MutinySocketDescriptor};
 use bitcoin::BlockHash;
 use lightning::events::{MessageSendEvent, MessageSendEventsProvider};
 use lightning::ln::features::{InitFeatures, NodeFeatures};
@@ -27,9 +28,7 @@ use lightning::util::logger::Logger;
 use std::sync::Arc;
 
 #[cfg(target_arch = "wasm32")]
-use crate::networking::socket::{
-    schedule_descriptor_read, MultiWsSocketDescriptor, WsSocketDescriptor, WsTcpSocketDescriptor,
-};
+use crate::networking::ws_socket::{MultiWsSocketDescriptor, WsTcpSocketDescriptor};
 
 #[cfg(target_arch = "wasm32")]
 use crate::networking::proxy::WsProxy;
@@ -40,30 +39,30 @@ pub trait PeerManager {
     fn new_outbound_connection(
         &self,
         their_node_id: PublicKey,
-        descriptor: WsSocketDescriptor,
+        descriptor: MutinySocketDescriptor,
         remote_network_address: Option<NetAddress>,
     ) -> Result<Vec<u8>, PeerHandleError>;
 
     fn new_inbound_connection(
         &self,
-        descriptor: WsSocketDescriptor,
+        descriptor: MutinySocketDescriptor,
         remote_network_address: Option<NetAddress>,
     ) -> Result<(), PeerHandleError>;
 
     fn write_buffer_space_avail(
         &self,
-        descriptor: &mut WsSocketDescriptor,
+        descriptor: &mut MutinySocketDescriptor,
     ) -> Result<(), PeerHandleError>;
 
     fn read_event(
         &self,
-        descriptor: &mut WsSocketDescriptor,
+        descriptor: &mut MutinySocketDescriptor,
         data: &[u8],
     ) -> Result<bool, PeerHandleError>;
 
     fn process_events(&self);
 
-    fn socket_disconnected(&self, descriptor: &mut WsSocketDescriptor);
+    fn socket_disconnected(&self, descriptor: &mut MutinySocketDescriptor);
 
     fn disconnect_by_node_id(&self, node_id: PublicKey);
 
@@ -80,7 +79,7 @@ pub trait PeerManager {
 }
 
 pub(crate) type PeerManagerImpl<S: MutinyStorage> = LdkPeerManager<
-    WsSocketDescriptor,
+    MutinySocketDescriptor,
     Arc<PhantomChannelManager<S>>,
     Arc<GossipMessageHandler<S>>,
     Arc<IgnoringMessageHandler>,
@@ -97,7 +96,7 @@ impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
     fn new_outbound_connection(
         &self,
         their_node_id: PublicKey,
-        descriptor: WsSocketDescriptor,
+        descriptor: MutinySocketDescriptor,
         remote_network_address: Option<NetAddress>,
     ) -> Result<Vec<u8>, PeerHandleError> {
         self.new_outbound_connection(their_node_id, descriptor, remote_network_address)
@@ -105,7 +104,7 @@ impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
 
     fn new_inbound_connection(
         &self,
-        descriptor: WsSocketDescriptor,
+        descriptor: MutinySocketDescriptor,
         remote_network_address: Option<NetAddress>,
     ) -> Result<(), PeerHandleError> {
         self.new_inbound_connection(descriptor, remote_network_address)
@@ -113,14 +112,14 @@ impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
 
     fn write_buffer_space_avail(
         &self,
-        descriptor: &mut WsSocketDescriptor,
+        descriptor: &mut MutinySocketDescriptor,
     ) -> Result<(), PeerHandleError> {
         self.write_buffer_space_avail(descriptor)
     }
 
     fn read_event(
         &self,
-        peer_descriptor: &mut WsSocketDescriptor,
+        peer_descriptor: &mut MutinySocketDescriptor,
         data: &[u8],
     ) -> Result<bool, PeerHandleError> {
         self.read_event(peer_descriptor, data)
@@ -130,7 +129,7 @@ impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
         self.process_events()
     }
 
-    fn socket_disconnected(&self, descriptor: &mut WsSocketDescriptor) {
+    fn socket_disconnected(&self, descriptor: &mut MutinySocketDescriptor) {
         self.socket_disconnected(descriptor)
     }
 
@@ -362,7 +361,7 @@ async fn connect_peer(
             )
             .await?;
             (
-                WsSocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
+                MutinySocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
                 try_get_net_addr_from_socket(t),
             )
         }
@@ -373,7 +372,7 @@ async fn connect_peer(
                 .create_new_subsocket(peer_connection_info.pubkey.encode())
                 .await;
 
-            (WsSocketDescriptor::Mutiny(sub_socket), None)
+            (MutinySocketDescriptor::Mutiny(sub_socket), None)
         }
     };
 
