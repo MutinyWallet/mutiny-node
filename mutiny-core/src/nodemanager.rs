@@ -42,6 +42,7 @@ use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget,
 use lightning::chain::channelmonitor::Balance;
 use lightning::chain::keysinterface::{NodeSigner, Recipient};
 use lightning::chain::Confirm;
+use lightning::events::ClosureReason;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning::ln::PaymentHash;
 use lightning::routing::gossip::NodeId;
@@ -306,10 +307,50 @@ impl From<bdk::TransactionDetails> for TransactionDetails {
     }
 }
 
+/// Information about a channel that was closed.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ChannelClosure {
+    pub user_channel_id: Option<[u8; 16]>,
+    pub channel_id: Option<[u8; 32]>,
+    pub node_id: Option<PublicKey>,
+    pub reason: String,
+    pub timestamp: u64,
+}
+
+impl ChannelClosure {
+    pub fn new(
+        user_channel_id: u128,
+        channel_id: [u8; 32],
+        node_id: Option<PublicKey>,
+        reason: ClosureReason,
+    ) -> Self {
+        Self {
+            user_channel_id: Some(user_channel_id.to_be_bytes()),
+            channel_id: Some(channel_id),
+            node_id,
+            reason: reason.to_string(),
+            timestamp: utils::now().as_secs(),
+        }
+    }
+}
+
+impl PartialOrd for ChannelClosure {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ChannelClosure {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.timestamp.cmp(&other.timestamp)
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum ActivityItem {
     OnChain(TransactionDetails),
     Lightning(Box<MutinyInvoice>),
+    ChannelClosed(ChannelClosure),
 }
 
 impl ActivityItem {
@@ -320,6 +361,7 @@ impl ActivityItem {
                 ConfirmationTime::Unconfirmed => None,
             },
             ActivityItem::Lightning(i) => Some(i.last_updated),
+            ActivityItem::ChannelClosed(c) => Some(c.timestamp),
         }
     }
 
@@ -327,6 +369,7 @@ impl ActivityItem {
         match self {
             ActivityItem::OnChain(t) => t.labels.clone(),
             ActivityItem::Lightning(i) => i.labels.clone(),
+            ActivityItem::ChannelClosed(_) => vec![],
         }
     }
 
@@ -336,6 +379,7 @@ impl ActivityItem {
                 onchain.labels.iter().any(|l| l.contains("LN Channel:"))
             }
             ActivityItem::Lightning(_) => false,
+            ActivityItem::ChannelClosed(_) => false,
         }
     }
 }
@@ -931,8 +975,12 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Returns all the on-chain and lightning activity from the wallet.
     pub async fn get_activity(&self) -> Result<Vec<ActivityItem>, MutinyError> {
         // todo add contacts to the activity
-        let lightning = self.list_invoices().await?;
+        let (lightning, closures) =
+            futures_util::join!(self.list_invoices(), self.list_channel_closures());
+        let lightning = lightning?;
+        let closures = closures?;
         let onchain = self.list_onchain()?;
+
         let mut activity = Vec::with_capacity(lightning.len() + onchain.len());
         for ln in lightning {
             // Only show paid invoices
@@ -942,6 +990,9 @@ impl<S: MutinyStorage> NodeManager<S> {
         }
         for on in onchain {
             activity.push(ActivityItem::OnChain(on));
+        }
+        for chan in closures {
+            activity.push(ActivityItem::ChannelClosed(chan));
         }
 
         // Newest first
@@ -1531,6 +1582,31 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(invoices)
     }
 
+    pub async fn get_channel_closure(
+        &self,
+        user_channel_id: u128,
+    ) -> Result<ChannelClosure, MutinyError> {
+        let nodes = self.nodes.lock().await;
+        for (_, node) in nodes.iter() {
+            if let Ok(Some(closure)) = node.get_channel_closure(user_channel_id) {
+                return Ok(closure);
+            }
+        }
+
+        Err(MutinyError::NotFound)
+    }
+
+    pub async fn list_channel_closures(&self) -> Result<Vec<ChannelClosure>, MutinyError> {
+        let mut channels: Vec<ChannelClosure> = vec![];
+        let nodes = self.nodes.lock().await;
+        for (_, node) in nodes.iter() {
+            if let Ok(mut invs) = node.get_channel_closures() {
+                channels.append(&mut invs)
+            }
+        }
+        Ok(channels)
+    }
+
     /// Opens a channel from our selected node to the given pubkey.
     /// The amount is in satoshis.
     ///
@@ -1948,7 +2024,9 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
 
 #[cfg(test)]
 mod tests {
-    use crate::nodemanager::{ActivityItem, MutinyInvoice, NodeManager, TransactionDetails};
+    use crate::nodemanager::{
+        ActivityItem, ChannelClosure, MutinyInvoice, NodeManager, TransactionDetails,
+    };
     use crate::{keymanager::generate_seed, MutinyWalletConfig};
     use bdk::chain::ConfirmationTime;
     use bitcoin::hashes::hex::{FromHex, ToHex};
@@ -2216,6 +2294,14 @@ mod tests {
         )
         .unwrap();
 
+        let closure: ChannelClosure = ChannelClosure {
+            user_channel_id: None,
+            channel_id: None,
+            node_id: None,
+            reason: "".to_string(),
+            timestamp: 1686258926,
+        };
+
         let tx1: TransactionDetails = TransactionDetails {
             transaction: None,
             txid: Txid::all_zeros(),
@@ -2274,6 +2360,7 @@ mod tests {
             ActivityItem::OnChain(tx2.clone()),
             ActivityItem::Lightning(Box::new(invoice1.clone())),
             ActivityItem::Lightning(Box::new(invoice2.clone())),
+            ActivityItem::ChannelClosed(closure.clone()),
         ];
         vec.sort();
 
@@ -2282,6 +2369,7 @@ mod tests {
             vec![
                 ActivityItem::OnChain(tx2),
                 ActivityItem::Lightning(Box::new(invoice1)),
+                ActivityItem::ChannelClosed(closure),
                 ActivityItem::Lightning(Box::new(invoice2)),
                 ActivityItem::OnChain(tx1),
             ]
