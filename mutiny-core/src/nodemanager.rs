@@ -38,7 +38,7 @@ use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use core::time::Duration;
 use futures::{future::join_all, lock::Mutex};
-use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
+use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::chain::channelmonitor::Balance;
 use lightning::chain::keysinterface::{NodeSigner, Recipient};
 use lightning::chain::Confirm;
@@ -388,7 +388,7 @@ pub struct NodeManager<S: MutinyStorage> {
     wallet: Arc<OnChainWallet<S>>,
     gossip_sync: Arc<RapidGossipSync>,
     scorer: Arc<utils::Mutex<ProbScorer>>,
-    chain: Arc<MutinyChain>,
+    chain: Arc<MutinyChain<S>>,
     fee_estimator: Arc<MutinyFeeEstimator<S>>,
     pub(crate) storage: S,
     pub(crate) node_storage: Mutex<NodeStorage>,
@@ -452,7 +452,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             logger.clone(),
         )?);
 
-        let chain = Arc::new(MutinyChain::new(tx_sync, logger.clone()));
+        let chain = Arc::new(MutinyChain::new(tx_sync, wallet.clone(), logger.clone()));
 
         let (gossip_sync, scorer) =
             gossip::get_gossip_sync(&storage, c.user_rgs_url, network, logger.clone()).await?;
@@ -733,9 +733,8 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Broadcast a transaction to the network.
     /// The transaction is broadcast through the configured esplora server.
-    pub fn broadcast_transaction(&self, tx: &Transaction) -> Result<(), MutinyError> {
-        self.chain.broadcast_transaction(tx);
-        Ok(())
+    pub async fn broadcast_transaction(&self, tx: Transaction) -> Result<(), MutinyError> {
+        self.wallet.broadcast_transaction(tx).await
     }
 
     /// Returns the mnemonic seed phrase for the wallet.

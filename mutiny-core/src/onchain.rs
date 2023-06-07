@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
@@ -7,15 +8,14 @@ use bdk::psbt::PsbtUtils;
 use bdk::template::DescriptorTemplateOut;
 use bdk::{FeeRate, LocalUtxo, SignOptions, TransactionDetails, Wallet};
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
-use bdk_macros::maybe_await;
 use bip39::Mnemonic;
 use bitcoin::psbt::PartiallySignedTransaction;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, OutPoint, Script, Transaction, Txid};
 use esplora_client::AsyncClient;
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
-use lightning::log_debug;
 use lightning::util::logger::Logger;
+use lightning::{log_debug, log_error, log_warn};
 
 use crate::error::MutinyError;
 use crate::fees::MutinyFeeEstimator;
@@ -63,6 +63,36 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             fees,
             logger,
         })
+    }
+
+    pub async fn broadcast_transaction(&self, tx: Transaction) -> Result<(), MutinyError> {
+        let txid = tx.txid();
+        if let Err(e) = self.blockchain.broadcast(&tx).await {
+            log_error!(self.logger, "Failed to broadcast transaction ({txid}): {e}");
+            return Err(MutinyError::Other(anyhow!(
+                "Failed to broadcast transaction ({txid}): {e}"
+            )));
+        } else {
+            // if the wallet has the transaction, we don't need to insert it
+            let has_tx = {
+                let wallet = self.wallet.try_read()?;
+                wallet.get_tx(txid, false).is_some()
+            };
+
+            if !has_tx {
+                if let Err(e) = self
+                    .insert_tx(tx, ConfirmationTime::Unconfirmed, None)
+                    .await
+                {
+                    log_warn!(
+                        self.logger,
+                        "ERROR: Could not sync broadcasted tx ({txid}), will be synced in next iteration: {e:?}"
+                    );
+                };
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn sync(&self) -> Result<(), MutinyError> {
@@ -275,7 +305,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
 
-        maybe_await!(self.blockchain.broadcast(&raw_transaction))?;
+        self.broadcast_transaction(raw_transaction).await?;
         log_debug!(self.logger, "Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }
@@ -328,7 +358,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
 
-        maybe_await!(self.blockchain.broadcast(&raw_transaction))?;
+        self.broadcast_transaction(raw_transaction).await?;
         log_debug!(self.logger, "Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }

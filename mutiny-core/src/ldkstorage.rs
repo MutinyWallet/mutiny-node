@@ -49,7 +49,7 @@ const FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY: &str = "failed_spendable_outputs";
 
 pub(crate) type PhantomChannelManager<S: MutinyStorage> = LdkChannelManager<
     Arc<ChainMonitor<S>>,
-    Arc<MutinyChain>,
+    Arc<MutinyChain<S>>,
     Arc<PhantomKeysManager<S>>,
     Arc<PhantomKeysManager<S>>,
     Arc<PhantomKeysManager<S>>,
@@ -159,7 +159,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         &self,
         network: Network,
         chain_monitor: Arc<ChainMonitor<S>>,
-        mutiny_chain: Arc<MutinyChain>,
+        mutiny_chain: Arc<MutinyChain<S>>,
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
         mutiny_logger: Arc<MutinyLogger>,
         keys_manager: Arc<PhantomKeysManager<S>>,
@@ -447,7 +447,7 @@ impl<S: MutinyStorage>
     Persister<
         '_,
         Arc<ChainMonitor<S>>,
-        Arc<MutinyChain>,
+        Arc<MutinyChain<S>>,
         Arc<PhantomKeysManager<S>>,
         Arc<PhantomKeysManager<S>>,
         Arc<PhantomKeysManager<S>>,
