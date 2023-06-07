@@ -14,9 +14,11 @@ publish:
     wasm-pack publish --access public -t web
 
 test:
+    cargo test -p mutiny-core --target=x86_64-unknown-linux-gnu
     WASM_BINDGEN_TEST_TIMEOUT=120 wasm-pack test --headless --chrome ./mutiny-core
     WASM_BINDGEN_TEST_TIMEOUT=120 wasm-pack test --headless --chrome ./mutiny-wasm
 
 clippy:
-    cargo clippy --package mutiny-core
-    cargo clippy --package mutiny-wasm -- -Aclippy::drop_non_drop
+    cargo clippy --all-features --tests --package mutiny-core --target=wasm32-unknown-unknown -- -D warnings
+    cargo clippy --all-features --tests --package mutiny-core --target=x86_64-unknown-linux-gnu -- -D warnings
+    cargo clippy --all-features --tests --package mutiny-wasm -- -D warnings

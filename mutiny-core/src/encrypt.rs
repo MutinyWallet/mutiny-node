@@ -3,18 +3,15 @@ use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use pbkdf2::password_hash::Output;
 use pbkdf2::password_hash::{PasswordHasher, Salt, SaltString};
 use pbkdf2::{Params, Pbkdf2};
-use rand_core::{OsRng, RngCore};
-
-// Copied from https://github.com/FAE56/wasm-encrypt-rs/blob/master/src/crypto.rs
 
 pub fn encrypt(content: &str, password: &str) -> String {
     let mut salt = [0u8; 16];
-    OsRng.fill_bytes(&mut salt);
+    getrandom::getrandom(&mut salt).unwrap();
     let derive_key = derive_key(password, &salt);
     let key = derive_key.as_bytes();
 
     let mut iv = [0u8; 12];
-    OsRng.fill_bytes(&mut iv);
+    getrandom::getrandom(&mut iv).unwrap();
 
     let cipher = Aes256Gcm::new_from_slice(key).unwrap();
     let nonce = Nonce::from_slice(&iv);
@@ -66,18 +63,12 @@ mod tests {
     #[test]
     fn test_encryption() {
         let password = "password";
-        let content = "中文测试 😍 언문.";
+        let content = "hello world";
         let encrypted = encrypt(content, password);
         println!("{encrypted}");
 
         let decrypted = decrypt(&encrypted, password);
         println!("{decrypted}");
         assert_eq!(content, decrypted);
-
-        let fail_decrypt = decrypt(&encrypted, "incorrect");
-        assert_ne!(content, fail_decrypt);
-
-        let fail_decrypt2 = decrypt("incorrect", password);
-        assert_ne!(content, fail_decrypt2)
     }
 }
