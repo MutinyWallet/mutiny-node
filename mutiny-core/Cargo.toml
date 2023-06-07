@@ -71,7 +71,6 @@ gloo-net = { version = "0.2.4" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["rt"] }
-#lightning-net-tokio = { version = "0.0.115" }
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = true

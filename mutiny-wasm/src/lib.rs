@@ -75,6 +75,7 @@ impl MutinyWallet {
         let inner = mutiny_core::MutinyWallet::new(
             storage,
             mnemonic,
+            #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
             network,
             user_esplora_url,

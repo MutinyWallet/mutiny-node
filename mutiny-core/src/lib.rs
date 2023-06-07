@@ -60,6 +60,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct MutinyWalletConfig {
     mnemonic: Option<Mnemonic>,
+    #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: Option<String>,
     network: Option<Network>,
     user_esplora_url: Option<String>,
@@ -71,7 +72,7 @@ impl MutinyWalletConfig {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         mnemonic: Option<Mnemonic>,
-        websocket_proxy_addr: Option<String>,
+        #[cfg(target_arch = "wasm32")] websocket_proxy_addr: Option<String>,
         network: Option<Network>,
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
@@ -79,6 +80,7 @@ impl MutinyWalletConfig {
     ) -> Self {
         Self {
             mnemonic,
+            #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
             network,
             user_esplora_url,
@@ -104,7 +106,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     pub async fn new(
         storage: S,
         mnemonic: Option<Mnemonic>,
-        websocket_proxy_addr: Option<String>,
+        #[cfg(target_arch = "wasm32")] websocket_proxy_addr: Option<String>,
         network: Option<Network>,
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
@@ -112,6 +114,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     ) -> Result<MutinyWallet<S>, MutinyError> {
         let config = MutinyWalletConfig::new(
             mnemonic,
+            #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
             network,
             user_esplora_url,
@@ -287,6 +290,7 @@ mod tests {
         MutinyWallet::new(
             storage.clone(),
             None,
+            #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Regtest),
             None,
@@ -308,6 +312,7 @@ mod tests {
         let mut mw = MutinyWallet::new(
             storage.clone(),
             None,
+            #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Regtest),
             None,
@@ -336,6 +341,7 @@ mod tests {
         let mut mw = MutinyWallet::new(
             storage.clone(),
             None,
+            #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Regtest),
             None,

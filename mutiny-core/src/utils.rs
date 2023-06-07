@@ -101,7 +101,7 @@ where
 {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        tokio::task::spawn_local(future);
+        tokio::task::LocalSet::new().spawn_local(future);
     }
     #[cfg(target_arch = "wasm32")]
     {

@@ -31,6 +31,18 @@ use crate::networking::ws_socket::WsTcpSocketDescriptor;
 #[cfg(target_arch = "wasm32")]
 use crate::networking::proxy::WsProxy;
 
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::time;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
+
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::net::TcpStream;
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::networking::tcp_socket::TcpSocketDescriptor;
+
 pub trait PeerManager {
     fn get_peer_node_ids(&self) -> Vec<PublicKey>;
 
@@ -296,9 +308,8 @@ impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
 pub(crate) async fn connect_peer_if_necessary(
-    websocket_proxy_addr: &str,
+    #[cfg(target_arch = "wasm32")] websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
     logger: Arc<MutinyLogger>,
     peer_manager: Arc<dyn PeerManager>,
@@ -311,6 +322,7 @@ pub(crate) async fn connect_peer_if_necessary(
         Ok(())
     } else {
         connect_peer(
+            #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
             peer_connection_info,
             logger,
@@ -321,43 +333,48 @@ pub(crate) async fn connect_peer_if_necessary(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) async fn connect_peer_if_necessary(
-    websocket_proxy_addr: &str,
-    peer_connection_info: &PubkeyConnectionInfo,
-    logger: Arc<MutinyLogger>,
-    peer_manager: Arc<dyn PeerManager>,
-    stop: Arc<AtomicBool>,
-) -> Result<(), MutinyError> {
-    todo!()
-}
-
-#[cfg(target_arch = "wasm32")]
 async fn connect_peer(
-    websocket_proxy_addr: &str,
+    #[cfg(target_arch = "wasm32")] websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
     logger: Arc<MutinyLogger>,
     peer_manager: Arc<dyn PeerManager>,
     stop: Arc<AtomicBool>,
 ) -> Result<(), MutinyError> {
-    // first make a connection to the node
-    log_debug!(
-        logger,
-        "making connection to peer: {:?}",
-        peer_connection_info
-    );
     let (mut descriptor, socket_addr_opt) = match peer_connection_info.connection_type {
         ConnectionType::Tcp(ref t) => {
-            let proxy = WsProxy::new(
-                websocket_proxy_addr,
-                peer_connection_info.clone(),
-                logger.clone(),
-            )
-            .await?;
-            (
-                MutinySocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
-                try_get_net_addr_from_socket(t),
-            )
+            #[cfg(target_arch = "wasm32")]
+            {
+                let proxy = WsProxy::new(
+                    websocket_proxy_addr,
+                    peer_connection_info.clone(),
+                    logger.clone(),
+                )
+                .await?;
+                let (_, net_addr) = try_parse_addr_string(t);
+                (
+                    MutinySocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
+                    net_addr,
+                )
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let (socket_addr, net_addr) = try_parse_addr_string(t);
+                let socket_addr = socket_addr.ok_or(MutinyError::ConnectionFailed)?;
+
+                let stream =
+                    time::timeout(Duration::from_secs(10), TcpStream::connect(&socket_addr))
+                        .await
+                        .map_err(|_| MutinyError::ConnectionFailed)?
+                        .map_err(|_| MutinyError::ConnectionFailed)?;
+
+                let stream = stream.into_std().unwrap();
+                (
+                    MutinySocketDescriptor::Native(TcpSocketDescriptor::new(Arc::new(
+                        tokio::sync::Mutex::new(stream),
+                    ))),
+                    net_addr,
+                )
+            }
         }
     };
 
@@ -367,6 +384,7 @@ async fn connect_peer(
         descriptor.clone(),
         socket_addr_opt,
     )?;
+
     log_debug!(logger, "connected to peer: {:?}", peer_connection_info);
 
     let sent_bytes = descriptor.send_data(&initial_bytes, true);
@@ -387,29 +405,17 @@ async fn connect_peer(
     Ok(())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-async fn connect_peer(
-    websocket_proxy_addr: &str,
-    peer_connection_info: &PubkeyConnectionInfo,
-    logger: Arc<MutinyLogger>,
-    peer_manager: Arc<dyn PeerManager>,
-    stop: Arc<AtomicBool>,
-) -> Result<(), MutinyError> {
-    todo!()
-}
-
-fn try_get_net_addr_from_socket(socket_addr: &str) -> Option<NetAddress> {
-    socket_addr
-        .parse::<SocketAddr>()
-        .ok()
-        .map(|socket_addr| match socket_addr {
-            SocketAddr::V4(sockaddr) => NetAddress::IPv4 {
-                addr: sockaddr.ip().octets(),
-                port: sockaddr.port(),
-            },
-            SocketAddr::V6(sockaddr) => NetAddress::IPv6 {
-                addr: sockaddr.ip().octets(),
-                port: sockaddr.port(),
-            },
-        })
+fn try_parse_addr_string(addr: &str) -> (Option<SocketAddr>, Option<NetAddress>) {
+    let socket_addr = addr.parse::<SocketAddr>().ok();
+    let net_addr = socket_addr.map(|socket_addr| match socket_addr {
+        SocketAddr::V4(sockaddr) => NetAddress::IPv4 {
+            addr: sockaddr.ip().octets(),
+            port: sockaddr.port(),
+        },
+        SocketAddr::V6(sockaddr) => NetAddress::IPv6 {
+            addr: sockaddr.ip().octets(),
+            port: sockaddr.port(),
+        },
+    });
+    (socket_addr, net_addr)
 }

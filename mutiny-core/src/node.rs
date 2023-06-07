@@ -140,9 +140,10 @@ pub(crate) struct Node<S: MutinyStorage> {
     pub persister: Arc<MutinyNodePersister<S>>,
     wallet: Arc<OnChainWallet<S>>,
     logger: Arc<MutinyLogger>,
-    websocket_proxy_addr: String,
     pub(crate) lsp_client: Option<LspClient>,
     stop: Arc<AtomicBool>,
+    #[cfg(target_arch = "wasm32")]
+    websocket_proxy_addr: String,
 }
 
 impl<S: MutinyStorage> Node<S> {
@@ -159,10 +160,10 @@ impl<S: MutinyStorage> Node<S> {
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
         wallet: Arc<OnChainWallet<S>>,
         network: Network,
-        websocket_proxy_addr: String,
         esplora: Arc<AsyncClient>,
         lsp_clients: &[LspClient],
         logger: Arc<MutinyLogger>,
+        #[cfg(target_arch = "wasm32")] websocket_proxy_addr: String,
     ) -> Result<Self, MutinyError> {
         log_info!(logger, "initializing a new node: {uuid}");
 
@@ -429,6 +430,7 @@ impl<S: MutinyStorage> Node<S> {
         start_reconnection_handling(
             &persister.storage,
             pubkey,
+            #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr.clone(),
             peer_man.clone(),
             &logger,
@@ -452,9 +454,10 @@ impl<S: MutinyStorage> Node<S> {
             persister,
             wallet,
             logger,
-            websocket_proxy_addr,
             lsp_client,
             stop,
+            #[cfg(target_arch = "wasm32")]
+            websocket_proxy_addr,
         })
     }
 
@@ -503,7 +506,6 @@ impl<S: MutinyStorage> Node<S> {
 
         #[cfg(not(target_arch = "wasm32"))]
         let connect_res = connect_peer_if_necessary(
-            &self.websocket_proxy_addr,
             &peer_connection_info,
             self.logger.clone(),
             self.peer_manager.clone(),
@@ -1233,7 +1235,7 @@ impl<S: MutinyStorage> Node<S> {
 async fn start_reconnection_handling(
     storage: &impl MutinyStorage,
     node_pubkey: PublicKey,
-    websocket_proxy_addr: String,
+    #[cfg(target_arch = "wasm32")] websocket_proxy_addr: String,
     peer_man: Arc<dyn PeerManager>,
     logger: &Arc<MutinyLogger>,
     uuid: String,
@@ -1242,7 +1244,9 @@ async fn start_reconnection_handling(
     stopped_components: Arc<RwLock<Vec<bool>>>,
 ) -> Result<(), MutinyError> {
     // Attempt initial connections first in the background
+    #[cfg(target_arch = "wasm32")]
     let websocket_proxy_addr_copy_proxy = websocket_proxy_addr.clone();
+
     let proxy_logger = logger.clone();
     let peer_man_proxy = peer_man.clone();
     let lsp_client_copy = lsp_client.clone();
@@ -1254,8 +1258,8 @@ async fn start_reconnection_handling(
         if let Some(lsp) = lsp_client_copy.clone() {
             let node_id = NodeId::from_pubkey(&lsp.pubkey);
 
-            #[cfg(target_arch = "wasm32")]
             let connect_res = connect_peer_if_necessary(
+                #[cfg(target_arch = "wasm32")]
                 &websocket_proxy_addr_copy_proxy,
                 &PubkeyConnectionInfo::new(lsp.connection_string.as_str()).unwrap(),
                 proxy_logger.clone(),
@@ -1263,17 +1267,6 @@ async fn start_reconnection_handling(
                 stop_copy.clone(),
             )
             .await;
-
-            #[cfg(not(target_arch = "wasm32"))]
-            let connect_res = connect_peer_if_necessary(
-                &websocket_proxy_addr_copy_proxy,
-                &PubkeyConnectionInfo::new(lsp.connection_string.as_str()).unwrap(),
-                proxy_logger.clone(),
-                peer_man_proxy.clone(),
-                stop_copy.clone(),
-            )
-            .await;
-
             match connect_res {
                 Ok(_) => {
                     log_trace!(proxy_logger, "auto connected lsp: {node_id}");
@@ -1366,8 +1359,8 @@ async fn start_reconnection_handling(
                     }
                 };
 
-                #[cfg(target_arch = "wasm32")]
                 let connect_res = connect_peer_if_necessary(
+                    #[cfg(target_arch = "wasm32")]
                     &websocket_proxy_addr,
                     &peer_connection_info,
                     connect_logger.clone(),
@@ -1375,17 +1368,6 @@ async fn start_reconnection_handling(
                     stop.clone(),
                 )
                 .await;
-
-                #[cfg(not(target_arch = "wasm32"))]
-                let connect_res = connect_peer_if_necessary(
-                    &websocket_proxy_addr,
-                    &peer_connection_info,
-                    connect_logger.clone(),
-                    connect_peer_man.clone(),
-                    stop.clone(),
-                )
-                .await;
-
                 match connect_res {
                     Ok(_) => {
                         log_trace!(connect_logger, "auto connected peer: {pubkey}");

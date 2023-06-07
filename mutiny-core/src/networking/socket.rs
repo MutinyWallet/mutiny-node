@@ -10,6 +10,9 @@ use std::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use crate::networking::ws_socket::WsTcpSocketDescriptor;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::networking::tcp_socket::TcpSocketDescriptor;
+
 pub trait ReadDescriptor {
     async fn read(&self) -> Option<Result<Vec<u8>, MutinyError>>;
 }
@@ -19,7 +22,7 @@ pub enum MutinySocketDescriptor {
     #[cfg(target_arch = "wasm32")]
     Tcp(WsTcpSocketDescriptor),
     #[cfg(not(target_arch = "wasm32"))]
-    Native(), // TODO this might not be the best approach
+    Native(TcpSocketDescriptor),
 }
 
 impl ReadDescriptor for MutinySocketDescriptor {
@@ -28,7 +31,7 @@ impl ReadDescriptor for MutinySocketDescriptor {
             #[cfg(target_arch = "wasm32")]
             MutinySocketDescriptor::Tcp(s) => s.read().await,
             #[cfg(not(target_arch = "wasm32"))]
-            MutinySocketDescriptor::Native() => todo!(),
+            MutinySocketDescriptor::Native(s) => s.read().await,
         }
     }
 }
@@ -39,7 +42,7 @@ impl peer_handler::SocketDescriptor for MutinySocketDescriptor {
             #[cfg(target_arch = "wasm32")]
             MutinySocketDescriptor::Tcp(s) => s.send_data(data, resume_read),
             #[cfg(not(target_arch = "wasm32"))]
-            MutinySocketDescriptor::Native() => todo!(),
+            MutinySocketDescriptor::Native(s) => s.send_data(data, resume_read),
         }
     }
 
@@ -48,7 +51,7 @@ impl peer_handler::SocketDescriptor for MutinySocketDescriptor {
             #[cfg(target_arch = "wasm32")]
             MutinySocketDescriptor::Tcp(s) => s.disconnect_socket(),
             #[cfg(not(target_arch = "wasm32"))]
-            MutinySocketDescriptor::Native() => todo!(),
+            MutinySocketDescriptor::Native(s) => s.disconnect_socket(),
         }
     }
 }
