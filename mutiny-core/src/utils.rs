@@ -1,3 +1,4 @@
+use bitcoin::Network;
 use core::cell::{RefCell, RefMut};
 use core::ops::{Deref, DerefMut};
 use core::time::Duration;
@@ -6,6 +7,13 @@ use lightning::routing::scoring::LockableScore;
 use lightning::routing::scoring::Score;
 use lightning::util::ser::Writeable;
 use lightning::util::ser::Writer;
+
+pub(crate) fn min_lightning_amount(network: Network) -> u64 {
+    match network {
+        Network::Bitcoin => 50_000,
+        Network::Testnet | Network::Signet | Network::Regtest => 10_000,
+    }
+}
 
 pub async fn sleep(millis: i32) {
     #[cfg(target_arch = "wasm32")]

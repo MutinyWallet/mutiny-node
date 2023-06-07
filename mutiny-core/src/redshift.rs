@@ -1,6 +1,7 @@
 use crate::error::MutinyError;
 use crate::nodemanager::NodeManager;
 use crate::storage::MutinyStorage;
+use crate::utils;
 use crate::utils::sleep;
 use anyhow::anyhow;
 use bitcoin::hashes::hex::ToHex;
@@ -271,8 +272,8 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
 
         // original utxo value - opening tx fee - channel reserve
         let max_sats = rs.amount_sats - rs.fees_paid - reserve;
-        // Voltage LSP minimum is 10,000 sats
-        let min_sats = 10_000;
+        // account for Voltage LSP minimum
+        let min_sats = utils::min_lightning_amount(self.get_network());
 
         let receiving_node = match rs.recipient {
             RedshiftRecipient::Lightning(receiving_pubkey) => {
