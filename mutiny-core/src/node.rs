@@ -89,7 +89,7 @@ pub(crate) type MessageHandler<S: MutinyStorage> = LdkMessageHandler<
 pub(crate) type ChainMonitor<S: MutinyStorage> = chainmonitor::ChainMonitor<
     InMemorySigner,
     Arc<dyn Filter + Send + Sync>,
-    Arc<MutinyChain>,
+    Arc<MutinyChain<S>>,
     Arc<MutinyFeeEstimator<S>>,
     Arc<MutinyLogger>,
     Arc<MutinyNodePersister<S>>,
@@ -157,7 +157,7 @@ impl<S: MutinyStorage> Node<S> {
         storage: S,
         gossip_sync: Arc<RapidGossipSync>,
         scorer: Arc<utils::Mutex<ProbScorer>>,
-        chain: Arc<MutinyChain>,
+        chain: Arc<MutinyChain<S>>,
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
         wallet: Arc<OnChainWallet<S>>,
         network: Network,

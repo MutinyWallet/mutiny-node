@@ -563,7 +563,7 @@ impl<S: MutinyStorage> EventHandler<S> {
             )
             .map_err(|_| anyhow!("Failed to spend spendable outputs"))?;
 
-        self.wallet.blockchain.broadcast(&spending_tx).await?;
+        self.wallet.broadcast_transaction(spending_tx).await?;
 
         Ok(())
     }

@@ -114,12 +114,12 @@ impl MutinyWallet {
     /// Broadcast a transaction to the network.
     /// The transaction is broadcast through the configured esplora server.
     #[wasm_bindgen]
-    pub fn broadcast_transaction(&self, str: String) -> Result<(), MutinyJsError> {
+    pub async fn broadcast_transaction(&self, str: String) -> Result<(), MutinyJsError> {
         let tx_bytes =
             Vec::from_hex(str.as_str()).map_err(|_| MutinyJsError::WalletOperationFailed)?;
         let tx: Transaction =
             deserialize(&tx_bytes).map_err(|_| MutinyJsError::WalletOperationFailed)?;
-        Ok(self.inner.node_manager.broadcast_transaction(&tx)?)
+        Ok(self.inner.node_manager.broadcast_transaction(tx).await?)
     }
 
     /// Returns the mnemonic seed phrase for the wallet.
