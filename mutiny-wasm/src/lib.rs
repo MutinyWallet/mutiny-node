@@ -574,6 +574,33 @@ impl MutinyWallet {
         )?)
     }
 
+    /// Gets an channel closure from the node manager.
+    #[wasm_bindgen]
+    pub async fn get_channel_closure(
+        &self,
+        user_channel_id: String,
+    ) -> Result<ChannelClosure, MutinyJsError> {
+        let user_channel_id: [u8; 16] = FromHex::from_hex(&user_channel_id)?;
+        Ok(self
+            .inner
+            .node_manager
+            .get_channel_closure(u128::from_be_bytes(user_channel_id))
+            .await?
+            .into())
+    }
+
+    /// Gets all channel closures from the node manager.
+    ///
+    /// The channel closures are sorted by the time they were closed.
+    #[wasm_bindgen]
+    pub async fn list_channel_closures(
+        &self,
+    ) -> Result<JsValue /* Vec<ChannelClosure> */, MutinyJsError> {
+        let mut channel_closures = self.inner.node_manager.list_channel_closures().await?;
+        channel_closures.sort();
+        Ok(JsValue::from_serde(&channel_closures)?)
+    }
+
     /// Opens a channel from our selected node to the given pubkey.
     /// The amount is in satoshis.
     ///

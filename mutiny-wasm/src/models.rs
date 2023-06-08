@@ -20,6 +20,7 @@ pub enum ActivityType {
     OnChain,
     Lightning,
     ChannelOpen,
+    ChannelClose,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -68,11 +69,15 @@ impl From<nodemanager::ActivityItem> for ActivityItem {
                 }
             }
             nodemanager::ActivityItem::Lightning(_) => ActivityType::Lightning,
+            nodemanager::ActivityItem::ChannelClosed(_) => ActivityType::ChannelClose,
         };
 
         let id = match a {
             nodemanager::ActivityItem::OnChain(ref t) => t.txid.to_hex(),
             nodemanager::ActivityItem::Lightning(ref ln) => ln.payment_hash.to_hex(),
+            nodemanager::ActivityItem::ChannelClosed(ref c) => {
+                c.user_channel_id.map(|c| c.to_hex()).unwrap_or_default()
+            }
         };
 
         let (inbound, amount_sats) = match a {
@@ -86,6 +91,7 @@ impl From<nodemanager::ActivityItem> for ActivityItem {
                 (inbound, amount_sats)
             }
             nodemanager::ActivityItem::Lightning(ref ln) => (ln.inbound, ln.amount_sats),
+            nodemanager::ActivityItem::ChannelClosed(_) => (false, None),
         };
 
         ActivityItem {
@@ -279,6 +285,62 @@ impl From<nodemanager::MutinyChannel> for MutinyChannel {
             peer: m.peer.to_hex(),
             confirmations_required: m.confirmations_required,
             confirmations: m.confirmations,
+        }
+    }
+}
+
+/// Information about a channel that was closed.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[wasm_bindgen]
+pub struct ChannelClosure {
+    channel_id: Option<[u8; 32]>,
+    node_id: Option<PublicKey>,
+    reason: String,
+    pub timestamp: u64,
+}
+
+#[wasm_bindgen]
+impl ChannelClosure {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn channel_id(&self) -> Option<String> {
+        self.channel_id.map(|c| c.to_hex())
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn node_id(&self) -> Option<String> {
+        self.node_id.map(|n| n.to_string())
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn reason(&self) -> String {
+        self.reason.clone()
+    }
+}
+
+impl PartialOrd for ChannelClosure {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ChannelClosure {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.timestamp.cmp(&other.timestamp)
+    }
+}
+
+impl From<nodemanager::ChannelClosure> for ChannelClosure {
+    fn from(c: nodemanager::ChannelClosure) -> Self {
+        ChannelClosure {
+            channel_id: c.channel_id,
+            node_id: c.node_id,
+            reason: c.reason,
+            timestamp: c.timestamp,
         }
     }
 }

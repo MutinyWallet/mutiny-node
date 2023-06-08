@@ -1,6 +1,7 @@
 use crate::keymanager::PhantomKeysManager;
 use crate::labels::LabelStorage;
 use crate::ldkstorage::ChannelOpenParams;
+use crate::nodemanager::ChannelClosure;
 use crate::{
     background::process_events_async,
     chain::MutinyChain,
@@ -772,6 +773,24 @@ impl<S: MutinyStorage> Node<S> {
                         || matches!(i.status, HTLCStatus::Succeeded | HTLCStatus::InFlight)
                 })
             })
+            .collect())
+    }
+
+    /// Gets all the closed channels for this node
+    pub fn get_channel_closure(
+        &self,
+        user_channel_id: u128,
+    ) -> Result<Option<ChannelClosure>, MutinyError> {
+        self.persister.get_channel_closure(user_channel_id)
+    }
+
+    /// Gets all the closed channels for this node
+    pub fn get_channel_closures(&self) -> Result<Vec<ChannelClosure>, MutinyError> {
+        Ok(self
+            .persister
+            .list_channel_closures()?
+            .into_iter()
+            .map(|c| c.1)
             .collect())
     }
 

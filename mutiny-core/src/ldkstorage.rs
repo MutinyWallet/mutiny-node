@@ -1,12 +1,13 @@
 use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyStorageError};
-use crate::event::{ChannelClosure, PaymentInfo};
+use crate::event::PaymentInfo;
 use crate::fees::MutinyFeeEstimator;
 use crate::gossip::{NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 use crate::keymanager::PhantomKeysManager;
 use crate::logging::MutinyLogger;
 use crate::node::{default_user_config, ChainMonitor, ProbScorer};
 use crate::node::{NetworkGraph, Router};
+use crate::nodemanager::ChannelClosure;
 use crate::storage::MutinyStorage;
 use crate::utils;
 use anyhow::anyhow;
@@ -312,7 +313,6 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         self.storage.get_data(key)
     }
 
-    #[allow(dead_code)] // todo expose to front end
     pub(crate) fn list_channel_closures(&self) -> Result<Vec<(u128, ChannelClosure)>, MutinyError> {
         let suffix = format!("_{}", self.node_id);
         let map: HashMap<String, ChannelClosure> =
@@ -601,6 +601,9 @@ mod test {
 
         let user_channel_id: u128 = 123456789;
         let closure = ChannelClosure {
+            user_channel_id: Some(user_channel_id.to_be_bytes()),
+            channel_id: Some([1; 32]),
+            node_id: None,
             reason: "This is a test.".to_string(),
             timestamp: utils::now().as_secs(),
         };

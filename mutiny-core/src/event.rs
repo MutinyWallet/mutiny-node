@@ -2,6 +2,7 @@ use crate::fees::MutinyFeeEstimator;
 use crate::keymanager::PhantomKeysManager;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::logging::MutinyLogger;
+use crate::nodemanager::ChannelClosure;
 use crate::onchain::OnChainWallet;
 use crate::redshift::RedshiftStorage;
 use crate::storage::MutinyStorage;
@@ -11,7 +12,7 @@ use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
 use lightning::chain::keysinterface::SpendableOutputDescriptor;
-use lightning::events::{ClosureReason, Event, PaymentPurpose};
+use lightning::events::{Event, PaymentPurpose};
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
     log_debug, log_error, log_info, log_warn,
@@ -55,22 +56,6 @@ pub(crate) enum HTLCStatus {
     InFlight,
     Succeeded,
     Failed,
-}
-
-/// Information about a channel that was closed.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct ChannelClosure {
-    pub reason: String,
-    pub timestamp: u64,
-}
-
-impl ChannelClosure {
-    pub fn new(reason: ClosureReason) -> Self {
-        Self {
-            reason: reason.to_string(),
-            timestamp: crate::utils::now().as_secs(),
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -458,7 +443,17 @@ impl<S: MutinyStorage> EventHandler<S> {
                     reason
                 );
 
-                let closure = ChannelClosure::new(reason);
+                // this doesn't really work, leaving here because maybe sometimes it'll get the node id
+                // can be fixed with https://github.com/lightningdevkit/rust-lightning/issues/2343
+                let node_id = self.channel_manager.list_channels().iter().find_map(|c| {
+                    if c.channel_id == channel_id {
+                        Some(c.counterparty.node_id)
+                    } else {
+                        None
+                    }
+                });
+
+                let closure = ChannelClosure::new(user_channel_id, channel_id, node_id, reason);
                 if let Err(e) = self
                     .persister
                     .persist_channel_closure(user_channel_id, closure)
