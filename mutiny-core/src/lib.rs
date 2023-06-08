@@ -140,6 +140,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Starts up all the nodes again.
     /// Not needed after [NodeManager]'s `new()` function.
     pub async fn start(&mut self) -> Result<(), MutinyError> {
+        self.storage.start().await?;
         self.node_manager =
             Arc::new(NodeManager::new(self.config.clone(), self.storage.clone()).await?);
         NodeManager::start_sync(self.node_manager.clone());
