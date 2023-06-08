@@ -1,7 +1,6 @@
 use core::cell::{RefCell, RefMut};
 use core::ops::{Deref, DerefMut};
 use core::time::Duration;
-use instant::SystemTime;
 use lightning::routing::scoring::LockableScore;
 use lightning::routing::scoring::Score;
 use lightning::util::ser::Writeable;
@@ -26,9 +25,15 @@ pub async fn sleep(millis: i32) {
 }
 
 pub fn now() -> Duration {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
+    #[cfg(target_arch = "wasm32")]
+    return instant::SystemTime::now()
+        .duration_since(instant::SystemTime::UNIX_EPOCH)
+        .unwrap();
+
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap();
 }
 
 pub type LockResult<Guard> = Result<Guard, ()>;
