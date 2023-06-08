@@ -610,7 +610,11 @@ impl<S: MutinyStorage> Node<S> {
                 .list_channels_with_counterparty(&lsp.pubkey)
                 .iter()
                 .any(|c| c.inbound_capacity_msat >= amount_sat * 1000);
-            let min_amount_sat = if has_usable_channel { 1 } else { 10_000 };
+            let min_amount_sat = if has_usable_channel {
+                1
+            } else {
+                utils::min_lightning_amount(self.network)
+            };
             if amount_sat < min_amount_sat {
                 return Err(MutinyError::BadAmountError);
             }
