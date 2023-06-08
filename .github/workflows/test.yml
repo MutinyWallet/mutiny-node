@@ -4,6 +4,34 @@ on:
   pull_request:
 
 jobs:
+  check_formatting:
+    name: Check Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-formatting-v2-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-formatting-v2-
+            cargo-${{ runner.os }}-
+
+      - name: Install nightly toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly-2023-04-16
+          components: rustfmt
+          profile: minimal
+
+      - name: Check formatting
+        run: |
+          cargo +nightly-2023-04-16 fmt -- --check
+
   website:
     name: Build WASM binary
     runs-on: ubuntu-latest
@@ -26,7 +54,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-browser-tests-v2-${{ hashFiles('**/Cargo.toml') }}
+          key: cargo-${{ runner.os }}-browser-tests-v2-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-browser-tests-v2-
             cargo-${{ runner.os }}-
@@ -66,7 +94,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-browser-tests-v2-${{ hashFiles('**/Cargo.toml') }}
+          key: cargo-${{ runner.os }}-browser-tests-v2-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-browser-tests-v2-
             cargo-${{ runner.os }}-
@@ -77,15 +105,15 @@ jobs:
       - run: wasm-pack test --headless --firefox ./mutiny-wasm
       - run: wasm-pack test --headless --chrome ./mutiny-wasm
 
-  rust_tests:
-    name: Rust Tests
+  wasm_checks:
+    name: Rust Wasm Checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: nightly-2023-04-16
-          components: clippy, rustfmt
+          components: clippy
           target: wasm32-unknown-unknown
           override: true
           profile: minimal
@@ -101,16 +129,151 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-rust-tests-v2-${{ hashFiles('**/Cargo.toml') }}
+          key: cargo-${{ runner.os }}-rust-wasm-checks-v2-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
           restore-keys: |
-            cargo-${{ runner.os }}-rust-tests-v2-
+            cargo-${{ runner.os }}-rust-wasm-checks-v2-
             cargo-${{ runner.os }}-
-
-      - name: Check formatting
-        run: cargo fmt --check
-
-      - name: Check clippy mutiny-core
-        run: cargo clippy --all-features --tests --package mutiny-core -- -D warnings
 
       - name: Check clippy mutiny-wasm
         run: cargo clippy --all-features --tests --package mutiny-wasm -- -D warnings
+
+  core_tests_linux:
+    name: Core Tests on Linux
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target: 
+          - wasm32-unknown-unknown
+          - x86_64-unknown-linux-gnu
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly-2023-04-16
+          override: true
+          profile: minimal
+          components: clippy
+
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-core-tests-linux-v2-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-core-tests-linux-v2-
+            cargo-${{ runner.os }}-
+
+      - name: Add targets
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Run cargo clippy
+        run: cargo clippy --all-features --tests --package mutiny-core --target=${{ matrix.target }} -- -D warnings
+
+      - name: Run cargo test
+        if: matrix.target != 'wasm32-unknown-unknown'
+        run: cargo test --all-features --package mutiny-core --target=${{ matrix.target }}
+
+      - name: Run cargo build
+        if: matrix.target != 'wasm32-unknown-unknown'
+        run: cargo build --all-features --package mutiny-core --target=${{ matrix.target }}
+
+  core_tests_mac:
+    name: Core Tests on macOS
+    runs-on: macos-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target: 
+          - x86_64-apple-darwin
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly-2023-04-16
+          override: true
+          profile: minimal
+          components: clippy
+
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-core-tests-mac-v2-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-core-tests-mac-v2-
+            cargo-${{ runner.os }}-
+
+      - name: Add targets
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Run cargo clippy
+        run: cargo clippy --all-features --tests --package mutiny-core --target=${{ matrix.target }} -- -D warnings
+        continue-on-error: true
+
+      - name: Run cargo test
+        run: cargo test --all-features --package mutiny-core --target=${{ matrix.target }}
+
+      - name: Run cargo build
+        run: cargo build --all-features --package mutiny-core --target=${{ matrix.target }}
+
+  core_tests_windows:
+    name: Core Tests on Windows
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target: 
+          - x86_64-pc-windows-msvc
+          - i686-pc-windows-msvc
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly-2023-04-16
+          override: true
+          profile: minimal
+          components: clippy
+
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-core-tests-windows-v2-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-core-tests-windows-v2-
+            cargo-${{ runner.os }}-
+
+      - name: Add targets
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Run cargo clippy
+        run: cargo clippy --all-features --tests --package mutiny-core --target=${{ matrix.target }} -- -D warnings
+        continue-on-error: true
+
+      - name: Run cargo test
+        run: cargo test --all-features --package mutiny-core --target=${{ matrix.target }}
+
+      - name: Run cargo build
+        run: cargo build --all-features --package mutiny-core --target=${{ matrix.target }}

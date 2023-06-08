@@ -101,7 +101,15 @@ impl NostrManager {
 
     pub async fn broadcast_nwc_info_event(&self) -> anyhow::Result<EventId> {
         let client = Client::new(&self.nwc_server_key);
+
+        #[cfg(target_arch = "wasm32")]
         client.add_relays(self.relays.clone()).await?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        client
+            .add_relays(self.relays.clone().into_iter().map(|s| (s, None)).collect())
+            .await?;
+
         client.connect().await;
 
         let info = self.create_nwc_info_event()?;

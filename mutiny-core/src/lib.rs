@@ -23,15 +23,15 @@ pub mod labels;
 mod ldkstorage;
 pub mod logging;
 mod lspclient;
+mod networking;
 mod node;
 pub mod nodemanager;
 mod nostr;
 mod onchain;
 mod peermanager;
-mod proxy;
 pub mod redshift;
-mod socket;
 pub mod storage;
+
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 mod utils;
@@ -60,6 +60,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct MutinyWalletConfig {
     mnemonic: Option<Mnemonic>,
+    #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: Option<String>,
     network: Option<Network>,
     user_esplora_url: Option<String>,
@@ -71,7 +72,7 @@ impl MutinyWalletConfig {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         mnemonic: Option<Mnemonic>,
-        websocket_proxy_addr: Option<String>,
+        #[cfg(target_arch = "wasm32")] websocket_proxy_addr: Option<String>,
         network: Option<Network>,
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
@@ -79,6 +80,7 @@ impl MutinyWalletConfig {
     ) -> Self {
         Self {
             mnemonic,
+            #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
             network,
             user_esplora_url,
@@ -104,7 +106,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     pub async fn new(
         storage: S,
         mnemonic: Option<Mnemonic>,
-        websocket_proxy_addr: Option<String>,
+        #[cfg(target_arch = "wasm32")] websocket_proxy_addr: Option<String>,
         network: Option<Network>,
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
@@ -112,6 +114,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     ) -> Result<MutinyWallet<S>, MutinyError> {
         let config = MutinyWalletConfig::new(
             mnemonic,
+            #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
             network,
             user_esplora_url,
@@ -171,10 +174,23 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 }
 
                 let client = Client::new(&nostr.primary_key);
-                client
-                    .add_relays(nostr.relays.clone())
-                    .await
-                    .expect("Failed to add relays");
+
+                #[cfg(target_arch = "wasm32")]
+                let add_relay_res = client.add_relays(nostr.relays.clone()).await;
+
+                #[cfg(not(target_arch = "wasm32"))]
+                let add_relay_res = client
+                    .add_relays(
+                        nostr
+                            .relays
+                            .clone()
+                            .into_iter()
+                            .map(|s| (s, None))
+                            .collect(),
+                    )
+                    .await;
+
+                add_relay_res.expect("Failed to add relays");
                 client.connect().await;
                 client.subscribe(vec![nostr.create_nwc_filter()]).await;
 
@@ -275,6 +291,7 @@ mod tests {
         MutinyWallet::new(
             storage.clone(),
             None,
+            #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Regtest),
             None,
@@ -296,6 +313,7 @@ mod tests {
         let mut mw = MutinyWallet::new(
             storage.clone(),
             None,
+            #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Regtest),
             None,
@@ -324,6 +342,7 @@ mod tests {
         let mut mw = MutinyWallet::new(
             storage.clone(),
             None,
+            #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Regtest),
             None,

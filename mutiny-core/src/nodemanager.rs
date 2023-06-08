@@ -383,6 +383,7 @@ pub struct NodeManager<S: MutinyStorage> {
     pub(crate) stop: Arc<AtomicBool>,
     mnemonic: Mnemonic,
     network: Network,
+    #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
     esplora: Arc<AsyncClient>,
     wallet: Arc<OnChainWallet<S>>,
@@ -413,6 +414,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     pub async fn new(c: MutinyWalletConfig, storage: S) -> Result<NodeManager<S>, MutinyError> {
         let stop = Arc::new(AtomicBool::new(false));
 
+        #[cfg(target_arch = "wasm32")]
         let websocket_proxy_addr = c
             .websocket_proxy_addr
             .unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
@@ -509,10 +511,11 @@ impl<S: MutinyStorage> NodeManager<S> {
                 fee_estimator.clone(),
                 wallet.clone(),
                 network,
-                websocket_proxy_addr.clone(),
                 esplora.clone(),
                 &lsp_clients,
                 logger.clone(),
+                #[cfg(target_arch = "wasm32")]
+                websocket_proxy_addr.clone(),
             )
             .await?;
 
@@ -565,6 +568,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             storage,
             node_storage: Mutex::new(node_storage),
             nodes,
+            #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
             esplora,
             auth,
@@ -1909,7 +1913,8 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
     node_mutex.nodes = existing_nodes.nodes.clone();
 
     // now create the node process and init it
-    let new_node = match Node::new(
+    #[cfg(target_arch = "wasm32")]
+    let new_node_res = Node::new(
         next_node_uuid.clone(),
         &next_node,
         node_manager.stop.clone(),
@@ -1921,13 +1926,33 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         node_manager.fee_estimator.clone(),
         node_manager.wallet.clone(),
         node_manager.network,
+        node_manager.esplora.clone(),
+        &node_manager.lsp_clients,
+        node_manager.logger.clone(),
         node_manager.websocket_proxy_addr.clone(),
+    )
+    .await;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let new_node_res = Node::new(
+        next_node_uuid.clone(),
+        &next_node,
+        node_manager.stop.clone(),
+        &node_manager.mnemonic,
+        node_manager.storage.clone(),
+        node_manager.gossip_sync.clone(),
+        node_manager.scorer.clone(),
+        node_manager.chain.clone(),
+        node_manager.fee_estimator.clone(),
+        node_manager.wallet.clone(),
+        node_manager.network,
         node_manager.esplora.clone(),
         &node_manager.lsp_clients,
         node_manager.logger.clone(),
     )
-    .await
-    {
+    .await;
+
+    let new_node = match new_node_res {
         Ok(new_node) => new_node,
         Err(e) => return Err(e),
     };
@@ -1977,7 +2002,15 @@ mod tests {
         let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
 
         assert!(!NodeManager::has_node_manager(storage.clone()));
-        let c = MutinyWalletConfig::new(None, None, Some(Network::Regtest), None, None, None);
+        let c = MutinyWalletConfig::new(
+            None,
+            #[cfg(target_arch = "wasm32")]
+            None,
+            Some(Network::Regtest),
+            None,
+            None,
+            None,
+        );
         NodeManager::new(c, storage.clone())
             .await
             .expect("node manager should initialize");
@@ -1992,6 +2025,7 @@ mod tests {
         let seed = generate_seed(12).expect("Failed to gen seed");
         let c = MutinyWalletConfig::new(
             Some(seed.clone()),
+            #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Regtest),
             None,
@@ -2010,7 +2044,15 @@ mod tests {
 
         let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
         let seed = generate_seed(12).expect("Failed to gen seed");
-        let c = MutinyWalletConfig::new(Some(seed), None, Some(Network::Regtest), None, None, None);
+        let c = MutinyWalletConfig::new(
+            Some(seed),
+            #[cfg(target_arch = "wasm32")]
+            None,
+            Some(Network::Regtest),
+            None,
+            None,
+            None,
+        );
         let nm = NodeManager::new(c, storage)
             .await
             .expect("node manager should initialize");
@@ -2046,7 +2088,15 @@ mod tests {
 
         let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
         let seed = generate_seed(12).expect("Failed to gen seed");
-        let c = MutinyWalletConfig::new(Some(seed), None, Some(Network::Signet), None, None, None);
+        let c = MutinyWalletConfig::new(
+            Some(seed),
+            #[cfg(target_arch = "wasm32")]
+            None,
+            Some(Network::Signet),
+            None,
+            None,
+            None,
+        );
         let nm = NodeManager::new(c, storage)
             .await
             .expect("node manager should initialize");

@@ -15,13 +15,13 @@ use mockall::{automock, predicate::*};
 
 #[cfg_attr(test, automock)]
 #[async_trait(?Send)]
-pub(crate) trait Proxy {
+pub trait Proxy {
     fn send(&self, data: Message);
     async fn read(&self) -> Option<Result<Message, gloo_net::websocket::WebSocketError>>;
     async fn close(&self);
 }
 
-pub(crate) struct WsProxy {
+pub struct WsProxy {
     write: WsSplit,
     read: ReadSplit,
     logger: Arc<MutinyLogger>,
@@ -39,10 +39,6 @@ impl WsProxy {
         let ws = match peer_connection_info.connection_type {
             ConnectionType::Tcp(s) => WebSocket::open(&tcp_proxy_to_url(proxy_url, &s)?)
                 .map_err(|_| MutinyError::ConnectionFailed)?,
-            ConnectionType::Mutiny(url) => WebSocket::open(String::as_str(
-                &mutiny_conn_proxy_to_url(&url, &peer_connection_info.pubkey.to_string()),
-            ))
-            .map_err(|_| MutinyError::ConnectionFailed)?,
         };
 
         // wait for connected status or time out at 10s
@@ -123,25 +119,18 @@ pub fn tcp_proxy_to_url(proxy_url: &str, peer_addr: &str) -> Result<String, Muti
     ))
 }
 
-pub fn mutiny_conn_proxy_to_url(proxy_url: &str, peer_pubkey: &str) -> String {
-    format!("{proxy_url}/v1/mutiny/{peer_pubkey}",)
-}
-
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "ignored_tests")]
-    use crate::proxy::*;
+    use crate::networking::proxy::*;
 
     use crate::test_utils::*;
 
-    use crate::proxy::{mutiny_conn_proxy_to_url, tcp_proxy_to_url};
+    use crate::networking::proxy::tcp_proxy_to_url;
 
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
-
-    // ACINQ's node pubkey
-    const PEER_PUBKEY: &str = "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f";
 
     #[test]
     // test ignored because it connects to a real server
@@ -149,6 +138,10 @@ mod tests {
     async fn test_websocket_proxy_init() {
         log!("test websocket proxy");
         let logger = Arc::new(MutinyLogger::default());
+
+        // ACINQ's node pubkey
+        const PEER_PUBKEY: &str =
+            "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f";
 
         let proxy = WsProxy::new(
             "wss://p.mutinywallet.com",
@@ -169,10 +162,5 @@ mod tests {
             "ws://127.0.0.1:3001/v1/127_0_0_1/4000".to_string(),
             tcp_proxy_to_url("ws://127.0.0.1:3001", "127.0.0.1:4000").unwrap()
         );
-
-        assert_eq!(
-            format!("ws://127.0.0.1:3001/v1/mutiny/{PEER_PUBKEY}"),
-            mutiny_conn_proxy_to_url("ws://127.0.0.1:3001", PEER_PUBKEY,)
-        )
     }
 }
