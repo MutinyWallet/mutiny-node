@@ -29,6 +29,7 @@ lightning = { version = "0.0.115", default-features = false, features = ["max_le
 lightning-invoice = { version = "0.23", default-features = false, features = ["no-std"] }
 lightning-rapid-gossip-sync = { version = "0.0.115", default-features = false, features = ["no-std"] }
 chrono = "0.4.22"
+futures-util = { version = "0.3", default-features = false }
 reqwest = { version = "0.11", default-features = false, features = ["json"] }
 async-trait = "0.1.68"
 url = { version = "2.3.1", features = ["serde"] }
