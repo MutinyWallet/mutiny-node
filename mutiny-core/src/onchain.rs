@@ -72,24 +72,11 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             return Err(MutinyError::Other(anyhow!(
                 "Failed to broadcast transaction ({txid}): {e}"
             )));
-        } else {
-            // if the wallet has the transaction, we don't need to insert it
-            let has_tx = {
-                let wallet = self.wallet.try_read()?;
-                wallet.get_tx(txid, false).is_some()
-            };
-
-            if !has_tx {
-                if let Err(e) = self
-                    .insert_tx(tx, ConfirmationTime::Unconfirmed, None)
-                    .await
-                {
-                    log_warn!(
-                        self.logger,
-                        "ERROR: Could not sync broadcasted tx ({txid}), will be synced in next iteration: {e:?}"
-                    );
-                };
-            }
+        } else if let Err(e) = self
+            .insert_tx(tx, ConfirmationTime::Unconfirmed, None)
+            .await
+        {
+            log_warn!(self.logger, "ERROR: Could not sync broadcasted tx ({txid}), will be synced in next iteration: {e:?}");
         }
 
         Ok(())
@@ -152,7 +139,11 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             ConfirmationTime::Unconfirmed => {
                 // if the transaction is unconfirmed, we can just insert it
                 let mut wallet = self.wallet.try_write()?;
-                wallet.insert_tx(tx, position)?;
+
+                // if we already have the transaction, we don't need to insert it
+                if wallet.get_tx(tx.txid(), false).is_none() {
+                    wallet.insert_tx(tx, position)?;
+                }
             }
         }
 
