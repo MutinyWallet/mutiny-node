@@ -1078,6 +1078,8 @@ impl<S: MutinyStorage> Node<S> {
                 .find(|c| c.user_channel_id == user_channel_id);
 
             if let Some(outpoint) = channel.and_then(|c| c.funding_txo) {
+                // TODO wait until Event::ChannelPending after funding tx generated
+                sleep(1_000).await;
                 return Ok(outpoint.into_bitcoin_outpoint());
             }
 
