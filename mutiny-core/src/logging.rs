@@ -30,8 +30,8 @@ impl MutinyLogger {
         let log_copy = l.clone();
         utils::spawn(async move {
             loop {
-                // wait up to 5s, checking graceful shutdown check each 1s.
-                for _ in 0..5 {
+                // wait up to 3s, checking graceful shutdown check each 1s.
+                for _ in 0..3 {
                     if stop.load(Ordering::Relaxed) {
                         logging_db.stop();
                         return;
