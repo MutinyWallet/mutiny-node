@@ -107,10 +107,23 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                 5,
             )
             .await?;
-        // get new wallet lock for writing
-        let mut wallet = self.wallet.try_write()?;
-        wallet.apply_update(update)?;
-        wallet.commit()?;
+
+        // get new wallet lock for writing and apply the update
+        match self.wallet.try_write() {
+            Ok(mut wallet) => match wallet.apply_update(update) {
+                Ok(_) => wallet.commit()?,
+                Err(e) => {
+                    // failed to apply wallet update
+                    log_error!(self.logger, "Could not apply wallet update: {e}");
+                    return Err(MutinyError::Other(anyhow!("Could not apply update: {e}")));
+                }
+            },
+            Err(e) => {
+                // if we can't get the lock, we just return and try again later
+                log_error!(self.logger, "Could not get wallet lock: {e}");
+                return Ok(());
+            }
+        }
 
         Ok(())
     }
