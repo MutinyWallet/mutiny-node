@@ -659,6 +659,21 @@ impl<S: MutinyStorage> Node<S> {
         let amount_msat = amount_sat.map(|s| s * 1_000);
         // Set description to empty string to make smallest possible invoice/QR code
         let description = "".to_string();
+
+        // wait for first sync to complete
+        for _ in 0..60 {
+            // check if we've been stopped
+            if self.stop.load(Ordering::Relaxed) {
+                return Err(MutinyError::NotRunning);
+            }
+
+            if let Ok(true) = self.persister.storage.has_done_first_sync() {
+                break;
+            }
+
+            sleep(1_000).await;
+        }
+
         let invoice_res = match route_hints {
             None => {
                 let now = crate::utils::now();
