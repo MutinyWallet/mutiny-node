@@ -834,7 +834,7 @@ impl<S: MutinyStorage> Node<S> {
 
     /// init_invoice_payment sends off the payment but does not wait for results
     /// use pay_invoice_with_timeout to wait for results
-    pub fn init_invoice_payment(
+    pub async fn init_invoice_payment(
         &self,
         invoice: &Invoice,
         amt_sats: Option<u64>,
@@ -856,6 +856,19 @@ impl<S: MutinyStorage> Node<S> {
             .is_some_and(|p| p.status != HTLCStatus::Failed)
         {
             return Err(MutinyError::NonUniquePaymentHash);
+        }
+
+        // make sure node at least has one connection before attempting payment
+        // wait for connection before paying, or otherwise instant fail anyways
+        for _ in 0..DEFAULT_PAYMENT_TIMEOUT {
+            // check if we've been stopped
+            if self.stop.load(Ordering::Relaxed) {
+                return Err(MutinyError::NotRunning);
+            }
+            if !self.peer_manager.get_peer_node_ids().is_empty() {
+                break;
+            }
+            sleep(1_000).await;
         }
 
         let (pay_result, amt_msat) = if invoice.amount_milli_satoshis().is_none() {
@@ -987,7 +1000,9 @@ impl<S: MutinyStorage> Node<S> {
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         // initiate payment
-        let payment_hash = self.init_invoice_payment(invoice, amt_sats, labels.clone())?;
+        let payment_hash = self
+            .init_invoice_payment(invoice, amt_sats, labels.clone())
+            .await?;
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
 
         self.await_payment(payment_hash, timeout, labels).await
