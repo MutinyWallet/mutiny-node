@@ -267,6 +267,24 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // TODO stop redshift and NWC as well
         self.node_manager.stop().await
     }
+
+    /// Resets BDK's keychain tracker. This will require a re-sync of the blockchain.
+    ///
+    /// This can be useful if you get stuck in a bad state.
+    pub async fn reset_onchain_tracker(&mut self) -> Result<(), MutinyError> {
+        self.node_manager.reset_onchain_tracker().await?;
+        // sleep for 250ms to give time for the storage to write
+        utils::sleep(250).await;
+
+        self.stop().await?;
+
+        // sleep for 250ms to give time for the node manager to stop
+        utils::sleep(250).await;
+
+        self.start().await?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

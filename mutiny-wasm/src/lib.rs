@@ -899,6 +899,14 @@ impl MutinyWallet {
         Ok(())
     }
 
+    /// Resets BDK's keychain tracker. This will require a re-sync of the blockchain.
+    ///
+    /// This can be useful if you get stuck in a bad state.
+    #[wasm_bindgen]
+    pub async fn reset_onchain_tracker(&mut self) -> Result<(), MutinyJsError> {
+        Ok(self.inner.reset_onchain_tracker().await?)
+    }
+
     /// Exports the current state of the node manager to a json object.
     #[wasm_bindgen]
     pub async fn export_json(&self) -> Result<String, MutinyJsError> {
