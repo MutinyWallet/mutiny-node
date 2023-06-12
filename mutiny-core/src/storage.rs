@@ -17,6 +17,7 @@ pub(crate) const MNEMONIC_KEY: &str = "mnemonic";
 const NODES_KEY: &str = "nodes";
 const AUTH_PROFILES_KEY: &str = "auth_profiles";
 const FEE_ESTIMATES_KEY: &str = "fee_estimates";
+const FIRST_SYNC_KEY: &str = "first_sync";
 
 fn needs_encryption(key: &str) -> bool {
     match key {
@@ -206,6 +207,15 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     /// The key is block target, the value is the fee in satoshis per byte
     fn insert_fee_estimates(&self, fees: HashMap<String, f64>) -> Result<(), MutinyError> {
         self.set_data(FEE_ESTIMATES_KEY, fees)
+    }
+
+    fn has_done_first_sync(&self) -> Result<bool, MutinyError> {
+        self.get_data::<bool>(FIRST_SYNC_KEY)
+            .map(|v| v == Some(true))
+    }
+
+    fn set_done_first_sync(&self) -> Result<(), MutinyError> {
+        self.set_data(FIRST_SYNC_KEY, true)
     }
 }
 

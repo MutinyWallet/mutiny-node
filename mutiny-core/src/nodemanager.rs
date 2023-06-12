@@ -765,6 +765,11 @@ impl<S: MutinyStorage> NodeManager<S> {
                     log_error!(nm.logger, "Failed to sync: {e}");
                 }
 
+                // if this is the first sync, set the done_first_sync flag
+                if sync_count == 0 {
+                    let _ = nm.storage.set_done_first_sync();
+                }
+
                 // sleep for 1 minute, checking graceful shutdown check each 1s.
                 for _ in 0..60 {
                     if nm.stop.load(Ordering::Relaxed) {
@@ -819,11 +824,11 @@ impl<S: MutinyStorage> NodeManager<S> {
         amount: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyBip21RawMaterials, MutinyError> {
+        let invoice = self.create_invoice(amount, labels.clone()).await?;
+
         let Ok(address) = self.get_new_address(labels.clone()) else {
             return Err(MutinyError::WalletOperationFailed);
         };
-
-        let invoice = self.create_invoice(amount, labels.clone()).await?;
 
         let Some(bolt11) = invoice.bolt11 else {
             return Err(MutinyError::WalletOperationFailed);
