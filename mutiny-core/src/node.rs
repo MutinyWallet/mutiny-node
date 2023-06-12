@@ -439,6 +439,7 @@ impl<S: MutinyStorage> Node<S> {
             &lsp_client,
             stop.clone(),
             stopped_components.clone(),
+            network == Network::Regtest,
         )
         .await?;
 
@@ -1297,7 +1298,27 @@ async fn start_reconnection_handling(
     lsp_client: &Option<LspClient>,
     stop: Arc<AtomicBool>,
     stopped_components: Arc<RwLock<Vec<bool>>>,
+    skip_fee_estimates: bool,
 ) -> Result<(), MutinyError> {
+    // wait for fee estimates sync to finish, it can cause issues if we try to connect before
+    // we have fee estimates
+    if !skip_fee_estimates {
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                return Err(MutinyError::NotRunning);
+            }
+            // make sure we have fee estimates and they are not empty
+            if storage
+                .get_fee_estimates()
+                .map(|m| m.is_some_and(|m| !m.is_empty()))
+                .unwrap_or(false)
+            {
+                break;
+            }
+            sleep(1_000).await;
+        }
+    }
+
     // Attempt initial connections first in the background
     #[cfg(target_arch = "wasm32")]
     let websocket_proxy_addr_copy_proxy = websocket_proxy_addr.clone();
