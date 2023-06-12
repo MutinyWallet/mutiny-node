@@ -7,7 +7,7 @@ use crate::gossip::*;
 use crate::labels::LabelStorage;
 use crate::logging::LOGGING_KEY;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
-use crate::storage::MutinyStorage;
+use crate::storage::{MutinyStorage, KEYCHAIN_STORE_KEY};
 use crate::utils::sleep;
 use crate::{
     auth::{AuthManager, AuthProfile},
@@ -1896,6 +1896,27 @@ impl<S: MutinyStorage> NodeManager<S> {
         // delete all the keys we use to store routing data
         self.storage
             .delete(&[GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY])?;
+
+        // shut back down after reading if it was already closed
+        if needs_db_connection {
+            self.storage.clone().stop();
+        }
+
+        Ok(())
+    }
+
+    /// Resets BDK's keychain tracker. This will require a re-sync of the blockchain.
+    ///
+    /// This can be useful if you get stuck in a bad state.
+    pub async fn reset_onchain_tracker(&self) -> Result<(), MutinyError> {
+        // if we're not connected to the db, start it up
+        let needs_db_connection = !self.storage.clone().connected().unwrap_or(true);
+        if needs_db_connection {
+            self.storage.clone().start().await?;
+        }
+
+        // delete the bdk keychain store
+        self.storage.delete(&[KEYCHAIN_STORE_KEY])?;
 
         // shut back down after reading if it was already closed
         if needs_db_connection {
