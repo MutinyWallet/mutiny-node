@@ -806,7 +806,14 @@ impl<S: MutinyStorage> Node<S> {
             .persister
             .list_channel_closures()?
             .into_iter()
-            .map(|c| c.1)
+            .map(|(id, mut c)| {
+                // some old closures might not have the user_channel_id set
+                // we set it here to avoid breaking the API
+                if c.user_channel_id.is_none() {
+                    c.user_channel_id = Some(id.to_be_bytes())
+                }
+                c
+            })
             .collect())
     }
 
