@@ -218,7 +218,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         notification = read_fut => {
                             match notification {
                                 Ok(RelayPoolNotification::Event(_url, event)) => {
-                                    if event.kind == Kind::WalletConnectRequest {
+                                    if event.kind == Kind::WalletConnectRequest && event.verify().is_ok() {
                                         match nostr.handle_nwc_request(event, &nm, &from_node).await {
                                             Ok(Some(event)) => {
                                                 if let Err(e) = client.send_event(event).await {
