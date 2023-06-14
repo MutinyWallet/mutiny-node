@@ -32,7 +32,7 @@ pub fn encrypt_value(
     let res = match password {
         Some(pw) if needs_encryption(key.as_ref()) => {
             let str = serde_json::to_string(&value)?;
-            let ciphertext = encrypt(&str, pw);
+            let ciphertext = encrypt(&str, pw)?;
             Value::String(ciphertext)
         }
         _ => value,
@@ -50,7 +50,7 @@ pub fn decrypt_value(
     let json: Value = match password {
         Some(pw) if needs_encryption(key.as_ref()) => {
             let str: String = serde_json::from_value(value)?;
-            let ciphertext = decrypt(&str, pw);
+            let ciphertext = decrypt(&str, pw)?;
             serde_json::from_str(&ciphertext)?
         }
         _ => value,
@@ -143,12 +143,45 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     }
 
     /// Get the mnemonic from the storage
-    fn get_mnemonic(&self) -> Result<Mnemonic, MutinyError> {
-        let mnemonic: Option<Mnemonic> = self.get_data(MNEMONIC_KEY)?;
-        match mnemonic {
-            Some(m) => Ok(m),
-            None => Err(MutinyError::NotFound),
+    fn get_mnemonic(&self) -> Result<Option<Mnemonic>, MutinyError> {
+        self.get_data(MNEMONIC_KEY)
+    }
+
+    fn change_password(&mut self, new: Option<String>) -> Result<(), MutinyError>;
+
+    fn change_password_and_rewrite_storage(
+        &mut self,
+        old: Option<String>,
+        new: Option<String>,
+    ) -> Result<(), MutinyError> {
+        // check if old password is correct
+        if old != self.password().map(|s| s.to_owned()) {
+            return Err(MutinyError::IncorrectPassword);
         }
+
+        // get all of our keys
+        let mut keys: Vec<String> = self.scan_keys("", None)?;
+        // get the ones that need encryption
+        keys.retain(|k| needs_encryption(k));
+
+        // decrypt all of the values
+        let mut values: HashMap<String, Value> = HashMap::new();
+        for key in keys.iter() {
+            let value = self.get_data(key)?;
+            if let Some(v) = value {
+                values.insert(key.to_owned(), v);
+            }
+        }
+
+        // change the password
+        self.change_password(new)?;
+
+        // encrypt all of the values
+        for (key, value) in values.iter() {
+            self.set_data(key, value)?;
+        }
+
+        Ok(())
     }
 
     /// Override the storage with the new JSON object
@@ -294,6 +327,11 @@ impl MutinyStorage for MemoryStorage {
             .collect())
     }
 
+    fn change_password(&mut self, new: Option<String>) -> Result<(), MutinyError> {
+        self.password = new;
+        Ok(())
+    }
+
     async fn import(_json: Value) -> Result<(), MutinyError> {
         Ok(())
     }
@@ -339,6 +377,10 @@ impl MutinyStorage for () {
 
     fn scan_keys(&self, _prefix: &str, _suffix: Option<&str>) -> Result<Vec<String>, MutinyError> {
         Ok(Vec::new())
+    }
+
+    fn change_password(&mut self, _new: Option<String>) -> Result<(), MutinyError> {
+        Ok(())
     }
 
     async fn import(_json: Value) -> Result<(), MutinyError> {
@@ -404,7 +446,7 @@ mod tests {
         let mnemonic = storage.insert_mnemonic(seed).unwrap();
 
         let stored_mnemonic = storage.get_mnemonic().unwrap();
-        assert_eq!(mnemonic, stored_mnemonic);
+        assert_eq!(Some(mnemonic), stored_mnemonic);
     }
 
     #[test]
@@ -419,6 +461,6 @@ mod tests {
         let mnemonic = storage.insert_mnemonic(seed).unwrap();
 
         let stored_mnemonic = storage.get_mnemonic().unwrap();
-        assert_eq!(mnemonic, stored_mnemonic);
+        assert_eq!(Some(mnemonic), stored_mnemonic);
     }
 }

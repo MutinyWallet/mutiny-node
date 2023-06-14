@@ -123,6 +123,9 @@ pub enum MutinyError {
     /// Error getting the bitcoin price
     #[error("Failed to get the bitcoin price.")]
     BitcoinPriceError,
+    /// Incorrect password entered.
+    #[error("Incorrect password entered.")]
+    IncorrectPassword,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -149,6 +152,18 @@ impl MutinyError {
 
     pub fn write_err(e: MutinyStorageError) -> Self {
         MutinyError::PersistenceFailed { source: e }
+    }
+}
+
+impl From<aes_gcm::Error> for MutinyError {
+    fn from(_: aes_gcm::Error) -> Self {
+        Self::IncorrectPassword
+    }
+}
+
+impl From<aes_gcm::aes::cipher::InvalidLength> for MutinyError {
+    fn from(_: aes_gcm::aes::cipher::InvalidLength) -> Self {
+        Self::IncorrectPassword
     }
 }
 

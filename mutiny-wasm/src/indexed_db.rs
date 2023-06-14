@@ -394,6 +394,11 @@ impl MutinyStorage for IndexedDbStorage {
             .collect())
     }
 
+    fn change_password(&mut self, new: Option<String>) -> Result<(), MutinyError> {
+        self.password = new;
+        Ok(())
+    }
+
     async fn import(json: Value) -> Result<(), MutinyError> {
         Self::clear().await?;
         let indexed_db = Self::build_indexed_db_database().await?;
@@ -594,7 +599,7 @@ mod tests {
         let mnemonic = storage.insert_mnemonic(seed).unwrap();
 
         let stored_mnemonic = storage.get_mnemonic().unwrap();
-        assert_eq!(mnemonic, stored_mnemonic);
+        assert_eq!(Some(mnemonic), stored_mnemonic);
 
         // clear the storage to clean up
         IndexedDbStorage::clear().await.unwrap();
@@ -615,7 +620,7 @@ mod tests {
         let mnemonic = storage.insert_mnemonic(seed).unwrap();
 
         let stored_mnemonic = storage.get_mnemonic().unwrap();
-        assert_eq!(mnemonic, stored_mnemonic);
+        assert_eq!(Some(mnemonic), stored_mnemonic);
 
         // clear the storage to clean up
         IndexedDbStorage::clear().await.unwrap();

@@ -526,7 +526,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Returns if there is a saved wallet in storage.
     /// This is checked by seeing if a mnemonic seed exists in storage.
     pub fn has_node_manager(storage: S) -> bool {
-        storage.get_mnemonic().is_ok()
+        storage.get_mnemonic().is_ok_and(|x| x.is_some())
     }
 
     /// Creates a new [NodeManager] with the given parameters.
@@ -545,10 +545,14 @@ impl<S: MutinyStorage> NodeManager<S> {
         let mnemonic = match c.mnemonic {
             Some(seed) => storage.insert_mnemonic(seed)?,
             None => match storage.get_mnemonic() {
-                Ok(mnemonic) => mnemonic,
-                Err(_) => {
+                Ok(Some(mnemonic)) => mnemonic,
+                Ok(None) => {
                     let seed = keymanager::generate_seed(12)?;
                     storage.insert_mnemonic(seed)?
+                }
+                Err(_) => {
+                    // if we get an error, then we have the wrong password
+                    return Err(MutinyError::IncorrectPassword);
                 }
             },
         };

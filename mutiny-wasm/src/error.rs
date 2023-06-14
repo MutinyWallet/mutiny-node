@@ -125,6 +125,9 @@ pub enum MutinyJsError {
     /// Invalid Arguments were given
     #[error("Invalid Arguments were given")]
     InvalidArgumentsError,
+    /// Incorrect password entered.
+    #[error("Incorrect password entered.")]
+    IncorrectPassword,
     /// Unknown error.
     #[error("Unknown Error")]
     UnknownError,
@@ -168,6 +171,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::IncorrectLnUrlFunction => MutinyJsError::IncorrectLnUrlFunction,
             MutinyError::BadAmountError => MutinyJsError::BadAmountError,
             MutinyError::BitcoinPriceError => MutinyJsError::BitcoinPriceError,
+            MutinyError::IncorrectPassword => MutinyJsError::IncorrectPassword,
             MutinyError::Other(_) => MutinyJsError::UnknownError,
             MutinyError::SubscriptionClientNotConfigured => {
                 MutinyJsError::SubscriptionClientNotConfigured

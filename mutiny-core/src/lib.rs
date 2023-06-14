@@ -43,10 +43,10 @@ pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
-use crate::nostr::NostrManager;
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
+use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::Kind;
 use bip39::Mnemonic;
 use bitcoin::secp256k1::PublicKey;
@@ -54,7 +54,7 @@ use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::Network;
 use futures::{pin_mut, select, FutureExt};
 use lightning::util::logger::Logger;
-use lightning::{log_error, log_warn};
+use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Invoice;
 use nostr_sdk::{Client, RelayPoolNotification};
 use std::sync::atomic::Ordering;
@@ -306,6 +306,36 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     pub async fn stop(&self) -> Result<(), MutinyError> {
         // TODO stop redshift and NWC as well
         self.node_manager.stop().await
+    }
+
+    pub async fn change_password(
+        &mut self,
+        old: Option<String>,
+        new: Option<String>,
+    ) -> Result<(), MutinyError> {
+        // check if old password is correct
+        if old != self.storage.password().map(|s| s.to_owned()) {
+            return Err(MutinyError::IncorrectPassword);
+        }
+
+        log_info!(self.node_manager.logger, "Changing password");
+
+        self.stop().await?;
+
+        self.storage.start().await?;
+
+        self.storage.change_password_and_rewrite_storage(
+            old.filter(|s| !s.is_empty()),
+            new.filter(|s| !s.is_empty()),
+        )?;
+
+        // There's not a good way to check that all the indexeddb
+        // data is saved in the background. This should get better
+        // once we have async saving, but for now just make sure
+        // the user has saved their seed already.
+        sleep(5_000).await;
+
+        Ok(())
     }
 
     /// Resets BDK's keychain tracker. This will require a re-sync of the blockchain.

@@ -1136,6 +1136,18 @@ impl MutinyWallet {
         Ok(())
     }
 
+    #[wasm_bindgen]
+    pub async fn change_password(
+        &mut self,
+        old_password: Option<String>,
+        new_password: Option<String>,
+    ) -> Result<(), MutinyJsError> {
+        self.inner
+            .change_password(old_password, new_password)
+            .await?;
+        Ok(())
+    }
+
     /// Converts a bitcoin amount in BTC to satoshis.
     #[wasm_bindgen]
     pub fn convert_btc_to_sats(btc: f64) -> Result<u64, MutinyJsError> {
