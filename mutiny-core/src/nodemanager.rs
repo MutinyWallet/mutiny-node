@@ -889,6 +889,19 @@ impl<S: MutinyStorage> NodeManager<S> {
             .estimate_tx_fee(destination_address.script_pubkey(), amount, fee_rate)
     }
 
+    /// Estimates the onchain fee for a transaction sweep our on-chain balance
+    /// to the given address.
+    ///
+    /// The fee rate is in sat/vbyte.
+    pub fn estimate_sweep_tx_fee(
+        &self,
+        destination_address: Address,
+        fee_rate: Option<f32>,
+    ) -> Result<u64, MutinyError> {
+        self.wallet
+            .estimate_sweep_tx_fee(destination_address.script_pubkey(), fee_rate)
+    }
+
     /// Estimates the onchain fee for a opening a lightning channel.
     /// The amount is in satoshis and the fee rate is in sat/vbyte.
     pub fn estimate_channel_open_fee(
@@ -902,6 +915,20 @@ impl<S: MutinyStorage> NodeManager<S> {
             .push_slice(&[0; 32])
             .into_script();
         self.wallet.estimate_tx_fee(script, amount, fee_rate)
+    }
+
+    /// Estimates the onchain fee for sweeping our on-chain balance to open a lightning channel.
+    /// The fee rate is in sat/vbyte.
+    pub fn estimate_sweep_channel_open_fee(
+        &self,
+        fee_rate: Option<f32>,
+    ) -> Result<u64, MutinyError> {
+        // Dummy p2wsh script for the channel output
+        let script = script::Builder::new()
+            .push_int(0)
+            .push_slice(&[0; 32])
+            .into_script();
+        self.wallet.estimate_sweep_tx_fee(script, fee_rate)
     }
 
     /// Checks if the given address has any transactions.

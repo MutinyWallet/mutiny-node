@@ -316,13 +316,9 @@ impl<S: MutinyStorage> OnChainWallet<S> {
 
     pub fn create_sweep_psbt(
         &self,
-        destination_address: Address,
+        spk: Script,
         fee_rate: Option<f32>,
     ) -> Result<PartiallySignedTransaction, MutinyError> {
-        if !destination_address.is_valid_for_network(self.network) {
-            return Err(MutinyError::IncorrectNetwork(destination_address.network));
-        }
-
         let mut wallet = self.wallet.try_write()?;
 
         let fee_rate = if let Some(rate) = fee_rate {
@@ -333,7 +329,6 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                 .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
             FeeRate::from_sat_per_kwu(sat_per_kwu as f32)
         };
-        let spk = destination_address.script_pubkey();
         let (mut psbt, details) = {
             let mut builder = wallet.build_tx();
             builder
@@ -356,7 +351,11 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        let psbt = self.create_sweep_psbt(destination_address, fee_rate)?;
+        if !destination_address.is_valid_for_network(self.network) {
+            return Err(MutinyError::IncorrectNetwork(destination_address.network));
+        }
+
+        let psbt = self.create_sweep_psbt(destination_address.script_pubkey(), fee_rate)?;
         self.label_psbt(&psbt, labels)?;
 
         let raw_transaction = psbt.extract_tx();
@@ -399,6 +398,16 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         fee_rate: Option<f32>,
     ) -> Result<u64, MutinyError> {
         let psbt = self.create_signed_psbt_to_spk(spk, amount, fee_rate)?;
+
+        psbt.fee_amount().ok_or(MutinyError::WalletOperationFailed)
+    }
+
+    pub fn estimate_sweep_tx_fee(
+        &self,
+        spk: Script,
+        fee_rate: Option<f32>,
+    ) -> Result<u64, MutinyError> {
+        let psbt = self.create_sweep_psbt(spk, fee_rate)?;
 
         psbt.fee_amount().ok_or(MutinyError::WalletOperationFailed)
     }
