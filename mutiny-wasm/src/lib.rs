@@ -235,6 +235,22 @@ impl MutinyWallet {
             .estimate_tx_fee(addr, amount, fee_rate)?)
     }
 
+    /// Estimates the onchain fee for a transaction sweep our on-chain balance
+    /// to the given address.
+    ///
+    /// The fee rate is in sat/vbyte.
+    pub fn estimate_sweep_tx_fee(
+        &self,
+        destination_address: String,
+        fee_rate: Option<f32>,
+    ) -> Result<u64, MutinyJsError> {
+        let addr = Address::from_str(&destination_address)?;
+        Ok(self
+            .inner
+            .node_manager
+            .estimate_sweep_tx_fee(addr, fee_rate)?)
+    }
+
     /// Estimates the onchain fee for a opening a lightning channel.
     /// The amount is in satoshis and the fee rate is in sat/vbyte.
     pub fn estimate_channel_open_fee(
@@ -246,6 +262,18 @@ impl MutinyWallet {
             .inner
             .node_manager
             .estimate_channel_open_fee(amount, fee_rate)?)
+    }
+
+    /// Estimates the onchain fee for sweeping our on-chain balance to open a lightning channel.
+    /// The fee rate is in sat/vbyte.
+    pub fn estimate_sweep_channel_open_fee(
+        &self,
+        fee_rate: Option<f32>,
+    ) -> Result<u64, MutinyJsError> {
+        Ok(self
+            .inner
+            .node_manager
+            .estimate_sweep_channel_open_fee(fee_rate)?)
     }
 
     /// Checks if the given address has any transactions.
