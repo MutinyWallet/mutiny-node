@@ -53,7 +53,7 @@ use bitcoin::Network;
 use futures::{pin_mut, select, FutureExt};
 use lightning::util::logger::Logger;
 use lightning::{log_error, log_warn};
-use nostr_sdk::{Client, RelayMessage, RelayPoolNotification};
+use nostr_sdk::{Client, RelayPoolNotification};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -216,8 +216,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     pin_mut!(delay_fut);
                     select! {
                         notification = read_fut => {
-                            match notification {
-                                Ok(RelayPoolNotification::Event(_url, event)) => {
+                                if let Ok(RelayPoolNotification::Event(_url, event)) = notification {
                                     if event.kind == Kind::WalletConnectRequest && event.verify().is_ok() {
                                         match nostr.handle_nwc_request(event, &nm, &from_node).await {
                                             Ok(Some(event)) => {
@@ -232,23 +231,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                         }
                                     }
                                 }
-                                Ok(RelayPoolNotification::Message(_url, RelayMessage::EndOfStoredEvents(_))) => {
-                                    // after we process all events, sleep for 10 seconds
-                                    // and then we will reconnect to the relay
-                                    if let Err(e) = client.disconnect().await {
-                                        log_warn!(nm.logger, "Error disconnecting from nostr relay: {e}");
-                                    }
-                                    // wait up to 10s, checking graceful shutdown check each 1s.
-                                    for _ in 0..10 {
-                                        if nm.stop.load(Ordering::Relaxed) {
-                                            break;
-                                        }
-                                        utils::sleep(1_000).await;
-                                    }
-                                    break;
-                                }
-                                _ => {} // ignore
-                            }
                         }
                         _ = delay_fut => {
                             if nm.stop.load(Ordering::Relaxed) {

@@ -1,7 +1,6 @@
 use crate::error::MutinyError;
 use crate::nodemanager::NodeManager;
 use crate::storage::MutinyStorage;
-use crate::utils;
 use anyhow::anyhow;
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::util::bip32::{DerivationPath, ExtendedPrivKey};
@@ -13,7 +12,7 @@ use nostr::nips::nip47::{
     ErrorCode, Method, NIP47Error, NostrWalletConnectURI, Request, Response, ResponseResult,
 };
 use nostr::prelude::{decrypt, encrypt};
-use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag, Timestamp};
+use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
 use nostr_sdk::Client;
 use std::str::FromStr;
 
@@ -83,13 +82,10 @@ impl NostrManager {
         let client_pubkey = self.nwc_client_key.public_key();
         let server_pubkey = self.nwc_server_key.public_key();
 
-        let fifteen_mins_ago = utils::now().as_secs() - 15 * 60;
-
         Filter::new()
             .kinds(vec![Kind::WalletConnectRequest])
             .author(client_pubkey.to_string())
             .pubkey(server_pubkey)
-            .since(Timestamp::from(fifteen_mins_ago))
     }
 
     /// Create Nostr Wallet Connect Info event
