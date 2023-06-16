@@ -805,17 +805,27 @@ impl<S: MutinyStorage> NodeManager<S> {
     ///
     /// It is recommended to create a new address for every transaction.
     pub fn get_new_address(&self, labels: Vec<String>) -> Result<Address, MutinyError> {
-        let mut wallet = self.wallet.wallet.try_write()?;
-        let address = wallet.get_address(AddressIndex::New).address;
-        self.set_address_labels(address.clone(), labels)?;
-        Ok(address)
+        if let Ok(mut wallet) = self.wallet.wallet.try_write() {
+            let address = wallet.get_address(AddressIndex::New).address;
+            self.set_address_labels(address.clone(), labels)?;
+            return Ok(address);
+        }
+
+        log_error!(self.logger, "Could not get wallet lock to get new address");
+        Err(MutinyError::WalletOperationFailed)
     }
 
     /// Gets the current balance of the on-chain wallet.
     pub fn get_wallet_balance(&self) -> Result<u64, MutinyError> {
-        let wallet = self.wallet.wallet.try_read()?;
+        if let Ok(wallet) = self.wallet.wallet.try_read() {
+            return Ok(wallet.get_balance().total());
+        }
 
-        Ok(wallet.get_balance().total())
+        log_error!(
+            self.logger,
+            "Could not get wallet lock to get wallet balance"
+        );
+        Err(MutinyError::WalletOperationFailed)
     }
 
     /// Creates a BIP 21 invoice. This creates a new address and a lightning invoice.
@@ -1098,7 +1108,12 @@ impl<S: MutinyStorage> NodeManager<S> {
     ///
     /// This will not include any funds in an unconfirmed lightning channel.
     pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyError> {
-        let onchain = self.wallet.wallet.try_read()?.get_balance();
+        let onchain = if let Ok(wallet) = self.wallet.wallet.try_read() {
+            wallet.get_balance()
+        } else {
+            log_error!(self.logger, "Could not get wallet lock to get balance");
+            return Err(MutinyError::WalletOperationFailed);
+        };
 
         let nodes = self.nodes.lock().await;
         let lightning_msats: u64 = nodes
