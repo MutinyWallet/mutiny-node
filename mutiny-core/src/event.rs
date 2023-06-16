@@ -8,6 +8,7 @@ use crate::redshift::RedshiftStorage;
 use crate::storage::MutinyStorage;
 use crate::utils::sleep;
 use anyhow::anyhow;
+use bdk::chain::ConfirmationTime;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;

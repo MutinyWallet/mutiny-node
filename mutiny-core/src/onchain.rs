@@ -72,12 +72,14 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             return Err(MutinyError::Other(anyhow!(
                 "Failed to broadcast transaction ({txid}): {e}"
             )));
-        } else if let Err(e) = self
-            .insert_tx(tx, ConfirmationTime::Unconfirmed, None)
-            .await
-        {
-            log_warn!(self.logger, "ERROR: Could not sync broadcasted tx ({txid}), will be synced in next iteration: {e:?}");
         }
+        // todo bring back after bdk alpha1
+        // else if let Err(e) = self
+        //     .insert_tx(tx, ConfirmationTime::Unconfirmed, None)
+        //     .await
+        // {
+        //     log_warn!(self.logger, "ERROR: Could not sync broadcasted tx ({txid}), will be synced in next iteration: {e:?}");
+        // }
 
         Ok(())
     }
@@ -320,7 +322,9 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
 
-        self.broadcast_transaction(raw_transaction).await?;
+        self.broadcast_transaction(raw_transaction.clone()).await?;
+        self.insert_tx(raw_transaction, ConfirmationTime::Unconfirmed, None)
+            .await?;
         log_debug!(self.logger, "Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }
@@ -372,7 +376,9 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
 
-        self.broadcast_transaction(raw_transaction).await?;
+        self.broadcast_transaction(raw_transaction.clone()).await?;
+        self.insert_tx(raw_transaction, ConfirmationTime::Unconfirmed, None)
+            .await?;
         log_debug!(self.logger, "Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }
