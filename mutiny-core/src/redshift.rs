@@ -192,7 +192,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
                 let node = self.get_node(&node.pubkey).await?;
                 match &node.lsp_client {
                     Some(lsp) => lsp.pubkey,
-                    None => return Err(MutinyError::LspFailure),
+                    None => return Err(MutinyError::LspGenericError),
                 }
             }
         };

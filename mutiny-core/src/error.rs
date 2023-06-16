@@ -51,8 +51,15 @@ pub enum MutinyError {
     /// Failed to call on the given LNURL
     #[error("Failed to call on the given LNURL.")]
     LnUrlFailure,
-    #[error("Failed to connect to LSP.")]
-    LspFailure,
+    /// Could not make a request to the LSP.
+    #[error("Failed to make a request to the LSP.")]
+    LspGenericError,
+    /// LSP indicated it could not fund the channel requested.
+    #[error("Failed to request channel from LSP due to funding error.")]
+    LspFundingError,
+    /// LSP indicated it was not connected to the client node.
+    #[error("Failed to have a connection to the LSP node.")]
+    LspConnectionError,
     /// No route for the given target could be found.
     #[error("Failed to find route.")]
     RoutingFailed,
