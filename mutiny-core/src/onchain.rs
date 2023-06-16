@@ -85,15 +85,19 @@ impl<S: MutinyStorage> OnChainWallet<S> {
     pub async fn sync(&self) -> Result<(), MutinyError> {
         // get first wallet lock that only needs to read
         let (checkpoints, spks) = {
-            let wallet = self.wallet.try_read()?;
-            let checkpoints = wallet.checkpoints();
-            let spks = wallet
-                .spks_of_all_keychains()
-                .into_iter()
-                .map(|(k, spks)| (k, spks))
-                .collect();
+            if let Ok(wallet) = self.wallet.try_read() {
+                let checkpoints = wallet.checkpoints();
+                let spks = wallet
+                    .spks_of_all_keychains()
+                    .into_iter()
+                    .map(|(k, spks)| (k, spks))
+                    .collect();
 
-            (checkpoints.clone(), spks)
+                (checkpoints.clone(), spks)
+            } else {
+                log_error!(self.logger, "Could not get wallet lock to sync");
+                return Err(MutinyError::WalletOperationFailed);
+            }
         };
 
         let update = self
@@ -171,8 +175,15 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         &self,
         include_raw: bool,
     ) -> Result<Vec<TransactionDetails>, MutinyError> {
-        #[allow(deprecated)]
-        Ok(self.wallet.try_read()?.list_transactions(include_raw))
+        if let Ok(wallet) = self.wallet.try_read() {
+            #[allow(deprecated)]
+            return Ok(wallet.list_transactions(include_raw));
+        }
+        log_error!(
+            self.logger,
+            "Could not get wallet lock to list transactions"
+        );
+        Err(MutinyError::WalletOperationFailed)
     }
 
     pub fn get_transaction(
