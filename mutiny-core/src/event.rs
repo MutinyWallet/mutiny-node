@@ -135,7 +135,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                             self.wallet.create_signed_psbt_to_spk(
                                 output_script,
                                 channel_value_satoshis,
-                                Some(params.sats_per_kw as f32),
+                                Some(params.sats_per_vbyte),
                             )
                         }
                     }

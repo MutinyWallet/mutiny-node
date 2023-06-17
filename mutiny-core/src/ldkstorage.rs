@@ -421,7 +421,7 @@ fn channel_open_params_key(id: u128) -> String {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct ChannelOpenParams {
-    pub sats_per_kw: u32,
+    pub sats_per_vbyte: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub utxos: Option<Vec<bitcoin::OutPoint>>,
     #[serde(skip_serializing_if = "Option::is_none")]

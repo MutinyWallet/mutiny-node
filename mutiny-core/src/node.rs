@@ -22,6 +22,7 @@ use crate::{
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{lspclient::FeeRequest, storage::MutinyStorage};
 use anyhow::{anyhow, Context};
+use bdk::FeeRate;
 use bdk_esplora::esplora_client::AsyncClient;
 use bip39::Mnemonic;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
@@ -1181,18 +1182,20 @@ impl<S: MutinyStorage> Node<S> {
             u128::from_be_bytes(user_channel_id_bytes)
         });
 
-        let sats_per_kw = if let Some(sats_vbyte) = fee_rate {
-            // convert to sats per kw
-            (sats_vbyte * 250.0) as u32
+        let sats_per_vbyte = if let Some(sats_vbyte) = fee_rate {
+            sats_vbyte
         } else {
-            self.wallet
+            let sats_per_kw = self
+                .wallet
                 .fees
-                .get_est_sat_per_1000_weight(ConfirmationTarget::Normal)
+                .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+
+            FeeRate::from_sat_per_kwu(sats_per_kw as f32).as_sat_per_vb()
         };
 
         // save params to db
         let params = ChannelOpenParams {
-            sats_per_kw,
+            sats_per_vbyte,
             utxos: None,
             labels: None,
             opening_tx: None,
@@ -1292,9 +1295,10 @@ impl<S: MutinyStorage> Node<S> {
             u128::from_be_bytes(user_channel_id_bytes)
         });
 
+        let sats_per_vbyte = FeeRate::from_sat_per_kwu(sats_per_kw as f32).as_sat_per_vb();
         // save params to db
         let params = ChannelOpenParams {
-            sats_per_kw,
+            sats_per_vbyte,
             utxos: Some(utxos.to_vec()),
             labels: None,
             opening_tx: None,
