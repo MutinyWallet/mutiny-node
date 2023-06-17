@@ -1104,6 +1104,10 @@ impl<S: MutinyStorage> Node<S> {
     ) -> Result<OutPoint, MutinyError> {
         let start = utils::now().as_secs();
         loop {
+            if self.stop.load(Ordering::Relaxed) {
+                return Err(MutinyError::NotRunning);
+            }
+
             // We will get a channel closure event if the peer rejects the channel
             // todo return closure reason to user
             if let Ok(Some(_closure)) = self.persister.get_channel_closure(user_channel_id) {
@@ -1116,9 +1120,32 @@ impl<S: MutinyStorage> Node<S> {
                 .find(|c| c.user_channel_id == user_channel_id);
 
             if let Some(outpoint) = channel.and_then(|c| c.funding_txo) {
-                // TODO wait until Event::ChannelPending after funding tx generated
-                sleep(1_000).await;
-                return Ok(outpoint.into_bitcoin_outpoint());
+                let outpoint = outpoint.into_bitcoin_outpoint();
+                log_info!(self.logger, "Channel funding tx found: {}", outpoint);
+                log_debug!(self.logger, "Waiting for Channel Pending event");
+                loop {
+                    // we delete the channel open params on channel pending event
+                    // so if we can't find them, we know the channel is pending
+                    // and we can safely return
+                    if self
+                        .persister
+                        .get_channel_open_params(user_channel_id)
+                        .map(|p| p.is_none())
+                        .unwrap_or(false)
+                    {
+                        return Ok(outpoint);
+                    }
+
+                    let now = utils::now().as_secs();
+                    if now - start > timeout {
+                        return Err(MutinyError::ChannelCreationFailed);
+                    }
+
+                    if self.stop.load(Ordering::Relaxed) {
+                        return Err(MutinyError::NotRunning);
+                    }
+                    sleep(250).await;
+                }
             }
 
             let now = utils::now().as_secs();
@@ -1134,6 +1161,7 @@ impl<S: MutinyStorage> Node<S> {
         &self,
         pubkey: PublicKey,
         amount_sat: u64,
+        fee_rate: Option<f32>,
         user_channel_id: Option<u128>,
     ) -> Result<u128, MutinyError> {
         let mut config = default_user_config();
@@ -1152,6 +1180,25 @@ impl<S: MutinyStorage> Node<S> {
             getrandom::getrandom(&mut user_channel_id_bytes).unwrap();
             u128::from_be_bytes(user_channel_id_bytes)
         });
+
+        let sats_per_kw = if let Some(sats_vbyte) = fee_rate {
+            // convert to sats per kw
+            (sats_vbyte * 250.0) as u32
+        } else {
+            self.wallet
+                .fees
+                .get_est_sat_per_1000_weight(ConfirmationTarget::Normal)
+        };
+
+        // save params to db
+        let params = ChannelOpenParams {
+            sats_per_kw,
+            utxos: None,
+            labels: None,
+            opening_tx: None,
+        };
+        self.persister
+            .persist_channel_open_params(user_channel_id, params)?;
 
         match self.channel_manager.create_channel(
             pubkey,
@@ -1181,11 +1228,12 @@ impl<S: MutinyStorage> Node<S> {
         &self,
         pubkey: PublicKey,
         amount_sat: u64,
+        fee_rate: Option<f32>,
         user_channel_id: Option<u128>,
         timeout: u64,
     ) -> Result<OutPoint, MutinyError> {
         let init = self
-            .init_open_channel(pubkey, amount_sat, user_channel_id)
+            .init_open_channel(pubkey, amount_sat, fee_rate, user_channel_id)
             .await?;
 
         self.await_chan_funding_tx(init, &pubkey, timeout).await
@@ -1247,8 +1295,9 @@ impl<S: MutinyStorage> Node<S> {
         // save params to db
         let params = ChannelOpenParams {
             sats_per_kw,
-            utxos: utxos.to_vec(),
+            utxos: Some(utxos.to_vec()),
             labels: None,
+            opening_tx: None,
         };
         self.persister
             .persist_channel_open_params(user_channel_id, params)?;

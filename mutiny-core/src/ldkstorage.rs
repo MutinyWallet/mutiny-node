@@ -13,8 +13,8 @@ use crate::utils;
 use anyhow::anyhow;
 use bdk_esplora::esplora_client::AsyncClient;
 use bitcoin::hashes::hex::{FromHex, ToHex};
-use bitcoin::BlockHash;
 use bitcoin::Network;
+use bitcoin::{BlockHash, Transaction};
 use futures::{try_join, TryFutureExt};
 use lightning::chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate};
 use lightning::chain::keysinterface::{
@@ -422,9 +422,12 @@ fn channel_open_params_key(id: u128) -> String {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct ChannelOpenParams {
     pub sats_per_kw: u32,
-    pub utxos: Vec<bitcoin::OutPoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub utxos: Option<Vec<bitcoin::OutPoint>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub labels: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opening_tx: Option<Transaction>,
 }
 
 fn payment_key(inbound: bool, payment_hash: &PaymentHash) -> String {

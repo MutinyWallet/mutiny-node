@@ -15,7 +15,7 @@ use bitcoin::{Address, Network, OutPoint, Script, Transaction, Txid};
 use esplora_client::AsyncClient;
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::util::logger::Logger;
-use lightning::{log_debug, log_error, log_warn};
+use lightning::{log_debug, log_error};
 
 use crate::error::MutinyError;
 use crate::fees::MutinyFeeEstimator;
