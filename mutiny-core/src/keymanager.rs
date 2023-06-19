@@ -250,6 +250,7 @@ mod tests {
     use bitcoin::Network;
     use esplora_client::Builder;
     use std::str::FromStr;
+    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
 
     #[test]
@@ -270,6 +271,7 @@ mod tests {
             esplora.clone(),
             logger.clone(),
         ));
+        let stop = Arc::new(AtomicBool::new(false));
 
         let wallet = Arc::new(
             OnChainWallet::new(
@@ -278,6 +280,7 @@ mod tests {
                 Network::Testnet,
                 esplora,
                 fees,
+                stop,
                 logger.clone(),
             )
             .unwrap(),

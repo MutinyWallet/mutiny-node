@@ -495,6 +495,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             network,
             esplora.clone(),
             fee_estimator.clone(),
+            stop.clone(),
             logger.clone(),
         )?);
 
