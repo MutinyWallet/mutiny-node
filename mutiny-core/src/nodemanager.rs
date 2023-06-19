@@ -762,10 +762,8 @@ impl<S: MutinyStorage> NodeManager<S> {
 
                 if let Err(e) = nm.sync().await {
                     log_error!(nm.logger, "Failed to sync: {e}");
-                }
-
-                // if this is the first sync, set the done_first_sync flag
-                if !synced {
+                } else if !synced {
+                    // if this is the first sync, set the done_first_sync flag
                     let _ = nm.storage.set_done_first_sync();
                     synced = true;
                 }
