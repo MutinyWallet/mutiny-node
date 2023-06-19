@@ -1,8 +1,9 @@
-use crate::error::MutinyError;
 use crate::logging::MutinyLogger;
 use crate::storage::MutinyStorage;
+use crate::{error::MutinyError, utils};
 use bdk::FeeRate;
 use esplora_client::AsyncClient;
+use futures::lock::Mutex;
 use lightning::chain::chaininterface::{
     ConfirmationTarget, FeeEstimator, FEERATE_FLOOR_SATS_PER_KW,
 };
@@ -25,6 +26,7 @@ pub struct MutinyFeeEstimator<S: MutinyStorage> {
     storage: S,
     esplora: Arc<AsyncClient>,
     logger: Arc<MutinyLogger>,
+    last_fee_update_time_secs: Arc<Mutex<Option<u64>>>,
 }
 
 impl<S: MutinyStorage> MutinyFeeEstimator<S> {
@@ -37,6 +39,7 @@ impl<S: MutinyStorage> MutinyFeeEstimator<S> {
             storage,
             esplora,
             logger,
+            last_fee_update_time_secs: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -64,6 +67,11 @@ impl<S: MutinyStorage> MutinyFeeEstimator<S> {
             (non_witness_size * 4) + witness_size
         };
         FeeRate::from_sat_per_kwu(sats_per_kw as f32).fee_wu(expected_weight)
+    }
+
+    async fn get_last_sync_time(&self) -> Option<u64> {
+        let lock = self.last_fee_update_time_secs.lock().await;
+        *lock
     }
 }
 
@@ -100,7 +108,15 @@ impl<S: MutinyStorage> MutinyFeeEstimator<S> {
         Ok(fee_estimates)
     }
 
-    pub async fn update_fee_estimates(&self) -> Result<(), MutinyError> {
+    pub async fn update_fee_estimates_if_necessary(&self) -> Result<(), MutinyError> {
+        let last_sync = self.get_last_sync_time().await;
+        if last_sync.is_none() || utils::now().as_secs() > last_sync.unwrap() + 60 * 10 {
+            self.update_fee_estimates().await?;
+        }
+        Ok(())
+    }
+
+    async fn update_fee_estimates(&self) -> Result<(), MutinyError> {
         // first try mempool.space's API
         let mempool_fees = self.get_mempool_recommended_fees().await;
 
@@ -111,6 +127,8 @@ impl<S: MutinyStorage> MutinyFeeEstimator<S> {
         };
 
         self.storage.insert_fee_estimates(fee_estimates)?;
+        let mut update_time_lock = self.last_fee_update_time_secs.lock().await;
+        *update_time_lock = Some(utils::now().as_secs());
 
         Ok(())
     }
