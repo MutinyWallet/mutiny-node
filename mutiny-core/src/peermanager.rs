@@ -1,6 +1,6 @@
-use crate::error::MutinyError;
 use crate::node::NetworkGraph;
 use crate::storage::MutinyStorage;
+use crate::{error::MutinyError, fees::MutinyFeeEstimator};
 use crate::{gossip, ldkstorage::PhantomChannelManager, logging::MutinyLogger};
 use crate::{gossip::read_peer_info, node::PubkeyConnectionInfo};
 use crate::{keymanager::PhantomKeysManager, node::ConnectionType};
@@ -308,11 +308,12 @@ impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
     }
 }
 
-pub(crate) async fn connect_peer_if_necessary(
+pub(crate) async fn connect_peer_if_necessary<S: MutinyStorage>(
     #[cfg(target_arch = "wasm32")] websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
     logger: Arc<MutinyLogger>,
     peer_manager: Arc<dyn PeerManager>,
+    fee_estimator: Arc<MutinyFeeEstimator<S>>,
     stop: Arc<AtomicBool>,
 ) -> Result<(), MutinyError> {
     if peer_manager
@@ -321,6 +322,11 @@ pub(crate) async fn connect_peer_if_necessary(
     {
         Ok(())
     } else {
+        // first check to see if the fee rate is mostly up to date
+        // if not, we need to have updated fees or force closures
+        // could occur due to UpdateFee message conflicts.
+        fee_estimator.update_fee_estimates_if_necessary().await?;
+
         connect_peer(
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,

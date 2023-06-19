@@ -137,6 +137,7 @@ pub(crate) struct Node<S: MutinyStorage> {
     pub keys_manager: Arc<PhantomKeysManager<S>>,
     pub channel_manager: Arc<PhantomChannelManager<S>>,
     pub chain_monitor: Arc<ChainMonitor<S>>,
+    pub fee_estimator: Arc<MutinyFeeEstimator<S>>,
     network: Network,
     pub persister: Arc<MutinyNodePersister<S>>,
     wallet: Arc<OnChainWallet<S>>,
@@ -294,7 +295,7 @@ impl<S: MutinyStorage> Node<S> {
         // init event handler
         let event_handler = EventHandler::new(
             channel_manager.clone(),
-            fee_estimator,
+            fee_estimator.clone(),
             wallet.clone(),
             keys_manager.clone(),
             persister.clone(),
@@ -434,6 +435,7 @@ impl<S: MutinyStorage> Node<S> {
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr.clone(),
             peer_man.clone(),
+            fee_estimator.clone(),
             &logger,
             uuid.clone(),
             &lsp_client,
@@ -452,6 +454,7 @@ impl<S: MutinyStorage> Node<S> {
             keys_manager,
             channel_manager,
             chain_monitor,
+            fee_estimator,
             network,
             persister,
             wallet,
@@ -496,25 +499,16 @@ impl<S: MutinyStorage> Node<S> {
         peer_connection_info: PubkeyConnectionInfo,
         label: Option<String>,
     ) -> Result<(), MutinyError> {
-        #[cfg(target_arch = "wasm32")]
         let connect_res = connect_peer_if_necessary(
+            #[cfg(target_arch = "wasm32")]
             &self.websocket_proxy_addr,
             &peer_connection_info,
             self.logger.clone(),
             self.peer_manager.clone(),
+            self.fee_estimator.clone(),
             self.stop.clone(),
         )
         .await;
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let connect_res = connect_peer_if_necessary(
-            &peer_connection_info,
-            self.logger.clone(),
-            self.peer_manager.clone(),
-            self.stop.clone(),
-        )
-        .await;
-
         match connect_res {
             Ok(_) => {
                 let node_id = NodeId::from_pubkey(&peer_connection_info.pubkey);
@@ -1295,11 +1289,12 @@ impl<S: MutinyStorage> Node<S> {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn start_reconnection_handling(
+async fn start_reconnection_handling<S: MutinyStorage>(
     storage: &impl MutinyStorage,
     node_pubkey: PublicKey,
     #[cfg(target_arch = "wasm32")] websocket_proxy_addr: String,
     peer_man: Arc<dyn PeerManager>,
+    fee_estimator: Arc<MutinyFeeEstimator<S>>,
     logger: &Arc<MutinyLogger>,
     uuid: String,
     lsp_client: &Option<LspClient>,
@@ -1332,6 +1327,7 @@ async fn start_reconnection_handling(
 
     let proxy_logger = logger.clone();
     let peer_man_proxy = peer_man.clone();
+    let proxy_fee_estimator = fee_estimator.clone();
     let lsp_client_copy = lsp_client.clone();
     let storage_copy = storage.clone();
     let uuid_copy = uuid.clone();
@@ -1347,6 +1343,7 @@ async fn start_reconnection_handling(
                 &PubkeyConnectionInfo::new(lsp.connection_string.as_str()).unwrap(),
                 proxy_logger.clone(),
                 peer_man_proxy.clone(),
+                proxy_fee_estimator.clone(),
                 stop_copy.clone(),
             )
             .await;
@@ -1373,6 +1370,7 @@ async fn start_reconnection_handling(
 
     // keep trying to connect each lightning peer if they get disconnected
     let connect_peer_man = peer_man.clone();
+    let connect_fee_estimator = fee_estimator.clone();
     let connect_logger = logger.clone();
     let connect_storage = storage.clone();
     stopped_components.try_write()?.push(false);
@@ -1448,6 +1446,7 @@ async fn start_reconnection_handling(
                     &peer_connection_info,
                     connect_logger.clone(),
                     connect_peer_man.clone(),
+                    connect_fee_estimator.clone(),
                     stop.clone(),
                 )
                 .await;

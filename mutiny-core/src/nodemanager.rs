@@ -744,7 +744,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         }
 
         utils::spawn(async move {
-            let mut sync_count: u64 = 0;
+            let mut synced = false;
             loop {
                 // If we are stopped, don't sync
                 if nm.stop.load(Ordering::Relaxed) {
@@ -753,12 +753,10 @@ impl<S: MutinyStorage> NodeManager<S> {
 
                 // we don't need to re-sync fees every time
                 // just do it every 10 minutes
-                if sync_count % 10 == 0 {
-                    if let Err(e) = nm.fee_estimator.update_fee_estimates().await {
-                        log_error!(nm.logger, "Failed to update fee estimates: {e}");
-                    } else {
-                        log_info!(nm.logger, "Updated fee estimates!");
-                    }
+                if let Err(e) = nm.fee_estimator.update_fee_estimates_if_necessary().await {
+                    log_error!(nm.logger, "Failed to update fee estimates: {e}");
+                } else {
+                    log_info!(nm.logger, "Updated fee estimates!");
                 }
 
                 if let Err(e) = nm.sync().await {
@@ -766,8 +764,9 @@ impl<S: MutinyStorage> NodeManager<S> {
                 }
 
                 // if this is the first sync, set the done_first_sync flag
-                if sync_count == 0 {
+                if !synced {
                     let _ = nm.storage.set_done_first_sync();
+                    synced = true;
                 }
 
                 // sleep for 1 minute, checking graceful shutdown check each 1s.
@@ -777,9 +776,6 @@ impl<S: MutinyStorage> NodeManager<S> {
                     }
                     sleep(1_000).await;
                 }
-
-                // increment sync count
-                sync_count += 1;
             }
         });
     }
