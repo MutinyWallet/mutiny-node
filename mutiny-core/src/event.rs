@@ -8,6 +8,7 @@ use crate::redshift::RedshiftStorage;
 use crate::storage::MutinyStorage;
 use crate::utils::sleep;
 use anyhow::anyhow;
+use bdk::chain::ConfirmationTime;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
@@ -111,34 +112,39 @@ impl<S: MutinyStorage> EventHandler<S> {
                 };
 
                 let psbt_result = match &params_opt {
-                    None => self.wallet.create_signed_psbt_to_spk(
-                        output_script,
-                        channel_value_satoshis,
-                        None,
-                    ),
-                    Some(params) => {
-                        log_debug!(self.logger, "Opening channel with params: {params:?}");
-                        let psbt = self.wallet.create_sweep_psbt_to_output(
-                            &params.utxos,
+                    None => {
+                        log_warn!(
+                            self.logger,
+                            "WARNING: Could not find channel open params for channel {user_channel_id}"
+                        );
+                        self.wallet.create_signed_psbt_to_spk(
                             output_script,
                             channel_value_satoshis,
-                        );
-
-                        // delete from storage, if it fails, it is fine, just log it.
-                        if let Err(e) = self.persister.delete_channel_open_params(user_channel_id) {
-                            log_warn!(
-                                self.logger,
-                                "ERROR: Could not delete channel open params, but continuing: {e}"
-                            );
+                            None,
+                        )
+                    }
+                    Some(params) => {
+                        log_debug!(self.logger, "Opening channel with params: {params:?}");
+                        if let Some(utxos) = &params.utxos {
+                            self.wallet.create_sweep_psbt_to_output(
+                                utxos,
+                                output_script,
+                                channel_value_satoshis,
+                            )
+                        } else {
+                            self.wallet.create_signed_psbt_to_spk(
+                                output_script,
+                                channel_value_satoshis,
+                                Some(params.sats_per_vbyte),
+                            )
                         }
-
-                        psbt
                     }
                 };
 
                 let label = format!("LN Channel: {}", counterparty_node_id.to_hex());
                 let labels = params_opt
-                    .and_then(|p| p.labels)
+                    .as_ref()
+                    .and_then(|p| p.labels.clone())
                     .unwrap_or_else(|| vec![label]);
 
                 let psbt = match psbt_result {
@@ -166,16 +172,26 @@ impl<S: MutinyStorage> EventHandler<S> {
                     }
                 };
 
+                let tx = psbt.extract_tx();
+
                 if let Err(e) = self.channel_manager.funding_transaction_generated(
                     &temporary_channel_id,
                     &counterparty_node_id,
-                    psbt.extract_tx(),
+                    tx.clone(),
                 ) {
                     log_error!(
                         self.logger,
                         "ERROR: Could not send funding transaction to channel manager: {e:?}"
                     );
                     return;
+                }
+
+                if let Some(mut params) = params_opt {
+                    params.opening_tx = Some(tx);
+
+                    let _ = self
+                        .persister
+                        .persist_channel_open_params(user_channel_id, params);
                 }
 
                 log_info!(self.logger, "EVENT: FundingGenerationReady success");
@@ -515,6 +531,30 @@ impl<S: MutinyStorage> EventHandler<S> {
                     channel_id.to_hex(),
                     user_channel_id,
                     counterparty_node_id.to_hex());
+
+                if let Ok(Some(params)) = self.persister.get_channel_open_params(user_channel_id) {
+                    if let Some(tx) = params.opening_tx {
+                        if let Err(e) = self
+                            .wallet
+                            .insert_tx(tx, ConfirmationTime::Unconfirmed, None)
+                            .await
+                        {
+                            {
+                                log_warn!(
+                                    self.logger,
+                                    "ERROR: Could not insert opening tx into wallet, but continuing: {e}"
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if let Err(e) = self.persister.delete_channel_open_params(user_channel_id) {
+                    log_warn!(
+                        self.logger,
+                        "ERROR: Could not delete channel open params, but continuing: {e}"
+                    );
+                }
             }
             Event::HTLCIntercepted { .. } => {}
         }

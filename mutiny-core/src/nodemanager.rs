@@ -1663,6 +1663,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         from_node: &PublicKey,
         to_pubkey: Option<PublicKey>,
         amount: u64,
+        fee_rate: Option<f32>,
         user_channel_id: Option<u128>,
     ) -> Result<MutinyChannel, MutinyError> {
         let node = self.get_node(from_node).await?;
@@ -1678,7 +1679,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         };
 
         let outpoint = node
-            .open_channel_with_timeout(to_pubkey, amount, user_channel_id, 60)
+            .open_channel_with_timeout(to_pubkey, amount, fee_rate, user_channel_id, 60)
             .await?;
 
         let all_channels = node.channel_manager.list_channels();

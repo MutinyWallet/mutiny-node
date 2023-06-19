@@ -640,6 +640,7 @@ impl MutinyWallet {
         from_node: String,
         to_pubkey: Option<String>,
         amount: u64,
+        fee_rate: Option<f32>,
     ) -> Result<MutinyChannel, MutinyJsError> {
         let from_node = PublicKey::from_str(&from_node)?;
 
@@ -653,7 +654,7 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .open_channel(&from_node, to_pubkey, amount, None)
+            .open_channel(&from_node, to_pubkey, amount, fee_rate, None)
             .await?
             .into())
     }
