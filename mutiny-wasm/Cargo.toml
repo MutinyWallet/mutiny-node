@@ -50,7 +50,7 @@ mutiny-core = { path = "../mutiny-core", features = ["test-utils"] }
 wasm-bindgen-test = "0.3.33"
 
 [features]
-default = ["console_error_panic_hook"]
+default = [ ]
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = true

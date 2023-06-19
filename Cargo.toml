@@ -9,7 +9,7 @@ members = [
 
 # Tell `rustc` to optimize for small code size.
 [profile.release.package.mutiny-core]
-opt-level = "s"
+opt-level = "z"
 
 [profile.release.package.mutiny-wasm]
-opt-level = "s"
+opt-level = "z"
