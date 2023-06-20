@@ -26,6 +26,7 @@ use lightning_invoice::Invoice;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::logging::MutinyLogger;
 use mutiny_core::redshift::RedshiftManager;
+use mutiny_core::scb::StaticChannelBackupStorage;
 use mutiny_core::storage::MutinyStorage;
 use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
 use mutiny_core::{nodemanager, redshift::RedshiftRecipient};
@@ -725,6 +726,25 @@ impl MutinyWallet {
         Ok(JsValue::from_serde(
             &self.inner.node_manager.list_channels().await?,
         )?)
+    }
+
+    #[wasm_bindgen]
+    pub async fn recover_from_static_channel_backup(
+        &self,
+        scb: String,
+    ) -> Result<(), MutinyJsError> {
+        let scb = StaticChannelBackupStorage::from_str(&scb)
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        self.inner
+            .node_manager
+            .recover_from_static_channel_backup(scb)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn create_static_channel_backup(&self) -> Result<String, MutinyJsError> {
+        let scb = self.inner.node_manager.create_static_channel_backup().await;
+        Ok(scb.to_string())
     }
 
     /// Lists all the peers for all the nodes in the node manager.

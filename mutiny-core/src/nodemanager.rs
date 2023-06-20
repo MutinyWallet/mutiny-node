@@ -7,6 +7,7 @@ use crate::gossip::*;
 use crate::labels::LabelStorage;
 use crate::logging::LOGGING_KEY;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
+use crate::scb::{StaticChannelBackup, StaticChannelBackupStorage};
 use crate::storage::{MutinyStorage, KEYCHAIN_STORE_KEY};
 use crate::utils::sleep;
 use crate::{
@@ -43,10 +44,13 @@ use lightning::chain::channelmonitor::Balance;
 use lightning::chain::keysinterface::{NodeSigner, Recipient};
 use lightning::chain::Confirm;
 use lightning::events::ClosureReason;
+use lightning::io::Read;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
+use lightning::ln::msgs::DecodeError;
 use lightning::ln::PaymentHash;
 use lightning::routing::gossip::NodeId;
 use lightning::util::logger::*;
+use lightning::util::ser::{Readable, Writeable, Writer};
 use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::{Invoice, InvoiceDescription};
 use lnurl::lnurl::LnUrl;
@@ -60,13 +64,13 @@ use uuid::Uuid;
 const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 
 // This is the NodeStorage object saved to the DB
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct NodeStorage {
     pub nodes: HashMap<String, NodeIndex>,
 }
 
 // This is the NodeIndex reference that is saved to the DB
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub struct NodeIndex {
     pub child_index: u32,
     pub lsp: Option<String>,
@@ -76,6 +80,63 @@ pub struct NodeIndex {
 impl NodeIndex {
     pub fn is_archived(&self) -> bool {
         self.archived.unwrap_or(false)
+    }
+}
+
+impl Writeable for NodeIndex {
+    fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
+        // Write the archived flag, 1 if archived, 0 if not
+        if self.archived.unwrap_or(false) {
+            writer.write_all(&[1])?;
+        } else {
+            writer.write_all(&[0])?;
+        }
+
+        // Write the child index
+        writer.write_all(&self.child_index.to_be_bytes())?;
+        // Write the lsp
+        match self.lsp {
+            Some(ref lsp) => {
+                let bytes = lsp.as_bytes();
+                let len = bytes.len() as u32;
+                writer.write_all(&len.to_be_bytes())?;
+                writer.write_all(bytes)?;
+            }
+            None => {
+                let len: u32 = 0;
+                writer.write_all(&len.to_be_bytes())?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Readable for NodeIndex {
+    fn read<R: Read>(reader: &mut R) -> Result<Self, DecodeError> {
+        // Read the archived flag
+        let mut archived = [0; 1];
+        reader.read_exact(&mut archived)?;
+        let archived = archived[0] == 1;
+
+        // Read the child index
+        let child_index: u32 = Readable::read(reader)?;
+
+        // Read the lsp
+        let lsp_len: u32 = Readable::read(reader)?;
+        let lsp = if lsp_len > 0 {
+            let mut lsp = Vec::with_capacity(lsp_len as usize);
+            reader.take(lsp_len as u64).read_to_end(&mut lsp)?;
+            Some(String::from_utf8(lsp).unwrap())
+        } else {
+            None
+        };
+
+        Ok(NodeIndex {
+            child_index,
+            lsp,
+            archived: Some(archived),
+        })
     }
 }
 
@@ -1857,6 +1918,83 @@ impl<S: MutinyStorage> NodeManager<S> {
             channels.iter().map(MutinyChannel::from).collect();
 
         Ok(mutiny_channels)
+    }
+
+    pub async fn create_static_channel_backup(&self) -> StaticChannelBackupStorage {
+        let nodes = self.nodes.lock().await;
+        let mut backups: HashMap<PublicKey, (NodeIndex, StaticChannelBackup)> = HashMap::new();
+        for (_, node) in nodes.iter() {
+            let scb = node.create_static_channel_backup();
+            backups.insert(node.pubkey, (node.node_index(), scb));
+        }
+
+        let peers = get_all_peers(&self.storage).unwrap_or_default();
+
+        let peer_connections = peers
+            .into_iter()
+            .filter_map(|(n, p)| p.connection_string.map(|str| (n.as_pubkey().unwrap(), str)))
+            .collect::<HashMap<_, _>>();
+
+        StaticChannelBackupStorage {
+            backups,
+            peer_connections,
+        }
+    }
+
+    pub async fn recover_from_static_channel_backup(
+        &self,
+        scb: StaticChannelBackupStorage,
+    ) -> Result<(), MutinyError> {
+        let max_index = scb
+            .backups
+            .values()
+            .map(|(node_index, _)| node_index.child_index)
+            .max()
+            .unwrap_or(0);
+
+        let current_index = self
+            .node_storage
+            .lock()
+            .await
+            .nodes
+            .values()
+            .map(|n| n.child_index)
+            .max()
+            .unwrap_or(0);
+
+        let needed_nodes = max_index - current_index;
+        if needed_nodes > 0 {
+            log_info!(
+                self.logger,
+                "Creating {needed_nodes} new nodes to recover from backup"
+            );
+            for _ in 0..needed_nodes {
+                self.new_node().await?;
+            }
+        }
+
+        // fixme: run these futures in parallel
+        for (pubkey, (node_index, backup)) in scb.backups {
+            match self.get_node(&pubkey).await {
+                Ok(node) => {
+                    debug_assert!(node.node_index().child_index == node_index.child_index);
+                    log_info!(
+                        self.logger,
+                        "Recovering node {pubkey} from static channel backup"
+                    );
+                    node.recover_from_static_channel_backup(backup, &scb.peer_connections)
+                        .await?;
+                }
+                Err(_) => {
+                    log_error!(
+                        self.logger,
+                        "Could not find node with pubkey {pubkey} to recover from backup",
+                    );
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Lists all the peers for all the nodes in the node manager.

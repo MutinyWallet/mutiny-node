@@ -12,6 +12,7 @@ use lightning::{
 use std::{net::SocketAddr, sync::atomic::AtomicBool};
 
 use crate::networking::socket::{schedule_descriptor_read, MutinySocketDescriptor};
+use crate::scb::message_handler::SCBMessageHandler;
 use bitcoin::BlockHash;
 use lightning::events::{MessageSendEvent, MessageSendEventsProvider};
 use lightning::ln::features::{InitFeatures, NodeFeatures};
@@ -94,7 +95,7 @@ pub(crate) type PeerManagerImpl<S: MutinyStorage> = LdkPeerManager<
     Arc<GossipMessageHandler<S>>,
     Arc<IgnoringMessageHandler>,
     Arc<MutinyLogger>,
-    Arc<IgnoringMessageHandler>,
+    Arc<SCBMessageHandler>,
     Arc<PhantomKeysManager<S>>,
 >;
 
