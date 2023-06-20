@@ -1,6 +1,7 @@
 use anyhow::anyhow;
 use std::collections::HashSet;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 use bdk::chain::{BlockId, ConfirmationTime};
@@ -22,6 +23,7 @@ use crate::fees::MutinyFeeEstimator;
 use crate::labels::*;
 use crate::logging::MutinyLogger;
 use crate::storage::{MutinyStorage, OnChainStorage};
+use crate::utils::sleep;
 
 #[derive(Clone)]
 pub struct OnChainWallet<S: MutinyStorage> {
@@ -30,6 +32,7 @@ pub struct OnChainWallet<S: MutinyStorage> {
     pub network: Network,
     pub blockchain: Arc<AsyncClient>,
     pub fees: Arc<MutinyFeeEstimator<S>>,
+    pub(crate) stop: Arc<AtomicBool>,
     logger: Arc<MutinyLogger>,
 }
 
@@ -40,6 +43,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         network: Network,
         esplora: Arc<AsyncClient>,
         fees: Arc<MutinyFeeEstimator<S>>,
+        stop: Arc<AtomicBool>,
         logger: Arc<MutinyLogger>,
     ) -> Result<OnChainWallet<S>, MutinyError> {
         let seed = mnemonic.to_seed("");
@@ -61,6 +65,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             network,
             blockchain: esplora,
             fees,
+            stop,
             logger,
         })
     }
@@ -115,23 +120,37 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             .await?;
 
         // get new wallet lock for writing and apply the update
-        match self.wallet.try_write() {
-            Ok(mut wallet) => match wallet.apply_update(update) {
-                Ok(_) => wallet.commit()?,
+        for _ in 0..10 {
+            match self.wallet.try_write() {
+                Ok(mut wallet) => match wallet.apply_update(update) {
+                    Ok(_) => {
+                        wallet.commit()?;
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        // failed to apply wallet update
+                        log_error!(self.logger, "Could not apply wallet update: {e}");
+                        return Err(MutinyError::Other(anyhow!("Could not apply update: {e}")));
+                    }
+                },
                 Err(e) => {
-                    // failed to apply wallet update
-                    log_error!(self.logger, "Could not apply wallet update: {e}");
-                    return Err(MutinyError::Other(anyhow!("Could not apply update: {e}")));
+                    // if we can't get the lock, we just return and try again later
+                    log_error!(
+                        self.logger,
+                        "Could not get wallet lock: {e}, retrying in 250ms"
+                    );
+
+                    if self.stop.load(Ordering::Relaxed) {
+                        return Err(MutinyError::NotRunning);
+                    };
+
+                    sleep(250).await;
                 }
-            },
-            Err(e) => {
-                // if we can't get the lock, we just return and try again later
-                log_error!(self.logger, "Could not get wallet lock: {e}");
-                return Ok(());
             }
         }
 
-        Ok(())
+        log_error!(self.logger, "Could not get wallet lock after 10 retries");
+        Err(MutinyError::WalletOperationFailed)
     }
 
     pub(crate) async fn insert_tx(
@@ -499,8 +518,9 @@ mod tests {
             esplora.clone(),
             logger.clone(),
         ));
+        let stop = Arc::new(AtomicBool::new(false));
 
-        OnChainWallet::new(&mnemonic, db, Network::Testnet, esplora, fees, logger).unwrap()
+        OnChainWallet::new(&mnemonic, db, Network::Testnet, esplora, fees, stop, logger).unwrap()
     }
 
     #[test]
