@@ -1752,7 +1752,24 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     /// Closes a channel with the given outpoint.
-    pub async fn close_channel(&self, outpoint: &OutPoint, force: bool) -> Result<(), MutinyError> {
+    ///
+    /// If force is true, the channel will be force closed.
+    ///
+    /// If abandon is true, the channel will be abandoned.
+    /// This will force close without broadcasting the latest transaction.
+    /// This should only be used if the channel will never actually be opened.
+    ///
+    /// If both force and abandon are true, an error will be returned.
+    pub async fn close_channel(
+        &self,
+        outpoint: &OutPoint,
+        force: bool,
+        abandon: bool,
+    ) -> Result<(), MutinyError> {
+        if force && abandon {
+            return Err(MutinyError::ChannelClosingFailed);
+        }
+
         let nodes = self.nodes.lock().await;
         let channel_opt: Option<(Arc<Node<S>>, ChannelDetails)> =
             nodes.iter().find_map(|(_, n)| {
@@ -1780,6 +1797,21 @@ impl<S: MutinyStorage> NodeManager<S> {
                             );
                             MutinyError::ChannelClosingFailed
                         })?;
+                } else if abandon {
+                    node.channel_manager
+                        .force_close_without_broadcasting_txn(
+                            &channel.channel_id,
+                            &channel.counterparty.node_id,
+                        )
+                        .map_err(|e| {
+                            log_error!(
+                                self.logger,
+                                "had an error abandoning closing channel {} with node {} : {e:?}",
+                                &channel.channel_id.to_hex(),
+                                &channel.counterparty.node_id.to_hex()
+                            );
+                            MutinyError::ChannelClosingFailed
+                        })?;
                 } else {
                     node.channel_manager
                         .close_channel(&channel.channel_id, &channel.counterparty.node_id)
@@ -1793,48 +1825,6 @@ impl<S: MutinyStorage> NodeManager<S> {
                             MutinyError::ChannelClosingFailed
                         })?;
                 }
-
-                Ok(())
-            }
-            None => {
-                log_error!(
-                    self.logger,
-                    "Channel not found with this transaction: {outpoint}",
-                );
-                Err(MutinyError::NotFound)
-            }
-        }
-    }
-
-    /// Abandons a channel with the given outpoint. This will force close without broadcasting
-    /// the latest transaction. This should only be used if the channel will never actually be opened.
-    pub async fn abandon_channel(&self, outpoint: &OutPoint) -> Result<(), MutinyError> {
-        let nodes = self.nodes.lock().await;
-        let channel_opt: Option<(Arc<Node<S>>, ChannelDetails)> =
-            nodes.iter().find_map(|(_, n)| {
-                n.channel_manager
-                    .list_channels()
-                    .iter()
-                    .find(|c| c.funding_txo.map(|f| f.into_bitcoin_outpoint()) == Some(*outpoint))
-                    .map(|c| (n.clone(), c.clone()))
-            });
-
-        match channel_opt {
-            Some((node, channel)) => {
-                node.channel_manager
-                    .force_close_without_broadcasting_txn(
-                        &channel.channel_id,
-                        &channel.counterparty.node_id,
-                    )
-                    .map_err(|e| {
-                        log_error!(
-                            self.logger,
-                            "had an error abandoning channel {} with node {} : {e:?}",
-                            &channel.channel_id.to_hex(),
-                            &channel.counterparty.node_id.to_hex()
-                        );
-                        MutinyError::ChannelClosingFailed
-                    })?;
 
                 Ok(())
             }
