@@ -1190,6 +1190,7 @@ impl<S: MutinyStorage> Node<S> {
         // save params to db
         let params = ChannelOpenParams {
             sats_per_vbyte,
+            absolute_fee: None,
             utxos: None,
             labels: None,
             opening_tx: None,
@@ -1293,6 +1294,7 @@ impl<S: MutinyStorage> Node<S> {
         // save params to db
         let params = ChannelOpenParams {
             sats_per_vbyte,
+            absolute_fee: Some(expected_fee),
             utxos: Some(utxos.to_vec()),
             labels: None,
             opening_tx: None,
