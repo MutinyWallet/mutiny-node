@@ -166,6 +166,7 @@ impl<S: MutinyStorage> Node<S> {
         esplora: Arc<AsyncClient>,
         lsp_clients: &[LspClient],
         logger: Arc<MutinyLogger>,
+        do_not_connect_peers: bool,
         #[cfg(target_arch = "wasm32")] websocket_proxy_addr: String,
     ) -> Result<Self, MutinyError> {
         log_info!(logger, "initializing a new node: {uuid}");
@@ -430,21 +431,23 @@ impl<S: MutinyStorage> Node<S> {
             }
         });
 
-        start_reconnection_handling(
-            &persister.storage,
-            pubkey,
-            #[cfg(target_arch = "wasm32")]
-            websocket_proxy_addr.clone(),
-            peer_man.clone(),
-            fee_estimator.clone(),
-            &logger,
-            uuid.clone(),
-            &lsp_client,
-            stop.clone(),
-            stopped_components.clone(),
-            network == Network::Regtest,
-        )
-        .await?;
+        if !do_not_connect_peers {
+            start_reconnection_handling(
+                &persister.storage,
+                pubkey,
+                #[cfg(target_arch = "wasm32")]
+                websocket_proxy_addr.clone(),
+                peer_man.clone(),
+                fee_estimator.clone(),
+                &logger,
+                uuid.clone(),
+                &lsp_client,
+                stop.clone(),
+                stopped_components.clone(),
+                network == Network::Regtest,
+            )
+            .await?;
+        }
 
         Ok(Node {
             _uuid: uuid,
