@@ -1188,12 +1188,7 @@ impl<S: MutinyStorage> Node<S> {
         };
 
         // save params to db
-        let params = ChannelOpenParams {
-            sats_per_vbyte,
-            utxos: None,
-            labels: None,
-            opening_tx: None,
-        };
+        let params = ChannelOpenParams::new(sats_per_vbyte);
         self.persister
             .persist_channel_open_params(user_channel_id, params)?;
 
@@ -1291,12 +1286,7 @@ impl<S: MutinyStorage> Node<S> {
 
         let sats_per_vbyte = FeeRate::from_sat_per_kwu(sats_per_kw as f32).as_sat_per_vb();
         // save params to db
-        let params = ChannelOpenParams {
-            sats_per_vbyte,
-            utxos: Some(utxos.to_vec()),
-            labels: None,
-            opening_tx: None,
-        };
+        let params = ChannelOpenParams::new_sweep(sats_per_vbyte, expected_fee, utxos.to_vec());
         self.persister
             .persist_channel_open_params(user_channel_id, params)?;
 

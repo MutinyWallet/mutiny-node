@@ -421,13 +421,41 @@ fn channel_open_params_key(id: u128) -> String {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct ChannelOpenParams {
-    pub sats_per_vbyte: f32,
+    pub(crate) sats_per_vbyte: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub utxos: Option<Vec<bitcoin::OutPoint>>,
+    pub(crate) absolute_fee: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub labels: Option<Vec<String>>,
+    pub(crate) utxos: Option<Vec<bitcoin::OutPoint>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub opening_tx: Option<Transaction>,
+    pub(crate) labels: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) opening_tx: Option<Transaction>,
+}
+
+impl ChannelOpenParams {
+    pub fn new(sats_per_vbyte: f32) -> Self {
+        Self {
+            sats_per_vbyte,
+            absolute_fee: None,
+            utxos: None,
+            labels: None,
+            opening_tx: None,
+        }
+    }
+
+    pub fn new_sweep(
+        sats_per_vbyte: f32,
+        absolute_fee: u64,
+        utxos: Vec<bitcoin::OutPoint>,
+    ) -> Self {
+        Self {
+            sats_per_vbyte,
+            absolute_fee: Some(absolute_fee),
+            utxos: Some(utxos),
+            labels: None,
+            opening_tx: None,
+        }
+    }
 }
 
 fn payment_key(inbound: bool, payment_hash: &PaymentHash) -> String {

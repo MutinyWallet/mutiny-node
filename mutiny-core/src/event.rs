@@ -130,6 +130,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                                 utxos,
                                 output_script,
                                 channel_value_satoshis,
+                                params.absolute_fee.expect("Absolute fee should be set"),
                             )
                         } else {
                             self.wallet.create_signed_psbt_to_spk(

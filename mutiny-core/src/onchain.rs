@@ -410,6 +410,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         utxos: &[OutPoint],
         spk: Script,
         amount_sats: u64,
+        absolute_fee: u64,
     ) -> Result<PartiallySignedTransaction, MutinyError> {
         let mut wallet = self.wallet.try_write()?;
         let (mut psbt, details) = {
@@ -417,7 +418,9 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             builder
                 .manually_selected_only()
                 .add_utxos(utxos)?
-                .add_recipient(spk, amount_sats);
+                .add_recipient(spk, amount_sats)
+                .fee_absolute(absolute_fee)
+                .enable_rbf();
             builder.finish()?
         };
         log_debug!(self.logger, "Transaction details: {details:#?}");
