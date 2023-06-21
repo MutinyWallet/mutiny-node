@@ -463,8 +463,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             .websocket_proxy_addr
             .unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
 
-        // todo we should eventually have default mainnet
-        let network: Network = c.network.unwrap_or(Network::Signet);
+        let network: Network = c.network.unwrap_or(Network::Bitcoin);
 
         let mnemonic = match c.mnemonic {
             Some(seed) => storage.insert_mnemonic(seed)?,
