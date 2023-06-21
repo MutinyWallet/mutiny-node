@@ -511,15 +511,18 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
         monitor: &ChannelMonitor<ChannelSigner>,
         _update_id: MonitorUpdateId,
     ) -> chain::ChannelMonitorUpdateStatus {
-        let key = format!(
-            "{MONITORS_PREFIX_KEY}{}_{}",
-            funding_txo.txid.to_hex(),
-            funding_txo.index
-        );
-        match self.persist_local_storage(&key, monitor) {
-            Ok(()) => chain::ChannelMonitorUpdateStatus::Completed,
-            Err(_) => chain::ChannelMonitorUpdateStatus::PermanentFailure,
-        }
+        chain::ChannelMonitorUpdateStatus::Completed
+        /*
+            let key = format!(
+                "{MONITORS_PREFIX_KEY}{}_{}",
+                funding_txo.txid.to_hex(),
+                funding_txo.index
+            );
+            match self.persist_local_storage(&key, monitor) {
+                Ok(()) => chain::ChannelMonitorUpdateStatus::Completed,
+                Err(_) => chain::ChannelMonitorUpdateStatus::PermanentFailure,
+            }
+        */
     }
 }
 
