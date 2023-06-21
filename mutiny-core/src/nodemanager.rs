@@ -1920,6 +1920,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(mutiny_channels)
     }
 
+    // todo add docs
     pub async fn create_static_channel_backup(&self) -> StaticChannelBackupStorage {
         let nodes = self.nodes.lock().await;
         let mut backups: HashMap<PublicKey, (NodeIndex, StaticChannelBackup)> = HashMap::new();
@@ -1941,6 +1942,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         }
     }
 
+    // todo add docs
     pub async fn recover_from_static_channel_backup(
         &self,
         scb: StaticChannelBackupStorage,

@@ -1,9 +1,10 @@
 pub mod message_handler;
 
 use crate::nodemanager::NodeIndex;
+use bitcoin::bech32::{FromBase32, ToBase32, Variant};
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::OutPoint;
+use bitcoin::{bech32, OutPoint};
 use lightning::io::{Cursor, Read};
 use lightning::ln::msgs::DecodeError;
 use lightning::util::ser::{Readable, Writeable, Writer};
@@ -138,7 +139,11 @@ impl FromStr for StaticChannelBackupStorage {
     type Err = DecodeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes = base64::decode(s).map_err(|_| DecodeError::InvalidValue)?;
+        let (hrp, data, variant) = bech32::decode(s).map_err(|_| DecodeError::InvalidValue)?;
+        if hrp != "scb" || variant != Variant::Bech32m {
+            return Err(DecodeError::InvalidValue);
+        }
+        let bytes = Vec::<u8>::from_base32(&data).map_err(|_| DecodeError::InvalidValue)?;
         let mut reader = Cursor::new(bytes);
         Readable::read(&mut reader)
     }
@@ -147,7 +152,8 @@ impl FromStr for StaticChannelBackupStorage {
 impl core::fmt::Display for StaticChannelBackupStorage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let bytes = self.encode();
-        let s = base64::encode(bytes);
+        let s = bech32::encode("scb", bytes.to_base32(), Variant::Bech32m)
+            .map_err(|_| std::fmt::Error)?;
         write!(f, "{}", s)
     }
 }
@@ -540,5 +546,6 @@ mod test {
         let read = StaticChannelBackupStorage::read(&mut Cursor::new(&storage_bytes)).unwrap();
 
         assert!(read == storage);
+        assert!(storage == StaticChannelBackupStorage::from_str(&storage.to_string()).unwrap())
     }
 }
