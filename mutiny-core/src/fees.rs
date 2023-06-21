@@ -122,8 +122,20 @@ impl<S: MutinyStorage> MutinyFeeEstimator<S> {
 
         // if that fails, fall back to esplora's API
         let fee_estimates = match mempool_fees {
-            Ok(mempool_fees) => mempool_fees,
-            Err(_) => self.esplora.get_fee_estimates().await?,
+            Ok(mempool_fees) => {
+                log_trace!(self.logger, "Retrieved fees from mempool");
+                mempool_fees
+            }
+            Err(e) => {
+                log_trace!(
+                    self.logger,
+                    "Failed to retrieve fees from mempool, falling back to esplora: {e}"
+                );
+                self.esplora.get_fee_estimates().await.map_err(|e| {
+                    log_trace!(self.logger, "Failed to get esplora fee: {e}");
+                    e
+                })?
+            }
         };
 
         self.storage.insert_fee_estimates(fee_estimates)?;
