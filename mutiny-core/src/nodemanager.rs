@@ -443,6 +443,7 @@ pub struct NodeManager<S: MutinyStorage> {
     pub(crate) lsp_clients: Vec<LspClient>,
     pub(crate) logger: Arc<MutinyLogger>,
     bitcoin_price_cache: Arc<Mutex<Option<(f32, Duration)>>>,
+    do_not_connect_peers: bool,
 }
 
 impl<S: MutinyStorage> NodeManager<S> {
@@ -558,6 +559,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                 esplora.clone(),
                 &lsp_clients,
                 logger.clone(),
+                c.do_not_connect_peers,
                 #[cfg(target_arch = "wasm32")]
                 websocket_proxy_addr.clone(),
             )
@@ -620,6 +622,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             lsp_clients,
             logger,
             bitcoin_price_cache: Arc::new(Mutex::new(None)),
+            do_not_connect_peers: c.do_not_connect_peers,
         };
 
         Ok(nm)
@@ -2051,7 +2054,6 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
     node_mutex.nodes = existing_nodes.nodes.clone();
 
     // now create the node process and init it
-    #[cfg(target_arch = "wasm32")]
     let new_node_res = Node::new(
         next_node_uuid.clone(),
         &next_node,
@@ -2067,26 +2069,9 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         node_manager.esplora.clone(),
         &node_manager.lsp_clients,
         node_manager.logger.clone(),
+        node_manager.do_not_connect_peers,
+        #[cfg(target_arch = "wasm32")]
         node_manager.websocket_proxy_addr.clone(),
-    )
-    .await;
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let new_node_res = Node::new(
-        next_node_uuid.clone(),
-        &next_node,
-        node_manager.stop.clone(),
-        &node_manager.mnemonic,
-        node_manager.storage.clone(),
-        node_manager.gossip_sync.clone(),
-        node_manager.scorer.clone(),
-        node_manager.chain.clone(),
-        node_manager.fee_estimator.clone(),
-        node_manager.wallet.clone(),
-        node_manager.network,
-        node_manager.esplora.clone(),
-        &node_manager.lsp_clients,
-        node_manager.logger.clone(),
     )
     .await;
 

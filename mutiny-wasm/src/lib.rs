@@ -51,6 +51,7 @@ impl MutinyWallet {
     /// The mnemonic seed is read from storage, unless one is provided.
     /// If no mnemonic is provided, a new one is generated and stored.
     #[wasm_bindgen(constructor)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         password: Option<String>,
         mnemonic_str: Option<String>,
@@ -59,6 +60,7 @@ impl MutinyWallet {
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
+        do_not_connect_peers: Option<bool>,
     ) -> Result<MutinyWallet, MutinyJsError> {
         utils::set_panic_hook();
 
@@ -72,17 +74,20 @@ impl MutinyWallet {
         let logger = Arc::new(MutinyLogger::default());
         let storage = IndexedDbStorage::new(password, logger).await?;
 
-        let inner = mutiny_core::MutinyWallet::new(
-            storage,
+        let mut config = mutiny_core::MutinyWalletConfig::new(
             mnemonic,
-            #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
             network,
             user_esplora_url,
             user_rgs_url,
             lsp_url,
-        )
-        .await?;
+        );
+
+        if let Some(true) = do_not_connect_peers {
+            config = config.with_do_not_connect_peers();
+        }
+
+        let inner = mutiny_core::MutinyWallet::new(storage, config).await?;
         Ok(MutinyWallet { inner })
     }
 
@@ -998,6 +1003,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1022,6 +1028,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1052,6 +1059,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,

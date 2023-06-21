@@ -66,6 +66,7 @@ pub struct MutinyWalletConfig {
     user_esplora_url: Option<String>,
     user_rgs_url: Option<String>,
     lsp_url: Option<String>,
+    do_not_connect_peers: bool,
 }
 
 impl MutinyWalletConfig {
@@ -86,7 +87,13 @@ impl MutinyWalletConfig {
             user_esplora_url,
             user_rgs_url,
             lsp_url,
+            do_not_connect_peers: false,
         }
+    }
+
+    pub fn with_do_not_connect_peers(mut self) -> Self {
+        self.do_not_connect_peers = true;
+        self
     }
 }
 
@@ -102,26 +109,10 @@ pub struct MutinyWallet<S: MutinyStorage> {
 }
 
 impl<S: MutinyStorage> MutinyWallet<S> {
-    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         storage: S,
-        mnemonic: Option<Mnemonic>,
-        #[cfg(target_arch = "wasm32")] websocket_proxy_addr: Option<String>,
-        network: Option<Network>,
-        user_esplora_url: Option<String>,
-        user_rgs_url: Option<String>,
-        lsp_url: Option<String>,
+        config: MutinyWalletConfig,
     ) -> Result<MutinyWallet<S>, MutinyError> {
-        let config = MutinyWalletConfig::new(
-            mnemonic,
-            #[cfg(target_arch = "wasm32")]
-            websocket_proxy_addr,
-            network,
-            user_esplora_url,
-            user_rgs_url,
-            lsp_url,
-        );
-
         let node_manager = Arc::new(NodeManager::new(config.clone(), storage.clone()).await?);
 
         NodeManager::start_sync(node_manager.clone());
@@ -271,7 +262,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{nodemanager::NodeManager, MutinyWallet};
+    use crate::{nodemanager::NodeManager, MutinyWallet, MutinyWalletConfig};
     use bitcoin::Network;
 
     use crate::test_utils::*;
@@ -288,8 +279,7 @@ mod tests {
 
         let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
         assert!(!NodeManager::has_node_manager(storage.clone()));
-        MutinyWallet::new(
-            storage.clone(),
+        let config = MutinyWalletConfig::new(
             None,
             #[cfg(target_arch = "wasm32")]
             None,
@@ -297,9 +287,10 @@ mod tests {
             None,
             None,
             None,
-        )
-        .await
-        .expect("mutiny wallet should initialize");
+        );
+        MutinyWallet::new(storage.clone(), config)
+            .await
+            .expect("mutiny wallet should initialize");
         assert!(NodeManager::has_node_manager(storage));
     }
 
@@ -310,8 +301,7 @@ mod tests {
 
         let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
         assert!(!NodeManager::has_node_manager(storage.clone()));
-        let mut mw = MutinyWallet::new(
-            storage.clone(),
+        let config = MutinyWalletConfig::new(
             None,
             #[cfg(target_arch = "wasm32")]
             None,
@@ -319,9 +309,10 @@ mod tests {
             None,
             None,
             None,
-        )
-        .await
-        .expect("mutiny wallet should initialize");
+        );
+        let mut mw = MutinyWallet::new(storage.clone(), config)
+            .await
+            .expect("mutiny wallet should initialize");
         assert!(NodeManager::has_node_manager(storage));
 
         let first_seed = mw.node_manager.show_seed();
@@ -339,8 +330,7 @@ mod tests {
         let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
 
         assert!(!NodeManager::has_node_manager(storage.clone()));
-        let mut mw = MutinyWallet::new(
-            storage.clone(),
+        let config = MutinyWalletConfig::new(
             None,
             #[cfg(target_arch = "wasm32")]
             None,
@@ -348,9 +338,10 @@ mod tests {
             None,
             None,
             None,
-        )
-        .await
-        .expect("mutiny wallet should initialize");
+        );
+        let mut mw = MutinyWallet::new(storage.clone(), config)
+            .await
+            .expect("mutiny wallet should initialize");
         assert!(NodeManager::has_node_manager(storage));
 
         assert!(mw.node_manager.list_nodes().await.unwrap().is_empty());
