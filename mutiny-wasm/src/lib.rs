@@ -697,6 +697,15 @@ impl MutinyWallet {
             .await?)
     }
 
+    /// Abandons a channel with the given outpoint. This will force close without broadcasting
+    /// the latest transaction. This should only be used if the channel will never actually be opened.
+    #[wasm_bindgen]
+    pub async fn abandon_channel(&self, outpoint: String) -> Result<(), MutinyJsError> {
+        let outpoint: OutPoint =
+            OutPoint::from_str(&outpoint).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        Ok(self.inner.node_manager.abandon_channel(&outpoint).await?)
+    }
+
     /// Lists all the channels for all the nodes in the node manager.
     #[wasm_bindgen]
     pub async fn list_channels(&self) -> Result<JsValue /* Vec<MutinyChannel> */, MutinyJsError> {
