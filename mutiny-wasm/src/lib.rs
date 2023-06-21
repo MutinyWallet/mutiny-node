@@ -26,7 +26,7 @@ use lightning_invoice::Invoice;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::logging::MutinyLogger;
 use mutiny_core::redshift::RedshiftManager;
-use mutiny_core::scb::StaticChannelBackupStorage;
+use mutiny_core::scb::EncryptedSCB;
 use mutiny_core::storage::MutinyStorage;
 use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
 use mutiny_core::{nodemanager, redshift::RedshiftRecipient};
@@ -733,8 +733,7 @@ impl MutinyWallet {
         &self,
         scb: String,
     ) -> Result<(), MutinyJsError> {
-        let scb = StaticChannelBackupStorage::from_str(&scb)
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        let scb = EncryptedSCB::from_str(&scb).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         self.inner
             .node_manager
             .recover_from_static_channel_backup(scb)

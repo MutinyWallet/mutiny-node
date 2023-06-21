@@ -7,7 +7,7 @@ use crate::gossip::*;
 use crate::labels::LabelStorage;
 use crate::logging::LOGGING_KEY;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
-use crate::scb::{StaticChannelBackup, StaticChannelBackupStorage};
+use crate::scb::{EncryptedSCB, StaticChannelBackup, StaticChannelBackupStorage};
 use crate::storage::{MutinyStorage, KEYCHAIN_STORE_KEY};
 use crate::utils::sleep;
 use crate::{
@@ -34,8 +34,8 @@ use bip39::Mnemonic;
 use bitcoin::blockdata::script;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::hashes::{sha256, Hash};
-use bitcoin::secp256k1::{rand, PublicKey};
-use bitcoin::util::bip32::ExtendedPrivKey;
+use bitcoin::secp256k1::{rand, PublicKey, Secp256k1, SecretKey};
+use bitcoin::util::bip32::{DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use core::time::Duration;
 use futures::{future::join_all, lock::Mutex};
@@ -58,6 +58,7 @@ use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::str::FromStr;
 use url::Url;
 use uuid::Uuid;
 
@@ -1920,8 +1921,17 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(mutiny_channels)
     }
 
+    fn get_scb_key(&self) -> SecretKey {
+        let seed = self.mnemonic.to_seed("");
+        let xprivkey = ExtendedPrivKey::new_master(self.network, &seed).unwrap();
+        let path = DerivationPath::from_str("m/444'/444'/444'").unwrap();
+        let context = Secp256k1::new();
+
+        xprivkey.derive_priv(&context, &path).unwrap().private_key
+    }
+
     // todo add docs
-    pub async fn create_static_channel_backup(&self) -> StaticChannelBackupStorage {
+    pub async fn create_static_channel_backup(&self) -> EncryptedSCB {
         let nodes = self.nodes.lock().await;
         let mut backups: HashMap<PublicKey, (NodeIndex, StaticChannelBackup)> = HashMap::new();
         for (_, node) in nodes.iter() {
@@ -1936,17 +1946,25 @@ impl<S: MutinyStorage> NodeManager<S> {
             .filter_map(|(n, p)| p.connection_string.map(|str| (n.as_pubkey().unwrap(), str)))
             .collect::<HashMap<_, _>>();
 
-        StaticChannelBackupStorage {
+        let scb = StaticChannelBackupStorage {
             backups,
             peer_connections,
-        }
+        };
+
+        // encrypt
+        let encryption_key = self.get_scb_key();
+        scb.encrypt(&encryption_key)
     }
 
     // todo add docs
     pub async fn recover_from_static_channel_backup(
         &self,
-        scb: StaticChannelBackupStorage,
+        scb: EncryptedSCB,
     ) -> Result<(), MutinyError> {
+        // decrypt
+        let encryption_key = self.get_scb_key();
+        let scb = scb.decrypt(&encryption_key)?;
+
         let max_index = scb
             .backups
             .values()

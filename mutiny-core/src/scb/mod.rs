@@ -1,16 +1,24 @@
 pub mod message_handler;
 
+use crate::error::MutinyError;
 use crate::nodemanager::NodeIndex;
+use aes::cipher::block_padding::Pkcs7;
+use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use aes::Aes256;
 use bitcoin::bech32::{FromBase32, ToBase32, Variant};
 use bitcoin::hashes::Hash;
-use bitcoin::secp256k1::PublicKey;
-use bitcoin::{bech32, OutPoint};
+use bitcoin::secp256k1::{PublicKey, SecretKey};
+use bitcoin::{bech32, secp256k1, OutPoint};
+use cbc::{Decryptor, Encryptor};
 use lightning::io::{Cursor, Read};
 use lightning::ln::msgs::DecodeError;
 use lightning::util::ser::{Readable, Writeable, Writer};
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::str::FromStr;
+
+type Aes256CbcEnc = Encryptor<Aes256>;
+type Aes256CbcDec = Decryptor<Aes256>;
 
 /// A static channel backup is a backup for the channels for a given node.
 /// These are backups of the channel monitors, which store the necessary
@@ -69,6 +77,18 @@ impl Readable for StaticChannelBackup {
 pub struct StaticChannelBackupStorage {
     pub(crate) backups: HashMap<PublicKey, (NodeIndex, StaticChannelBackup)>,
     pub(crate) peer_connections: HashMap<PublicKey, String>,
+}
+
+impl StaticChannelBackupStorage {
+    pub(crate) fn encrypt(&self, secret_key: &SecretKey) -> EncryptedSCB {
+        let bytes = self.encode();
+        let iv: [u8; 16] = secp256k1::rand::random();
+
+        let cipher = Aes256CbcEnc::new(&secret_key.secret_bytes().into(), &iv.into());
+        let encrypted_scb: Vec<u8> = cipher.encrypt_padded_vec_mut::<Pkcs7>(&bytes);
+
+        EncryptedSCB { encrypted_scb, iv }
+    }
 }
 
 impl Writeable for StaticChannelBackupStorage {
@@ -135,7 +155,50 @@ impl Readable for StaticChannelBackupStorage {
     }
 }
 
-impl FromStr for StaticChannelBackupStorage {
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct EncryptedSCB {
+    pub(crate) encrypted_scb: Vec<u8>,
+    pub(crate) iv: [u8; 16],
+}
+
+impl EncryptedSCB {
+    pub(crate) fn decrypt(
+        &self,
+        secret_key: &SecretKey,
+    ) -> Result<StaticChannelBackupStorage, MutinyError> {
+        let cipher =
+            Aes256CbcDec::new(&secret_key.secret_bytes().into(), self.iv.as_slice().into());
+        let result = cipher
+            .decrypt_padded_vec_mut::<Pkcs7>(&self.encrypted_scb)
+            .map_err(|_| MutinyError::InvalidMnemonic)?;
+
+        let mut cursor = Cursor::new(result);
+        Ok(StaticChannelBackupStorage::read(&mut cursor).expect("decoding succeeds"))
+    }
+}
+
+impl Writeable for EncryptedSCB {
+    fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
+        let len = self.encrypted_scb.len() as u32;
+        writer.write_all(&len.to_be_bytes())?;
+        writer.write_all(&self.encrypted_scb)?;
+        writer.write_all(&self.iv)?;
+        Ok(())
+    }
+}
+
+impl Readable for EncryptedSCB {
+    fn read<R: Read>(reader: &mut R) -> Result<Self, DecodeError> {
+        let len: u32 = Readable::read(reader)?;
+        let mut encrypted_scb = vec![0u8; len as usize];
+        reader.read_exact(&mut encrypted_scb)?;
+        let mut iv = [0u8; 16];
+        reader.read_exact(&mut iv)?;
+        Ok(Self { encrypted_scb, iv })
+    }
+}
+
+impl FromStr for EncryptedSCB {
     type Err = DecodeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -149,7 +212,7 @@ impl FromStr for StaticChannelBackupStorage {
     }
 }
 
-impl core::fmt::Display for StaticChannelBackupStorage {
+impl core::fmt::Display for EncryptedSCB {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let bytes = self.encode();
         let s = bech32::encode("scb", bytes.to_base32(), Variant::Bech32m)
@@ -546,6 +609,54 @@ mod test {
         let read = StaticChannelBackupStorage::read(&mut Cursor::new(&storage_bytes)).unwrap();
 
         assert!(read == storage);
-        assert!(storage == StaticChannelBackupStorage::from_str(&storage.to_string()).unwrap())
+    }
+
+    #[test]
+    fn test_encrypted_static_channel_backup_storage() {
+        let outpoint = OutPoint {
+            txid: bitcoin::Txid::from_hex(
+                "830b1c110ef6c78312a8f4c798da0bfbacdfc9c80c7d458ca614e7b1543f5b03",
+            )
+            .unwrap(),
+            vout: 1,
+        };
+
+        let pubkey = PublicKey::from_str(
+            "02cae09cf2c8842ace44068a5bf3117a494ebbf69a99e79712483c36f97cdb7b54",
+        )
+        .unwrap();
+
+        let connection_str =
+            "02cae09cf2c8842ace44068a5bf3117a494ebbf69a99e79712483c36f97cdb7b54@192.168.0.1:9735"
+                .to_string();
+
+        let backup = StaticChannelBackup {
+            monitors: vec![(outpoint, CHAIN_MONITOR_BYTES.to_vec())]
+                .into_iter()
+                .collect(),
+        };
+
+        let node_index = NodeIndex {
+            child_index: 0,
+            lsp: Some("https://signet-lsp.mutinywallet.com".to_string()),
+            archived: Some(false),
+        };
+
+        let storage = StaticChannelBackupStorage {
+            backups: vec![(pubkey, (node_index, backup))].into_iter().collect(),
+            peer_connections: vec![(pubkey, connection_str)].into_iter().collect(),
+        };
+
+        // gen key
+        let mut bytes = [0u8; 32];
+        getrandom::getrandom(&mut bytes).expect("Failed to generate entropy");
+        let encryption_key = SecretKey::from_slice(&bytes).unwrap();
+
+        let encrypted = storage.encrypt(&encryption_key);
+        assert!(encrypted == EncryptedSCB::from_str(&encrypted.to_string()).unwrap());
+
+        // decrypt
+        let decrypted = encrypted.decrypt(&encryption_key).unwrap();
+        assert!(decrypted == storage);
     }
 }
