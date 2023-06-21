@@ -1752,7 +1752,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     /// Closes a channel with the given outpoint.
-    pub async fn close_channel(&self, outpoint: &OutPoint) -> Result<(), MutinyError> {
+    pub async fn close_channel(&self, outpoint: &OutPoint, force: bool) -> Result<(), MutinyError> {
         let nodes = self.nodes.lock().await;
         let channel_opt: Option<(Arc<Node<S>>, ChannelDetails)> =
             nodes.iter().find_map(|(_, n)| {
@@ -1765,17 +1765,34 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         match channel_opt {
             Some((node, channel)) => {
-                node.channel_manager
-                    .close_channel(&channel.channel_id, &channel.counterparty.node_id)
-                    .map_err(|e| {
-                        log_error!(
-                            self.logger,
-                            "had an error closing channel {} with node {} : {e:?}",
-                            &channel.channel_id.to_hex(),
-                            &channel.counterparty.node_id.to_hex()
-                        );
-                        MutinyError::ChannelClosingFailed
-                    })?;
+                if force {
+                    node.channel_manager
+                        .force_close_broadcasting_latest_txn(
+                            &channel.channel_id,
+                            &channel.counterparty.node_id,
+                        )
+                        .map_err(|e| {
+                            log_error!(
+                                self.logger,
+                                "had an error force closing channel {} with node {} : {e:?}",
+                                &channel.channel_id.to_hex(),
+                                &channel.counterparty.node_id.to_hex()
+                            );
+                            MutinyError::ChannelClosingFailed
+                        })?;
+                } else {
+                    node.channel_manager
+                        .close_channel(&channel.channel_id, &channel.counterparty.node_id)
+                        .map_err(|e| {
+                            log_error!(
+                                self.logger,
+                                "had an error closing channel {} with node {} : {e:?}",
+                                &channel.channel_id.to_hex(),
+                                &channel.counterparty.node_id.to_hex()
+                            );
+                            MutinyError::ChannelClosingFailed
+                        })?;
+                }
 
                 Ok(())
             }

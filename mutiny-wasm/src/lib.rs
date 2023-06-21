@@ -687,10 +687,14 @@ impl MutinyWallet {
 
     /// Closes a channel with the given outpoint.
     #[wasm_bindgen]
-    pub async fn close_channel(&self, outpoint: String) -> Result<(), MutinyJsError> {
+    pub async fn close_channel(&self, outpoint: String, force: bool) -> Result<(), MutinyJsError> {
         let outpoint: OutPoint =
             OutPoint::from_str(&outpoint).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        Ok(self.inner.node_manager.close_channel(&outpoint).await?)
+        Ok(self
+            .inner
+            .node_manager
+            .close_channel(&outpoint, force)
+            .await?)
     }
 
     /// Lists all the channels for all the nodes in the node manager.

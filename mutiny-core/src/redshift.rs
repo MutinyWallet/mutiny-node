@@ -423,7 +423,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
         // close introduction channel
         match rs.introduction_channel.as_ref() {
             Some(chan) => {
-                self.close_channel(chan).await?
+                self.close_channel(chan, false).await?
                 // todo need to set change amount to on the amount we get back
             }
             None => log_debug!(&self.logger, "no introduction channel to close"),
@@ -454,7 +454,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
                 for c in receiving_node.channel_manager.list_channels() {
                     if let Some(funding_txo) = c.funding_txo {
                         let channel_outpoint = funding_txo.into_bitcoin_outpoint();
-                        self.close_channel(&channel_outpoint).await?;
+                        self.close_channel(&channel_outpoint, false).await?;
                         channel_outpoints.push(channel_outpoint);
                     }
                 }
