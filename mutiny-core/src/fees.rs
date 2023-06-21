@@ -182,24 +182,25 @@ fn num_blocks_from_conf_target(confirmation_target: ConfirmationTarget) -> usize
 
 fn fallback_fee_from_conf_target(confirmation_target: ConfirmationTarget) -> u32 {
     match confirmation_target {
-        ConfirmationTarget::Background => FEERATE_FLOOR_SATS_PER_KW,
-        ConfirmationTarget::Normal => 2000,
-        ConfirmationTarget::HighPriority => 5000,
+        ConfirmationTarget::Background => 10 * 250,
+        ConfirmationTarget::Normal => 20 * 250,
+        ConfirmationTarget::HighPriority => 50 * 250,
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::storage::{MemoryStorage, MutinyStorage};
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::test_utils::*;
+    #[cfg(not(target_arch = "wasm32"))]
     use esplora_client::Builder;
+    #[cfg(not(target_arch = "wasm32"))]
     use std::collections::HashMap;
 
-    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
-
-    wasm_bindgen_test_configure!(run_in_browser);
-
+    #[cfg(not(target_arch = "wasm32"))]
     async fn create_fee_estimator() -> MutinyFeeEstimator<MemoryStorage> {
         let storage = MemoryStorage::new(None);
         let esplora = Arc::new(
@@ -229,19 +230,20 @@ mod test {
     fn test_fallback_fee_from_conf_target() {
         assert_eq!(
             fallback_fee_from_conf_target(ConfirmationTarget::Background),
-            253
+            2_500
         );
         assert_eq!(
             fallback_fee_from_conf_target(ConfirmationTarget::Normal),
-            2000
+            5_000
         );
         assert_eq!(
             fallback_fee_from_conf_target(ConfirmationTarget::HighPriority),
-            5000
+            12_500
         );
     }
 
-    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
     async fn test_update_fee_estimates() {
         let test_name = "test_update_fee_estimates";
         log!("{}", test_name);
@@ -256,7 +258,8 @@ mod test {
         assert!(fee_estimates.get("12").is_some());
     }
 
-    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
     async fn test_get_est_sat_per_1000_weight() {
         let test_name = "test_get_est_sat_per_1000_weight";
         log!("{}", test_name);
@@ -279,15 +282,16 @@ mod test {
         // test that we get the fallback fee rate
         assert_eq!(
             fee_estimator.get_est_sat_per_1000_weight(ConfirmationTarget::Background),
-            253
+            2_500
         );
         assert_eq!(
             fee_estimator.get_est_sat_per_1000_weight(ConfirmationTarget::HighPriority),
-            5000
+            12_500
         );
     }
 
-    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
     async fn test_estimate_expected_fee() {
         let test_name = "test_estimate_expected_fee";
         log!("{}", test_name);
@@ -303,6 +307,16 @@ mod test {
             ),
             616
         );
+
+        // set up the cache
+        let mut fee_estimates = HashMap::new();
+        fee_estimates.insert("3".to_string(), 20_f64);
+        fee_estimates.insert("6".to_string(), 8_f64);
+        fee_estimates.insert("12".to_string(), 1_f64);
+        fee_estimator
+            .storage
+            .insert_fee_estimates(fee_estimates)
+            .unwrap();
 
         assert_eq!(
             fee_estimator.calculate_expected_fee(1, P2WSH_OUTPUT_SIZE, None, None),
