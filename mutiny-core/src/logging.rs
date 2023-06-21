@@ -21,7 +21,7 @@ pub struct MutinyLogger {
 }
 
 impl MutinyLogger {
-    pub(crate) fn with_writer<S: MutinyStorage>(stop: Arc<AtomicBool>, logging_db: S) -> Self {
+    pub fn with_writer<S: MutinyStorage>(stop: Arc<AtomicBool>, logging_db: S) -> Self {
         let l = MutinyLogger {
             should_write_to_storage: true,
             memory_logs: Arc::new(Mutex::new(vec![])),

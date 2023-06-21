@@ -23,14 +23,17 @@ use gloo_utils::format::JsValueSerdeExt;
 use lightning::routing::gossip::NodeId;
 use lightning_invoice::Invoice;
 use lnurl::lnurl::LnUrl;
-use mutiny_core::labels::LabelStorage;
 use mutiny_core::logging::MutinyLogger;
 use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::storage::MutinyStorage;
+use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
 use mutiny_core::{nodemanager, redshift::RedshiftRecipient};
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicBool, Ordering},
+};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -903,8 +906,15 @@ impl MutinyWallet {
 
     /// Exports the current state of the node manager to a json object.
     #[wasm_bindgen]
-    pub fn get_logs(&self) -> Result<JsValue /* Option<Vec<String>> */, MutinyJsError> {
-        Ok(JsValue::from_serde(&self.inner.node_manager.get_logs()?)?)
+    pub async fn get_logs() -> Result<JsValue /* Option<Vec<String>> */, MutinyJsError> {
+        let logger = Arc::new(MutinyLogger::default());
+        // Password should not be required for logs
+        let storage = IndexedDbStorage::new(None, logger.clone()).await?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let logger = Arc::new(MutinyLogger::with_writer(stop.clone(), storage.clone()));
+        let res = JsValue::from_serde(&NodeManager::get_logs(storage, logger)?)?;
+        stop.swap(true, Ordering::Relaxed);
+        Ok(res)
     }
 
     /// Get nostr wallet connect URI
@@ -943,8 +953,10 @@ impl MutinyWallet {
 
     /// Exports the current state of the node manager to a json object.
     #[wasm_bindgen]
-    pub async fn export_json(&self) -> Result<String, MutinyJsError> {
-        let json = self.inner.node_manager.export_json().await?;
+    pub async fn export_json(password: Option<String>) -> Result<String, MutinyJsError> {
+        let logger = Arc::new(MutinyLogger::default());
+        let storage = IndexedDbStorage::new(password, logger).await?;
+        let json = NodeManager::export_json(storage).await?;
         Ok(serde_json::to_string(&json)?)
     }
 

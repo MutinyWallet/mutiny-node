@@ -1921,8 +1921,11 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     /// Retrieves the logs from storage.
-    pub fn get_logs(&self) -> Result<Option<Vec<String>>, MutinyError> {
-        self.logger.get_logs(&self.storage)
+    pub fn get_logs(
+        storage: S,
+        logger: Arc<MutinyLogger>,
+    ) -> Result<Option<Vec<String>>, MutinyError> {
+        logger.get_logs(&storage)
     }
 
     /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.
@@ -1967,14 +1970,14 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     /// Exports the current state of the node manager to a json object.
-    pub async fn export_json(&self) -> Result<Value, MutinyError> {
-        let needs_db_connection = !self.storage.clone().connected().unwrap_or(true);
+    pub async fn export_json(storage: S) -> Result<Value, MutinyError> {
+        let needs_db_connection = !storage.clone().connected().unwrap_or(true);
         if needs_db_connection {
-            self.storage.clone().start().await?;
+            storage.clone().start().await?;
         }
 
         // get all the data from storage, scanning with prefix "" will get all keys
-        let map = self.storage.scan("", None)?;
+        let map = storage.scan("", None)?;
         let serde_map = serde_json::map::Map::from_iter(map.into_iter().filter(|(k, _)| {
             // filter out logs and network graph
             // these are really big and not needed for export
@@ -1983,7 +1986,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         // shut back down after reading if it was already closed
         if needs_db_connection {
-            self.storage.clone().stop();
+            storage.clone().stop();
         }
 
         Ok(Value::Object(serde_map))
