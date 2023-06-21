@@ -728,6 +728,8 @@ impl MutinyWallet {
         )?)
     }
 
+    /// Takes an encrypted static channel backup and recovers the channels from it.
+    /// If the backup is encrypted with a different key than the current key, it will fail.
     #[wasm_bindgen]
     pub async fn recover_from_static_channel_backup(
         &self,
@@ -741,8 +743,15 @@ impl MutinyWallet {
         Ok(())
     }
 
+    /// Creates a static channel backup for all the nodes in the node manager.
+    /// The backup is encrypted with the SCB key.
+    #[wasm_bindgen]
     pub async fn create_static_channel_backup(&self) -> Result<String, MutinyJsError> {
-        let scb = self.inner.node_manager.create_static_channel_backup().await;
+        let scb = self
+            .inner
+            .node_manager
+            .create_static_channel_backup()
+            .await?;
         Ok(scb.to_string())
     }
 

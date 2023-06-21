@@ -20,6 +20,8 @@ use std::str::FromStr;
 type Aes256CbcEnc = Encryptor<Aes256>;
 type Aes256CbcDec = Decryptor<Aes256>;
 
+pub const SCB_ENCRYPTION_KEY_DERIVATION_PATH: &str = "m/444'/444'/444'";
+
 /// A static channel backup is a backup for the channels for a given node.
 /// These are backups of the channel monitors, which store the necessary
 /// information to recover the channel in case of a failure.

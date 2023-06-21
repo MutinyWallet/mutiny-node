@@ -28,7 +28,7 @@ impl SCBMessageHandler {
         }
     }
 
-    /// Send a message to the peer with given node id. Not that the message is not
+    /// Send a message to the peer with given node id. Note that the message is not
     /// sent right away, but only when the LDK
     /// [`lightning::ln::peer_handler::PeerManager::process_events`] is next called.
     pub fn request_channel_close(&self, node_id: PublicKey, channel_id: [u8; 32]) {

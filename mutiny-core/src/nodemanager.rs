@@ -7,7 +7,10 @@ use crate::gossip::*;
 use crate::labels::LabelStorage;
 use crate::logging::LOGGING_KEY;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
-use crate::scb::{EncryptedSCB, StaticChannelBackup, StaticChannelBackupStorage};
+use crate::scb::{
+    EncryptedSCB, StaticChannelBackup, StaticChannelBackupStorage,
+    SCB_ENCRYPTION_KEY_DERIVATION_PATH,
+};
 use crate::storage::{MutinyStorage, KEYCHAIN_STORE_KEY};
 use crate::utils::sleep;
 use crate::{
@@ -621,6 +624,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                 &lsp_clients,
                 logger.clone(),
                 c.do_not_connect_peers,
+                false,
                 #[cfg(target_arch = "wasm32")]
                 websocket_proxy_addr.clone(),
             )
@@ -1924,18 +1928,19 @@ impl<S: MutinyStorage> NodeManager<S> {
     fn get_scb_key(&self) -> SecretKey {
         let seed = self.mnemonic.to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(self.network, &seed).unwrap();
-        let path = DerivationPath::from_str("m/444'/444'/444'").unwrap();
+        let path = DerivationPath::from_str(SCB_ENCRYPTION_KEY_DERIVATION_PATH).unwrap();
         let context = Secp256k1::new();
 
         xprivkey.derive_priv(&context, &path).unwrap().private_key
     }
 
-    // todo add docs
-    pub async fn create_static_channel_backup(&self) -> EncryptedSCB {
+    /// Creates a static channel backup for all the nodes in the node manager.
+    /// The backup is encrypted with the SCB key.
+    pub async fn create_static_channel_backup(&self) -> Result<EncryptedSCB, MutinyError> {
         let nodes = self.nodes.lock().await;
         let mut backups: HashMap<PublicKey, (NodeIndex, StaticChannelBackup)> = HashMap::new();
         for (_, node) in nodes.iter() {
-            let scb = node.create_static_channel_backup();
+            let scb = node.create_static_channel_backup()?;
             backups.insert(node.pubkey, (node.node_index(), scb));
         }
 
@@ -1953,10 +1958,17 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         // encrypt
         let encryption_key = self.get_scb_key();
-        scb.encrypt(&encryption_key)
+        let scb = scb.encrypt(&encryption_key);
+        log_debug!(
+            self.logger,
+            "Created SCB with a size of {} bytes",
+            scb.encode().len()
+        );
+        Ok(scb)
     }
 
-    // todo add docs
+    /// Takes an encrypted static channel backup and recovers the channels from it.
+    /// If the backup is encrypted with a different key than the current key, it will fail.
     pub async fn recover_from_static_channel_backup(
         &self,
         scb: EncryptedSCB,
@@ -1965,37 +1977,61 @@ impl<S: MutinyStorage> NodeManager<S> {
         let encryption_key = self.get_scb_key();
         let scb = scb.decrypt(&encryption_key)?;
 
-        let max_index = scb
-            .backups
-            .values()
-            .map(|(node_index, _)| node_index.child_index)
-            .max()
-            .unwrap_or(0);
-
-        let current_index = self
-            .node_storage
-            .lock()
-            .await
-            .nodes
-            .values()
-            .map(|n| n.child_index)
-            .max()
-            .unwrap_or(0);
-
-        let needed_nodes = max_index - current_index;
-        if needed_nodes > 0 {
-            log_info!(
-                self.logger,
-                "Creating {needed_nodes} new nodes to recover from backup"
-            );
-            for _ in 0..needed_nodes {
-                self.new_node().await?;
-            }
+        // stop all nodes, todo stop in parallel
+        for node in self.nodes.lock().await.values() {
+            node.stop().await?;
         }
 
-        // fixme: run these futures in parallel
         for (pubkey, (node_index, backup)) in scb.backups {
-            match self.get_node(&pubkey).await {
+            // find the uuid if we have it, otherwise create a new one and save it
+            let uuid = {
+                let mut node_mutex = self.node_storage.lock().await;
+                let current = node_mutex
+                    .nodes
+                    .iter()
+                    .find(|(_, n)| *n == &node_index)
+                    .map(|(uuid, _)| uuid.clone());
+
+                match current {
+                    Some(uuid) => uuid,
+                    None => {
+                        let mut existing_nodes = self.storage.get_nodes()?;
+                        let new_uuid = Uuid::new_v4().to_string();
+                        existing_nodes
+                            .nodes
+                            .insert(new_uuid.clone(), node_index.clone());
+
+                        self.storage.insert_nodes(existing_nodes.clone())?;
+                        node_mutex.nodes = existing_nodes.nodes.clone();
+
+                        new_uuid
+                    }
+                }
+            };
+
+            // create a fresh instance of each node
+            let new_node = Node::new(
+                uuid,
+                &node_index,
+                &self.mnemonic,
+                self.storage.clone(),
+                self.gossip_sync.clone(),
+                self.scorer.clone(),
+                self.chain.clone(),
+                self.fee_estimator.clone(),
+                self.wallet.clone(),
+                self.network,
+                self.esplora.clone(),
+                &self.lsp_clients,
+                self.logger.clone(),
+                true,
+                true,
+                #[cfg(target_arch = "wasm32")]
+                self.websocket_proxy_addr.clone(),
+            )
+            .await;
+
+            match new_node {
                 Ok(node) => {
                     debug_assert!(node.node_index().child_index == node_index.child_index);
                     log_info!(
@@ -2284,6 +2320,7 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         &node_manager.lsp_clients,
         node_manager.logger.clone(),
         node_manager.do_not_connect_peers,
+        false,
         #[cfg(target_arch = "wasm32")]
         node_manager.websocket_proxy_addr.clone(),
     )

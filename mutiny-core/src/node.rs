@@ -171,6 +171,7 @@ impl<S: MutinyStorage> Node<S> {
         lsp_clients: &[LspClient],
         logger: Arc<MutinyLogger>,
         do_not_connect_peers: bool,
+        empty_state: bool,
         #[cfg(target_arch = "wasm32")] websocket_proxy_addr: String,
     ) -> Result<Self, MutinyError> {
         log_info!(logger, "initializing a new node: {uuid}");
@@ -203,11 +204,17 @@ impl<S: MutinyStorage> Node<S> {
         ));
 
         // read channelmonitor state from disk
-        let channel_monitors = persister
-            .read_channel_monitors(keys_manager.clone())
-            .map_err(|e| MutinyError::ReadError {
-                source: MutinyStorageError::Other(anyhow!("failed to read channel monitors: {e}")),
-            })?;
+        let channel_monitors = if empty_state {
+            vec![]
+        } else {
+            persister
+                .read_channel_monitors(keys_manager.clone())
+                .map_err(|e| MutinyError::ReadError {
+                    source: MutinyStorageError::Other(anyhow!(
+                        "failed to read channel monitors: {e}"
+                    )),
+                })?
+        };
 
         let network_graph = gossip_sync.network_graph().clone();
 
@@ -219,8 +226,8 @@ impl<S: MutinyStorage> Node<S> {
         ));
 
         // init channel manager
-        let mut read_channel_manager = persister
-            .read_channel_manager(
+        let mut read_channel_manager = if empty_state {
+            MutinyNodePersister::create_new_channel_manager(
                 network,
                 chain_monitor.clone(),
                 chain.clone(),
@@ -231,7 +238,22 @@ impl<S: MutinyStorage> Node<S> {
                 channel_monitors,
                 esplora,
             )
-            .await?;
+            .await?
+        } else {
+            persister
+                .read_channel_manager(
+                    network,
+                    chain_monitor.clone(),
+                    chain.clone(),
+                    fee_estimator.clone(),
+                    logger.clone(),
+                    keys_manager.clone(),
+                    router.clone(),
+                    channel_monitors,
+                    esplora,
+                )
+                .await?
+        };
 
         let channel_manager: Arc<PhantomChannelManager<S>> =
             Arc::new(read_channel_manager.channel_manager);
@@ -352,34 +374,36 @@ impl<S: MutinyStorage> Node<S> {
         // processor so we prevent any race conditions.
         // if we fail to read the spendable outputs, just log a warning and
         // continue
-        let retry_spendable_outputs = persister
-            .get_failed_spendable_outputs()
-            .map_err(|e| MutinyError::ReadError {
-                source: MutinyStorageError::Other(anyhow!(
-                    "failed to read retry spendable outputs: {e}"
-                )),
-            })
-            .unwrap_or_else(|e| {
-                log_warn!(logger, "Failed to read retry spendable outputs: {e}");
-                vec![]
-            });
+        if !empty_state {
+            let retry_spendable_outputs = persister
+                .get_failed_spendable_outputs()
+                .map_err(|e| MutinyError::ReadError {
+                    source: MutinyStorageError::Other(anyhow!(
+                        "failed to read retry spendable outputs: {e}"
+                    )),
+                })
+                .unwrap_or_else(|e| {
+                    log_warn!(logger, "Failed to read retry spendable outputs: {e}");
+                    vec![]
+                });
 
-        if !retry_spendable_outputs.is_empty() {
-            log_info!(
-                logger,
-                "Retrying {} spendable outputs",
-                retry_spendable_outputs.len()
-            );
+            if !retry_spendable_outputs.is_empty() {
+                log_info!(
+                    logger,
+                    "Retrying {} spendable outputs",
+                    retry_spendable_outputs.len()
+                );
 
-            match event_handler
-                .handle_spendable_outputs(&retry_spendable_outputs)
-                .await
-            {
-                Ok(_) => {
-                    log_info!(logger, "Successfully retried spendable outputs");
-                    persister.clear_failed_spendable_outputs()?;
+                match event_handler
+                    .handle_spendable_outputs(&retry_spendable_outputs)
+                    .await
+                {
+                    Ok(_) => {
+                        log_info!(logger, "Successfully retried spendable outputs");
+                        persister.clear_failed_spendable_outputs()?;
+                    }
+                    Err(e) => log_warn!(logger, "Failed to retry spendable outputs {e}"),
                 }
-                Err(e) => log_warn!(logger, "Failed to retry spendable outputs {e}"),
             }
         }
 
@@ -1349,15 +1373,19 @@ impl<S: MutinyStorage> Node<S> {
         self.await_chan_funding_tx(init, &pubkey, timeout).await
     }
 
-    pub fn create_static_channel_backup(&self) -> StaticChannelBackup {
+    pub fn create_static_channel_backup(&self) -> Result<StaticChannelBackup, MutinyError> {
         let mut monitors = HashMap::new();
         for outpoint in self.chain_monitor.list_monitors() {
-            let monitor = self.chain_monitor.get_monitor(outpoint).unwrap();
+            let monitor = self
+                .chain_monitor
+                .get_monitor(outpoint)
+                .map_err(|_| MutinyError::Other(anyhow!("Failed to get channel monitor")))?;
+
             let monitor_bytes = monitor.encode();
             monitors.insert(outpoint.into_bitcoin_outpoint(), monitor_bytes);
         }
 
-        StaticChannelBackup { monitors }
+        Ok(StaticChannelBackup { monitors })
     }
 
     pub async fn recover_from_static_channel_backup(
