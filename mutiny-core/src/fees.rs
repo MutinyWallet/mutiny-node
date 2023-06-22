@@ -174,7 +174,9 @@ impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
 
 fn num_blocks_from_conf_target(confirmation_target: ConfirmationTarget) -> usize {
     match confirmation_target {
-        ConfirmationTarget::Background => 12,
+        // Background is VERY lax and may never confirm if used directly
+        // it is only meant for lower ranges of transaction to enter mempool
+        ConfirmationTarget::Background => 1008,
         ConfirmationTarget::Normal => 6,
         ConfirmationTarget::HighPriority => 3,
     }
@@ -217,7 +219,7 @@ mod test {
     fn test_num_blocks_from_conf_target() {
         assert_eq!(
             num_blocks_from_conf_target(ConfirmationTarget::Background),
-            12
+            1008
         );
         assert_eq!(num_blocks_from_conf_target(ConfirmationTarget::Normal), 6);
         assert_eq!(
@@ -255,7 +257,7 @@ mod test {
         assert!(!fee_estimates.is_empty());
         assert!(fee_estimates.get("3").is_some());
         assert!(fee_estimates.get("6").is_some());
-        assert!(fee_estimates.get("12").is_some());
+        assert!(fee_estimates.get("1008").is_some());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -312,7 +314,7 @@ mod test {
         let mut fee_estimates = HashMap::new();
         fee_estimates.insert("3".to_string(), 20_f64);
         fee_estimates.insert("6".to_string(), 8_f64);
-        fee_estimates.insert("12".to_string(), 1_f64);
+        fee_estimates.insert("1008".to_string(), 1_f64);
         fee_estimator
             .storage
             .insert_fee_estimates(fee_estimates)
