@@ -1021,7 +1021,13 @@ impl<S: MutinyStorage> NodeManager<S> {
             futures_util::join!(self.list_invoices(), self.list_channel_closures());
         let lightning = lightning?;
         let closures = closures?;
-        let onchain = self.list_onchain()?;
+        let onchain = self
+            .list_onchain()
+            .map_err(|e| {
+                log_warn!(self.logger, "Failed to get bdk history: {e}");
+                e
+            })
+            .unwrap_or(vec![]);
 
         let mut activity = Vec::with_capacity(lightning.len() + onchain.len());
         for ln in lightning {
