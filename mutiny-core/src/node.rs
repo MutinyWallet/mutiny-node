@@ -154,7 +154,6 @@ impl<S: MutinyStorage> Node<S> {
     pub(crate) async fn new(
         uuid: String,
         node_index: &NodeIndex,
-        stop: Arc<AtomicBool>,
         mnemonic: &Mnemonic,
         storage: S,
         gossip_sync: Arc<RapidGossipSync>,
@@ -376,6 +375,8 @@ impl<S: MutinyStorage> Node<S> {
             }
         }
 
+        let stop = Arc::new(AtomicBool::new(false));
+
         let background_persister = persister.clone();
         let background_event_handler = event_handler.clone();
         let background_processor_logger = logger.clone();
@@ -468,6 +469,12 @@ impl<S: MutinyStorage> Node<S> {
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
         })
+    }
+
+    pub async fn stop(&self) -> Result<(), MutinyError> {
+        self.stop.store(true, Ordering::Relaxed);
+
+        self.stopped().await
     }
 
     /// stopped will await until the node is fully shut down
