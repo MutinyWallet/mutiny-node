@@ -6,7 +6,7 @@ use crate::nodemanager::ChannelClosure;
 use crate::onchain::OnChainWallet;
 use crate::redshift::RedshiftStorage;
 use crate::storage::MutinyStorage;
-use crate::utils::sleep;
+use crate::utils::{now, sleep};
 use anyhow::anyhow;
 use bdk::chain::ConfirmationTime;
 use bitcoin::hashes::hex::ToHex;
@@ -537,7 +537,13 @@ impl<S: MutinyStorage> EventHandler<S> {
                     if let Some(tx) = params.opening_tx {
                         if let Err(e) = self
                             .wallet
-                            .insert_tx(tx, ConfirmationTime::Unconfirmed, None)
+                            .insert_tx(
+                                tx,
+                                ConfirmationTime::Unconfirmed {
+                                    last_seen: now().as_secs(),
+                                },
+                                None,
+                            )
                             .await
                         {
                             {

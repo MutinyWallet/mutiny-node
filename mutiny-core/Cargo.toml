@@ -17,14 +17,15 @@ lnurl-rs = { version = "=0.2.4", default-features = false, features = ["async", 
 cfg-if = "1.0.0"
 bip39 = { version = "2.0.0" }
 bitcoin = { version = "0.29.2", default-features = false, features = ["serde", "secp-recovery", "rand"] }
-bdk = { git = "https://github.com/MutinyWallet/bdk.git", branch = "mutiny-no-std", default-features = false }
-bdk_esplora = { git = "https://github.com/MutinyWallet/bdk.git", branch = "mutiny-no-std", default-features = false, features = ["async-https"] }
+bdk = { git = "https://github.com/bitcoindevkit/bdk.git", rev = "5d1f922b3be026031720f2bbb659b3f10fb29f4e", default-features = false }
+bdk_esplora = { git = "https://github.com/bitcoindevkit/bdk.git", rev = "5d1f922b3be026031720f2bbb659b3f10fb29f4e", default-features = false, features = ["async-https"] }
+bdk_chain = { git = "https://github.com/bitcoindevkit/bdk.git", rev = "5d1f922b3be026031720f2bbb659b3f10fb29f4e", default-features = false, features = ["hashbrown"] }
 bdk-macros = "0.6.0"
 getrandom = { version = "0.2" }
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
 uuid = { version = "1.1.2", features = ["v4"] }
-esplora-client = { version = "0.4", default-features = false }
+esplora-client = { version = "0.5", default-features = false }
 lightning = { version = "0.0.115", default-features = false, features = ["max_level_trace", "grind_signatures", "no-std"] }
 lightning-invoice = { version = "0.23", default-features = false, features = ["no-std"] }
 lightning-rapid-gossip-sync = { version = "0.0.115", default-features = false, features = ["no-std"] }
@@ -40,7 +41,7 @@ base64 = "0.13.0"
 pbkdf2 = "0.11"
 aes-gcm = "0.10.1"
 
-log = "0.4.17"
+log = "=0.4.18"
 futures = "0.3.25"
 thiserror = "1.0"
 anyhow = "1.0"

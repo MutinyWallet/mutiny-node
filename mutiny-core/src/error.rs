@@ -285,20 +285,14 @@ impl From<esplora_client::Error> for MutinyError {
     }
 }
 
-impl<T> From<bdk::chain::chain_graph::UpdateError<T>> for MutinyError {
-    fn from(_e: bdk::chain::chain_graph::UpdateError<T>) -> Self {
+impl From<bdk_chain::local_chain::InsertBlockNotMatchingError> for MutinyError {
+    fn from(_e: bdk_chain::local_chain::InsertBlockNotMatchingError) -> Self {
         Self::WalletSyncError
     }
 }
 
-impl<T> From<bdk::chain::chain_graph::InsertTxError<T>> for MutinyError {
-    fn from(_e: bdk::chain::chain_graph::InsertTxError<T>) -> Self {
-        Self::WalletSyncError
-    }
-}
-
-impl From<bdk::chain::chain_graph::InsertCheckpointError> for MutinyError {
-    fn from(_e: bdk::chain::chain_graph::InsertCheckpointError) -> Self {
+impl From<bdk::wallet::InsertTxError> for MutinyError {
+    fn from(_e: bdk::wallet::InsertTxError) -> Self {
         Self::WalletSyncError
     }
 }

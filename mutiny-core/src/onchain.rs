@@ -16,14 +16,14 @@ use bitcoin::{Address, Network, OutPoint, Script, Transaction, Txid};
 use esplora_client::AsyncClient;
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::util::logger::Logger;
-use lightning::{log_debug, log_error};
+use lightning::{log_debug, log_error, log_warn};
 
 use crate::error::MutinyError;
 use crate::fees::MutinyFeeEstimator;
 use crate::labels::*;
 use crate::logging::MutinyLogger;
 use crate::storage::{MutinyStorage, OnChainStorage};
-use crate::utils::sleep;
+use crate::utils::{now, sleep};
 
 #[derive(Clone)]
 pub struct OnChainWallet<S: MutinyStorage> {
@@ -77,14 +77,18 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             return Err(MutinyError::Other(anyhow!(
                 "Failed to broadcast transaction ({txid}): {e}"
             )));
+        } else if let Err(e) = self
+            .insert_tx(
+                tx,
+                ConfirmationTime::Unconfirmed {
+                    last_seen: now().as_secs(),
+                },
+                None,
+            )
+            .await
+        {
+            log_warn!(self.logger, "ERROR: Could not sync broadcasted tx ({txid}), will be synced in next iteration: {e:?}");
         }
-        // todo bring back after bdk alpha1
-        // else if let Err(e) = self
-        //     .insert_tx(tx, ConfirmationTime::Unconfirmed, None)
-        //     .await
-        // {
-        //     log_warn!(self.logger, "ERROR: Could not sync broadcasted tx ({txid}), will be synced in next iteration: {e:?}");
-        // }
 
         Ok(())
     }
@@ -174,7 +178,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                     self.sync().await?
                 }
             }
-            ConfirmationTime::Unconfirmed => {
+            ConfirmationTime::Unconfirmed { .. } => {
                 // if the transaction is unconfirmed, we can just insert it
                 let mut wallet = self.wallet.try_write()?;
 
@@ -189,7 +193,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
     }
 
     pub fn list_utxos(&self) -> Result<Vec<LocalUtxo>, MutinyError> {
-        Ok(self.wallet.try_read()?.list_unspent())
+        Ok(self.wallet.try_read()?.list_unspent().collect())
     }
 
     pub fn list_transactions(
@@ -197,8 +201,50 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         include_raw: bool,
     ) -> Result<Vec<TransactionDetails>, MutinyError> {
         if let Ok(wallet) = self.wallet.try_read() {
-            #[allow(deprecated)]
-            return Ok(wallet.list_transactions(include_raw));
+            let txs = wallet
+                .transactions()
+                .filter_map(|tx| {
+                    // skip txs that were not relevant to our bdk wallet
+                    if wallet.spk_index().is_relevant(tx.node.tx) {
+                        let (sent, received) = wallet.spk_index().sent_and_received(tx.node.tx);
+
+                        let transaction = if include_raw {
+                            Some(tx.node.tx.clone())
+                        } else {
+                            None
+                        };
+
+                        // todo bdk is making an easy function for this
+                        // calculate fee if possible
+                        let inputs = tx
+                            .node
+                            .tx
+                            .input
+                            .iter()
+                            .map(|txin| {
+                                wallet
+                                    .spk_index()
+                                    .txout(txin.previous_output)
+                                    .map(|(_, txout)| txout.value)
+                            })
+                            .sum::<Option<u64>>();
+                        let outputs = tx.node.tx.output.iter().map(|txout| txout.value).sum();
+                        let fee = inputs.map(|inputs| inputs.saturating_sub(outputs));
+
+                        Some(TransactionDetails {
+                            transaction,
+                            txid: tx.node.txid,
+                            received,
+                            sent,
+                            fee,
+                            confirmation_time: tx.observed_as.cloned().into(),
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            return Ok(txs);
         }
         log_error!(
             self.logger,
@@ -342,8 +388,14 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let txid = raw_transaction.txid();
 
         self.broadcast_transaction(raw_transaction.clone()).await?;
-        self.insert_tx(raw_transaction, ConfirmationTime::Unconfirmed, None)
-            .await?;
+        self.insert_tx(
+            raw_transaction,
+            ConfirmationTime::Unconfirmed {
+                last_seen: now().as_secs(),
+            },
+            None,
+        )
+        .await?;
         log_debug!(self.logger, "Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }
@@ -396,8 +448,14 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let txid = raw_transaction.txid();
 
         self.broadcast_transaction(raw_transaction.clone()).await?;
-        self.insert_tx(raw_transaction, ConfirmationTime::Unconfirmed, None)
-            .await?;
+        self.insert_tx(
+            raw_transaction,
+            ConfirmationTime::Unconfirmed {
+                last_seen: now().as_secs(),
+            },
+            None,
+        )
+        .await?;
         log_debug!(self.logger, "Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }
