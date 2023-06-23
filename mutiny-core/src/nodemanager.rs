@@ -547,7 +547,6 @@ impl<S: MutinyStorage> NodeManager<S> {
             let node = Node::new(
                 node_item.0,
                 &node_item.1,
-                stop.clone(),
                 &mnemonic,
                 storage.clone(),
                 gossip_sync.clone(),
@@ -641,7 +640,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         self.stop.swap(true, Ordering::Relaxed);
         let mut nodes = self.nodes.lock().await;
         let node_futures = nodes.iter().map(|(_, n)| async {
-            match n.stopped().await {
+            match n.stop().await {
                 Ok(_) => {
                     log_debug!(self.logger, "stopped node: {}", n.pubkey.to_hex())
                 }
@@ -2115,7 +2114,6 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
     let new_node_res = Node::new(
         next_node_uuid.clone(),
         &next_node,
-        node_manager.stop.clone(),
         &node_manager.mnemonic,
         node_manager.storage.clone(),
         node_manager.gossip_sync.clone(),
