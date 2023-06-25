@@ -4,9 +4,9 @@ use std::sync::{
 };
 
 use crate::storage::MutinyStorage;
-use crate::utils::Mutex;
 use crate::{error::MutinyError, utils, utils::sleep};
 use chrono::Utc;
+use lightning::sync::Mutex;
 use lightning::util::logger::{Level, Logger, Record};
 use log::*;
 
@@ -19,6 +19,10 @@ pub struct MutinyLogger {
     should_write_to_storage: bool,
     memory_logs: Arc<Mutex<Vec<String>>>,
 }
+
+// This is just because of memory_logs
+unsafe impl Sync for MutinyLogger {}
+unsafe impl Send for MutinyLogger {}
 
 impl MutinyLogger {
     pub fn with_writer<S: MutinyStorage>(stop: Arc<AtomicBool>, logging_db: S) -> Self {

@@ -4,11 +4,12 @@ use std::sync::Arc;
 
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::Network;
-use lightning::ln::msgs::NodeAnnouncement;
 use lightning::routing::gossip::NodeId;
-use lightning::routing::scoring::ProbabilisticScoringParameters;
 use lightning::util::logger::Logger;
 use lightning::util::ser::{ReadableArgs, Writeable};
+use lightning::{
+    ln::msgs::NodeAnnouncement, routing::scoring::ProbabilisticScoringDecayParameters,
+};
 use lightning::{log_debug, log_error, log_info, log_warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -67,7 +68,7 @@ async fn get_gossip_data(
         Some(prob_scorer_str) => {
             let prob_scorer_bytes: Vec<u8> = Vec::from_hex(&prob_scorer_str)?;
             let mut readable_bytes = lightning::io::Cursor::new(prob_scorer_bytes);
-            let params = ProbabilisticScoringParameters::default();
+            let params = ProbabilisticScoringDecayParameters::default();
             let args = (params, Arc::clone(&network_graph), Arc::clone(&logger));
             ProbScorer::read(&mut readable_bytes, args)
         }
@@ -142,7 +143,7 @@ pub async fn get_gossip_sync(
     let prob_scorer = match gossip_data.scorer {
         Some(scorer) => scorer,
         None => {
-            let params = ProbabilisticScoringParameters::default();
+            let params = ProbabilisticScoringDecayParameters::default();
             ProbScorer::new(params, gossip_data.network_graph.clone(), logger.clone())
         }
     };

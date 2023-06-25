@@ -40,12 +40,12 @@ use core::time::Duration;
 use futures::{future::join_all, lock::Mutex};
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::chain::channelmonitor::Balance;
-use lightning::chain::keysinterface::{NodeSigner, Recipient};
 use lightning::chain::Confirm;
 use lightning::events::ClosureReason;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning::ln::PaymentHash;
 use lightning::routing::gossip::NodeId;
+use lightning::sign::{NodeSigner, Recipient};
 use lightning::util::logger::*;
 use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::{Invoice, InvoiceDescription};
@@ -432,7 +432,7 @@ pub struct NodeManager<S: MutinyStorage> {
     esplora: Arc<AsyncClient>,
     wallet: Arc<OnChainWallet<S>>,
     gossip_sync: Arc<RapidGossipSync>,
-    scorer: Arc<utils::Mutex<ProbScorer>>,
+    scorer: Arc<lightning::sync::Mutex<ProbScorer>>,
     chain: Arc<MutinyChain<S>>,
     fee_estimator: Arc<MutinyFeeEstimator<S>>,
     pub(crate) storage: S,
@@ -504,7 +504,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         let (gossip_sync, scorer) =
             gossip::get_gossip_sync(&storage, c.user_rgs_url, network, logger.clone()).await?;
 
-        let scorer = Arc::new(utils::Mutex::new(scorer));
+        let scorer = Arc::new(lightning::sync::Mutex::new(scorer));
 
         let gossip_sync = Arc::new(gossip_sync);
 

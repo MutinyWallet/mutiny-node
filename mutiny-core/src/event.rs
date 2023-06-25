@@ -12,8 +12,8 @@ use bdk::chain::ConfirmationTime;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
-use lightning::chain::keysinterface::SpendableOutputDescriptor;
 use lightning::events::{Event, PaymentPurpose};
+use lightning::sign::SpendableOutputDescriptor;
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
     log_debug, log_error, log_info, log_warn,
@@ -558,6 +558,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 }
             }
             Event::HTLCIntercepted { .. } => {}
+            Event::BumpTransaction(_) => {} // we do not support anchors
         }
     }
 

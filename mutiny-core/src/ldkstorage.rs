@@ -9,7 +9,6 @@ use crate::node::{default_user_config, ChainMonitor, ProbScorer};
 use crate::node::{NetworkGraph, Router};
 use crate::nodemanager::ChannelClosure;
 use crate::storage::MutinyStorage;
-use crate::utils;
 use anyhow::anyhow;
 use bdk_esplora::esplora_client::AsyncClient;
 use bitcoin::hashes::hex::{FromHex, ToHex};
@@ -17,9 +16,6 @@ use bitcoin::Network;
 use bitcoin::{BlockHash, Transaction};
 use futures::{try_join, TryFutureExt};
 use lightning::chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate};
-use lightning::chain::keysinterface::{
-    InMemorySigner, SpendableOutputDescriptor, WriteableEcdsaChannelSigner,
-};
 use lightning::chain::transaction::OutPoint;
 use lightning::chain::BestBlock;
 use lightning::io::Cursor;
@@ -27,6 +23,7 @@ use lightning::ln::channelmanager::{
     self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
 };
 use lightning::ln::PaymentHash;
+use lightning::sign::{InMemorySigner, SpendableOutputDescriptor, WriteableEcdsaChannelSigner};
 use lightning::util::logger::Logger;
 use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
@@ -485,7 +482,7 @@ impl<S: MutinyStorage>
         Arc<MutinyFeeEstimator<S>>,
         Arc<Router>,
         Arc<MutinyLogger>,
-        utils::Mutex<ProbScorer>,
+        lightning::sync::Mutex<ProbScorer>,
     > for MutinyNodePersister<S>
 {
     fn persist_manager(
@@ -503,7 +500,7 @@ impl<S: MutinyStorage>
 
     fn persist_scorer(
         &self,
-        scorer: &utils::Mutex<ProbScorer>,
+        scorer: &lightning::sync::Mutex<ProbScorer>,
     ) -> Result<(), lightning::io::Error> {
         let scorer_str = scorer.encode().to_hex();
         self.storage
@@ -555,6 +552,7 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
 mod test {
     use crate::event::{HTLCStatus, MillisatAmount};
     use crate::storage::MemoryStorage;
+    use crate::utils;
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::PublicKey;
     use bitcoin::Txid;
