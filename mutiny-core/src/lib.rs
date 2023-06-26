@@ -258,6 +258,18 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         Ok(())
     }
+
+    /// Restore's the mnemonic after deleting the previous state.
+    ///
+    /// Backup the state beforehand. Does not restore lightning data.
+    /// Should refresh or restart afterwards. Wallet should be stopped.
+    pub async fn restore_mnemonic(mut storage: S, m: Mnemonic) -> Result<(), MutinyError> {
+        storage.stop();
+        S::clear();
+        storage.start().await?;
+        storage.insert_mnemonic(m)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -351,5 +363,60 @@ mod tests {
         assert!(mw.stop().await.is_ok());
         assert!(mw.start().await.is_ok());
         assert!(!mw.node_manager.list_nodes().await.unwrap().is_empty());
+    }
+
+    #[test]
+    async fn restore_mutiny_mnemonic() {
+        let test_name = "restore_mutiny_mnemonic";
+        log!("{}", test_name);
+
+        let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        assert!(!NodeManager::has_node_manager(storage.clone()));
+        let config = MutinyWalletConfig::new(
+            None,
+            #[cfg(target_arch = "wasm32")]
+            None,
+            Some(Network::Regtest),
+            None,
+            None,
+            None,
+        );
+        let mw = MutinyWallet::new(storage.clone(), config)
+            .await
+            .expect("mutiny wallet should initialize");
+        let seed = mw.node_manager.show_seed();
+        assert_ne!(seed.to_string(), "");
+
+        // create a second mw and make sure it has a different seed
+        let storage2 = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        assert!(!NodeManager::has_node_manager(storage2.clone()));
+        let config2 = MutinyWalletConfig::new(
+            None,
+            #[cfg(target_arch = "wasm32")]
+            None,
+            Some(Network::Regtest),
+            None,
+            None,
+            None,
+        );
+        let mw2 = MutinyWallet::new(storage2.clone(), config2.clone())
+            .await
+            .expect("mutiny wallet should initialize");
+        let seed2 = mw2.node_manager.show_seed();
+        assert_ne!(seed.to_string(), seed2.to_string());
+
+        // now restore the first seed into the 2nd mutiny node
+        mw2.stop().await.expect("should stop");
+        drop(mw2);
+
+        MutinyWallet::restore_mnemonic(storage2.clone(), seed.clone())
+            .await
+            .expect("mutiny wallet should restore");
+
+        let mw2 = MutinyWallet::new(storage2, config2)
+            .await
+            .expect("mutiny wallet should initialize");
+        let restored_seed = mw2.node_manager.show_seed();
+        assert_eq!(seed.to_string(), restored_seed.to_string());
     }
 }

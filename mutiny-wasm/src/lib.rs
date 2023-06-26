@@ -19,7 +19,6 @@ use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
-use gloo_storage::{LocalStorage, Storage};
 use gloo_utils::format::JsValueSerdeExt;
 use lightning::routing::gossip::NodeId;
 use lightning_invoice::Invoice;
@@ -983,7 +982,25 @@ impl MutinyWallet {
     pub async fn import_json(json: String) -> Result<(), MutinyJsError> {
         let json: serde_json::Value = serde_json::from_str(&json)?;
         IndexedDbStorage::import(json).await?;
-        LocalStorage::clear();
+        Ok(())
+    }
+
+    /// Restore's the mnemonic after deleting the previous state.
+    ///
+    /// Backup the state beforehand. Does not restore lightning data.
+    /// Should refresh or restart afterwards. Wallet should be stopped.
+    #[wasm_bindgen]
+    pub async fn restore_mnemonic(
+        m: String,
+        password: Option<String>,
+    ) -> Result<(), MutinyJsError> {
+        let logger = Arc::new(MutinyLogger::default());
+        let storage = IndexedDbStorage::new(password, logger).await?;
+        mutiny_core::MutinyWallet::<IndexedDbStorage>::restore_mnemonic(
+            storage,
+            Mnemonic::from_str(&m).map_err(|_| MutinyJsError::InvalidMnemonic)?,
+        )
+        .await?;
         Ok(())
     }
 
