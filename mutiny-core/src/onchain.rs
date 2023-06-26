@@ -127,8 +127,12 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         for _ in 0..10 {
             match self.wallet.try_write() {
                 Ok(mut wallet) => match wallet.apply_update(update) {
-                    Ok(_) => {
-                        wallet.commit()?;
+                    Ok(changed) => {
+                        // commit the changes if there were any
+                        if changed {
+                            wallet.commit()?;
+                        }
+
                         return Ok(());
                     }
                     Err(e) => {
@@ -184,7 +188,15 @@ impl<S: MutinyStorage> OnChainWallet<S> {
 
                 // if we already have the transaction, we don't need to insert it
                 if wallet.get_tx(tx.txid(), false).is_none() {
+                    // insert tx and commit changes
                     wallet.insert_tx(tx, position)?;
+                    wallet.commit()?;
+                } else {
+                    log_debug!(
+                        self.logger,
+                        "Tried to insert already existing transaction ({})",
+                        tx.txid()
+                    )
                 }
             }
         }
