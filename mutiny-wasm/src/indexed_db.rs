@@ -448,6 +448,9 @@ impl MutinyStorage for IndexedDbStorage {
             .await
             .map_err(|e| MutinyError::write_err(anyhow!("Failed clear indexed db: {e}").into()))?;
 
+        // We use some localstorage right now for ensuring channel data
+        LocalStorage::clear();
+
         Ok(())
     }
 }
