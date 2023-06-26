@@ -388,14 +388,6 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let txid = raw_transaction.txid();
 
         self.broadcast_transaction(raw_transaction.clone()).await?;
-        self.insert_tx(
-            raw_transaction,
-            ConfirmationTime::Unconfirmed {
-                last_seen: now().as_secs(),
-            },
-            None,
-        )
-        .await?;
         log_debug!(self.logger, "Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }
@@ -448,14 +440,6 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let txid = raw_transaction.txid();
 
         self.broadcast_transaction(raw_transaction.clone()).await?;
-        self.insert_tx(
-            raw_transaction,
-            ConfirmationTime::Unconfirmed {
-                last_seen: now().as_secs(),
-            },
-            None,
-        )
-        .await?;
         log_debug!(self.logger, "Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }
