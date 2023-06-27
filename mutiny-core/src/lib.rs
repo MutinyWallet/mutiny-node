@@ -30,6 +30,7 @@ mod nostr;
 mod onchain;
 mod peermanager;
 pub mod redshift;
+pub mod scb;
 pub mod storage;
 
 #[cfg(any(test, feature = "test-utils"))]

@@ -7,6 +7,10 @@ use crate::gossip::*;
 use crate::labels::LabelStorage;
 use crate::logging::LOGGING_KEY;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
+use crate::scb::{
+    EncryptedSCB, StaticChannelBackup, StaticChannelBackupStorage,
+    SCB_ENCRYPTION_KEY_DERIVATION_PATH,
+};
 use crate::storage::{MutinyStorage, KEYCHAIN_STORE_KEY};
 use crate::utils::sleep;
 use crate::{
@@ -33,8 +37,8 @@ use bip39::Mnemonic;
 use bitcoin::blockdata::script;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::hashes::{sha256, Hash};
-use bitcoin::secp256k1::{rand, PublicKey};
-use bitcoin::util::bip32::ExtendedPrivKey;
+use bitcoin::secp256k1::{rand, PublicKey, Secp256k1, SecretKey};
+use bitcoin::util::bip32::{DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use core::time::Duration;
 use futures::{future::join_all, lock::Mutex};
@@ -43,10 +47,13 @@ use lightning::chain::channelmonitor::Balance;
 use lightning::chain::keysinterface::{NodeSigner, Recipient};
 use lightning::chain::Confirm;
 use lightning::events::ClosureReason;
+use lightning::io::Read;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
+use lightning::ln::msgs::DecodeError;
 use lightning::ln::PaymentHash;
 use lightning::routing::gossip::NodeId;
 use lightning::util::logger::*;
+use lightning::util::ser::{Readable, Writeable, Writer};
 use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::{Invoice, InvoiceDescription};
 use lnurl::lnurl::LnUrl;
@@ -54,19 +61,20 @@ use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::str::FromStr;
 use url::Url;
 use uuid::Uuid;
 
 const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 
 // This is the NodeStorage object saved to the DB
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct NodeStorage {
     pub nodes: HashMap<String, NodeIndex>,
 }
 
 // This is the NodeIndex reference that is saved to the DB
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub struct NodeIndex {
     pub child_index: u32,
     pub lsp: Option<String>,
@@ -76,6 +84,63 @@ pub struct NodeIndex {
 impl NodeIndex {
     pub fn is_archived(&self) -> bool {
         self.archived.unwrap_or(false)
+    }
+}
+
+impl Writeable for NodeIndex {
+    fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
+        // Write the archived flag, 1 if archived, 0 if not
+        if self.archived.unwrap_or(false) {
+            writer.write_all(&[1])?;
+        } else {
+            writer.write_all(&[0])?;
+        }
+
+        // Write the child index
+        writer.write_all(&self.child_index.to_be_bytes())?;
+        // Write the lsp
+        match self.lsp {
+            Some(ref lsp) => {
+                let bytes = lsp.as_bytes();
+                let len = bytes.len() as u32;
+                writer.write_all(&len.to_be_bytes())?;
+                writer.write_all(bytes)?;
+            }
+            None => {
+                let len: u32 = 0;
+                writer.write_all(&len.to_be_bytes())?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Readable for NodeIndex {
+    fn read<R: Read>(reader: &mut R) -> Result<Self, DecodeError> {
+        // Read the archived flag
+        let mut archived = [0; 1];
+        reader.read_exact(&mut archived)?;
+        let archived = archived[0] == 1;
+
+        // Read the child index
+        let child_index: u32 = Readable::read(reader)?;
+
+        // Read the lsp
+        let lsp_len: u32 = Readable::read(reader)?;
+        let lsp = if lsp_len > 0 {
+            let mut lsp = Vec::with_capacity(lsp_len as usize);
+            reader.take(lsp_len as u64).read_to_end(&mut lsp)?;
+            Some(String::from_utf8(lsp).unwrap())
+        } else {
+            None
+        };
+
+        Ok(NodeIndex {
+            child_index,
+            lsp,
+            archived: Some(archived),
+        })
     }
 }
 
@@ -559,6 +624,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                 &lsp_clients,
                 logger.clone(),
                 c.do_not_connect_peers,
+                false,
                 #[cfg(target_arch = "wasm32")]
                 websocket_proxy_addr.clone(),
             )
@@ -1861,6 +1927,134 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(mutiny_channels)
     }
 
+    fn get_scb_key(&self) -> SecretKey {
+        let seed = self.mnemonic.to_seed("");
+        let xprivkey = ExtendedPrivKey::new_master(self.network, &seed).unwrap();
+        let path = DerivationPath::from_str(SCB_ENCRYPTION_KEY_DERIVATION_PATH).unwrap();
+        let context = Secp256k1::new();
+
+        xprivkey.derive_priv(&context, &path).unwrap().private_key
+    }
+
+    /// Creates a static channel backup for all the nodes in the node manager.
+    /// The backup is encrypted with the SCB key.
+    pub async fn create_static_channel_backup(&self) -> Result<EncryptedSCB, MutinyError> {
+        let nodes = self.nodes.lock().await;
+        let mut backups: HashMap<PublicKey, (NodeIndex, StaticChannelBackup)> = HashMap::new();
+        for (_, node) in nodes.iter() {
+            let scb = node.create_static_channel_backup()?;
+            backups.insert(node.pubkey, (node.node_index(), scb));
+        }
+
+        let peers = get_all_peers(&self.storage).unwrap_or_default();
+
+        let peer_connections = peers
+            .into_iter()
+            .filter_map(|(n, p)| p.connection_string.map(|str| (n.as_pubkey().unwrap(), str)))
+            .collect::<HashMap<_, _>>();
+
+        let scb = StaticChannelBackupStorage {
+            backups,
+            peer_connections,
+        };
+
+        // encrypt
+        let encryption_key = self.get_scb_key();
+        let scb = scb.encrypt(&encryption_key);
+        log_debug!(
+            self.logger,
+            "Created SCB with a size of {} bytes",
+            scb.encode().len()
+        );
+        Ok(scb)
+    }
+
+    /// Takes an encrypted static channel backup and recovers the channels from it.
+    /// If the backup is encrypted with a different key than the current key, it will fail.
+    pub async fn recover_from_static_channel_backup(
+        &self,
+        scb: EncryptedSCB,
+    ) -> Result<(), MutinyError> {
+        // decrypt
+        let encryption_key = self.get_scb_key();
+        let scb = scb.decrypt(&encryption_key)?;
+
+        // stop all nodes, todo stop in parallel
+        for node in self.nodes.lock().await.values() {
+            node.stop().await?;
+        }
+
+        for (pubkey, (node_index, backup)) in scb.backups {
+            // find the uuid if we have it, otherwise create a new one and save it
+            let uuid = {
+                let mut node_mutex = self.node_storage.lock().await;
+                let current = node_mutex
+                    .nodes
+                    .iter()
+                    .find(|(_, n)| *n == &node_index)
+                    .map(|(uuid, _)| uuid.clone());
+
+                match current {
+                    Some(uuid) => uuid,
+                    None => {
+                        let mut existing_nodes = self.storage.get_nodes()?;
+                        let new_uuid = Uuid::new_v4().to_string();
+                        existing_nodes
+                            .nodes
+                            .insert(new_uuid.clone(), node_index.clone());
+
+                        self.storage.insert_nodes(existing_nodes.clone())?;
+                        node_mutex.nodes = existing_nodes.nodes.clone();
+
+                        new_uuid
+                    }
+                }
+            };
+
+            // create a fresh instance of each node
+            let new_node = Node::new(
+                uuid,
+                &node_index,
+                &self.mnemonic,
+                self.storage.clone(),
+                self.gossip_sync.clone(),
+                self.scorer.clone(),
+                self.chain.clone(),
+                self.fee_estimator.clone(),
+                self.wallet.clone(),
+                self.network,
+                self.esplora.clone(),
+                &self.lsp_clients,
+                self.logger.clone(),
+                true,
+                true,
+                #[cfg(target_arch = "wasm32")]
+                self.websocket_proxy_addr.clone(),
+            )
+            .await;
+
+            match new_node {
+                Ok(node) => {
+                    debug_assert!(node.node_index().child_index == node_index.child_index);
+                    log_info!(
+                        self.logger,
+                        "Recovering node {pubkey} from static channel backup"
+                    );
+                    node.recover_from_static_channel_backup(backup, &scb.peer_connections)
+                        .await?;
+                }
+                Err(_) => {
+                    log_error!(
+                        self.logger,
+                        "Could not find node with pubkey {pubkey} to recover from backup",
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Lists all the peers for all the nodes in the node manager.
     pub async fn list_peers(&self) -> Result<Vec<MutinyPeer>, MutinyError> {
         let peer_data = gossip::get_all_peers(&self.storage)?;
@@ -2128,6 +2322,7 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         &node_manager.lsp_clients,
         node_manager.logger.clone(),
         node_manager.do_not_connect_peers,
+        false,
         #[cfg(target_arch = "wasm32")]
         node_manager.websocket_proxy_addr.clone(),
     )

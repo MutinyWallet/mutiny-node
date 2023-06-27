@@ -2,6 +2,7 @@ use crate::keymanager::PhantomKeysManager;
 use crate::labels::LabelStorage;
 use crate::ldkstorage::ChannelOpenParams;
 use crate::nodemanager::ChannelClosure;
+use crate::scb::StaticChannelBackup;
 use crate::{
     background::process_events_async,
     chain::MutinyChain,
@@ -19,6 +20,7 @@ use crate::{
     utils::{self, sleep},
 };
 
+use crate::scb::message_handler::SCBMessageHandler;
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{lspclient::FeeRequest, storage::MutinyStorage};
 use anyhow::{anyhow, Context};
@@ -27,9 +29,11 @@ use bdk_esplora::esplora_client::AsyncClient;
 use bip39::Mnemonic;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
 use bitcoin::secp256k1::rand;
-use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint};
+use bitcoin::{hashes::Hash, secp256k1::PublicKey, BlockHash, Network, OutPoint};
 use core::time::Duration;
+use lightning::chain::channelmonitor::ChannelMonitor;
 use lightning::ln::channelmanager::{RecipientOnionFields, RetryableSendFailure};
+use lightning::util::ser::{ReadableArgs, Writeable};
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
     util::config::ChannelConfig,
@@ -139,6 +143,7 @@ pub(crate) struct Node<S: MutinyStorage> {
     pub channel_manager: Arc<PhantomChannelManager<S>>,
     pub chain_monitor: Arc<ChainMonitor<S>>,
     pub fee_estimator: Arc<MutinyFeeEstimator<S>>,
+    pub scb_message_handler: Arc<SCBMessageHandler>,
     network: Network,
     pub persister: Arc<MutinyNodePersister<S>>,
     wallet: Arc<OnChainWallet<S>>,
@@ -166,6 +171,7 @@ impl<S: MutinyStorage> Node<S> {
         lsp_clients: &[LspClient],
         logger: Arc<MutinyLogger>,
         do_not_connect_peers: bool,
+        empty_state: bool,
         #[cfg(target_arch = "wasm32")] websocket_proxy_addr: String,
     ) -> Result<Self, MutinyError> {
         log_info!(logger, "initializing a new node: {uuid}");
@@ -198,11 +204,17 @@ impl<S: MutinyStorage> Node<S> {
         ));
 
         // read channelmonitor state from disk
-        let channel_monitors = persister
-            .read_channel_monitors(keys_manager.clone())
-            .map_err(|e| MutinyError::ReadError {
-                source: MutinyStorageError::Other(anyhow!("failed to read channel monitors: {e}")),
-            })?;
+        let channel_monitors = if empty_state {
+            vec![]
+        } else {
+            persister
+                .read_channel_monitors(keys_manager.clone())
+                .map_err(|e| MutinyError::ReadError {
+                    source: MutinyStorageError::Other(anyhow!(
+                        "failed to read channel monitors: {e}"
+                    )),
+                })?
+        };
 
         let network_graph = gossip_sync.network_graph().clone();
 
@@ -214,8 +226,8 @@ impl<S: MutinyStorage> Node<S> {
         ));
 
         // init channel manager
-        let mut read_channel_manager = persister
-            .read_channel_manager(
+        let mut read_channel_manager = if empty_state {
+            MutinyNodePersister::create_new_channel_manager(
                 network,
                 chain_monitor.clone(),
                 chain.clone(),
@@ -226,7 +238,22 @@ impl<S: MutinyStorage> Node<S> {
                 channel_monitors,
                 esplora,
             )
-            .await?;
+            .await?
+        } else {
+            persister
+                .read_channel_manager(
+                    network,
+                    chain_monitor.clone(),
+                    chain.clone(),
+                    fee_estimator.clone(),
+                    logger.clone(),
+                    keys_manager.clone(),
+                    router.clone(),
+                    channel_monitors,
+                    esplora,
+                )
+                .await?
+        };
 
         let channel_manager: Arc<PhantomChannelManager<S>> =
             Arc::new(read_channel_manager.channel_manager);
@@ -273,6 +300,7 @@ impl<S: MutinyStorage> Node<S> {
             route_handler,
             onion_message_handler: Arc::new(IgnoringMessageHandler {}),
         };
+        let scb_message_handler = Arc::new(SCBMessageHandler::new());
 
         log_info!(logger, "creating lsp client");
         let lsp_client: Option<LspClient> = match node_index.lsp {
@@ -303,9 +331,11 @@ impl<S: MutinyStorage> Node<S> {
             lsp_client_pubkey,
             logger.clone(),
         );
+
         let peer_man = Arc::new(create_peer_manager(
             keys_manager.clone(),
             ln_msg_handler,
+            scb_message_handler.clone(),
             logger.clone(),
         ));
 
@@ -344,34 +374,36 @@ impl<S: MutinyStorage> Node<S> {
         // processor so we prevent any race conditions.
         // if we fail to read the spendable outputs, just log a warning and
         // continue
-        let retry_spendable_outputs = persister
-            .get_failed_spendable_outputs()
-            .map_err(|e| MutinyError::ReadError {
-                source: MutinyStorageError::Other(anyhow!(
-                    "failed to read retry spendable outputs: {e}"
-                )),
-            })
-            .unwrap_or_else(|e| {
-                log_warn!(logger, "Failed to read retry spendable outputs: {e}");
-                vec![]
-            });
+        if !empty_state {
+            let retry_spendable_outputs = persister
+                .get_failed_spendable_outputs()
+                .map_err(|e| MutinyError::ReadError {
+                    source: MutinyStorageError::Other(anyhow!(
+                        "failed to read retry spendable outputs: {e}"
+                    )),
+                })
+                .unwrap_or_else(|e| {
+                    log_warn!(logger, "Failed to read retry spendable outputs: {e}");
+                    vec![]
+                });
 
-        if !retry_spendable_outputs.is_empty() {
-            log_info!(
-                logger,
-                "Retrying {} spendable outputs",
-                retry_spendable_outputs.len()
-            );
+            if !retry_spendable_outputs.is_empty() {
+                log_info!(
+                    logger,
+                    "Retrying {} spendable outputs",
+                    retry_spendable_outputs.len()
+                );
 
-            match event_handler
-                .handle_spendable_outputs(&retry_spendable_outputs)
-                .await
-            {
-                Ok(_) => {
-                    log_info!(logger, "Successfully retried spendable outputs");
-                    persister.clear_failed_spendable_outputs()?;
+                match event_handler
+                    .handle_spendable_outputs(&retry_spendable_outputs)
+                    .await
+                {
+                    Ok(_) => {
+                        log_info!(logger, "Successfully retried spendable outputs");
+                        persister.clear_failed_spendable_outputs()?;
+                    }
+                    Err(e) => log_warn!(logger, "Failed to retry spendable outputs {e}"),
                 }
-                Err(e) => log_warn!(logger, "Failed to retry spendable outputs {e}"),
             }
         }
 
@@ -460,6 +492,7 @@ impl<S: MutinyStorage> Node<S> {
             channel_manager,
             chain_monitor,
             fee_estimator,
+            scb_message_handler,
             network,
             persister,
             wallet,
@@ -1339,6 +1372,66 @@ impl<S: MutinyStorage> Node<S> {
 
         self.await_chan_funding_tx(init, &pubkey, timeout).await
     }
+
+    pub fn create_static_channel_backup(&self) -> Result<StaticChannelBackup, MutinyError> {
+        let mut monitors = HashMap::new();
+        for outpoint in self.chain_monitor.list_monitors() {
+            let monitor = self
+                .chain_monitor
+                .get_monitor(outpoint)
+                .map_err(|_| MutinyError::Other(anyhow!("Failed to get channel monitor")))?;
+
+            let monitor_bytes = monitor.encode();
+            monitors.insert(outpoint.into_bitcoin_outpoint(), monitor_bytes);
+        }
+
+        Ok(StaticChannelBackup { monitors })
+    }
+
+    pub async fn recover_from_static_channel_backup(
+        &self,
+        scb: StaticChannelBackup,
+        peer_connections: &HashMap<PublicKey, String>,
+    ) -> Result<(), MutinyError> {
+        for (outpoint, monitor_bytes) in scb.monitors {
+            let ln_outpoint = lightning::chain::transaction::OutPoint {
+                txid: outpoint.txid,
+                index: outpoint.vout as u16,
+            };
+
+            let reader = &mut lightning::io::Cursor::new(&monitor_bytes);
+            let (_, monitor) = <(BlockHash, ChannelMonitor<InMemorySigner>)>::read(
+                reader,
+                (self.keys_manager.as_ref(), self.keys_manager.as_ref()),
+            )?;
+
+            // unwrap is safe for ldk > 0.0.110
+            let node_id = monitor
+                .get_counterparty_node_id()
+                .expect("failed to get node id");
+
+            // watch the channel in the case peer tries to cheat us
+            self.chain_monitor.watch_channel(ln_outpoint, monitor);
+
+            // connect to peer if we have a connection string
+            if let Some(connection_string) = peer_connections.get(&node_id) {
+                let connect = PubkeyConnectionInfo::new(connection_string)
+                    .expect("invalid connection string");
+                self.connect_peer(connect, None).await?;
+            }
+
+            // then ask peer to force close the channel
+            self.scb_message_handler
+                .request_channel_close(node_id, ln_outpoint.to_channel_id());
+        }
+
+        // fire off all the send events
+        if self.scb_message_handler.has_pending_messages() {
+            self.peer_manager.process_events();
+        }
+
+        Ok(())
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1533,6 +1626,7 @@ fn stop_component(stopped_components: &Arc<RwLock<Vec<bool>>>) {
 pub(crate) fn create_peer_manager<S: MutinyStorage>(
     km: Arc<PhantomKeysManager<S>>,
     lightning_msg_handler: MessageHandler<S>,
+    scb_message_handler: Arc<SCBMessageHandler>,
     logger: Arc<MutinyLogger>,
 ) -> PeerManagerImpl<S> {
     let now = utils::now().as_secs();
@@ -1544,7 +1638,7 @@ pub(crate) fn create_peer_manager<S: MutinyStorage>(
         now as u32,
         &ephemeral_bytes,
         logger,
-        Arc::new(IgnoringMessageHandler {}),
+        scb_message_handler,
         km,
     )
 }

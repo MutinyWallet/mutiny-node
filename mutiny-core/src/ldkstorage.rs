@@ -177,7 +177,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
                 let read_args = ChannelManagerReadArgs::new(
                     keys_manager.clone(),
                     keys_manager.clone(),
-                    keys_manager.clone(),
+                    keys_manager,
                     fee_estimator,
                     chain_monitor,
                     mutiny_chain,
@@ -199,46 +199,71 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             Err(_) => {
                 // no key manager stored, start a new one
 
-                // if regtest, we don't need to get the tip hash and can
-                // just use genesis, this also lets us use regtest in tests
-                let best_block = if network == Network::Regtest {
-                    BestBlock::from_network(network)
-                } else {
-                    let height_future = esplora
-                        .get_height()
-                        .map_err(|_| MutinyError::ChainAccessFailed);
-                    let hash_future = esplora
-                        .get_tip_hash()
-                        .map_err(|_| MutinyError::ChainAccessFailed);
-                    let (height, hash) = try_join!(height_future, hash_future)?;
-                    BestBlock::new(hash, height)
-                };
-                let chain_params = ChainParameters {
+                Self::create_new_channel_manager(
                     network,
-                    best_block,
-                };
-
-                let fresh_channel_manager: PhantomChannelManager<S> =
-                    channelmanager::ChannelManager::new(
-                        fee_estimator,
-                        chain_monitor,
-                        mutiny_chain,
-                        router,
-                        mutiny_logger,
-                        keys_manager.clone(),
-                        keys_manager.clone(),
-                        keys_manager,
-                        default_user_config(),
-                        chain_params,
-                    );
-
-                Ok(ReadChannelManager {
-                    channel_manager: fresh_channel_manager,
-                    is_restarting: false,
+                    chain_monitor,
+                    mutiny_chain,
+                    fee_estimator,
+                    mutiny_logger,
+                    keys_manager,
+                    router,
                     channel_monitors,
-                })
+                    esplora,
+                )
+                .await
             }
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn create_new_channel_manager(
+        network: Network,
+        chain_monitor: Arc<ChainMonitor<S>>,
+        mutiny_chain: Arc<MutinyChain<S>>,
+        fee_estimator: Arc<MutinyFeeEstimator<S>>,
+        mutiny_logger: Arc<MutinyLogger>,
+        keys_manager: Arc<PhantomKeysManager<S>>,
+        router: Arc<Router>,
+        channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
+        esplora: Arc<AsyncClient>,
+    ) -> Result<ReadChannelManager<S>, MutinyError> {
+        // if regtest, we don't need to get the tip hash and can
+        // just use genesis, this also lets us use regtest in tests
+        let best_block = if network == Network::Regtest {
+            BestBlock::from_network(network)
+        } else {
+            let height_future = esplora
+                .get_height()
+                .map_err(|_| MutinyError::ChainAccessFailed);
+            let hash_future = esplora
+                .get_tip_hash()
+                .map_err(|_| MutinyError::ChainAccessFailed);
+            let (height, hash) = try_join!(height_future, hash_future)?;
+            BestBlock::new(hash, height)
+        };
+        let chain_params = ChainParameters {
+            network,
+            best_block,
+        };
+
+        let fresh_channel_manager: PhantomChannelManager<S> = channelmanager::ChannelManager::new(
+            fee_estimator,
+            chain_monitor,
+            mutiny_chain,
+            router,
+            mutiny_logger,
+            keys_manager.clone(),
+            keys_manager.clone(),
+            keys_manager,
+            default_user_config(),
+            chain_params,
+        );
+
+        Ok(ReadChannelManager {
+            channel_manager: fresh_channel_manager,
+            is_restarting: false,
+            channel_monitors,
+        })
     }
 
     pub(crate) fn persist_payment_info(

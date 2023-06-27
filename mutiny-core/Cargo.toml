@@ -36,6 +36,8 @@ async-trait = "0.1.68"
 url = { version = "2.3.1", features = ["serde"] }
 nostr = { version = "0.22.0-bitcoin-v0.29", default-features = false, features = ["nip47"] }
 nostr-sdk = { version = "0.22.0-bitcoin-v0.29", default-features = false }
+cbc = { version = "0.1", features = ["alloc"] }
+aes = { version = "0.8" }
 
 base64 = "0.13.0"
 pbkdf2 = "0.11"
