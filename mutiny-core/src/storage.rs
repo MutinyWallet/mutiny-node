@@ -4,15 +4,14 @@ use crate::error::{MutinyError, MutinyStorageError};
 use crate::ldkstorage::CHANNEL_MANAGER_KEY;
 use crate::nodemanager::NodeStorage;
 use anyhow::anyhow;
-use bdk::chain::keychain::{KeychainChangeSet, KeychainTracker, PersistBackend};
-use bdk::chain::sparse_chain::ChainPosition;
+use bdk::chain::{Append, PersistBackend};
 use bip39::Mnemonic;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-pub const KEYCHAIN_STORE_KEY: &str = "keychain_store";
+pub const KEYCHAIN_STORE_KEY: &str = "bdk_keychain";
 pub(crate) const MNEMONIC_KEY: &str = "mnemonic";
 const NODES_KEY: &str = "nodes";
 const AUTH_PROFILES_KEY: &str = "auth_profiles";
@@ -379,27 +378,19 @@ impl MutinyStorage for () {
 #[derive(Clone)]
 pub struct OnChainStorage<S: MutinyStorage>(pub(crate) S);
 
-impl<K, P, S: MutinyStorage> PersistBackend<K, P> for OnChainStorage<S>
+impl<K, S: MutinyStorage> PersistBackend<K> for OnChainStorage<S>
 where
-    K: Ord + Clone + core::fmt::Debug,
-    P: ChainPosition,
-    KeychainChangeSet<K, P>: serde::Serialize + serde::de::DeserializeOwned,
+    K: Default + Clone + Append + serde::Serialize + serde::de::DeserializeOwned,
 {
     type WriteError = MutinyError;
     type LoadError = MutinyError;
 
-    fn append_changeset(
-        &mut self,
-        changeset: &KeychainChangeSet<K, P>,
-    ) -> Result<(), Self::WriteError> {
+    fn write_changes(&mut self, changeset: &K) -> Result<(), Self::WriteError> {
         if changeset.is_empty() {
             return Ok(());
         }
 
-        match self
-            .0
-            .get_data::<KeychainChangeSet<K, P>>(KEYCHAIN_STORE_KEY)?
-        {
+        match self.0.get_data::<K>(KEYCHAIN_STORE_KEY)? {
             Some(mut keychain_store) => {
                 keychain_store.append(changeset.clone());
                 self.0.set_data(KEYCHAIN_STORE_KEY, keychain_store)
@@ -408,15 +399,13 @@ where
         }
     }
 
-    fn load_into_keychain_tracker(
-        &mut self,
-        tracker: &mut KeychainTracker<K, P>,
-    ) -> Result<(), Self::LoadError> {
+    fn load_from_persistence(&mut self) -> Result<K, Self::LoadError> {
         if let Some(k) = self.0.get_data(KEYCHAIN_STORE_KEY)? {
-            tracker.apply_changeset(k);
+            Ok(k)
+        } else {
+            // If there is no keychain store, we return an empty one
+            Ok(K::default())
         }
-
-        Ok(())
     }
 }
 

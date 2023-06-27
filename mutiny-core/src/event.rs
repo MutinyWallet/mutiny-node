@@ -8,7 +8,6 @@ use crate::redshift::RedshiftStorage;
 use crate::storage::MutinyStorage;
 use crate::utils::sleep;
 use anyhow::anyhow;
-use bdk::chain::ConfirmationTime;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
@@ -532,23 +531,6 @@ impl<S: MutinyStorage> EventHandler<S> {
                     channel_id.to_hex(),
                     user_channel_id,
                     counterparty_node_id.to_hex());
-
-                if let Ok(Some(params)) = self.persister.get_channel_open_params(user_channel_id) {
-                    if let Some(tx) = params.opening_tx {
-                        if let Err(e) = self
-                            .wallet
-                            .insert_tx(tx, ConfirmationTime::Unconfirmed, None)
-                            .await
-                        {
-                            {
-                                log_warn!(
-                                    self.logger,
-                                    "ERROR: Could not insert opening tx into wallet, but continuing: {e}"
-                                )
-                            }
-                        }
-                    }
-                }
 
                 if let Err(e) = self.persister.delete_channel_open_params(user_channel_id) {
                     log_warn!(

@@ -358,7 +358,7 @@ impl ActivityItem {
         match self {
             ActivityItem::OnChain(t) => match t.confirmation_time {
                 ConfirmationTime::Confirmed { time, .. } => Some(time),
-                ConfirmationTime::Unconfirmed => None,
+                ConfirmationTime::Unconfirmed { last_seen } => Some(last_seen),
             },
             ActivityItem::Lightning(i) => Some(i.last_updated),
             ActivityItem::ChannelClosed(c) => Some(c.timestamp),
@@ -966,7 +966,9 @@ impl<S: MutinyStorage> NodeManager<S> {
                     height: c.height,
                     time: c.timestamp,
                 })
-                .unwrap_or(ConfirmationTime::Unconfirmed);
+                .unwrap_or(ConfirmationTime::Unconfirmed {
+                    last_seen: utils::now().as_secs(),
+                });
 
             let address_labels = self.get_address_labels().unwrap_or_default();
             let labels = address_labels
@@ -2302,7 +2304,10 @@ mod tests {
         {
             let mut wallet = nm.wallet.wallet.try_write().unwrap();
             wallet
-                .insert_tx(fake_tx.clone(), ConfirmationTime::Unconfirmed)
+                .insert_tx(
+                    fake_tx.clone(),
+                    ConfirmationTime::Unconfirmed { last_seen: 0 },
+                )
                 .unwrap();
             wallet.commit().unwrap();
         }
@@ -2461,7 +2466,9 @@ mod tests {
             received: 0,
             sent: 0,
             fee: None,
-            confirmation_time: ConfirmationTime::Unconfirmed,
+            confirmation_time: ConfirmationTime::Unconfirmed {
+                last_seen: u64::MAX,
+            },
             labels: vec![],
         };
 
