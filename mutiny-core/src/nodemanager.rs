@@ -14,10 +14,6 @@ use crate::scb::{
 use crate::storage::{MutinyStorage, KEYCHAIN_STORE_KEY};
 use crate::utils::sleep;
 use crate::{
-    auth::{AuthManager, AuthProfile},
-    MutinyWalletConfig,
-};
-use crate::{
     chain::MutinyChain,
     error::MutinyError,
     esplora::EsploraSyncClient,
@@ -29,6 +25,10 @@ use crate::{
     onchain::get_esplora_url,
     onchain::OnChainWallet,
     utils,
+};
+use crate::{
+    lnurlauth::{AuthManager, AuthProfile},
+    MutinyWalletConfig,
 };
 use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::{wallet::AddressIndex, LocalUtxo};
