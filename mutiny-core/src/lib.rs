@@ -26,7 +26,7 @@ mod lspclient;
 mod networking;
 mod node;
 pub mod nodemanager;
-mod nostr;
+pub mod nostr;
 mod onchain;
 mod peermanager;
 pub mod redshift;
@@ -106,7 +106,7 @@ pub struct MutinyWallet<S: MutinyStorage> {
     config: MutinyWalletConfig,
     storage: S,
     pub node_manager: Arc<NodeManager<S>>,
-    pub nostr: Arc<NostrManager>,
+    pub nostr: Arc<NostrManager<S>>,
 }
 
 impl<S: MutinyStorage> MutinyWallet<S> {
@@ -121,8 +121,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // create nostr manager
         let seed = node_manager.show_seed().to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(node_manager.get_network(), &seed)?;
-        let relays = vec!["wss://nostr.mutinywallet.com".to_string()]; // todo make configurable
-        let nostr = Arc::new(NostrManager::from_mnemonic(xprivkey, relays)?);
+        let nostr = Arc::new(NostrManager::from_mnemonic(xprivkey, storage.clone())?);
 
         Ok(Self {
             config,
@@ -148,7 +147,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let nostr = self.nostr.clone();
         let nm = self.node_manager.clone();
         utils::spawn(async move {
-            let mut broadcasted_info = false;
             loop {
                 if nm.stop.load(Ordering::Relaxed) {
                     break;
@@ -168,35 +166,16 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 let client = Client::new(&nostr.primary_key);
 
                 #[cfg(target_arch = "wasm32")]
-                let add_relay_res = client.add_relays(nostr.relays.clone()).await;
+                let add_relay_res = client.add_relays(nostr.get_relays()).await;
 
                 #[cfg(not(target_arch = "wasm32"))]
                 let add_relay_res = client
-                    .add_relays(
-                        nostr
-                            .relays
-                            .clone()
-                            .into_iter()
-                            .map(|s| (s, None))
-                            .collect(),
-                    )
+                    .add_relays(nostr.get_relays().into_iter().map(|s| (s, None)).collect())
                     .await;
 
                 add_relay_res.expect("Failed to add relays");
                 client.connect().await;
-                client.subscribe(vec![nostr.create_nwc_filter()]).await;
-
-                // broadcast NWC info event
-                // todo we only need to broadcast on creation
-                if !broadcasted_info {
-                    if let Ok(event) = nostr.create_nwc_info_event() {
-                        if let Err(e) = client.send_event(event).await {
-                            log_warn!(nm.logger, "Error sending NWC info event: {e}");
-                        } else {
-                            broadcasted_info = true;
-                        }
-                    }
-                }
+                client.subscribe(nostr.get_nwc_filters()).await;
 
                 // handle NWC requests
                 let mut notifications = client.notifications();

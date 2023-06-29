@@ -800,3 +800,51 @@ impl From<MutinyContact> for Contact {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[wasm_bindgen]
+pub struct NwcProfile {
+    name: String,
+    pub index: u32,
+    /// Maximum amount of sats that can be sent in a single payment
+    pub max_single_amt_sats: u64,
+    relay: String,
+    pub enabled: bool,
+    nwc_uri: String,
+}
+
+#[wasm_bindgen]
+impl NwcProfile {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn relay(&self) -> String {
+        self.relay.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn nwc_uri(&self) -> String {
+        self.nwc_uri.clone()
+    }
+}
+
+impl From<nostr::nwc::NwcProfile> for NwcProfile {
+    fn from(value: nostr::nwc::NwcProfile) -> Self {
+        NwcProfile {
+            name: value.name,
+            index: value.index,
+            max_single_amt_sats: value.max_single_amt_sats,
+            relay: value.relay,
+            enabled: value.enabled,
+            nwc_uri: value.nwc_uri,
+        }
+    }
+}
