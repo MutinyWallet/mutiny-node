@@ -1,9 +1,8 @@
 use crate::error::MutinyError;
 use crate::storage::MutinyStorage;
 use anyhow::anyhow;
-use bitcoin::hashes::{sha256, Hash, HashEngine, Hmac, HmacEngine};
 use bitcoin::secp256k1::{ecdsa, All, Message, PublicKey, Secp256k1, SecretKey};
-use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
+use bitcoin::util::bip32::{DerivationPath, ExtendedPrivKey};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
@@ -40,44 +39,13 @@ impl SigningProfile {
         }
     }
 
-    // todo: should this be in lnurl-rs?
-    pub(crate) fn get_derivation_path(&self, url: Url) -> Result<DerivationPath, MutinyError> {
-        // There exists a private hashingKey which is derived by user LN WALLET using m/138'/0 path.
-        let mut engine = HmacEngine::<sha256::Hash>::new(&self.hashing_key.secret_bytes());
-
-        // LN SERVICE full domain name is extracted from login LNURL
-        let host = url.host().ok_or(anyhow::anyhow!("No host"))?;
-
-        // and then hashed using hmacSha256(hashingKey, full service domain name)
-        engine.input(host.to_string().as_bytes());
-        let derivation_mat = Hmac::<sha256::Hash>::from_engine(engine).into_inner();
-
-        // First 16 bytes are taken from resulting hash and then turned into a sequence of 4 u32 values
-        let uints: [u32; 4] = (0..4)
-            .map(|i| u32::from_be_bytes(derivation_mat[(i * 4)..((i + 1) * 4)].try_into().unwrap()))
-            .collect::<Vec<u32>>()
-            .try_into()
-            .expect("slice with incorrect length");
-        // parse into ChildNumbers so we handle hardened vs unhardened
-        let children = uints.map(ChildNumber::from);
-
-        // which are in turn used to derive a service-specific linkingKey using m/138'/<long1>/<long2>/<long3>/<long4> path
-        let path = DerivationPath::from_str(&format!(
-            "m/138'/{}/{}/{}/{}",
-            children[0], children[1], children[2], children[3]
-        ))
-        .map_err(|e| MutinyError::Other(anyhow!("Error deriving path: {e}")))?;
-
-        Ok(path)
-    }
-
     pub(crate) fn get_secret_key(
         &self,
         context: &Secp256k1<All>,
         xprivkey: ExtendedPrivKey,
         url: Url,
     ) -> Result<SecretKey, MutinyError> {
-        let path = self.get_derivation_path(url)?;
+        let path = lnurl::get_derivation_path(self.hashing_key.secret_bytes(), url)?;
         let key = xprivkey
             .derive_priv(context, &path)
             .map_err(|e| MutinyError::Other(anyhow!("Error deriving key for path {path}: {e}")))?;
@@ -218,7 +186,6 @@ mod test {
     use crate::keymanager::generate_seed;
     use crate::storage::MemoryStorage;
     use crate::test_utils::*;
-    use bitcoin::hashes::hex::FromHex;
     use bitcoin::Network;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
     wasm_bindgen_test_configure!(run_in_browser);
@@ -233,29 +200,6 @@ mod test {
         let auth = AuthManager::new(xprivkey, storage).unwrap();
         auth.create_init().unwrap();
         auth
-    }
-
-    #[test]
-    fn test_lud_05_static_test_vector() {
-        let auth_prof = AuthProfile::new(0, "Default".to_string());
-        let hashing_key_byes: [u8; 32] =
-            FromHex::from_hex("7d417a6a5e9a6a4a879aeaba11a11838764c8fa2b959c242d43dea682b3e409b")
-                .unwrap();
-        let hashing_key = SecretKey::from_slice(&hashing_key_byes).unwrap();
-        let profile = SigningProfile::new(auth_prof, hashing_key);
-        let url = Url::parse("https://site.com").unwrap();
-
-        let path = profile.get_derivation_path(url).unwrap();
-        let expected = DerivationPath::from_str(&format!(
-            "m/138'/{}/{}/{}/{}",
-            ChildNumber::from(1588488367),
-            ChildNumber::from(2659270754),
-            ChildNumber::from(38110259),
-            ChildNumber::from(4136336762),
-        ))
-        .unwrap();
-
-        assert_eq!(path, expected);
     }
 
     #[test]
