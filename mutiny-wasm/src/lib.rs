@@ -24,6 +24,7 @@ use lightning::routing::gossip::NodeId;
 use lightning_invoice::Invoice;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::logging::MutinyLogger;
+use mutiny_core::nostr::nwc::NwcProfile;
 use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::scb::EncryptedSCB;
 use mutiny_core::storage::MutinyStorage;
@@ -962,12 +963,46 @@ impl MutinyWallet {
         Ok(res)
     }
 
+    /// Get nostr wallet connect profiles
+    #[wasm_bindgen]
+    pub fn get_nwc_profiles(&self) -> Result<JsValue /* Vec<NwcProfile> */, MutinyJsError> {
+        Ok(JsValue::from_serde(&self.inner.nostr.profiles())?)
+    }
+
+    /// Create a nostr wallet connect profile
+    #[wasm_bindgen]
+    pub async fn create_nwc_profile(
+        &self,
+        name: String,
+        max_single_amt_sats: u64,
+    ) -> Result<models::NwcProfile, MutinyJsError> {
+        Ok(self
+            .inner
+            .nostr
+            .create_new_nwc_profile(name, max_single_amt_sats)
+            .await?
+            .into())
+    }
+
+    /// Edits a nostr wallet connect profile
+    #[wasm_bindgen]
+    pub async fn edit_nwc_profile(
+        &self,
+        profile: JsValue,
+    ) -> Result<models::NwcProfile, MutinyJsError> {
+        let profile: NwcProfile = profile
+            .into_serde()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+
+        Ok(self.inner.nostr.edit_profile(profile)?.into())
+    }
+
     /// Get nostr wallet connect URI
     #[wasm_bindgen]
-    pub fn get_nwc_uri(&self) -> Result<String, MutinyJsError> {
+    pub fn get_nwc_uri(&self, index: u32) -> Result<String, MutinyJsError> {
         self.inner
             .nostr
-            .get_nwc_uri()
+            .get_nwc_uri(index)
             .map_err(|_| MutinyJsError::JsonReadWriteError)
     }
 
