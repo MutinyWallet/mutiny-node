@@ -2,7 +2,7 @@ use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, OutPoint, XOnlyPublicKey};
 use gloo_utils::format::JsValueSerdeExt;
-use lightning_invoice::Invoice;
+use lightning_invoice::{Invoice, InvoiceDescription};
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::labels::Contact as MutinyContact;
@@ -810,6 +810,8 @@ pub struct NwcProfile {
     pub max_single_amt_sats: u64,
     relay: String,
     pub enabled: bool,
+    /// Require approval before sending a payment
+    pub require_approval: bool,
     nwc_uri: String,
 }
 
@@ -844,7 +846,58 @@ impl From<nostr::nwc::NwcProfile> for NwcProfile {
             max_single_amt_sats: value.max_single_amt_sats,
             relay: value.relay,
             enabled: value.enabled,
+            require_approval: value.require_approval,
             nwc_uri: value.nwc_uri,
+        }
+    }
+}
+
+/// An invoice received over Nostr Wallet Connect that is pending approval or rejection
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[wasm_bindgen]
+pub struct PendingNwcInvoice {
+    /// Index of the profile that received the invoice
+    pub index: u32,
+    /// The invoice that awaiting approval
+    invoice: Invoice,
+}
+
+#[wasm_bindgen]
+impl PendingNwcInvoice {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn is_expired(&self) -> bool {
+        self.invoice.would_expire(utils::now())
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn invoice(&self) -> String {
+        self.invoice.to_string()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> String {
+        self.invoice.payment_hash().to_hex()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn invoice_description(&self) -> Option<String> {
+        match self.invoice.description() {
+            InvoiceDescription::Direct(desc) => Some(desc.to_string()),
+            InvoiceDescription::Hash(_) => None,
+        }
+    }
+}
+
+impl From<nostr::nwc::PendingNwcInvoice> for PendingNwcInvoice {
+    fn from(value: nostr::nwc::PendingNwcInvoice) -> Self {
+        PendingNwcInvoice {
+            index: value.index,
+            invoice: value.invoice,
         }
     }
 }

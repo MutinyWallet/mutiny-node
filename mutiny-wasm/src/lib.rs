@@ -1006,6 +1006,47 @@ impl MutinyWallet {
             .map_err(|_| MutinyJsError::JsonReadWriteError)
     }
 
+    /// Lists all pending NWC invoices
+    pub fn get_pending_nwc_invoices(
+        &self,
+    ) -> Result<JsValue /* Vec<PendingNwcInvoice> */, MutinyJsError> {
+        let pending: Vec<PendingNwcInvoice> = self
+            .inner
+            .nostr
+            .get_pending_nwc_invoices()?
+            .into_iter()
+            .map(|i| i.into())
+            .collect();
+
+        Ok(JsValue::from_serde(&pending)?)
+    }
+
+    /// Approves an invoice and sends the payment
+    pub async fn approve_invoice(
+        &self,
+        hash: String,
+        from_node: String,
+    ) -> Result<(), MutinyJsError> {
+        let from_node = PublicKey::from_str(&from_node)?;
+
+        self.inner
+            .nostr
+            .approve_invoice(hash.parse()?, &self.inner.node_manager, &from_node)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Removes an invoice from the pending list, will also remove expired invoices
+    pub async fn deny_invoice(&self, hash: String) -> Result<(), MutinyJsError> {
+        let hash: sha256::Hash = hash
+            .parse()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        self.inner.nostr.deny_invoice(&hash)?;
+
+        Ok(())
+    }
+
     #[wasm_bindgen]
     pub async fn start_nostr_wallet_connect(&self, from_node: String) -> Result<(), MutinyJsError> {
         let from_node = PublicKey::from_str(&from_node)?;
