@@ -10,7 +10,6 @@
 // background file is mostly an LDK copy paste
 mod background;
 
-mod auth;
 mod chain;
 pub mod encrypt;
 pub mod error;
@@ -21,6 +20,7 @@ mod gossip;
 mod keymanager;
 pub mod labels;
 mod ldkstorage;
+mod lnurlauth;
 pub mod logging;
 mod lspclient;
 mod networking;
@@ -46,7 +46,6 @@ use crate::nodemanager::NodeManager;
 use crate::nostr::NostrManager;
 use crate::storage::MutinyStorage;
 use ::nostr::Kind;
-pub use auth::AuthProfile;
 use bip39::Mnemonic;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
@@ -54,6 +53,7 @@ use bitcoin::Network;
 use futures::{pin_mut, select, FutureExt};
 use lightning::util::logger::Logger;
 use lightning::{log_error, log_warn};
+pub use lnurlauth::AuthProfile;
 use nostr_sdk::{Client, RelayPoolNotification};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;

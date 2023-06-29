@@ -1,7 +1,7 @@
-use crate::auth::AuthProfile;
 use crate::encrypt::{decrypt, encrypt};
 use crate::error::{MutinyError, MutinyStorageError};
 use crate::ldkstorage::CHANNEL_MANAGER_KEY;
+use crate::lnurlauth::AuthProfile;
 use crate::nodemanager::NodeStorage;
 use anyhow::anyhow;
 use bdk::chain::{Append, PersistBackend};
