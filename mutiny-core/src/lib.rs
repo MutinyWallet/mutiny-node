@@ -163,6 +163,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     continue;
                 }
 
+                if let Err(e) = nostr.clear_expired_nwc_invoices() {
+                    log_warn!(nm.logger, "Failed to clear expired NWC invoices: {e}");
+                }
+
                 let client = Client::new(&nostr.primary_key);
 
                 #[cfg(target_arch = "wasm32")]
@@ -239,7 +243,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(())
     }
 
-    /// Restore's the mnemonic after deleting the previous state.
+    /// Restores the mnemonic after deleting the previous state.
     ///
     /// Backup the state beforehand. Does not restore lightning data.
     /// Should refresh or restart afterwards. Wallet should be stopped.
