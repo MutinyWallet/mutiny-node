@@ -65,6 +65,7 @@ impl MutinyWallet {
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
+        auth_url: Option<String>,
         do_not_connect_peers: Option<bool>,
     ) -> Result<MutinyWallet, MutinyJsError> {
         utils::set_panic_hook();
@@ -86,6 +87,7 @@ impl MutinyWallet {
             user_esplora_url,
             user_rgs_url,
             lsp_url,
+            auth_url,
         );
 
         if let Some(true) = do_not_connect_peers {
@@ -1115,6 +1117,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1139,6 +1142,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1170,6 +1174,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,

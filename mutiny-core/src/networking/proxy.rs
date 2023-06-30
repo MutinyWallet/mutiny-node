@@ -27,8 +27,8 @@ pub struct WsProxy {
     logger: Arc<MutinyLogger>,
 }
 
-type WsSplit = Arc<Mutex<SplitSink<WebSocket, Message>>>;
-type ReadSplit = Arc<Mutex<SplitStream<WebSocket>>>;
+pub type WsSplit = Arc<Mutex<SplitSink<WebSocket, Message>>>;
+pub type ReadSplit = Arc<Mutex<SplitStream<WebSocket>>>;
 
 impl WsProxy {
     pub async fn new(

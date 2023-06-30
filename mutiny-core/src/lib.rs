@@ -10,6 +10,7 @@
 // background file is mostly an LDK copy paste
 mod background;
 
+mod auth;
 mod chain;
 pub mod encrypt;
 pub mod error;
@@ -67,6 +68,7 @@ pub struct MutinyWalletConfig {
     user_esplora_url: Option<String>,
     user_rgs_url: Option<String>,
     lsp_url: Option<String>,
+    auth_url: Option<String>,
     do_not_connect_peers: bool,
 }
 
@@ -79,6 +81,7 @@ impl MutinyWalletConfig {
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
+        auth_url: Option<String>,
     ) -> Self {
         Self {
             mnemonic,
@@ -88,6 +91,7 @@ impl MutinyWalletConfig {
             user_esplora_url,
             user_rgs_url,
             lsp_url,
+            auth_url,
             do_not_connect_peers: false,
         }
     }
@@ -279,6 +283,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         MutinyWallet::new(storage.clone(), config)
             .await
@@ -298,6 +303,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Regtest),
+            None,
             None,
             None,
             None,
@@ -327,6 +333,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Regtest),
+            None,
             None,
             None,
             None,
@@ -360,6 +367,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let mw = MutinyWallet::new(storage.clone(), config)
             .await
@@ -375,6 +383,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Regtest),
+            None,
             None,
             None,
             None,

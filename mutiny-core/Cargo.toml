@@ -38,6 +38,7 @@ nostr = { version = "0.22.0-bitcoin-v0.29", default-features = false, features =
 nostr-sdk = { version = "0.22.0-bitcoin-v0.29", default-features = false }
 cbc = { version = "0.1", features = ["alloc"] }
 aes = { version = "0.8" }
+jwt-compact = { version = "0.8.0-beta.1", features = ["es256k"] }
 
 base64 = "0.13.0"
 pbkdf2 = "0.11"
@@ -71,6 +72,7 @@ getrandom = { version = "0.2", features = ["js"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["rt"] }
+tokio-tungstenite = { version = "0.19.0", features = ["native-tls"] }
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = true
