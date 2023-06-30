@@ -7,10 +7,12 @@ use crate::storage::MutinyStorage;
 use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, Signing};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
+use futures_util::lock::Mutex;
 use nostr::key::SecretKey;
 use nostr::prelude::encrypt;
 use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
 use nostr_sdk::Client;
+use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
@@ -30,6 +32,8 @@ pub struct NostrManager<S: MutinyStorage> {
     /// Separate profiles for each nostr wallet connect string
     pub(crate) nwc: Arc<RwLock<Vec<NostrWalletConnect>>>,
     pub storage: S,
+    /// Lock for pending nwc invoices
+    pending_nwc_lock: Arc<Mutex<()>>,
 }
 
 impl<S: MutinyStorage> NostrManager<S> {
@@ -245,6 +249,9 @@ impl<S: MutinyStorage> NostrManager<S> {
             .await
             .map_err(|e| MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}")))?;
 
+        // get lock for writing
+        self.pending_nwc_lock.lock().await;
+
         // get from storage again, in case it was updated
         let mut pending: Vec<PendingNwcInvoice> = self
             .storage
@@ -259,7 +266,10 @@ impl<S: MutinyStorage> NostrManager<S> {
     }
 
     /// Removes an invoice from the pending list, will also remove expired invoices
-    pub fn deny_invoice(&self, hash: &sha256::Hash) -> Result<(), MutinyError> {
+    pub async fn deny_invoice(&self, hash: &sha256::Hash) -> Result<(), MutinyError> {
+        // wait for lock
+        self.pending_nwc_lock.lock().await;
+
         let mut invoices: Vec<PendingNwcInvoice> = self
             .storage
             .get_data(PENDING_NWC_EVENTS_KEY)?
@@ -306,7 +316,12 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         if let Some(nwc) = nwc {
             let event = nwc
-                .handle_nwc_request(event, node_manager, from_node)
+                .handle_nwc_request(
+                    event,
+                    node_manager,
+                    from_node,
+                    self.pending_nwc_lock.deref(),
+                )
                 .await?;
             Ok(event)
         } else {
@@ -385,6 +400,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             primary_key,
             nwc: Arc::new(RwLock::new(nwc)),
             storage,
+            pending_nwc_lock: Arc::new(Mutex::new(())),
         })
     }
 }
@@ -396,6 +412,7 @@ mod test {
     use bip39::Mnemonic;
     use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Network;
+    use futures::executor::block_on;
     use lightning_invoice::Invoice;
     use nostr::key::XOnlyPublicKey;
     use std::str::FromStr;
@@ -512,9 +529,7 @@ mod test {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].invoice, inv.invoice);
 
-        nostr_manager
-            .deny_invoice(inv.invoice.payment_hash())
-            .unwrap();
+        block_on(nostr_manager.deny_invoice(inv.invoice.payment_hash())).unwrap();
 
         let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
         assert_eq!(pending.len(), 0);

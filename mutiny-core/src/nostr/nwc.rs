@@ -6,6 +6,7 @@ use crate::utils;
 use anyhow::anyhow;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, Signing};
 use bitcoin::util::bip32::ExtendedPrivKey;
+use futures_util::lock::Mutex;
 use lightning::util::logger::Logger;
 use lightning::{log_error, log_warn};
 use lightning_invoice::Invoice;
@@ -140,6 +141,7 @@ impl NostrWalletConnect {
         event: Event,
         node_manager: &NodeManager<S>,
         from_node: &PublicKey,
+        pending_nwc_lock: &Mutex<()>,
     ) -> anyhow::Result<Option<Event>> {
         let client_pubkey = self.client_key.public_key();
         if self.profile.enabled
@@ -172,6 +174,7 @@ impl NostrWalletConnect {
                     event_id: event.id,
                     pubkey: event.pubkey,
                 };
+                pending_nwc_lock.lock().await;
 
                 let mut current: Vec<PendingNwcInvoice> = node_manager
                     .storage

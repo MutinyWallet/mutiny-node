@@ -1042,7 +1042,7 @@ impl MutinyWallet {
         let hash: sha256::Hash = hash
             .parse()
             .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        self.inner.nostr.deny_invoice(&hash)?;
+        self.inner.nostr.deny_invoice(&hash).await?;
 
         Ok(())
     }
