@@ -2,8 +2,6 @@ use anyhow::anyhow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
-use crate::event::{HTLCStatus, PaymentInfo};
-use crate::gossip::*;
 use crate::labels::LabelStorage;
 use crate::logging::LOGGING_KEY;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
@@ -13,6 +11,7 @@ use crate::scb::{
 };
 use crate::storage::{MutinyStorage, KEYCHAIN_STORE_KEY};
 use crate::utils::sleep;
+use crate::{auth::MutinyAuthClient, gossip::*};
 use crate::{
     chain::MutinyChain,
     error::MutinyError,
@@ -27,6 +26,10 @@ use crate::{
     utils,
 };
 use crate::{
+    event::{HTLCStatus, PaymentInfo},
+    lnurlauth::make_lnurl_auth_connection,
+};
+use crate::{
     lnurlauth::{AuthManager, AuthProfile},
     MutinyWalletConfig,
 };
@@ -35,7 +38,7 @@ use bdk::{wallet::AddressIndex, LocalUtxo};
 use bdk_esplora::esplora_client::AsyncClient;
 use bip39::Mnemonic;
 use bitcoin::blockdata::script;
-use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::hashes::hex::ToHex;
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{rand, PublicKey, Secp256k1, SecretKey};
 use bitcoin::util::bip32::{DerivationPath, ExtendedPrivKey};
@@ -62,7 +65,6 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::str::FromStr;
-use url::Url;
 use uuid::Uuid;
 
 const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
@@ -504,8 +506,10 @@ pub struct NodeManager<S: MutinyStorage> {
     pub(crate) node_storage: Mutex<NodeStorage>,
     pub(crate) nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node<S>>>>>,
     auth: AuthManager<S>,
-    lnurl_client: LnUrlClient,
+    lnurl_client: Arc<LnUrlClient>,
     pub(crate) lsp_clients: Vec<LspClient>,
+    #[allow(dead_code)]
+    pub(crate) auth_client: Option<Arc<MutinyAuthClient<S>>>,
     pub(crate) logger: Arc<MutinyLogger>,
     bitcoin_price_cache: Arc<Mutex<Option<(f32, Duration)>>>,
     do_not_connect_peers: bool,
@@ -663,9 +667,23 @@ impl<S: MutinyStorage> NodeManager<S> {
         // Create default profile if it doesn't exist
         auth.create_init()?;
 
-        let lnurl_client = lnurl::Builder::default()
-            .build_async()
-            .expect("failed to make lnurl client");
+        let lnurl_client = Arc::new(
+            lnurl::Builder::default()
+                .build_async()
+                .expect("failed to make lnurl client"),
+        );
+
+        let auth_client = if let Some(auth_url) = c.auth_url {
+            let a = Arc::new(MutinyAuthClient::new(
+                auth.clone(),
+                lnurl_client.clone(),
+                logger.clone(),
+                auth_url,
+            ));
+            Some(a)
+        } else {
+            None
+        };
 
         let nm = NodeManager {
             stop,
@@ -685,6 +703,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             auth,
             lnurl_client,
             lsp_clients,
+            auth_client,
             logger,
             bitcoin_price_cache: Arc::new(Mutex::new(None)),
             do_not_connect_peers: c.do_not_connect_peers,
@@ -1629,36 +1648,14 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Authenticates with a LNURL-auth for the given profile.
     pub async fn lnurl_auth(&self, profile_index: usize, lnurl: LnUrl) -> Result<(), MutinyError> {
-        let url = Url::parse(&lnurl.url)?;
-        let query_pairs: HashMap<String, String> = url
-            .query_pairs()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-
-        let k1 = query_pairs.get("k1").ok_or(MutinyError::LnUrlFailure)?;
-        let k1: [u8; 32] = FromHex::from_hex(k1).map_err(|_| MutinyError::LnUrlFailure)?;
-        let (sig, key) = self.auth.sign(profile_index, url.clone(), &k1)?;
-
-        let response = self.lnurl_client.lnurl_auth(lnurl, sig, key).await;
-        match response {
-            Ok(Response::Ok { .. }) => {
-                // don't fail if we just can't save the service
-                if let Err(e) = self.auth.add_used_service(profile_index, url) {
-                    log_error!(self.logger, "Failed to save used lnurl auth service: {e}");
-                }
-
-                log_info!(self.logger, "LNURL auth successful!");
-                Ok(())
-            }
-            Ok(Response::Error { reason }) => {
-                log_error!(self.logger, "LNURL auth failed: {reason}");
-                Err(MutinyError::LnUrlFailure)
-            }
-            Err(e) => {
-                log_error!(self.logger, "LNURL auth failed: {e}");
-                Err(MutinyError::LnUrlFailure)
-            }
-        }
+        make_lnurl_auth_connection(
+            self.auth.clone(),
+            self.lnurl_client.clone(),
+            lnurl,
+            profile_index,
+            self.logger.clone(),
+        )
+        .await
     }
 
     /// Gets an invoice from the node manager.
@@ -2388,6 +2385,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         NodeManager::new(c, storage.clone())
             .await
@@ -2409,6 +2407,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let nm = NodeManager::new(c, ()).await.unwrap();
 
@@ -2427,6 +2426,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Regtest),
+            None,
             None,
             None,
             None,
@@ -2471,6 +2471,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Signet),
+            None,
             None,
             None,
             None,

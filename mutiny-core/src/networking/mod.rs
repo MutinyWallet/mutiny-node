@@ -1,4 +1,5 @@
 pub mod socket;
+pub mod websocket;
 
 #[cfg(target_arch = "wasm32")]
 pub mod proxy;

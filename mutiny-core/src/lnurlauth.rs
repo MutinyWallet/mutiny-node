@@ -1,8 +1,14 @@
-use crate::error::MutinyError;
 use crate::storage::MutinyStorage;
+use crate::{error::MutinyError, logging::MutinyLogger};
 use anyhow::anyhow;
+use bdk_chain::collections::HashMap;
+use bitcoin::hashes::hex::FromHex;
 use bitcoin::secp256k1::{ecdsa, All, Message, PublicKey, Secp256k1, SecretKey};
 use bitcoin::util::bip32::{DerivationPath, ExtendedPrivKey};
+use lightning::util::logger::*;
+use lightning::{log_error, log_info};
+use lnurl::lnurl::LnUrl;
+use lnurl::{AsyncClient as LnUrlClient, Response};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
@@ -181,26 +187,52 @@ impl<S: MutinyStorage> AuthManager<S> {
     }
 }
 
+pub(crate) async fn make_lnurl_auth_connection<S: MutinyStorage>(
+    auth: AuthManager<S>,
+    lnurl_client: Arc<LnUrlClient>,
+    lnurl: LnUrl,
+    profile_index: usize,
+    logger: Arc<MutinyLogger>,
+) -> Result<(), MutinyError> {
+    let url = Url::parse(&lnurl.url)?;
+    let query_pairs: HashMap<String, String> = url
+        .query_pairs()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+    let k1 = query_pairs.get("k1").ok_or(MutinyError::LnUrlFailure)?;
+    let k1: [u8; 32] = FromHex::from_hex(k1).map_err(|_| MutinyError::LnUrlFailure)?;
+    let (sig, key) = auth.sign(profile_index, url.clone(), &k1)?;
+
+    let response = lnurl_client.lnurl_auth(lnurl, sig, key).await;
+    match response {
+        Ok(Response::Ok { .. }) => {
+            // don't fail if we just can't save the service
+            if let Err(e) = auth.add_used_service(profile_index, url) {
+                log_error!(logger, "Failed to save used lnurl auth service: {e}");
+            }
+
+            log_info!(logger, "LNURL auth successful!");
+            Ok(())
+        }
+        Ok(Response::Error { reason }) => {
+            log_error!(logger, "LNURL auth failed: {reason}");
+            Err(MutinyError::LnUrlFailure)
+        }
+        Err(e) => {
+            log_error!(logger, "LNURL auth failed: {e}");
+            Err(MutinyError::LnUrlFailure)
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use crate::keymanager::generate_seed;
-    use crate::storage::MemoryStorage;
     use crate::test_utils::*;
-    use bitcoin::Network;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
     wasm_bindgen_test_configure!(run_in_browser);
 
     use super::*;
-
-    fn create_manager() -> AuthManager<MemoryStorage> {
-        let storage = MemoryStorage::default();
-        let mnemonic = generate_seed(12).unwrap();
-        let seed = mnemonic.to_seed("");
-        let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &seed).unwrap();
-        let auth = AuthManager::new(xprivkey, storage).unwrap();
-        auth.create_init().unwrap();
-        auth
-    }
 
     #[test]
     async fn test_create_signature() {
