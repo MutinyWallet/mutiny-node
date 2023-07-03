@@ -452,6 +452,13 @@ impl<S: MutinyStorage> EventHandler<S> {
                 reason,
                 user_channel_id,
             } => {
+                // if we still have channel open params, then it was just a failed channel open
+                // we should not persist this as a closed channel and just delete the channel open params
+                if let Ok(Some(_)) = self.persister.get_channel_open_params(user_channel_id) {
+                    let _ = self.persister.delete_channel_open_params(user_channel_id);
+                    return;
+                };
+
                 log_debug!(
                     self.logger,
                     "EVENT: Channel {} closed due to: {:?}",
