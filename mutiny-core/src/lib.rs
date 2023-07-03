@@ -274,7 +274,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Should refresh or restart afterwards. Wallet should be stopped.
     pub async fn restore_mnemonic(mut storage: S, m: Mnemonic) -> Result<(), MutinyError> {
         storage.stop();
-        S::clear();
+        S::clear().await?;
         storage.start().await?;
         storage.insert_mnemonic(m)?;
         Ok(())
