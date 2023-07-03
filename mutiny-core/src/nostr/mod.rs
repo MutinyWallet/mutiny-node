@@ -43,6 +43,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             .read()
             .unwrap()
             .iter()
+            .filter(|x| x.profile.enabled)
             .map(|x| x.profile.relay.clone())
             .collect();
 
@@ -58,6 +59,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             .read()
             .unwrap()
             .iter()
+            .filter(|x| x.profile.enabled)
             .map(|nwc| nwc.create_nwc_filter())
             .collect()
     }

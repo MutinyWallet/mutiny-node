@@ -120,6 +120,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     ) -> Result<MutinyWallet<S>, MutinyError> {
         let node_manager = Arc::new(NodeManager::new(config.clone(), storage.clone()).await?);
 
+        // if we don't have any nodes, create one
+        let first_node = {
+            match node_manager.list_nodes().await?.pop() {
+                Some(node) => node,
+                None => node_manager.new_node().await?.pubkey,
+            }
+        };
+
         NodeManager::start_sync(node_manager.clone());
 
         // create nostr manager
@@ -127,12 +135,17 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let xprivkey = ExtendedPrivKey::new_master(node_manager.get_network(), &seed)?;
         let nostr = Arc::new(NostrManager::from_mnemonic(xprivkey, storage.clone())?);
 
-        Ok(Self {
+        let mw = Self {
             config,
             storage,
             node_manager,
             nostr,
-        })
+        };
+
+        // start the nostr wallet connect background process
+        mw.start_nostr_wallet_connect(first_node).await;
+
+        Ok(mw)
     }
 
     /// Starts up all the nodes again.
@@ -147,7 +160,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Starts a background process that will watch for nostr wallet connect events
-    pub async fn start_nostr_wallet_connect(&self, from_node: PublicKey) {
+    pub(crate) async fn start_nostr_wallet_connect(&self, from_node: PublicKey) {
         let nostr = self.nostr.clone();
         let nm = self.node_manager.clone();
         utils::spawn(async move {
@@ -155,6 +168,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 if nm.stop.load(Ordering::Relaxed) {
                     break;
                 };
+
+                // if we have no relays, then there are no nwc profiles enabled
+                // wait 10 seconds and see if we do again
+                let relays = nostr.get_relays();
+                if relays.is_empty() {
+                    utils::sleep(10_000).await;
+                    continue;
+                }
 
                 // check we have lightning channels ready
                 if nm
@@ -347,13 +368,13 @@ mod tests {
             .expect("mutiny wallet should initialize");
         assert!(NodeManager::has_node_manager(storage));
 
-        assert!(mw.node_manager.list_nodes().await.unwrap().is_empty());
+        assert_eq!(mw.node_manager.list_nodes().await.unwrap().len(), 1);
         assert!(mw.node_manager.new_node().await.is_ok());
-        assert!(!mw.node_manager.list_nodes().await.unwrap().is_empty());
+        assert_eq!(mw.node_manager.list_nodes().await.unwrap().len(), 2);
 
         assert!(mw.stop().await.is_ok());
         assert!(mw.start().await.is_ok());
-        assert!(!mw.node_manager.list_nodes().await.unwrap().is_empty());
+        assert_eq!(mw.node_manager.list_nodes().await.unwrap().len(), 2);
     }
 
     #[test]
@@ -402,11 +423,12 @@ mod tests {
         mw2.stop().await.expect("should stop");
         drop(mw2);
 
-        MutinyWallet::restore_mnemonic(storage2.clone(), seed.clone())
+        let storage3 = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        MutinyWallet::restore_mnemonic(storage3.clone(), seed.clone())
             .await
             .expect("mutiny wallet should restore");
 
-        let mw2 = MutinyWallet::new(storage2, config2)
+        let mw2 = MutinyWallet::new(storage3, config2)
             .await
             .expect("mutiny wallet should initialize");
         let restored_seed = mw2.node_manager.show_seed();
