@@ -15,6 +15,7 @@ use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
 use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::str::FromStr;
 
 pub(crate) const PENDING_NWC_EVENTS_KEY: &str = "pending_nwc_events";
@@ -105,7 +106,7 @@ impl NostrWalletConnect {
         node_manager: &NodeManager<S>,
         from_node: &PublicKey,
         invoice: &Invoice,
-    ) -> Response {
+    ) -> Result<Response, MutinyError> {
         // todo we could get the author of the event we zapping and use that as the label
         let labels = vec![self.profile.name.clone()];
         match node_manager
@@ -115,22 +116,15 @@ impl NostrWalletConnect {
             Ok(inv) => {
                 // preimage should be set after a successful payment
                 let preimage = inv.preimage.expect("preimage not set");
-                Response {
+                Ok(Response {
                     result_type: Method::PayInvoice,
                     error: None,
                     result: Some(ResponseResult { preimage }),
-                }
+                })
             }
             Err(e) => {
                 log_error!(node_manager.logger, "failed to pay invoice: {e}");
-                Response {
-                    result_type: Method::PayInvoice,
-                    error: Some(NIP47Error {
-                        code: ErrorCode::InsufficantBalance,
-                        message: format!("Failed to pay invoice: {e}"),
-                    }),
-                    result: None,
-                }
+                Err(e)
             }
         }
     }
@@ -182,6 +176,8 @@ impl NostrWalletConnect {
                     .unwrap_or_default();
 
                 current.push(pending);
+                current.sort();
+                current.dedup();
 
                 node_manager
                     .storage
@@ -201,8 +197,20 @@ impl NostrWalletConnect {
 
                 // verify amount is under our limit
                 let content = if msats <= self.profile.max_single_amt_sats * 1_000 {
-                    self.pay_nwc_invoice(node_manager, from_node, &invoice)
+                    match self
+                        .pay_nwc_invoice(node_manager, from_node, &invoice)
                         .await
+                    {
+                        Ok(resp) => resp,
+                        Err(e) => Response {
+                            result_type: Method::PayInvoice,
+                            error: Some(NIP47Error {
+                                code: ErrorCode::InsufficantBalance,
+                                message: format!("Failed to pay invoice: {e}"),
+                            }),
+                            result: None,
+                        },
+                    }
                 } else {
                     log_warn!(
                         node_manager.logger,
@@ -285,6 +293,20 @@ pub struct PendingNwcInvoice {
     pub event_id: EventId,
     /// The nostr pubkey of the request
     pub pubkey: XOnlyPublicKey,
+}
+
+impl PartialOrd for PendingNwcInvoice {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.invoice
+            .to_string()
+            .partial_cmp(&other.invoice.to_string())
+    }
+}
+
+impl Ord for PendingNwcInvoice {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.invoice.to_string().cmp(&other.invoice.to_string())
+    }
 }
 
 impl PendingNwcInvoice {

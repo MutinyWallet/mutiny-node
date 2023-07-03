@@ -865,6 +865,8 @@ pub struct PendingNwcInvoice {
     pub amount_sats: u64,
     /// The description of the invoice
     pub invoice_description: Option<String>,
+    /// Invoice expire time in seconds since epoch
+    pub expiry: u64,
 }
 
 impl From<nostr::nwc::PendingNwcInvoice> for PendingNwcInvoice {
@@ -874,12 +876,16 @@ impl From<nostr::nwc::PendingNwcInvoice> for PendingNwcInvoice {
             InvoiceDescription::Hash(_) => None,
         };
 
+        let timestamp = value.invoice.duration_since_epoch().as_secs();
+        let expiry = timestamp + value.invoice.expiry_time().as_secs();
+
         PendingNwcInvoice {
             index: value.index,
             invoice: value.invoice.to_string(),
             id: value.invoice.payment_hash().to_hex(),
             amount_sats: value.invoice.amount_milli_satoshis().unwrap_or_default() / 1_000,
             invoice_description,
+            expiry,
         }
     }
 }

@@ -231,7 +231,7 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let resp = nwc
             .pay_nwc_invoice(node_manager, from_node, &inv.invoice)
-            .await;
+            .await?;
 
         let encrypted = encrypt(
             &nwc.server_key.secret_key().unwrap(),
