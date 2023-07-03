@@ -854,50 +854,32 @@ impl From<nostr::nwc::NwcProfile> for NwcProfile {
 
 /// An invoice received over Nostr Wallet Connect that is pending approval or rejection
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[wasm_bindgen]
 pub struct PendingNwcInvoice {
     /// Index of the profile that received the invoice
     pub index: u32,
     /// The invoice that awaiting approval
-    invoice: Invoice,
-}
-
-#[wasm_bindgen]
-impl PendingNwcInvoice {
-    #[wasm_bindgen(getter)]
-    pub fn value(&self) -> JsValue {
-        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn is_expired(&self) -> bool {
-        self.invoice.would_expire(utils::now())
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn invoice(&self) -> String {
-        self.invoice.to_string()
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn id(&self) -> String {
-        self.invoice.payment_hash().to_hex()
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn invoice_description(&self) -> Option<String> {
-        match self.invoice.description() {
-            InvoiceDescription::Direct(desc) => Some(desc.to_string()),
-            InvoiceDescription::Hash(_) => None,
-        }
-    }
+    pub invoice: String,
+    /// The id of the invoice, this is the payment hash
+    pub id: String,
+    /// The amount of sats that the invoice is for
+    pub amount_sats: u64,
+    /// The description of the invoice
+    pub invoice_description: Option<String>,
 }
 
 impl From<nostr::nwc::PendingNwcInvoice> for PendingNwcInvoice {
     fn from(value: nostr::nwc::PendingNwcInvoice) -> Self {
+        let invoice_description = match value.invoice.description() {
+            InvoiceDescription::Direct(desc) => Some(desc.to_string()),
+            InvoiceDescription::Hash(_) => None,
+        };
+
         PendingNwcInvoice {
             index: value.index,
-            invoice: value.invoice,
+            invoice: value.invoice.to_string(),
+            id: value.invoice.payment_hash().to_hex(),
+            amount_sats: value.invoice.amount_milli_satoshis().unwrap_or_default() / 1_000,
+            invoice_description,
         }
     }
 }
