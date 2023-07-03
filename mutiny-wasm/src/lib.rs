@@ -1049,14 +1049,6 @@ impl MutinyWallet {
         Ok(())
     }
 
-    #[wasm_bindgen]
-    pub async fn start_nostr_wallet_connect(&self, from_node: String) -> Result<(), MutinyJsError> {
-        let from_node = PublicKey::from_str(&from_node)?;
-        self.inner.start_nostr_wallet_connect(from_node).await;
-
-        Ok(())
-    }
-
     /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.
     #[wasm_bindgen]
     pub async fn reset_router(&self) -> Result<(), MutinyJsError> {
