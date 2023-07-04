@@ -465,21 +465,36 @@ impl<S: MutinyStorage> Node<S> {
         });
 
         if !do_not_connect_peers {
-            start_reconnection_handling(
-                &persister.storage,
-                pubkey,
-                #[cfg(target_arch = "wasm32")]
-                websocket_proxy_addr.clone(),
-                peer_man.clone(),
-                fee_estimator.clone(),
-                &logger,
-                uuid.clone(),
-                &lsp_client,
-                stop.clone(),
-                stopped_components.clone(),
-                network == Network::Regtest,
-            )
-            .await?;
+            #[cfg(target_arch = "wasm32")]
+            let reconnection_proxy_addr = websocket_proxy_addr.clone();
+
+            let reconnection_storage = persister.storage.clone();
+            let reconnection_pubkey = pubkey;
+            let reconnection_peer_man = peer_man.clone();
+            let reconnection_fee = fee_estimator.clone();
+            let reconnection_logger = logger.clone();
+            let reconnection_uuid = uuid.clone();
+            let reconnection_lsp_client = lsp_client.clone();
+            let reconnection_stop = stop.clone();
+            let reconnection_stopped_comp = stopped_components.clone();
+            reconnection_stopped_comp.try_write()?.push(false);
+            utils::spawn(async move {
+                start_reconnection_handling(
+                    &reconnection_storage,
+                    reconnection_pubkey,
+                    #[cfg(target_arch = "wasm32")]
+                    reconnection_proxy_addr,
+                    reconnection_peer_man,
+                    reconnection_fee,
+                    &reconnection_logger,
+                    reconnection_uuid,
+                    &reconnection_lsp_client,
+                    reconnection_stop,
+                    reconnection_stopped_comp,
+                    network == Network::Regtest,
+                )
+                .await;
+            });
         }
 
         Ok(Node {
@@ -1447,13 +1462,13 @@ async fn start_reconnection_handling<S: MutinyStorage>(
     stop: Arc<AtomicBool>,
     stopped_components: Arc<RwLock<Vec<bool>>>,
     skip_fee_estimates: bool,
-) -> Result<(), MutinyError> {
+) {
     // wait for fee estimates sync to finish, it can cause issues if we try to connect before
     // we have fee estimates
     if !skip_fee_estimates {
         loop {
             if stop.load(Ordering::Relaxed) {
-                return Err(MutinyError::NotRunning);
+                return;
             }
             // make sure we have fee estimates and they are not empty
             if storage
@@ -1519,7 +1534,6 @@ async fn start_reconnection_handling<S: MutinyStorage>(
     let connect_fee_estimator = fee_estimator.clone();
     let connect_logger = logger.clone();
     let connect_storage = storage.clone();
-    stopped_components.try_write()?.push(false);
     utils::spawn(async move {
         // hashMap to store backoff times for each pubkey
         let mut backoff_times = HashMap::new();
@@ -1611,7 +1625,6 @@ async fn start_reconnection_handling<S: MutinyStorage>(
             }
         }
     });
-    Ok(())
 }
 
 fn stop_component(stopped_components: &Arc<RwLock<Vec<bool>>>) {
