@@ -2,7 +2,7 @@ cargo-features = ["per-package-target"]
 
 [package]
 name = "mutiny-core"
-version = "0.3.15"
+version = "0.3.16"
 edition = "2021"
 authors = ["Tony Giorgio <tony@mutinywallet.com>", "benthecarman <ben@mutinywallet.com>"]
 description = "The core SDK for the mutiny node"
