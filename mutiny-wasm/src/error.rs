@@ -46,8 +46,15 @@ pub enum MutinyJsError {
     /// Failed to call on the given LNURL
     #[error("Failed to call on the given LNURL.")]
     LnUrlFailure,
-    #[error("Failed to connect to LSP.")]
-    LspFailure,
+    /// Could not make a request to the LSP.
+    #[error("Failed to make a request to the LSP.")]
+    LspGenericError,
+    /// LSP indicated it could not fund the channel requested.
+    #[error("Failed to request channel from LSP due to funding error.")]
+    LspFundingError,
+    /// LSP indicated it was not connected to the client node.
+    #[error("Failed to have a connection to the LSP node.")]
+    LspConnectionError,
     /// Called incorrect lnurl function, eg calling withdraw on a pay lnurl
     #[error("Called incorrect lnurl function.")]
     IncorrectLnUrlFunction,
@@ -133,7 +140,9 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::ReserveAmountError => MutinyJsError::ReserveAmountError,
             MutinyError::InsufficientBalance => MutinyJsError::InsufficientBalance,
             MutinyError::LnUrlFailure => MutinyJsError::LnUrlFailure,
-            MutinyError::LspFailure => MutinyJsError::LspFailure,
+            MutinyError::LspGenericError => MutinyJsError::LspGenericError,
+            MutinyError::LspFundingError => MutinyJsError::LspFundingError,
+            MutinyError::LspConnectionError => MutinyJsError::LspConnectionError,
             MutinyError::RoutingFailed => MutinyJsError::RoutingFailed,
             MutinyError::PeerInfoParseFailed => MutinyJsError::PeerInfoParseFailed,
             MutinyError::ChannelCreationFailed => MutinyJsError::ChannelCreationFailed,

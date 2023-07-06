@@ -63,21 +63,27 @@ pub struct FeeResponse {
     pub fee_amount_msat: u64,
 }
 
+#[derive(Deserialize, Debug)]
+struct ErrorResponse {
+    error: String,
+    message: String,
+}
+
 const GET_INFO_PATH: &str = "/api/v1/info";
 const PROPOSAL_PATH: &str = "/api/v1/proposal";
 const FEE_PATH: &str = "/api/v1/fee";
 
 impl LspClient {
-    pub async fn new(url: &str) -> anyhow::Result<Self> {
+    pub async fn new(url: &str) -> Result<Self, MutinyError> {
         let http_client = Client::new();
         let get_info_response: GetInfoResponse = http_client
             .get(format!("{}{}", url, GET_INFO_PATH))
             .send()
             .await
-            .map_err(|_| MutinyError::LspFailure)?
+            .map_err(|_| MutinyError::LspGenericError)?
             .json()
             .await
-            .map_err(|_| MutinyError::LspFailure)?;
+            .map_err(|_| MutinyError::LspGenericError)?;
 
         let connection_string = get_info_response
             .connection_methods
@@ -114,38 +120,63 @@ impl LspClient {
         })
     }
 
-    pub(crate) async fn get_lsp_invoice(&self, bolt11: String) -> anyhow::Result<String> {
+    pub(crate) async fn get_lsp_invoice(&self, bolt11: String) -> Result<String, MutinyError> {
         let payload = ProposalRequest {
             bolt11,
             host: None,
             port: None,
         };
 
-        let proposal_response: ProposalResponse = self
+        let response: reqwest::Response = self
             .http_client
             .post(format!("{}{}", &self.url, PROPOSAL_PATH))
             .json(&payload)
             .send()
             .await
-            .map_err(|_| MutinyError::LspFailure)?
-            .json()
-            .await
-            .map_err(|_| MutinyError::LspFailure)?;
+            .map_err(|_| MutinyError::LspGenericError)?;
 
-        Ok(proposal_response.jit_bolt11)
+        if response.status().as_u16() == 200 {
+            let proposal_response: ProposalResponse = response
+                .json()
+                .await
+                .map_err(|_| MutinyError::LspGenericError)?;
+
+            return Ok(proposal_response.jit_bolt11);
+        } else {
+            // If it's not a 200 status, copy the response body to a string and try to parse as ErrorResponse
+            let response_body = response
+                .text()
+                .await
+                .map_err(|_| MutinyError::LspGenericError)?;
+
+            if let Ok(error_body) = serde_json::from_str::<ErrorResponse>(&response_body) {
+                if error_body.error == "Internal Server Error" {
+                    if error_body.message == "Cannot fund new channel at this time" {
+                        return Err(MutinyError::LspFundingError);
+                    } else if error_body.message.starts_with("Failed to connect to peer") {
+                        return Err(MutinyError::LspConnectionError);
+                    }
+                }
+            }
+        }
+
+        Err(MutinyError::LspGenericError)
     }
 
-    pub(crate) async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> anyhow::Result<u64> {
+    pub(crate) async fn get_lsp_fee_msat(
+        &self,
+        fee_request: FeeRequest,
+    ) -> Result<u64, MutinyError> {
         let fee_response: FeeResponse = self
             .http_client
             .post(format!("{}{}", &self.url, FEE_PATH))
             .json(&fee_request)
             .send()
             .await
-            .map_err(|_| MutinyError::LspFailure)?
+            .map_err(|_| MutinyError::LspGenericError)?
             .json()
             .await
-            .map_err(|_| MutinyError::LspFailure)?;
+            .map_err(|_| MutinyError::LspGenericError)?;
 
         Ok(fee_response.fee_amount_msat)
     }

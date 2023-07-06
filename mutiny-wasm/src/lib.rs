@@ -168,6 +168,27 @@ impl MutinyWallet {
     }
 
     /// Creates a BIP 21 invoice. This creates a new address and a lightning invoice.
+    /// The lightning invoice may return errors related to the LSP. Check the error and
+    /// fallback to `get_new_address` and warn the user that Lightning is not available.
+    ///
+    ///
+    /// Errors that might be returned include:
+    ///
+    /// - [`MutinyJsError::LspGenericError`]: This is returned for various reasons, including if a
+    ///   request to the LSP server fails for any reason, or if the server returns
+    ///   a status other than 500 that can't be parsed into a `ProposalResponse`.
+    ///
+    /// - [`MutinyJsError::LspFundingError`]: Returned if the LSP server returns an error with
+    ///   a status of 500, indicating an "Internal Server Error", and a message
+    ///   stating "Cannot fund new channel at this time". This means that the LSP cannot support
+    ///   a new channel at this time.
+    ///
+    /// - [`MutinyJsError::LspConnectionError`]: Returned if the LSP server returns an error with
+    ///   a status of 500, indicating an "Internal Server Error", and a message that starts with
+    ///   "Failed to connect to peer". This means that the LSP is not connected to our node.
+    ///
+    /// If the server returns a status of 500 with a different error message,
+    /// a [`MutinyJsError::LspGenericError`] is returned.
     #[wasm_bindgen]
     pub async fn create_bip21(
         &self,
