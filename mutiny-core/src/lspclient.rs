@@ -135,15 +135,16 @@ impl LspClient {
             .await
             .map_err(|_| MutinyError::LspGenericError)?;
 
-        if response.status().as_u16() == 200 {
+        let status = response.status().as_u16();
+        if (200..300).contains(&status) {
             let proposal_response: ProposalResponse = response
                 .json()
                 .await
                 .map_err(|_| MutinyError::LspGenericError)?;
 
             return Ok(proposal_response.jit_bolt11);
-        } else {
-            // If it's not a 200 status, copy the response body to a string and try to parse as ErrorResponse
+        } else if response.status().as_u16() >= 400 {
+            // If it's not OK, copy the response body to a string and try to parse as ErrorResponse
             let response_body = response
                 .text()
                 .await
