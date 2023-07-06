@@ -24,15 +24,14 @@ extern crate lightning_rapid_gossip_sync;
 use lightning::chain;
 use lightning::chain::chaininterface::{BroadcasterInterface, FeeEstimator};
 use lightning::chain::chainmonitor::{ChainMonitor, Persist};
-use lightning::chain::keysinterface::{EntropySource, NodeSigner, SignerProvider};
 use lightning::events::{Event, PathFailure};
 use lightning::ln::channelmanager::ChannelManager;
-use lightning::ln::msgs::{ChannelMessageHandler, OnionMessageHandler, RoutingMessageHandler};
-use lightning::ln::peer_handler::{CustomMessageHandler, PeerManager, SocketDescriptor};
+use lightning::ln::peer_handler::APeerManager;
 use lightning::routing::gossip::{NetworkGraph, P2PGossipSync};
 use lightning::routing::router::Router;
 use lightning::routing::scoring::{Score, WriteableScore};
 use lightning::routing::utxo::UtxoLookup;
+use lightning::sign::{EntropySource, NodeSigner, SignerProvider};
 use lightning::util::logger::Logger;
 use lightning::util::persist::Persister;
 use lightning_rapid_gossip_sync::RapidGossipSync;
@@ -59,7 +58,7 @@ const PING_TIMER: u64 = 1;
 const NETWORK_PRUNE_TIMER: u64 = 60 * 60;
 
 #[cfg(not(test))]
-const SCORER_PERSIST_TIMER: u64 = 30;
+const SCORER_PERSIST_TIMER: u64 = 60 * 60;
 #[cfg(test)]
 const SCORER_PERSIST_TIMER: u64 = 1;
 
@@ -165,14 +164,7 @@ impl<
         R: Deref<Target = RapidGossipSync<G, L>>,
         G: Deref<Target = NetworkGraph<L>>,
         L: Deref,
-    >
-    GossipSync<
-        &P2PGossipSync<G, &'a (dyn UtxoLookup + Send + Sync), L>,
-        R,
-        G,
-        &'a (dyn UtxoLookup + Send + Sync),
-        L,
-    >
+    > GossipSync<&P2PGossipSync<G, &'a (dyn UtxoLookup), L>, R, G, &'a (dyn UtxoLookup), L>
 where
     L::Target: Logger,
 {
@@ -185,10 +177,10 @@ where
 /// This is not exported to bindings users as the bindings concretize everything and have constructors for us
 impl<'a, L: Deref>
     GossipSync<
-        &P2PGossipSync<&'a NetworkGraph<L>, &'a (dyn UtxoLookup + Send + Sync), L>,
+        &P2PGossipSync<&'a NetworkGraph<L>, &'a (dyn UtxoLookup), L>,
         &RapidGossipSync<&'a NetworkGraph<L>, L>,
         &'a NetworkGraph<L>,
-        &'a (dyn UtxoLookup + Send + Sync),
+        &'a (dyn UtxoLookup),
         L,
     >
 where
@@ -215,10 +207,12 @@ where
     }
 }
 
+/// Updates scorer based on event and returns whether an update occurred so we can decide whether
+/// to persist.
 fn update_scorer<'a, S: 'static + Deref<Target = SC>, SC: 'a + WriteableScore<'a>>(
     scorer: &'a S,
     event: &Event,
-) {
+) -> bool {
     let mut score = scorer.lock();
     match event {
         Event::PaymentPathFailed {
@@ -250,8 +244,9 @@ fn update_scorer<'a, S: 'static + Deref<Target = SC>, SC: 'a + WriteableScore<'a
         } => {
             score.probe_failed(path, *scid);
         }
-        _ => {}
+        _ => return false,
     }
+    true
 }
 
 macro_rules! define_run_body {
@@ -288,7 +283,7 @@ macro_rules! define_run_body {
 			// ChannelManager, we want to minimize methods blocking on a ChannelManager
 			// generally, and as a fallback place such blocking only immediately before
 			// persistence.
-			$peer_manager.process_events();
+			$peer_manager.as_ref().process_events();
 
 			// Exit the loop if the background processor was requested to stop.
 			if $loop_exit_check {
@@ -333,28 +328,29 @@ macro_rules! define_run_body {
 				// more than a handful of seconds to complete, and shouldn't disconnect all our
 				// peers.
 				log_trace!($logger, "100ms sleep took more than a second, disconnecting peers.");
-				$peer_manager.disconnect_all_peers();
+				$peer_manager.as_ref().disconnect_all_peers();
 				last_ping_call = $get_timer(PING_TIMER);
 			} else if $timer_elapsed(&mut last_ping_call, PING_TIMER) {
 				log_trace!($logger, "Calling PeerManager's timer_tick_occurred");
-				$peer_manager.timer_tick_occurred();
+				$peer_manager.as_ref().timer_tick_occurred();
 				last_ping_call = $get_timer(PING_TIMER);
 			}
 
 			// Note that we want to run a graph prune once not long after startup before
 			// falling back to our usual hourly prunes. This avoids short-lived clients never
 			// pruning their network graph. We run once 60 seconds after startup before
-			// continuing our normal cadence.
+			// continuing our normal cadence. For RGS, since 60 seconds is likely too long,
+			// we prune after an initial sync completes.
 			let prune_timer = if have_pruned { NETWORK_PRUNE_TIMER } else { FIRST_NETWORK_PRUNE_TIMER };
-			if $timer_elapsed(&mut last_prune_call, prune_timer) {
+			let prune_timer_elapsed = $timer_elapsed(&mut last_prune_call, prune_timer);
+			let should_prune = match $gossip_sync {
+				GossipSync::Rapid(_) => !have_pruned || prune_timer_elapsed,
+				_ => prune_timer_elapsed,
+			};
+			if should_prune {
 				// The network graph must not be pruned while rapid sync completion is pending
 				if let Some(network_graph) = $gossip_sync.prunable_network_graph() {
-					#[cfg(feature = "std")] {
-						log_trace!($logger, "Pruning and persisting network graph.");
-						network_graph.remove_stale_channels_and_tracking();
-					}
 					#[cfg(not(feature = "std"))] {
-						// log_warn!($logger, "Not pruning network graph, consider enabling `std` or doing so manually with remove_stale_channels_and_tracking_with_time.");
 						log_trace!($logger, "Persisting network graph.");
 					}
 
@@ -404,7 +400,7 @@ macro_rules! define_run_body {
 	} }
 }
 
-pub(crate) mod bg_futures_util {
+pub(crate) mod futures_util {
     use core::future::Future;
     use core::marker::Unpin;
     use core::pin::Pin;
@@ -475,27 +471,9 @@ pub(crate) mod bg_futures_util {
         unsafe { Waker::from_raw(RawWaker::new(core::ptr::null(), &DUMMY_WAKER_VTABLE)) }
     }
 }
-use bg_futures_util::{dummy_waker, Selector, SelectorOutput};
+use crate::background::futures_util::{dummy_waker, Selector, SelectorOutput};
 use core::task;
 
-/// Processes background events in a future.
-///
-/// `sleeper` should return a future which completes in the given amount of time and returns a
-/// boolean indicating whether the background processing should exit. Once `sleeper` returns a
-/// future which outputs `true`, the loop will exit and this function's future will complete.
-/// The `sleeper` future is free to return early after it has triggered the exit condition.
-///
-/// See [`BackgroundProcessor::start`] for information on which actions this handles.
-///
-/// Requires the `futures` feature. Note that while this method is available without the `std`
-/// feature, doing so will skip calling [`NetworkGraph::remove_stale_channels_and_tracking`],
-/// you should call [`NetworkGraph::remove_stale_channels_and_tracking_with_time`] regularly
-/// manually instead.
-///
-/// The `mobile_interruptable_platform` flag should be set if we're currently running on a
-/// mobile device, where we may need to check for interruption of the application regularly. If you
-/// are unsure, you should set the flag, as the performance impact of it is minimal unless there
-/// are hundreds or thousands of simultaneous process calls running.
 pub async fn process_events_async<
     'a,
     UL: 'static + Deref,
@@ -510,10 +488,6 @@ pub async fn process_events_async<
     G: 'static + Deref<Target = NetworkGraph<L>>,
     L: 'static + Deref,
     P: 'static + Deref,
-    Descriptor: 'static + SocketDescriptor,
-    CMH: 'static + Deref,
-    RMH: 'static + Deref,
-    OMH: 'static + Deref,
     EventHandlerFuture: core::future::Future<Output = ()>,
     EventHandler: Fn(Event) -> EventHandlerFuture,
     PS: 'static + Deref,
@@ -521,8 +495,8 @@ pub async fn process_events_async<
     CM: 'static + Deref<Target = ChannelManager<CW, T, ES, NS, SP, F, R, L>>,
     PGS: 'static + Deref<Target = P2PGossipSync<G, UL, L>>,
     RGS: 'static + Deref<Target = RapidGossipSync<G, L>>,
-    UMH: 'static + Deref,
-    PM: 'static + Deref<Target = PeerManager<Descriptor, CMH, RMH, OMH, L, UMH, NS>>,
+    APM: APeerManager,
+    PM: 'static + Deref<Target = APM>,
     S: 'static + Deref<Target = SC>,
     SC: for<'b> WriteableScore<'b>,
     SleepFuture: core::future::Future<Output = bool> + core::marker::Unpin,
@@ -551,10 +525,6 @@ where
     R::Target: 'static + Router,
     L::Target: 'static + Logger,
     P::Target: 'static + Persist<<SP::Target as SignerProvider>::Signer>,
-    CMH::Target: 'static + ChannelMessageHandler,
-    OMH::Target: 'static + OnionMessageHandler,
-    RMH::Target: 'static + RoutingMessageHandler,
-    UMH::Target: 'static + CustomMessageHandler,
     PS::Target: 'static + Persister<'a, CW, T, ES, NS, SP, F, R, L, SC>,
 {
     let mut should_break = false;
@@ -562,12 +532,23 @@ where
         let network_graph = gossip_sync.network_graph();
         let event_handler = &event_handler;
         let scorer = &scorer;
+        let logger = &logger;
+        let persister = &persister;
         async move {
             if let Some(network_graph) = network_graph {
                 handle_network_graph_update(network_graph, &event)
             }
             if let Some(ref scorer) = scorer {
-                update_scorer(scorer, &event);
+                if update_scorer(scorer, &event) {
+                    log_trace!(logger, "Persisting scorer after update");
+                    if let Err(e) = persister.persist_scorer(&scorer) {
+                        log_error!(
+                            logger,
+                            "Error: Failed to persist scorer, check your disk and permissions {}",
+                            e
+                        )
+                    }
+                }
             }
             event_handler(event).await;
         }

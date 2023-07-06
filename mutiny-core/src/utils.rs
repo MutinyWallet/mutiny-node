@@ -92,6 +92,8 @@ impl<'a, T: 'a + Score> LockableScore<'a> for Mutex<T> {
     fn lock(&'a self) -> MutexGuard<'a, T> {
         Mutex::lock(self).expect("Failed to lock mutex")
     }
+
+    type Score = T;
 }
 
 impl<S: Writeable> Writeable for Mutex<S> {
