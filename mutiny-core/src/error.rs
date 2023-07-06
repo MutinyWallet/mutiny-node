@@ -60,6 +60,12 @@ pub enum MutinyError {
     /// LSP indicated it was not connected to the client node.
     #[error("Failed to have a connection to the LSP node.")]
     LspConnectionError,
+    /// Subscription Client Not Configured
+    #[error("Subscription Client Not Configured")]
+    SubscriptionClientNotConfigured,
+    /// Invalid Arguments were given
+    #[error("Invalid Arguments were given")]
+    InvalidArgumentsError,
     /// No route for the given target could be found.
     #[error("Failed to find route.")]
     RoutingFailed,

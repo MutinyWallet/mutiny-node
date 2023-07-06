@@ -2,7 +2,6 @@ use anyhow::anyhow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
-use crate::labels::LabelStorage;
 use crate::logging::LOGGING_KEY;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
 use crate::scb::{
@@ -29,6 +28,7 @@ use crate::{
     event::{HTLCStatus, PaymentInfo},
     lnurlauth::make_lnurl_auth_connection,
 };
+use crate::{labels::LabelStorage, subscription::MutinySubscriptionClient};
 use crate::{
     lnurlauth::{AuthManager, AuthProfile},
     MutinyWalletConfig,
@@ -483,6 +483,17 @@ pub struct LnUrlParams {
     pub tag: String,
 }
 
+/// Plan is a subscription plan for Mutiny+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Plan {
+    /// The ID of the internal plan.
+    /// Used for subscribing to specific one.
+    pub id: u8,
+
+    /// The amount in sats for the plan.
+    pub amount_sat: u64,
+}
+
 /// The [NodeManager] is the main entry point for interacting with the Mutiny Wallet.
 /// It is responsible for managing the on-chain wallet and the lightning nodes.
 ///
@@ -508,8 +519,7 @@ pub struct NodeManager<S: MutinyStorage> {
     auth: AuthManager<S>,
     lnurl_client: Arc<LnUrlClient>,
     pub(crate) lsp_clients: Vec<LspClient>,
-    #[allow(dead_code)]
-    pub(crate) auth_client: Option<Arc<MutinyAuthClient<S>>>,
+    pub(crate) subscription_client: Option<Arc<MutinySubscriptionClient<S>>>,
     pub(crate) logger: Arc<MutinyLogger>,
     bitcoin_price_cache: Arc<Mutex<Option<(f32, Duration)>>>,
     do_not_connect_peers: bool,
@@ -685,6 +695,21 @@ impl<S: MutinyStorage> NodeManager<S> {
             None
         };
 
+        let subscription_client = if let Some(auth_client) = auth_client {
+            if let Some(subscription_url) = c.subscription_url {
+                let s = Arc::new(MutinySubscriptionClient::new(
+                    auth_client,
+                    subscription_url,
+                    logger.clone(),
+                ));
+                Some(s)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let nm = NodeManager {
             stop,
             mnemonic,
@@ -703,7 +728,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             auth,
             lnurl_client,
             lsp_clients,
-            auth_client,
+            subscription_client,
             logger,
             bitcoin_price_cache: Arc::new(Mutex::new(None)),
             do_not_connect_peers: c.do_not_connect_peers,
@@ -2128,6 +2153,39 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(storage_peers)
     }
 
+    /// Checks whether or not the user is subscribed to Mutiny+.
+    ///
+    /// Returns None if there's no subscription at all.
+    /// Returns Some(u64) for their unix expiration timestamp, which may be in the
+    /// past or in the future, depending on whether or not it is currently active.
+    pub async fn check_subscribed(&self) -> Result<Option<u64>, MutinyError> {
+        if let Some(subscription_client) = self.subscription_client.clone() {
+            Ok(subscription_client.check_subscribed().await?)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Gets the subscription plans for Mutiny+ subscriptions
+    pub async fn get_subscription_plans(&self) -> Result<Vec<Plan>, MutinyError> {
+        if let Some(subscription_client) = self.subscription_client.clone() {
+            Ok(subscription_client.get_plans().await?)
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    /// Subscribes to a Mutiny+ plan with a specific plan id.
+    ///
+    /// Returns a lightning invoice so that the plan can be paid for to start it.
+    pub async fn subscribe_to_plan(&self, id: u8) -> Result<MutinyInvoice, MutinyError> {
+        if let Some(subscription_client) = self.subscription_client.clone() {
+            Ok(Invoice::from_str(&subscription_client.subscribe_to_plan(id).await?)?.into())
+        } else {
+            Err(MutinyError::SubscriptionClientNotConfigured)
+        }
+    }
+
     /// Gets the current bitcoin price in USD.
     pub async fn get_bitcoin_price(&self) -> Result<f32, MutinyError> {
         let now = crate::utils::now();
@@ -2406,6 +2464,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         NodeManager::new(c, storage.clone())
             .await
@@ -2428,6 +2487,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let nm = NodeManager::new(c, ()).await.unwrap();
 
@@ -2446,6 +2506,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Regtest),
+            None,
             None,
             None,
             None,
@@ -2491,6 +2552,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Signet),
+            None,
             None,
             None,
             None,

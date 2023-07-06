@@ -23,12 +23,12 @@ use gloo_utils::format::JsValueSerdeExt;
 use lightning::routing::gossip::NodeId;
 use lightning_invoice::Invoice;
 use lnurl::lnurl::LnUrl;
-use mutiny_core::logging::MutinyLogger;
 use mutiny_core::nostr::nwc::NwcProfile;
 use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::scb::EncryptedSCB;
 use mutiny_core::storage::MutinyStorage;
 use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
+use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
 use mutiny_core::{nodemanager, redshift::RedshiftRecipient};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -66,6 +66,7 @@ impl MutinyWallet {
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
         auth_url: Option<String>,
+        subscription_url: Option<String>,
         do_not_connect_peers: Option<bool>,
     ) -> Result<MutinyWallet, MutinyJsError> {
         utils::set_panic_hook();
@@ -88,6 +89,7 @@ impl MutinyWallet {
             user_rgs_url,
             lsp_url,
             auth_url,
+            subscription_url,
         );
 
         if let Some(true) = do_not_connect_peers {
@@ -1002,7 +1004,7 @@ impl MutinyWallet {
         Ok(self
             .inner
             .nostr
-            .create_new_nwc_profile(name, max_single_amt_sats)
+            .create_new_nwc_profile(ProfileType::Normal { name }, max_single_amt_sats)
             .await?
             .into())
     }
@@ -1067,6 +1069,39 @@ impl MutinyWallet {
             .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         self.inner.nostr.deny_invoice(&hash).await?;
 
+        Ok(())
+    }
+
+    /// Checks whether or not the user is subscribed to Mutiny+.
+    ///
+    /// Returns None if there's no subscription at all.
+    /// Returns Some(u64) for their unix expiration timestamp, which may be in the
+    /// past or in the future, depending on whether or not it is currently active.
+    #[wasm_bindgen]
+    pub async fn check_subscribed(&self) -> Result<Option<u64>, MutinyJsError> {
+        Ok(self.inner.node_manager.check_subscribed().await?)
+    }
+
+    /// Gets the subscription plans for Mutiny+ subscriptions
+    #[wasm_bindgen]
+    pub async fn get_subscription_plans(&self) -> Result<JsValue /* Vec<Plan> */, MutinyJsError> {
+        let plans = self.inner.node_manager.get_subscription_plans().await?;
+
+        Ok(JsValue::from_serde(&plans)?)
+    }
+
+    /// Subscribes to a Mutiny+ plan with a specific plan id.
+    ///
+    /// Returns a lightning invoice so that the plan can be paid for to start it.
+    #[wasm_bindgen]
+    pub async fn subscribe_to_plan(&self, id: u8) -> Result<MutinyInvoice, MutinyJsError> {
+        Ok(self.inner.node_manager.subscribe_to_plan(id).await?.into())
+    }
+
+    /// Pay the subscription invoice. This will post a NWC automatically afterwards.
+    pub async fn pay_subscription_invoice(&self, invoice_str: String) -> Result<(), MutinyJsError> {
+        let invoice = Invoice::from_str(&invoice_str)?;
+        self.inner.pay_subscription_invoice(&invoice).await?;
         Ok(())
     }
 
@@ -1172,6 +1207,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1196,6 +1232,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1228,6 +1265,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,

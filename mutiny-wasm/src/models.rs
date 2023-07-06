@@ -889,3 +889,28 @@ impl From<nostr::nwc::PendingNwcInvoice> for PendingNwcInvoice {
         }
     }
 }
+
+// This is a subscription plan for Mutiny+
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[wasm_bindgen]
+pub struct Plan {
+    pub id: u8,
+    pub amount_sat: u64,
+}
+
+#[wasm_bindgen]
+impl Plan {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+}
+
+impl From<nodemanager::Plan> for Plan {
+    fn from(m: nodemanager::Plan) -> Self {
+        Plan {
+            id: m.id,
+            amount_sat: m.amount_sat,
+        }
+    }
+}

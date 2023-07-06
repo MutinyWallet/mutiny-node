@@ -55,6 +55,12 @@ pub enum MutinyJsError {
     /// LSP indicated it was not connected to the client node.
     #[error("Failed to have a connection to the LSP node.")]
     LspConnectionError,
+    /// Subscription Client Not Configured
+    #[error("Subscription Client Not Configured")]
+    SubscriptionClientNotConfigured,
+    /// When an invalid parameter has been passed in by the user.
+    #[error("Invalid Parameter")]
+    InvalidParameter,
     /// Called incorrect lnurl function, eg calling withdraw on a pay lnurl
     #[error("Called incorrect lnurl function.")]
     IncorrectLnUrlFunction,
@@ -163,6 +169,10 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::BadAmountError => MutinyJsError::BadAmountError,
             MutinyError::BitcoinPriceError => MutinyJsError::BitcoinPriceError,
             MutinyError::Other(_) => MutinyJsError::UnknownError,
+            MutinyError::SubscriptionClientNotConfigured => {
+                MutinyJsError::SubscriptionClientNotConfigured
+            }
+            MutinyError::InvalidArgumentsError => MutinyJsError::InvalidArgumentsError,
         }
     }
 }

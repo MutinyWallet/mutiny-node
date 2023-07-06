@@ -33,6 +33,7 @@ mod peermanager;
 pub mod redshift;
 pub mod scb;
 pub mod storage;
+mod subscription;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
@@ -42,10 +43,10 @@ pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
-use crate::error::MutinyError;
-use crate::nodemanager::NodeManager;
 use crate::nostr::NostrManager;
 use crate::storage::MutinyStorage;
+use crate::{error::MutinyError, nostr::ReservedProfile};
+use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use ::nostr::Kind;
 use bip39::Mnemonic;
 use bitcoin::secp256k1::PublicKey;
@@ -54,6 +55,7 @@ use bitcoin::Network;
 use futures::{pin_mut, select, FutureExt};
 use lightning::util::logger::Logger;
 use lightning::{log_error, log_warn};
+use lightning_invoice::Invoice;
 pub use lnurlauth::AuthProfile;
 use nostr_sdk::{Client, RelayPoolNotification};
 use std::sync::atomic::Ordering;
@@ -69,6 +71,7 @@ pub struct MutinyWalletConfig {
     user_rgs_url: Option<String>,
     lsp_url: Option<String>,
     auth_url: Option<String>,
+    subscription_url: Option<String>,
     do_not_connect_peers: bool,
 }
 
@@ -82,6 +85,7 @@ impl MutinyWalletConfig {
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
         auth_url: Option<String>,
+        subscription_url: Option<String>,
     ) -> Self {
         Self {
             mnemonic,
@@ -92,6 +96,7 @@ impl MutinyWalletConfig {
             user_rgs_url,
             lsp_url,
             auth_url,
+            subscription_url,
             do_not_connect_peers: false,
         }
     }
@@ -243,6 +248,60 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         });
     }
 
+    /// Pay the subscription invoice. This will post a NWC automatically afterwards.
+    pub async fn pay_subscription_invoice(&self, inv: &Invoice) -> Result<(), MutinyError> {
+        if let Some(subscription_client) = self.node_manager.subscription_client.clone() {
+            let nodes = self.node_manager.nodes.lock().await;
+            let first_node_pubkey = if let Some(node) = nodes.values().next() {
+                node.pubkey
+            } else {
+                return Err(MutinyError::WalletOperationFailed);
+            };
+            drop(nodes);
+
+            // TODO if this times out, we should make the next part happen in EventManager
+            self.node_manager
+                .pay_invoice(
+                    &first_node_pubkey,
+                    inv,
+                    None,
+                    vec!["Mutiny+ Subscription".to_string()],
+                )
+                .await?;
+
+            // now submit the NWC string
+            let nwc_profiles = self.nostr.profiles();
+            let reserved_profile_index = ReservedProfile::MutinySubscription.info().1;
+            let profile_opt = nwc_profiles
+                .iter()
+                .find(|profile| profile.index == reserved_profile_index);
+
+            let nwc_uri = match profile_opt {
+                Some(profile) => {
+                    // profile with the reserved index already exists, do something with it
+                    profile.nwc_uri.clone()
+                }
+                None => {
+                    // profile with the reserved index does not exist, create a new one
+                    let profile = self
+                        .nostr
+                        .create_new_nwc_profile(
+                            ProfileType::Reserved(ReservedProfile::MutinySubscription),
+                            21_000,
+                        )
+                        .await?;
+                    profile.nwc_uri
+                }
+            };
+
+            subscription_client.submit_nwc(nwc_uri).await?;
+
+            Ok(())
+        } else {
+            Err(MutinyError::SubscriptionClientNotConfigured)
+        }
+    }
+
     /// Stops all of the nodes and background processes.
     /// Returns after node has been stopped.
     pub async fn stop(&self) -> Result<(), MutinyError> {
@@ -309,6 +368,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         MutinyWallet::new(storage.clone(), config)
             .await
@@ -328,6 +388,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Regtest),
+            None,
             None,
             None,
             None,
@@ -358,6 +419,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Regtest),
+            None,
             None,
             None,
             None,
@@ -393,6 +455,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let mw = MutinyWallet::new(storage.clone(), config)
             .await
@@ -408,6 +471,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Some(Network::Regtest),
+            None,
             None,
             None,
             None,
