@@ -75,7 +75,11 @@ impl MutinyAuthClient {
                 self.retrieve_new_jwt().await?;
                 self.authenticated_request(method, url, body).await
             }
-            _ => Ok(res),
+            StatusCode::OK | StatusCode::ACCEPTED | StatusCode::CREATED => Ok(res),
+            code => {
+                log_error!(self.logger, "Received unexpected status code: {code}");
+                Err(MutinyError::ConnectionFailed)
+            }
         }
     }
 

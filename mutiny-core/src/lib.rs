@@ -34,6 +34,7 @@ pub mod redshift;
 pub mod scb;
 pub mod storage;
 mod subscription;
+pub mod vss;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
