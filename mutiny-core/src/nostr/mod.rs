@@ -19,8 +19,32 @@ use std::sync::{Arc, RwLock};
 pub mod nwc;
 
 const NWC_ACCOUNT_INDEX: u32 = 1;
+const USER_NWC_PROFILE_START_INDEX: u32 = 1000;
 
 const NWC_STORAGE_KEY: &str = "nwc_profiles";
+
+/// Reserved profiles that are used internally.
+/// Must not exceed `USER_NWC_PROFILE_START_INDEX`
+pub enum ReservedProfile {
+    MutinySubscription,
+}
+
+impl ReservedProfile {
+    pub fn info(&self) -> (&'static str, u32) {
+        let (n, i) = match self {
+            ReservedProfile::MutinySubscription => ("Mutiny+ Subscription", 0),
+        };
+        if i >= USER_NWC_PROFILE_START_INDEX {
+            panic!("Must not exceed 1000 reserved indexes")
+        };
+        (n, i)
+    }
+}
+
+pub enum ProfileType {
+    Reserved(ReservedProfile),
+    Normal { name: String },
+}
 
 /// Manages Nostr keys and has different utilities for nostr specific things
 #[derive(Clone)]
@@ -117,11 +141,27 @@ impl<S: MutinyStorage> NostrManager<S> {
     /// Creates a new NWC profile and saves to storage
     pub(crate) fn create_new_profile(
         &self,
-        name: String,
+        profile_type: ProfileType,
         max_single_amt_sats: u64,
     ) -> Result<NwcProfile, MutinyError> {
         let mut profiles = self.nwc.write().unwrap();
-        let index = profiles.len() as u32;
+
+        let normal_profiles_count = profiles
+            .iter()
+            .filter(|&nwc| nwc.profile.index >= USER_NWC_PROFILE_START_INDEX)
+            .count() as u32;
+
+        let (name, index) = match profile_type {
+            ProfileType::Reserved(reserved_profile) => {
+                let (name, index) = reserved_profile.info();
+                (name.to_string(), index)
+            }
+            // Ensure normal profiles start from 1000
+            ProfileType::Normal { name } => {
+                (name, normal_profiles_count + USER_NWC_PROFILE_START_INDEX)
+            }
+        };
+
         let profile = Profile {
             name,
             index,
@@ -130,10 +170,10 @@ impl<S: MutinyStorage> NostrManager<S> {
             enabled: true,
             require_approval: true,
         };
-
         let nwc = NostrWalletConnect::new(&Secp256k1::new(), self.xprivkey, profile)?;
 
         profiles.push(nwc.clone());
+        profiles.sort_by_key(|nwc| nwc.profile.index);
 
         // save to storage
         {
@@ -151,10 +191,10 @@ impl<S: MutinyStorage> NostrManager<S> {
     /// This will also broadcast the info event to the relay
     pub async fn create_new_nwc_profile(
         &self,
-        name: String,
+        profile_type: ProfileType,
         max_single_amt_sats: u64,
     ) -> Result<NwcProfile, MutinyError> {
-        let profile = self.create_new_profile(name, max_single_amt_sats)?;
+        let profile = self.create_new_profile(profile_type, max_single_amt_sats)?;
 
         let info_event = self.nwc.read().unwrap().iter().find_map(|nwc| {
             if nwc.profile.index == profile.index {
@@ -438,7 +478,46 @@ mod test {
         let max_single_amt_sats = 1_000;
 
         let profile = nostr_manager
-            .create_new_profile(name.clone(), max_single_amt_sats)
+            .create_new_profile(
+                ProfileType::Normal { name: name.clone() },
+                max_single_amt_sats,
+            )
+            .unwrap();
+
+        assert_eq!(profile.name, name);
+        assert_eq!(profile.index, 1000);
+        assert_eq!(profile.max_single_amt_sats, max_single_amt_sats);
+
+        let profiles = nostr_manager.profiles();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].name, name);
+        assert_eq!(profiles[0].index, 1000);
+        assert_eq!(profiles[0].max_single_amt_sats, max_single_amt_sats);
+
+        let profiles: Vec<Profile> = nostr_manager
+            .storage
+            .get_data(NWC_STORAGE_KEY)
+            .unwrap()
+            .unwrap_or_default();
+
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].name, name);
+        assert_eq!(profiles[0].index, 1000);
+        assert_eq!(profiles[0].max_single_amt_sats, max_single_amt_sats);
+    }
+
+    #[test]
+    fn test_create_reserve_profile() {
+        let nostr_manager = create_nostr_manager();
+
+        let name = "Mutiny+ Subscription".to_string();
+        let max_single_amt_sats = 1_000;
+
+        let profile = nostr_manager
+            .create_new_profile(
+                ProfileType::Reserved(ReservedProfile::MutinySubscription),
+                max_single_amt_sats,
+            )
             .unwrap();
 
         assert_eq!(profile.name, name);
@@ -461,6 +540,21 @@ mod test {
         assert_eq!(profiles[0].name, name);
         assert_eq!(profiles[0].index, 0);
         assert_eq!(profiles[0].max_single_amt_sats, max_single_amt_sats);
+
+        // now create normal profile
+        let name = "test".to_string();
+        let max_single_amt_sats = 1_000;
+
+        let profile = nostr_manager
+            .create_new_profile(
+                ProfileType::Normal { name: name.clone() },
+                max_single_amt_sats,
+            )
+            .unwrap();
+
+        assert_eq!(profile.name, name);
+        assert_eq!(profile.index, 1000);
+        assert_eq!(profile.max_single_amt_sats, max_single_amt_sats);
     }
 
     #[test]
@@ -471,11 +565,14 @@ mod test {
         let max_single_amt_sats = 1_000;
 
         let mut profile = nostr_manager
-            .create_new_profile(name.clone(), max_single_amt_sats)
+            .create_new_profile(
+                ProfileType::Normal { name: name.clone() },
+                max_single_amt_sats,
+            )
             .unwrap();
 
         assert_eq!(profile.name, name);
-        assert_eq!(profile.index, 0);
+        assert_eq!(profile.index, 1000);
         assert!(profile.enabled);
         assert_eq!(profile.max_single_amt_sats, max_single_amt_sats);
 
@@ -486,7 +583,7 @@ mod test {
         let profiles = nostr_manager.profiles();
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].name, name);
-        assert_eq!(profiles[0].index, 0);
+        assert_eq!(profiles[0].index, 1000);
         assert!(!profiles[0].enabled);
         assert_eq!(profiles[0].max_single_amt_sats, max_single_amt_sats);
 
@@ -498,7 +595,7 @@ mod test {
 
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].name, name);
-        assert_eq!(profiles[0].index, 0);
+        assert_eq!(profiles[0].index, 1000);
         assert!(!profiles[0].enabled);
         assert_eq!(profiles[0].max_single_amt_sats, max_single_amt_sats);
     }
@@ -511,7 +608,7 @@ mod test {
         let max_single_amt_sats = 1_000;
 
         let profile = nostr_manager
-            .create_new_profile(name, max_single_amt_sats)
+            .create_new_profile(ProfileType::Normal { name }, max_single_amt_sats)
             .unwrap();
 
         let inv = PendingNwcInvoice {
