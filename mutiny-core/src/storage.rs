@@ -1,9 +1,7 @@
 use crate::encrypt::{decrypt, encrypt};
 use crate::error::{MutinyError, MutinyStorageError};
 use crate::ldkstorage::CHANNEL_MANAGER_KEY;
-use crate::lnurlauth::AuthProfile;
 use crate::nodemanager::NodeStorage;
-use anyhow::anyhow;
 use bdk::chain::{Append, PersistBackend};
 use bip39::Mnemonic;
 use serde::{Deserialize, Serialize};
@@ -14,7 +12,6 @@ use std::sync::{Arc, RwLock};
 pub const KEYCHAIN_STORE_KEY: &str = "bdk_keychain";
 pub(crate) const MNEMONIC_KEY: &str = "mnemonic";
 const NODES_KEY: &str = "nodes";
-const AUTH_PROFILES_KEY: &str = "auth_profiles";
 const FEE_ESTIMATES_KEY: &str = "fee_estimates";
 const FIRST_SYNC_KEY: &str = "first_sync";
 
@@ -159,28 +156,6 @@ pub trait MutinyStorage: Clone + Sized + 'static {
 
     /// Deletes all data from the storage
     async fn clear() -> Result<(), MutinyError>;
-
-    /// Replaces the existing auth profiles with the new ones
-    fn update_auth_profiles(&self, profiles: Vec<AuthProfile>) -> Result<(), MutinyError> {
-        // Check that the profiles are in the correct order
-        for (i, p) in profiles.iter().enumerate() {
-            if p.index as usize != i {
-                return Err(MutinyError::Other(anyhow!(
-                    "Auth profile index mismatch: {} != {}",
-                    p.index,
-                    i
-                )));
-            }
-        }
-
-        self.set_data(AUTH_PROFILES_KEY, profiles)
-    }
-
-    /// Gets the auth profiles from storage
-    fn get_auth_profiles(&self) -> Result<Vec<AuthProfile>, MutinyError> {
-        let res: Option<Vec<AuthProfile>> = self.get_data(AUTH_PROFILES_KEY)?;
-        Ok(res.unwrap_or_default()) // if no profiles exist, return an empty vec
-    }
 
     /// Gets the node indexes from storage
     fn get_nodes(&self) -> Result<NodeStorage, MutinyError> {
