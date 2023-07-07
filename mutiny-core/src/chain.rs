@@ -43,13 +43,18 @@ impl<S: MutinyStorage> Filter for MutinyChain<S> {
 }
 
 impl<S: MutinyStorage> BroadcasterInterface for MutinyChain<S> {
-    fn broadcast_transaction(&self, tx: &Transaction) {
-        let tx_clone = tx.clone();
+    fn broadcast_transactions(&self, txs: &[&Transaction]) {
+        let txs_clone = txs
+            .iter()
+            .map(|tx| (*tx).clone())
+            .collect::<Vec<Transaction>>();
         let wallet = self.wallet.clone();
         let logger = self.logger.clone();
         utils::spawn(async move {
-            if let Err(e) = wallet.broadcast_transaction(tx_clone).await {
-                log_warn!(logger, "Error broadcasting transaction: {e}")
+            for tx in txs_clone {
+                if let Err(e) = wallet.broadcast_transaction(tx).await {
+                    log_warn!(logger, "Error broadcasting transaction: {e}")
+                }
             }
         });
     }

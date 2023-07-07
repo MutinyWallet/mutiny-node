@@ -224,10 +224,7 @@ impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
     ) -> Result<bool, LightningError> {
         // because we got the channel, may as well update our network graph
         self.network_graph
-            .update_channel_from_unsigned_announcement::<Arc<ErroringUtxoLookup>>(
-                &msg.contents,
-                &None,
-            )?;
+            .update_channel_from_announcement_no_lookup(msg)?;
         Ok(false)
     }
 

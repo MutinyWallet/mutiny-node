@@ -1,4 +1,5 @@
 use anyhow::anyhow;
+use lightning::sign::{NodeSigner, Recipient};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
@@ -46,8 +47,6 @@ use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use core::time::Duration;
 use futures::{future::join_all, lock::Mutex};
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
-use lightning::chain::channelmonitor::Balance;
-use lightning::chain::keysinterface::{NodeSigner, Recipient};
 use lightning::chain::Confirm;
 use lightning::events::ClosureReason;
 use lightning::io::Read;
@@ -1264,31 +1263,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                 let ignored_channels: Vec<&ChannelDetails> = channels.iter().collect();
                 n.chain_monitor.get_claimable_balances(&ignored_channels)
             })
-            .map(|bal| match bal {
-                Balance::ClaimableOnChannelClose {
-                    claimable_amount_satoshis,
-                } => claimable_amount_satoshis,
-                Balance::ClaimableAwaitingConfirmations {
-                    claimable_amount_satoshis,
-                    ..
-                } => claimable_amount_satoshis,
-                Balance::ContentiousClaimable {
-                    claimable_amount_satoshis,
-                    ..
-                } => claimable_amount_satoshis,
-                Balance::MaybeTimeoutClaimableHTLC {
-                    claimable_amount_satoshis,
-                    ..
-                } => claimable_amount_satoshis,
-                Balance::MaybePreimageClaimableHTLC {
-                    claimable_amount_satoshis,
-                    ..
-                } => claimable_amount_satoshis,
-                Balance::CounterpartyRevokedOutputClaimable {
-                    claimable_amount_satoshis,
-                    ..
-                } => claimable_amount_satoshis,
-            })
+            .map(|bal| bal.claimable_amount_satoshis())
             .sum();
 
         Ok(MutinyBalance {

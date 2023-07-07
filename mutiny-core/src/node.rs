@@ -32,18 +32,17 @@ use bitcoin::secp256k1::rand;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, BlockHash, Network, OutPoint};
 use core::time::Duration;
 use lightning::chain::channelmonitor::ChannelMonitor;
-use lightning::ln::channelmanager::{RecipientOnionFields, RetryableSendFailure};
 use lightning::util::ser::{ReadableArgs, Writeable};
 use lightning::{
     chain::chaininterface::{ConfirmationTarget, FeeEstimator},
+    ln::channelmanager::{RecipientOnionFields, RetryableSendFailure},
+    routing::scoring::ProbabilisticScoringFeeParameters,
     util::config::ChannelConfig,
 };
+
+use lightning::sign::{EntropySource, InMemorySigner};
 use lightning::{
-    chain::{
-        chainmonitor,
-        keysinterface::{EntropySource, InMemorySigner},
-        Filter, Watch,
-    },
+    chain::{chainmonitor, Filter, Watch},
     ln::{
         channelmanager::{PaymentId, PhantomRouteHints, Retry},
         peer_handler::{IgnoringMessageHandler, MessageHandler as LdkMessageHandler},
@@ -89,6 +88,7 @@ pub(crate) type MessageHandler<S: MutinyStorage> = LdkMessageHandler<
     Arc<PhantomChannelManager<S>>,
     Arc<GossipMessageHandler<S>>,
     Arc<IgnoringMessageHandler>,
+    Arc<SCBMessageHandler>,
 >;
 
 pub(crate) type ChainMonitor<S: MutinyStorage> = chainmonitor::ChainMonitor<
@@ -100,8 +100,13 @@ pub(crate) type ChainMonitor<S: MutinyStorage> = chainmonitor::ChainMonitor<
     Arc<MutinyNodePersister<S>>,
 >;
 
-pub(crate) type Router =
-    DefaultRouter<Arc<NetworkGraph>, Arc<MutinyLogger>, Arc<utils::Mutex<ProbScorer>>>;
+pub(crate) type Router = DefaultRouter<
+    Arc<NetworkGraph>,
+    Arc<MutinyLogger>,
+    Arc<utils::Mutex<ProbScorer>>,
+    ProbabilisticScoringFeeParameters,
+    ProbScorer,
+>;
 
 pub(crate) type ProbScorer = ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>;
 
@@ -223,6 +228,7 @@ impl<S: MutinyStorage> Node<S> {
             logger.clone(),
             keys_manager.clone().get_secure_random_bytes(),
             scorer.clone(),
+            ProbabilisticScoringFeeParameters::default(),
         ));
 
         // init channel manager
@@ -295,12 +301,13 @@ impl<S: MutinyStorage> Node<S> {
         });
 
         // init peer manager
+        let scb_message_handler = Arc::new(SCBMessageHandler::new());
         let ln_msg_handler = MessageHandler {
             chan_handler: channel_manager.clone(),
             route_handler,
             onion_message_handler: Arc::new(IgnoringMessageHandler {}),
+            custom_message_handler: scb_message_handler.clone(),
         };
-        let scb_message_handler = Arc::new(SCBMessageHandler::new());
 
         log_info!(logger, "creating lsp client");
         let lsp_client: Option<LspClient> = match node_index.lsp {
@@ -335,7 +342,6 @@ impl<S: MutinyStorage> Node<S> {
         let peer_man = Arc::new(create_peer_manager(
             keys_manager.clone(),
             ln_msg_handler,
-            scb_message_handler.clone(),
             logger.clone(),
         ));
 
@@ -1087,7 +1093,8 @@ impl<S: MutinyStorage> Node<S> {
 
         let amt_msats = amt_sats * 1000;
 
-        let payment_params = PaymentParameters::for_keysend(to_node, 40);
+        // TODO retry with allow_mpp false just in case recipient does not support
+        let payment_params = PaymentParameters::for_keysend(to_node, 40, true);
         let route_params: RouteParameters = RouteParameters {
             final_value_msat: amt_msats,
             payment_params,
@@ -1639,7 +1646,6 @@ fn stop_component(stopped_components: &Arc<RwLock<Vec<bool>>>) {
 pub(crate) fn create_peer_manager<S: MutinyStorage>(
     km: Arc<PhantomKeysManager<S>>,
     lightning_msg_handler: MessageHandler<S>,
-    scb_message_handler: Arc<SCBMessageHandler>,
     logger: Arc<MutinyLogger>,
 ) -> PeerManagerImpl<S> {
     let now = utils::now().as_secs();
@@ -1651,7 +1657,6 @@ pub(crate) fn create_peer_manager<S: MutinyStorage>(
         now as u32,
         &ephemeral_bytes,
         logger,
-        scb_message_handler,
         km,
     )
 }

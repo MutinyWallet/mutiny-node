@@ -17,9 +17,6 @@ use bitcoin::Network;
 use bitcoin::{BlockHash, Transaction};
 use futures::{try_join, TryFutureExt};
 use lightning::chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate};
-use lightning::chain::keysinterface::{
-    InMemorySigner, SpendableOutputDescriptor, WriteableEcdsaChannelSigner,
-};
 use lightning::chain::transaction::OutPoint;
 use lightning::chain::BestBlock;
 use lightning::io::Cursor;
@@ -27,6 +24,7 @@ use lightning::ln::channelmanager::{
     self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
 };
 use lightning::ln::PaymentHash;
+use lightning::sign::{InMemorySigner, SpendableOutputDescriptor, WriteableEcdsaChannelSigner};
 use lightning::util::logger::Logger;
 use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
@@ -257,6 +255,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             keys_manager,
             default_user_config(),
             chain_params,
+            utils::now().as_secs() as u32,
         );
 
         Ok(ReadChannelManager {

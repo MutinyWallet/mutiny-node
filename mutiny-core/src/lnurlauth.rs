@@ -51,7 +51,7 @@ impl SigningProfile {
         xprivkey: ExtendedPrivKey,
         url: Url,
     ) -> Result<SecretKey, MutinyError> {
-        let path = lnurl::get_derivation_path(self.hashing_key.secret_bytes(), url)?;
+        let path = lnurl::get_derivation_path(self.hashing_key.secret_bytes(), &url)?;
         let key = xprivkey
             .derive_priv(context, &path)
             .map_err(|e| MutinyError::Other(anyhow!("Error deriving key for path {path}: {e}")))?;

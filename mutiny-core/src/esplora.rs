@@ -145,8 +145,8 @@ use lightning::{log_debug, log_error, log_info, log_trace};
 
 use bitcoin::{BlockHash, Script, Txid};
 
-use esplora_client::r#async::AsyncClient;
-use esplora_client::Builder;
+use bdk_esplora::esplora_client::r#async::AsyncClient;
+use bdk_esplora::esplora_client::Builder;
 
 use core::ops::Deref;
 use std::collections::HashSet;

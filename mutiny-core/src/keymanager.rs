@@ -12,14 +12,14 @@ use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, Signing};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Script, Transaction, TxOut};
-use lightning::chain::keysinterface::{
+use lightning::ln::msgs::{DecodeError, UnsignedGossipMessage};
+use lightning::ln::script::ShutdownScript;
+use lightning::log_warn;
+use lightning::sign::{
     EntropySource, InMemorySigner, KeyMaterial, NodeSigner,
     PhantomKeysManager as LdkPhantomKeysManager, Recipient, SignerProvider,
     SpendableOutputDescriptor,
 };
-use lightning::ln::msgs::{DecodeError, UnsignedGossipMessage};
-use lightning::ln::script::ShutdownScript;
-use lightning::log_warn;
 use lightning::util::logger::Logger;
 use std::sync::Arc;
 
@@ -69,6 +69,7 @@ impl<S: MutinyStorage> PhantomKeysManager<S> {
             outputs,
             address.script_pubkey(),
             feerate_sat_per_1000_weight,
+            None, // tx locktime of 0
             secp_ctx,
         );
 
@@ -156,21 +157,21 @@ impl<S: MutinyStorage> SignerProvider for PhantomKeysManager<S> {
         self.inner.read_chan_signer(reader)
     }
 
-    fn get_destination_script(&self) -> Script {
-        let mut wallet = self.wallet.wallet.try_write().unwrap();
-        wallet
+    fn get_destination_script(&self) -> Result<Script, ()> {
+        let mut wallet = self.wallet.wallet.try_write().map_err(|_| ())?;
+        Ok(wallet
             .get_address(AddressIndex::New)
             .address
-            .script_pubkey()
+            .script_pubkey())
     }
 
-    fn get_shutdown_scriptpubkey(&self) -> ShutdownScript {
-        let mut wallet = self.wallet.wallet.try_write().unwrap();
+    fn get_shutdown_scriptpubkey(&self) -> Result<ShutdownScript, ()> {
+        let mut wallet = self.wallet.wallet.try_write().map_err(|_| ())?;
         let script = wallet
             .get_address(AddressIndex::New)
             .address
             .script_pubkey();
-        ShutdownScript::try_from(script).unwrap()
+        ShutdownScript::try_from(script).map_err(|_| ())
     }
 }
 
