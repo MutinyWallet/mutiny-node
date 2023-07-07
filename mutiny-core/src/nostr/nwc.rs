@@ -21,20 +21,37 @@ use std::str::FromStr;
 pub(crate) const PENDING_NWC_EVENTS_KEY: &str = "pending_nwc_events";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SingleUseSpendingConditions {
+    pub spent: bool,
+    pub amount_sats: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SpendingConditions {
+    SingleUse(SingleUseSpendingConditions),
+    /// Require approval before sending a payment
+    RequireApproval,
+}
+
+impl Default for SpendingConditions {
+    fn default() -> Self {
+        Self::RequireApproval
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct Profile {
     pub name: String,
     pub index: u32,
-    /// Maximum amount of sats that can be sent in a single payment
-    pub max_single_amt_sats: u64,
     pub relay: String,
     pub enabled: bool,
     /// Require approval before sending a payment
     #[serde(default)]
-    pub require_approval: bool,
+    pub spending_conditions: SpendingConditions,
 }
 
 impl PartialOrd for Profile {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.index.partial_cmp(&other.index)
     }
 }
@@ -107,7 +124,6 @@ impl NostrWalletConnect {
         from_node: &PublicKey,
         invoice: &Bolt11Invoice,
     ) -> Result<Response, MutinyError> {
-        // todo we could get the author of the event we zapping and use that as the label
         let labels = vec![self.profile.name.clone()];
         match node_manager
             .pay_invoice(from_node, invoice, None, labels)
@@ -129,15 +145,18 @@ impl NostrWalletConnect {
         }
     }
 
-    /// Handle a Nostr Wallet Connect request, returns a response event if one is needed
+    /// Handle a Nostr Wallet Connect request
+    ///
+    /// Returns a response event if one is needed and if the profile needs to be saved to disk
     pub async fn handle_nwc_request<S: MutinyStorage>(
-        &self,
+        &mut self,
         event: Event,
         node_manager: &NodeManager<S>,
         from_node: &PublicKey,
         pending_nwc_lock: &Mutex<()>,
-    ) -> anyhow::Result<Option<Event>> {
+    ) -> anyhow::Result<(Option<Event>, bool)> {
         let client_pubkey = self.client_key.public_key();
+        let mut needs_save = false;
         if self.profile.enabled
             && event.kind == Kind::WalletConnectRequest
             && event.pubkey == client_pubkey
@@ -149,7 +168,7 @@ impl NostrWalletConnect {
 
             // only respond to pay invoice requests
             if req.method != Method::PayInvoice {
-                return Ok(None);
+                return Ok((None, needs_save));
             }
 
             let invoice = Bolt11Invoice::from_str(&req.params.invoice)
@@ -157,7 +176,7 @@ impl NostrWalletConnect {
 
             // if the invoice has expired, skip it
             if invoice.would_expire(utils::now()) {
-                return Ok(None);
+                return Ok((None, needs_save));
             }
 
             // if the invoice has no amount, we cannot pay it
@@ -166,99 +185,115 @@ impl NostrWalletConnect {
                     node_manager.logger,
                     "NWC Invoice amount not set, cannot pay: {invoice}"
                 );
-                return Ok(None);
+                return Ok((None, needs_save));
             }
 
             // if we have already paid this invoice, skip it
             let node = node_manager.get_node(from_node).await?;
             if node.get_invoice(&invoice).is_ok_and(|i| i.paid) {
-                return Ok(None);
+                return Ok((None, needs_save));
             }
             drop(node);
 
             // if we need approval, just save in the db for later
-            if self.profile.require_approval {
-                let pending = PendingNwcInvoice {
-                    index: self.profile.index,
-                    invoice,
-                    event_id: event.id,
-                    pubkey: event.pubkey,
-                };
-                pending_nwc_lock.lock().await;
+            match self.profile.spending_conditions.clone() {
+                SpendingConditions::SingleUse(mut single_use) => {
+                    // check if we have already spent
+                    if single_use.spent {
+                        return Ok((None, needs_save));
+                    }
 
-                let mut current: Vec<PendingNwcInvoice> = node_manager
-                    .storage
-                    .get_data(PENDING_NWC_EVENTS_KEY)?
-                    .unwrap_or_default();
+                    let msats = invoice.amount_milli_satoshis().unwrap();
 
-                current.push(pending);
-                current.sort();
-                current.dedup();
+                    // verify amount is under our limit
+                    let content = if msats <= single_use.amount_sats * 1_000 {
+                        match self
+                            .pay_nwc_invoice(node_manager, from_node, &invoice)
+                            .await
+                        {
+                            Ok(resp) => {
+                                // mark as spent and disable profile
+                                single_use.spent = true;
+                                self.profile.spending_conditions =
+                                    SpendingConditions::SingleUse(single_use);
+                                self.profile.enabled = false;
+                                needs_save = true;
+                                resp
+                            }
+                            Err(e) => {
+                                // todo handle timeout errors
+                                Response {
+                                    result_type: Method::PayInvoice,
+                                    error: Some(NIP47Error {
+                                        code: ErrorCode::InsufficantBalance,
+                                        message: format!("Failed to pay invoice: {e}"),
+                                    }),
+                                    result: None,
+                                }
+                            }
+                        }
+                    } else {
+                        log_warn!(
+                            node_manager.logger,
+                            "Invoice amount too high: {msats} msats"
+                        );
 
-                node_manager
-                    .storage
-                    .set_data(PENDING_NWC_EVENTS_KEY, current, None)?;
-
-                return Ok(None);
-            } else {
-                let msats = invoice.amount_milli_satoshis().unwrap();
-
-                // verify amount is under our limit
-                let content = if msats <= self.profile.max_single_amt_sats * 1_000 {
-                    match self
-                        .pay_nwc_invoice(node_manager, from_node, &invoice)
-                        .await
-                    {
-                        Ok(resp) => resp,
-                        Err(e) => Response {
+                        Response {
                             result_type: Method::PayInvoice,
                             error: Some(NIP47Error {
-                                code: ErrorCode::InsufficantBalance,
-                                message: format!("Failed to pay invoice: {e}"),
+                                code: ErrorCode::QuotaExceeded,
+                                message: format!("Invoice amount too high: {msats} msats"),
                             }),
                             result: None,
-                        },
-                    }
-                } else {
-                    log_warn!(
-                        node_manager.logger,
-                        "Invoice amount too high: {msats} msats"
-                    );
+                        }
+                    };
 
-                    Response {
-                        result_type: Method::PayInvoice,
-                        error: Some(NIP47Error {
-                            code: ErrorCode::QuotaExceeded,
-                            message: format!("Invoice amount too high: {msats} msats"),
-                        }),
-                        result: None,
-                    }
-                };
+                    let encrypted = encrypt(&server_key, &client_pubkey, content.as_json())?;
 
-                let encrypted = encrypt(&server_key, &client_pubkey, content.as_json())?;
+                    let p_tag = Tag::PubKey(event.pubkey, None);
+                    let e_tag = Tag::Event(event.id, None, None);
+                    let response =
+                        EventBuilder::new(Kind::WalletConnectResponse, encrypted, &[p_tag, e_tag])
+                            .to_event(&self.server_key)?;
 
-                let p_tag = Tag::PubKey(event.pubkey, None);
-                let e_tag = Tag::Event(event.id, None, None);
-                let response =
-                    EventBuilder::new(Kind::WalletConnectResponse, encrypted, &[p_tag, e_tag])
-                        .to_event(&self.server_key)?;
+                    return Ok((Some(response), needs_save));
+                }
+                SpendingConditions::RequireApproval => {
+                    let pending = PendingNwcInvoice {
+                        index: self.profile.index,
+                        invoice,
+                        event_id: event.id,
+                        pubkey: event.pubkey,
+                    };
+                    pending_nwc_lock.lock().await;
 
-                return Ok(Some(response));
+                    let mut current: Vec<PendingNwcInvoice> = node_manager
+                        .storage
+                        .get_data(PENDING_NWC_EVENTS_KEY)?
+                        .unwrap_or_default();
+
+                    current.push(pending);
+
+                    node_manager
+                        .storage
+                        .set_data(PENDING_NWC_EVENTS_KEY, current, None)?;
+
+                    return Ok((None, needs_save));
+                }
             }
         }
 
-        Ok(None)
+        Ok((None, needs_save))
     }
 
     pub fn nwc_profile(&self) -> NwcProfile {
         NwcProfile {
             name: self.profile.name.clone(),
             index: self.profile.index,
-            max_single_amt_sats: self.profile.max_single_amt_sats,
             relay: self.profile.relay.clone(),
             enabled: self.profile.enabled,
-            require_approval: self.profile.require_approval,
             nwc_uri: self.get_nwc_uri().expect("failed to get nwc uri"),
+            spending_conditions: self.profile.spending_conditions.clone(),
         }
     }
 }
@@ -268,13 +303,11 @@ impl NostrWalletConnect {
 pub struct NwcProfile {
     pub name: String,
     pub index: u32,
-    /// Maximum amount of sats that can be sent in a single payment
-    pub max_single_amt_sats: u64,
     pub relay: String,
     pub enabled: bool,
-    /// Require approval before sending a payment
-    pub require_approval: bool,
     pub nwc_uri: String,
+    #[serde(default)]
+    pub spending_conditions: SpendingConditions,
 }
 
 impl NwcProfile {
@@ -282,10 +315,9 @@ impl NwcProfile {
         Profile {
             name: self.name.clone(),
             index: self.index,
-            max_single_amt_sats: self.max_single_amt_sats,
             relay: self.relay.clone(),
-            require_approval: self.require_approval,
             enabled: self.enabled,
+            spending_conditions: self.spending_conditions.clone(),
         }
     }
 }

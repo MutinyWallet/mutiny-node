@@ -46,6 +46,7 @@ pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
 use crate::auth::MutinyAuthClient;
 use crate::labels::{Contact, LabelStorage};
+use crate::nostr::nwc::SpendingConditions;
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
@@ -296,7 +297,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         .nostr
                         .create_new_nwc_profile(
                             ProfileType::Reserved(ReservedProfile::MutinySubscription),
-                            21_000,
+                            SpendingConditions::RequireApproval,
                         )
                         .await?;
                     profile.nwc_uri

@@ -8,6 +8,7 @@ use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::labels::Contact as MutinyContact;
+use mutiny_core::nostr::nwc::SpendingConditions;
 use mutiny_core::redshift::{RedshiftRecipient, RedshiftStatus};
 use mutiny_core::*;
 use serde::{Deserialize, Serialize};
@@ -830,6 +831,7 @@ pub struct NwcProfile {
     pub enabled: bool,
     /// Require approval before sending a payment
     pub require_approval: bool,
+    spending_conditions: SpendingConditions,
     nwc_uri: String,
 }
 
@@ -854,17 +856,44 @@ impl NwcProfile {
     pub fn nwc_uri(&self) -> String {
         self.nwc_uri.clone()
     }
+
+    #[wasm_bindgen(getter)]
+    pub fn sharable_url(&self, url_prefix: String) -> Option<String> {
+        match self.spending_conditions {
+            SpendingConditions::SingleUse(ref single_use) => {
+                let encoded = urlencoding::encode(&self.nwc_uri);
+                // todo figure out how to change the url
+                Some(format!(
+                    "{}/gift?amount={}&nwc_uri={}",
+                    url_prefix, single_use.amount_sats, encoded
+                ))
+            }
+            SpendingConditions::RequireApproval => None,
+        }
+    }
 }
 
 impl From<nostr::nwc::NwcProfile> for NwcProfile {
     fn from(value: nostr::nwc::NwcProfile) -> Self {
+        let (require_approval, max_single_amt_sats) = match value.spending_conditions.clone() {
+            SpendingConditions::SingleUse(single) => {
+                if single.spent {
+                    (false, 0)
+                } else {
+                    (false, single.amount_sats)
+                }
+            }
+            SpendingConditions::RequireApproval => (true, 0),
+        };
+
         NwcProfile {
             name: value.name,
             index: value.index,
-            max_single_amt_sats: value.max_single_amt_sats,
             relay: value.relay,
+            max_single_amt_sats,
             enabled: value.enabled,
-            require_approval: value.require_approval,
+            require_approval,
+            spending_conditions: value.spending_conditions,
             nwc_uri: value.nwc_uri,
         }
     }

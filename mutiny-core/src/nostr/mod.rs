@@ -1,7 +1,8 @@
 use crate::error::MutinyError;
 use crate::nodemanager::NodeManager;
 use crate::nostr::nwc::{
-    NostrWalletConnect, NwcProfile, PendingNwcInvoice, Profile, PENDING_NWC_EVENTS_KEY,
+    NostrWalletConnect, NwcProfile, PendingNwcInvoice, Profile, SingleUseSpendingConditions,
+    SpendingConditions, PENDING_NWC_EVENTS_KEY,
 };
 use crate::storage::MutinyStorage;
 use bitcoin::hashes::sha256;
@@ -143,7 +144,7 @@ impl<S: MutinyStorage> NostrManager<S> {
     pub(crate) fn create_new_profile(
         &self,
         profile_type: ProfileType,
-        max_single_amt_sats: u64,
+        spending_conditions: SpendingConditions,
     ) -> Result<NwcProfile, MutinyError> {
         let mut profiles = self.nwc.write().unwrap();
 
@@ -166,10 +167,9 @@ impl<S: MutinyStorage> NostrManager<S> {
         let profile = Profile {
             name,
             index,
-            max_single_amt_sats,
             relay: "wss://nostr.mutinywallet.com".to_string(),
             enabled: true,
-            require_approval: true,
+            spending_conditions,
         };
         let nwc = NostrWalletConnect::new(&Secp256k1::new(), self.xprivkey, profile)?;
 
@@ -193,9 +193,9 @@ impl<S: MutinyStorage> NostrManager<S> {
     pub async fn create_new_nwc_profile(
         &self,
         profile_type: ProfileType,
-        max_single_amt_sats: u64,
+        spending_conditions: SpendingConditions,
     ) -> Result<NwcProfile, MutinyError> {
-        let profile = self.create_new_profile(profile_type, max_single_amt_sats)?;
+        let profile = self.create_new_profile(profile_type, spending_conditions)?;
 
         let info_event = self.nwc.read().unwrap().iter().find_map(|nwc| {
             if nwc.profile.index == profile.index {
@@ -225,6 +225,21 @@ impl<S: MutinyStorage> NostrManager<S> {
         }
 
         Ok(profile)
+    }
+
+    pub async fn create_single_use_nwc(
+        &self,
+        name: String,
+        amount_sats: u64,
+    ) -> Result<NwcProfile, MutinyError> {
+        let profile = ProfileType::Normal { name };
+
+        let spending_conditions = SpendingConditions::SingleUse(SingleUseSpendingConditions {
+            amount_sats,
+            spent: false,
+        });
+        self.create_new_nwc_profile(profile, spending_conditions)
+            .await
     }
 
     /// Lists all pending NWC invoices
@@ -405,8 +420,8 @@ impl<S: MutinyStorage> NostrManager<S> {
                 .cloned()
         };
 
-        if let Some(nwc) = nwc {
-            let event = nwc
+        if let Some(mut nwc) = nwc {
+            let (event, needs_save) = nwc
                 .handle_nwc_request(
                     event,
                     node_manager,
@@ -414,10 +429,75 @@ impl<S: MutinyStorage> NostrManager<S> {
                     self.pending_nwc_lock.deref(),
                 )
                 .await?;
+
+            // update the profile if needed
+            if needs_save {
+                let mut vec = self.nwc.write().unwrap();
+
+                // update the profile
+                for item in vec.iter_mut() {
+                    if item.profile.index == nwc.profile.index {
+                        item.profile = nwc.profile;
+                        break;
+                    }
+                }
+
+                let profiles = vec.iter().map(|x| x.profile.clone()).collect::<Vec<_>>();
+                drop(vec); // drop the lock, no longer needed
+
+                self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+            }
+
             Ok(event)
         } else {
             Ok(None)
         }
+    }
+
+    pub async fn claim_single_use_nwc(
+        &self,
+        amount_sats: u64,
+        nwc_uri: &str,
+        node_manager: &NodeManager<S>,
+    ) -> anyhow::Result<EventId> {
+        let nwc = NostrWalletConnectURI::from_str(nwc_uri)?;
+        let secret = Keys::new(nwc.secret);
+        let client = Client::new(&secret);
+
+        #[cfg(target_arch = "wasm32")]
+        let add_relay_res = client.add_relay(nwc.relay_url.as_str()).await;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let add_relay_res = client.add_relay(nwc.relay_url.as_str(), None).await;
+
+        add_relay_res.expect("Failed to add relays");
+        client.connect().await;
+
+        let invoice = node_manager
+            .create_invoice(Some(amount_sats), vec!["Gift".to_string()])
+            .await?;
+
+        let req = Request {
+            method: Method::PayInvoice,
+            params: RequestParams {
+                invoice: invoice.bolt11.unwrap().to_string(),
+            },
+        };
+        let encrypted = encrypt(&nwc.secret, &nwc.public_key, req.as_json())?;
+        let p_tag = Tag::PubKey(nwc.public_key, None);
+        let request_event =
+            EventBuilder::new(Kind::WalletConnectRequest, encrypted, &[p_tag]).to_event(&secret)?;
+
+        client
+            .send_event(request_event.clone())
+            .await
+            .map_err(|e| {
+                MutinyError::Other(anyhow::anyhow!("Failed to send request event: {e:?}"))
+            })?;
+
+        client.disconnect().await?;
+
+        Ok(request_event.id)
     }
 
     /// Derives the client and server keys for Nostr Wallet Connect given a profile index
@@ -524,24 +604,21 @@ mod test {
         let nostr_manager = create_nostr_manager();
 
         let name = "test".to_string();
-        let max_single_amt_sats = 1_000;
 
         let profile = nostr_manager
             .create_new_profile(
                 ProfileType::Normal { name: name.clone() },
-                max_single_amt_sats,
+                SpendingConditions::default(),
             )
             .unwrap();
 
         assert_eq!(profile.name, name);
         assert_eq!(profile.index, 1000);
-        assert_eq!(profile.max_single_amt_sats, max_single_amt_sats);
 
         let profiles = nostr_manager.profiles();
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].name, name);
         assert_eq!(profiles[0].index, 1000);
-        assert_eq!(profiles[0].max_single_amt_sats, max_single_amt_sats);
 
         let profiles: Vec<Profile> = nostr_manager
             .storage
@@ -552,7 +629,6 @@ mod test {
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].name, name);
         assert_eq!(profiles[0].index, 1000);
-        assert_eq!(profiles[0].max_single_amt_sats, max_single_amt_sats);
     }
 
     #[test]
@@ -560,24 +636,21 @@ mod test {
         let nostr_manager = create_nostr_manager();
 
         let name = "Mutiny+ Subscription".to_string();
-        let max_single_amt_sats = 1_000;
 
         let profile = nostr_manager
             .create_new_profile(
                 ProfileType::Reserved(ReservedProfile::MutinySubscription),
-                max_single_amt_sats,
+                SpendingConditions::default(),
             )
             .unwrap();
 
         assert_eq!(profile.name, name);
         assert_eq!(profile.index, 0);
-        assert_eq!(profile.max_single_amt_sats, max_single_amt_sats);
 
         let profiles = nostr_manager.profiles();
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].name, name);
         assert_eq!(profiles[0].index, 0);
-        assert_eq!(profiles[0].max_single_amt_sats, max_single_amt_sats);
 
         let profiles: Vec<Profile> = nostr_manager
             .storage
@@ -588,22 +661,19 @@ mod test {
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].name, name);
         assert_eq!(profiles[0].index, 0);
-        assert_eq!(profiles[0].max_single_amt_sats, max_single_amt_sats);
 
         // now create normal profile
         let name = "test".to_string();
-        let max_single_amt_sats = 1_000;
 
         let profile = nostr_manager
             .create_new_profile(
                 ProfileType::Normal { name: name.clone() },
-                max_single_amt_sats,
+                SpendingConditions::default(),
             )
             .unwrap();
 
         assert_eq!(profile.name, name);
         assert_eq!(profile.index, 1000);
-        assert_eq!(profile.max_single_amt_sats, max_single_amt_sats);
     }
 
     #[test]
@@ -611,19 +681,17 @@ mod test {
         let nostr_manager = create_nostr_manager();
 
         let name = "test".to_string();
-        let max_single_amt_sats = 1_000;
 
         let mut profile = nostr_manager
             .create_new_profile(
                 ProfileType::Normal { name: name.clone() },
-                max_single_amt_sats,
+                SpendingConditions::default(),
             )
             .unwrap();
 
         assert_eq!(profile.name, name);
         assert_eq!(profile.index, 1000);
         assert!(profile.enabled);
-        assert_eq!(profile.max_single_amt_sats, max_single_amt_sats);
 
         profile.enabled = false;
 
@@ -634,7 +702,6 @@ mod test {
         assert_eq!(profiles[0].name, name);
         assert_eq!(profiles[0].index, 1000);
         assert!(!profiles[0].enabled);
-        assert_eq!(profiles[0].max_single_amt_sats, max_single_amt_sats);
 
         let profiles: Vec<Profile> = nostr_manager
             .storage
@@ -646,7 +713,6 @@ mod test {
         assert_eq!(profiles[0].name, name);
         assert_eq!(profiles[0].index, 1000);
         assert!(!profiles[0].enabled);
-        assert_eq!(profiles[0].max_single_amt_sats, max_single_amt_sats);
     }
 
     #[test]
@@ -654,10 +720,9 @@ mod test {
         let nostr_manager = create_nostr_manager();
 
         let name = "test".to_string();
-        let max_single_amt_sats = 1_000;
 
         let profile = nostr_manager
-            .create_new_profile(ProfileType::Normal { name }, max_single_amt_sats)
+            .create_new_profile(ProfileType::Normal { name }, SpendingConditions::default())
             .unwrap();
 
         let inv = PendingNwcInvoice {
