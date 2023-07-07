@@ -3,6 +3,7 @@ use lightning::sign::{NodeSigner, Recipient};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
+use crate::lnurlauth::AuthManager;
 use crate::logging::LOGGING_KEY;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
 use crate::scb::{
@@ -11,6 +12,7 @@ use crate::scb::{
 };
 use crate::storage::{MutinyStorage, KEYCHAIN_STORE_KEY};
 use crate::utils::sleep;
+use crate::MutinyWalletConfig;
 use crate::{auth::MutinyAuthClient, gossip::*};
 use crate::{
     chain::MutinyChain,
@@ -30,10 +32,6 @@ use crate::{
     lnurlauth::make_lnurl_auth_connection,
 };
 use crate::{labels::LabelStorage, subscription::MutinySubscriptionClient};
-use crate::{
-    lnurlauth::{AuthManager, AuthProfile},
-    MutinyWalletConfig,
-};
 use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::{wallet::AddressIndex, LocalUtxo};
 use bdk_esplora::esplora_client::AsyncClient;
@@ -515,10 +513,10 @@ pub struct NodeManager<S: MutinyStorage> {
     pub(crate) storage: S,
     pub(crate) node_storage: Mutex<NodeStorage>,
     pub(crate) nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node<S>>>>>,
-    auth: AuthManager<S>,
+    auth: AuthManager,
     lnurl_client: Arc<LnUrlClient>,
     pub(crate) lsp_clients: Vec<LspClient>,
-    pub(crate) subscription_client: Option<Arc<MutinySubscriptionClient<S>>>,
+    pub(crate) subscription_client: Option<Arc<MutinySubscriptionClient>>,
     pub(crate) logger: Arc<MutinyLogger>,
     bitcoin_price_cache: Arc<Mutex<Option<(f32, Duration)>>>,
     do_not_connect_peers: bool,
@@ -671,10 +669,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let seed = mnemonic.to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(network, &seed)?;
-        let auth = AuthManager::new(xprivkey, storage.clone())?;
-
-        // Create default profile if it doesn't exist
-        auth.create_init()?;
+        let auth = AuthManager::new(xprivkey)?;
 
         let lnurl_client = Arc::new(
             lnurl::Builder::default()
@@ -1656,23 +1651,12 @@ impl<S: MutinyStorage> NodeManager<S> {
         }
     }
 
-    /// Creates a new LNURL-auth profile.
-    pub fn create_lnurl_auth_profile(&self, name: String) -> Result<u32, MutinyError> {
-        self.auth.add_profile(name)
-    }
-
-    /// Gets all the LNURL-auth profiles.
-    pub fn get_lnurl_auth_profiles(&self) -> Result<Vec<AuthProfile>, MutinyError> {
-        self.auth.get_profiles()
-    }
-
-    /// Authenticates with a LNURL-auth for the given profile.
-    pub async fn lnurl_auth(&self, profile_index: usize, lnurl: LnUrl) -> Result<(), MutinyError> {
+    /// Authenticate with a LNURL-auth
+    pub async fn lnurl_auth(&self, lnurl: LnUrl) -> Result<(), MutinyError> {
         make_lnurl_auth_connection(
             self.auth.clone(),
             self.lnurl_client.clone(),
             lnurl,
-            profile_index,
             self.logger.clone(),
         )
         .await

@@ -56,7 +56,6 @@ use futures::{pin_mut, select, FutureExt};
 use lightning::util::logger::Logger;
 use lightning::{log_error, log_warn};
 use lightning_invoice::Invoice;
-pub use lnurlauth::AuthProfile;
 use nostr_sdk::{Client, RelayPoolNotification};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;

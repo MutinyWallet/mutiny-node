@@ -4,7 +4,6 @@ use crate::{
     lnurlauth::{make_lnurl_auth_connection, AuthManager},
     logging::MutinyLogger,
     networking::websocket::{SimpleWebSocket, WebSocketImpl},
-    storage::MutinyStorage,
 };
 use jwt_compact::UntrustedToken;
 use lightning::util::logger::*;
@@ -22,8 +21,8 @@ struct CustomClaims {
     sub: String,
 }
 
-pub(crate) struct MutinyAuthClient<S: MutinyStorage> {
-    auth: AuthManager<S>,
+pub(crate) struct MutinyAuthClient {
+    auth: AuthManager,
     lnurl_client: Arc<LnUrlClient>,
     url: String,
     http_client: Client,
@@ -31,9 +30,9 @@ pub(crate) struct MutinyAuthClient<S: MutinyStorage> {
     logger: Arc<MutinyLogger>,
 }
 
-impl<S: MutinyStorage> MutinyAuthClient<S> {
+impl MutinyAuthClient {
     pub fn new(
-        auth: AuthManager<S>,
+        auth: AuthManager,
         lnurl_client: Arc<LnUrlClient>,
         logger: Arc<MutinyLogger>,
         url: String,
@@ -139,7 +138,6 @@ impl<S: MutinyStorage> MutinyAuthClient<S> {
             self.auth.clone(),
             self.lnurl_client.clone(),
             lnurl,
-            0, // Default Index
             self.logger.clone(),
         )
         .await?;
