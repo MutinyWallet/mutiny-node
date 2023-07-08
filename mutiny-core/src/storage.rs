@@ -1,4 +1,4 @@
-use crate::encrypt::{decrypt, encrypt};
+use crate::encrypt::{decrypt, encrypt, encryption_key_from_pass, Cipher};
 use crate::error::{MutinyError, MutinyStorageError};
 use crate::ldkstorage::CHANNEL_MANAGER_KEY;
 use crate::nodemanager::NodeStorage;
@@ -26,13 +26,13 @@ fn needs_encryption(key: &str) -> bool {
 pub fn encrypt_value(
     key: impl AsRef<str>,
     value: Value,
-    password: Option<&str>,
+    cipher: Option<Cipher>,
 ) -> Result<Value, MutinyError> {
     // Only bother encrypting if a password is set
-    let res = match password {
-        Some(pw) if needs_encryption(key.as_ref()) => {
+    let res = match cipher {
+        Some(c) if needs_encryption(key.as_ref()) => {
             let str = serde_json::to_string(&value)?;
-            let ciphertext = encrypt(&str, pw);
+            let ciphertext = encrypt(&str, c)?;
             Value::String(ciphertext)
         }
         _ => value,
@@ -50,7 +50,7 @@ pub fn decrypt_value(
     let json: Value = match password {
         Some(pw) if needs_encryption(key.as_ref()) => {
             let str: String = serde_json::from_value(value)?;
-            let ciphertext = decrypt(&str, pw);
+            let ciphertext = decrypt(&str, pw)?;
             serde_json::from_str(&ciphertext)?
         }
         _ => value,
@@ -62,6 +62,9 @@ pub fn decrypt_value(
 pub trait MutinyStorage: Clone + Sized + 'static {
     /// Get the password used to encrypt the storage
     fn password(&self) -> Option<&str>;
+
+    /// Get the encryption key used for storage
+    fn cipher(&self) -> Option<Cipher>;
 
     /// Set a value in the storage, the value will already be encrypted if needed
     fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
@@ -77,7 +80,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
             source: MutinyStorageError::SerdeError { source: e },
         })?;
 
-        let json: Value = encrypt_value(key.as_ref(), data, self.password())?;
+        let json: Value = encrypt_value(key.as_ref(), data, self.cipher())?;
 
         self.set(key, json)
     }
@@ -143,12 +146,54 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     }
 
     /// Get the mnemonic from the storage
-    fn get_mnemonic(&self) -> Result<Mnemonic, MutinyError> {
-        let mnemonic: Option<Mnemonic> = self.get_data(MNEMONIC_KEY)?;
-        match mnemonic {
-            Some(m) => Ok(m),
-            None => Err(MutinyError::NotFound),
+    fn get_mnemonic(&self) -> Result<Option<Mnemonic>, MutinyError> {
+        self.get_data(MNEMONIC_KEY)
+    }
+
+    fn change_password(
+        &mut self,
+        new: Option<String>,
+        new_cipher: Option<Cipher>,
+    ) -> Result<(), MutinyError>;
+
+    fn change_password_and_rewrite_storage(
+        &mut self,
+        old: Option<String>,
+        new: Option<String>,
+    ) -> Result<(), MutinyError> {
+        // check if old password is correct
+        if old != self.password().map(|s| s.to_owned()) {
+            return Err(MutinyError::IncorrectPassword);
         }
+
+        // get all of our keys
+        let mut keys: Vec<String> = self.scan_keys("", None)?;
+        // get the ones that need encryption
+        keys.retain(|k| needs_encryption(k));
+
+        // decrypt all of the values
+        let mut values: HashMap<String, Value> = HashMap::new();
+        for key in keys.iter() {
+            let value = self.get_data(key)?;
+            if let Some(v) = value {
+                values.insert(key.to_owned(), v);
+            }
+        }
+
+        // change the password
+        let new_cipher = new
+            .as_ref()
+            .filter(|p| !p.is_empty())
+            .map(|p| encryption_key_from_pass(p))
+            .transpose()?;
+        self.change_password(new, new_cipher)?;
+
+        // encrypt all of the values
+        for (key, value) in values.iter() {
+            self.set_data(key, value)?;
+        }
+
+        Ok(())
     }
 
     /// Override the storage with the new JSON object
@@ -193,15 +238,17 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MemoryStorage {
     pub password: Option<String>,
+    pub cipher: Option<Cipher>,
     pub memory: Arc<RwLock<HashMap<String, Value>>>,
 }
 
 impl MemoryStorage {
-    pub fn new(password: Option<String>) -> Self {
+    pub fn new(password: Option<String>, cipher: Option<Cipher>) -> Self {
         Self {
+            cipher,
             password,
             memory: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -210,13 +257,17 @@ impl MemoryStorage {
 
 impl Default for MemoryStorage {
     fn default() -> Self {
-        Self::new(None)
+        Self::new(None, None)
     }
 }
 
 impl MutinyStorage for MemoryStorage {
     fn password(&self) -> Option<&str> {
         self.password.as_deref()
+    }
+
+    fn cipher(&self) -> Option<Cipher> {
+        self.cipher.to_owned()
     }
 
     fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
@@ -294,6 +345,16 @@ impl MutinyStorage for MemoryStorage {
             .collect())
     }
 
+    fn change_password(
+        &mut self,
+        new: Option<String>,
+        new_cipher: Option<Cipher>,
+    ) -> Result<(), MutinyError> {
+        self.password = new;
+        self.cipher = new_cipher;
+        Ok(())
+    }
+
     async fn import(_json: Value) -> Result<(), MutinyError> {
         Ok(())
     }
@@ -306,6 +367,10 @@ impl MutinyStorage for MemoryStorage {
 // Dummy implementation for testing or if people want to ignore persistence
 impl MutinyStorage for () {
     fn password(&self) -> Option<&str> {
+        None
+    }
+
+    fn cipher(&self) -> Option<Cipher> {
         None
     }
 
@@ -339,6 +404,14 @@ impl MutinyStorage for () {
 
     fn scan_keys(&self, _prefix: &str, _suffix: Option<&str>) -> Result<Vec<String>, MutinyError> {
         Ok(Vec::new())
+    }
+
+    fn change_password(
+        &mut self,
+        _new: Option<String>,
+        _new_cipher: Option<Cipher>,
+    ) -> Result<(), MutinyError> {
+        Ok(())
     }
 
     async fn import(_json: Value) -> Result<(), MutinyError> {
@@ -386,8 +459,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::MemoryStorage;
     use crate::test_utils::*;
+    use crate::{encrypt::encryption_key_from_pass, storage::MemoryStorage};
     use crate::{keymanager, storage::MutinyStorage};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
@@ -400,11 +473,11 @@ mod tests {
 
         let seed = keymanager::generate_seed(12).unwrap();
 
-        let storage = MemoryStorage::new(None);
+        let storage = MemoryStorage::new(None, None);
         let mnemonic = storage.insert_mnemonic(seed).unwrap();
 
         let stored_mnemonic = storage.get_mnemonic().unwrap();
-        assert_eq!(mnemonic, stored_mnemonic);
+        assert_eq!(Some(mnemonic), stored_mnemonic);
     }
 
     #[test]
@@ -414,11 +487,13 @@ mod tests {
 
         let seed = keymanager::generate_seed(12).unwrap();
 
-        let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher));
 
         let mnemonic = storage.insert_mnemonic(seed).unwrap();
 
         let stored_mnemonic = storage.get_mnemonic().unwrap();
-        assert_eq!(mnemonic, stored_mnemonic);
+        assert_eq!(Some(mnemonic), stored_mnemonic);
     }
 }

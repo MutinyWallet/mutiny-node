@@ -43,10 +43,10 @@ pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
-use crate::nostr::NostrManager;
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
+use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::Kind;
 use bip39::Mnemonic;
 use bitcoin::secp256k1::PublicKey;
@@ -54,7 +54,7 @@ use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::Network;
 use futures::{pin_mut, select, FutureExt};
 use lightning::util::logger::Logger;
-use lightning::{log_error, log_warn};
+use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Invoice;
 use nostr_sdk::{Client, RelayPoolNotification};
 use std::sync::atomic::Ordering;
@@ -308,6 +308,36 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         self.node_manager.stop().await
     }
 
+    pub async fn change_password(
+        &mut self,
+        old: Option<String>,
+        new: Option<String>,
+    ) -> Result<(), MutinyError> {
+        // check if old password is correct
+        if old != self.storage.password().map(|s| s.to_owned()) {
+            return Err(MutinyError::IncorrectPassword);
+        }
+
+        log_info!(self.node_manager.logger, "Changing password");
+
+        self.stop().await?;
+
+        self.storage.start().await?;
+
+        self.storage.change_password_and_rewrite_storage(
+            old.filter(|s| !s.is_empty()),
+            new.filter(|s| !s.is_empty()),
+        )?;
+
+        // There's not a good way to check that all the indexeddb
+        // data is saved in the background. This should get better
+        // once we have async saving, but for now just make sure
+        // the user has saved their seed already.
+        sleep(5_000).await;
+
+        Ok(())
+    }
+
     /// Resets BDK's keychain tracker. This will require a re-sync of the blockchain.
     ///
     /// This can be useful if you get stuck in a bad state.
@@ -341,7 +371,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{nodemanager::NodeManager, MutinyWallet, MutinyWalletConfig};
+    use crate::{
+        encrypt::encryption_key_from_pass, nodemanager::NodeManager, MutinyWallet,
+        MutinyWalletConfig,
+    };
     use bitcoin::Network;
 
     use crate::test_utils::*;
@@ -356,7 +389,9 @@ mod tests {
         let test_name = "create_mutiny_wallet";
         log!("{}", test_name);
 
-        let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher));
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let config = MutinyWalletConfig::new(
             None,
@@ -380,7 +415,9 @@ mod tests {
         let test_name = "restart_mutiny_wallet";
         log!("{}", test_name);
 
-        let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher));
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let config = MutinyWalletConfig::new(
             None,
@@ -410,7 +447,9 @@ mod tests {
         let test_name = "restart_mutiny_wallet_with_nodes";
         log!("{}", test_name);
 
-        let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher));
 
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let config = MutinyWalletConfig::new(
@@ -443,7 +482,9 @@ mod tests {
         let test_name = "restore_mutiny_mnemonic";
         log!("{}", test_name);
 
-        let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher));
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let config = MutinyWalletConfig::new(
             None,
@@ -463,7 +504,9 @@ mod tests {
         assert_ne!(seed.to_string(), "");
 
         // create a second mw and make sure it has a different seed
-        let storage2 = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage2 = MemoryStorage::new(Some(pass), Some(cipher));
         assert!(!NodeManager::has_node_manager(storage2.clone()));
         let config2 = MutinyWalletConfig::new(
             None,
@@ -486,7 +529,9 @@ mod tests {
         mw2.stop().await.expect("should stop");
         drop(mw2);
 
-        let storage3 = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage3 = MemoryStorage::new(Some(pass), Some(cipher));
         MutinyWallet::restore_mnemonic(storage3.clone(), seed.clone())
             .await
             .expect("mutiny wallet should restore");

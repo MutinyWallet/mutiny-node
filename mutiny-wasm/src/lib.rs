@@ -23,10 +23,10 @@ use gloo_utils::format::JsValueSerdeExt;
 use lightning::routing::gossip::NodeId;
 use lightning_invoice::Invoice;
 use lnurl::lnurl::LnUrl;
-use mutiny_core::nostr::nwc::NwcProfile;
 use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::scb::EncryptedSCB;
 use mutiny_core::storage::MutinyStorage;
+use mutiny_core::{encrypt::encryption_key_from_pass, nostr::nwc::NwcProfile};
 use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
 use mutiny_core::{nodemanager, redshift::RedshiftRecipient};
@@ -79,7 +79,12 @@ impl MutinyWallet {
         };
 
         let logger = Arc::new(MutinyLogger::default());
-        let storage = IndexedDbStorage::new(password, logger).await?;
+        let cipher = password
+            .as_ref()
+            .filter(|p| !p.is_empty())
+            .map(|p| encryption_key_from_pass(p))
+            .transpose()?;
+        let storage = IndexedDbStorage::new(password, cipher, logger).await?;
 
         let mut config = mutiny_core::MutinyWalletConfig::new(
             mnemonic,
@@ -105,7 +110,16 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn has_node_manager(password: Option<String>) -> bool {
         let logger = Arc::new(MutinyLogger::default());
-        let storage = IndexedDbStorage::new(password, logger)
+        let cipher = match password
+            .as_ref()
+            .filter(|p| !p.is_empty())
+            .map(|p| encryption_key_from_pass(p))
+            .transpose()
+        {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        let storage = IndexedDbStorage::new(password, cipher, logger)
             .await
             .expect("Failed to init");
         nodemanager::NodeManager::has_node_manager(storage)
@@ -958,7 +972,7 @@ impl MutinyWallet {
     pub async fn get_logs() -> Result<JsValue /* Option<Vec<String>> */, MutinyJsError> {
         let logger = Arc::new(MutinyLogger::default());
         // Password should not be required for logs
-        let storage = IndexedDbStorage::new(None, logger.clone()).await?;
+        let storage = IndexedDbStorage::new(None, None, logger.clone()).await?;
         let stop = Arc::new(AtomicBool::new(false));
         let logger = Arc::new(MutinyLogger::with_writer(stop.clone(), storage.clone()));
         let res = JsValue::from_serde(&NodeManager::get_logs(storage, logger)?)?;
@@ -1104,7 +1118,16 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn export_json(password: Option<String>) -> Result<String, MutinyJsError> {
         let logger = Arc::new(MutinyLogger::default());
-        let storage = IndexedDbStorage::new(password, logger).await?;
+        let cipher = password
+            .as_ref()
+            .filter(|p| !p.is_empty())
+            .map(|p| encryption_key_from_pass(p))
+            .transpose()?;
+        let storage = IndexedDbStorage::new(password, cipher, logger).await?;
+        if storage.get_mnemonic().is_err() {
+            // if we get an error, then we have the wrong password
+            return Err(MutinyJsError::IncorrectPassword);
+        }
         let json = NodeManager::export_json(storage).await?;
         Ok(serde_json::to_string(&json)?)
     }
@@ -1127,12 +1150,29 @@ impl MutinyWallet {
         password: Option<String>,
     ) -> Result<(), MutinyJsError> {
         let logger = Arc::new(MutinyLogger::default());
-        let storage = IndexedDbStorage::new(password, logger).await?;
+        let cipher = password
+            .as_ref()
+            .filter(|p| !p.is_empty())
+            .map(|p| encryption_key_from_pass(p))
+            .transpose()?;
+        let storage = IndexedDbStorage::new(password, cipher, logger).await?;
         mutiny_core::MutinyWallet::<IndexedDbStorage>::restore_mnemonic(
             storage,
             Mnemonic::from_str(&m).map_err(|_| MutinyJsError::InvalidMnemonic)?,
         )
         .await?;
+        Ok(())
+    }
+
+    #[wasm_bindgen]
+    pub async fn change_password(
+        &mut self,
+        old_password: Option<String>,
+        new_password: Option<String>,
+    ) -> Result<(), MutinyJsError> {
+        self.inner
+            .change_password(old_password, new_password)
+            .await?;
         Ok(())
     }
 

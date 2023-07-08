@@ -526,7 +526,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Returns if there is a saved wallet in storage.
     /// This is checked by seeing if a mnemonic seed exists in storage.
     pub fn has_node_manager(storage: S) -> bool {
-        storage.get_mnemonic().is_ok()
+        storage.get_mnemonic().is_ok_and(|x| x.is_some())
     }
 
     /// Creates a new [NodeManager] with the given parameters.
@@ -545,10 +545,14 @@ impl<S: MutinyStorage> NodeManager<S> {
         let mnemonic = match c.mnemonic {
             Some(seed) => storage.insert_mnemonic(seed)?,
             None => match storage.get_mnemonic() {
-                Ok(mnemonic) => mnemonic,
-                Err(_) => {
+                Ok(Some(mnemonic)) => mnemonic,
+                Ok(None) => {
                     let seed = keymanager::generate_seed(12)?;
                     storage.insert_mnemonic(seed)?
+                }
+                Err(_) => {
+                    // if we get an error, then we have the wrong password
+                    return Err(MutinyError::IncorrectPassword);
                 }
             },
         };
@@ -2383,8 +2387,11 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
 
 #[cfg(test)]
 mod tests {
-    use crate::nodemanager::{
-        ActivityItem, ChannelClosure, MutinyInvoice, NodeManager, TransactionDetails,
+    use crate::{
+        encrypt::encryption_key_from_pass,
+        nodemanager::{
+            ActivityItem, ChannelClosure, MutinyInvoice, NodeManager, TransactionDetails,
+        },
     };
     use crate::{keymanager::generate_seed, MutinyWalletConfig};
     use bdk::chain::ConfirmationTime;
@@ -2411,7 +2418,9 @@ mod tests {
         let test_name = "create_node_manager";
         log!("{}", test_name);
 
-        let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher));
 
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let c = MutinyWalletConfig::new(
@@ -2458,7 +2467,9 @@ mod tests {
         let test_name = "created_new_nodes";
         log!("{}", test_name);
 
-        let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher));
         let seed = generate_seed(12).expect("Failed to gen seed");
         let c = MutinyWalletConfig::new(
             Some(seed),
@@ -2504,7 +2515,9 @@ mod tests {
         let test_name = "created_new_nodes";
         log!("{}", test_name);
 
-        let storage = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher));
         let seed = generate_seed(12).expect("Failed to gen seed");
         let c = MutinyWalletConfig::new(
             Some(seed),

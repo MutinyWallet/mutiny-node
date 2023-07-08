@@ -553,8 +553,8 @@ pub(crate) fn get_esplora_url(network: Network, user_provided_url: Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::MemoryStorage;
     use crate::test_utils::*;
+    use crate::{encrypt::encryption_key_from_pass, storage::MemoryStorage};
     use bitcoin::Address;
     use esplora_client::Builder;
     use std::str::FromStr;
@@ -568,7 +568,9 @@ mod tests {
                 .build_async()
                 .unwrap(),
         );
-        let db = MemoryStorage::new(Some(uuid::Uuid::new_v4().to_string()));
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let db = MemoryStorage::new(Some(pass), Some(cipher));
         let logger = Arc::new(MutinyLogger::default());
         let fees = Arc::new(MutinyFeeEstimator::new(
             db.clone(),
