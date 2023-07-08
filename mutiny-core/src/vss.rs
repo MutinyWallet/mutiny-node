@@ -81,7 +81,7 @@ impl EncryptedVssKeyValueItem {
 }
 
 impl MutinyVssClient {
-    pub(crate) fn new(
+    pub fn new(
         auth_client: Arc<MutinyAuthClient>,
         url: String,
         encryption_key: SecretKey,

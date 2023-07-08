@@ -3,6 +3,7 @@ use lightning::sign::{NodeSigner, Recipient};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
+use crate::gossip::*;
 use crate::lnurlauth::AuthManager;
 use crate::logging::LOGGING_KEY;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
@@ -13,13 +14,12 @@ use crate::scb::{
 use crate::storage::{MutinyStorage, KEYCHAIN_STORE_KEY};
 use crate::utils::sleep;
 use crate::MutinyWalletConfig;
-use crate::{auth::MutinyAuthClient, gossip::*};
 use crate::{
     chain::MutinyChain,
     error::MutinyError,
     esplora::EsploraSyncClient,
     fees::MutinyFeeEstimator,
-    gossip, keymanager,
+    gossip,
     logging::MutinyLogger,
     lspclient::LspClient,
     node::{Node, ProbScorer, PubkeyConnectionInfo, RapidGossipSync},
@@ -35,7 +35,6 @@ use crate::{labels::LabelStorage, subscription::MutinySubscriptionClient};
 use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::{wallet::AddressIndex, LocalUtxo};
 use bdk_esplora::esplora_client::AsyncClient;
-use bip39::Mnemonic;
 use bitcoin::blockdata::script;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::hashes::{sha256, Hash};
@@ -500,7 +499,7 @@ pub struct Plan {
 /// services provided by Mutiny.
 pub struct NodeManager<S: MutinyStorage> {
     pub(crate) stop: Arc<AtomicBool>,
-    mnemonic: Mnemonic,
+    pub(crate) xprivkey: ExtendedPrivKey,
     network: Network,
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
@@ -540,26 +539,9 @@ impl<S: MutinyStorage> NodeManager<S> {
             .websocket_proxy_addr
             .unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
 
-        let network: Network = c.network.unwrap_or(Network::Bitcoin);
-
-        let mnemonic = match c.mnemonic {
-            Some(seed) => storage.insert_mnemonic(seed)?,
-            None => match storage.get_mnemonic() {
-                Ok(Some(mnemonic)) => mnemonic,
-                Ok(None) => {
-                    let seed = keymanager::generate_seed(12)?;
-                    storage.insert_mnemonic(seed)?
-                }
-                Err(_) => {
-                    // if we get an error, then we have the wrong password
-                    return Err(MutinyError::IncorrectPassword);
-                }
-            },
-        };
-
         let logger = Arc::new(MutinyLogger::with_writer(stop.clone(), storage.clone()));
 
-        let esplora_server_url = get_esplora_url(network, c.user_esplora_url);
+        let esplora_server_url = get_esplora_url(c.network, c.user_esplora_url);
         let tx_sync = Arc::new(EsploraSyncClient::new(esplora_server_url, logger.clone()));
 
         let esplora = Arc::new(tx_sync.client().clone());
@@ -570,9 +552,9 @@ impl<S: MutinyStorage> NodeManager<S> {
         ));
 
         let wallet = Arc::new(OnChainWallet::new(
-            &mnemonic,
+            c.xprivkey,
             storage.clone(),
-            network,
+            c.network,
             esplora.clone(),
             fee_estimator.clone(),
             stop.clone(),
@@ -582,7 +564,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         let chain = Arc::new(MutinyChain::new(tx_sync, wallet.clone(), logger.clone()));
 
         let (gossip_sync, scorer) =
-            gossip::get_gossip_sync(&storage, c.user_rgs_url, network, logger.clone()).await?;
+            get_gossip_sync(&storage, c.user_rgs_url, c.network, logger.clone()).await?;
 
         let scorer = Arc::new(utils::Mutex::new(scorer));
 
@@ -627,14 +609,14 @@ impl<S: MutinyStorage> NodeManager<S> {
             let node = Node::new(
                 node_item.0,
                 &node_item.1,
-                &mnemonic,
+                c.xprivkey,
                 storage.clone(),
                 gossip_sync.clone(),
                 scorer.clone(),
                 chain.clone(),
                 fee_estimator.clone(),
                 wallet.clone(),
-                network,
+                c.network,
                 esplora.clone(),
                 &lsp_clients,
                 logger.clone(),
@@ -671,47 +653,33 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let nodes = Arc::new(Mutex::new(nodes_map));
 
-        let seed = mnemonic.to_seed("");
-        let xprivkey = ExtendedPrivKey::new_master(network, &seed)?;
-        let auth = AuthManager::new(xprivkey)?;
-
         let lnurl_client = Arc::new(
             lnurl::Builder::default()
                 .build_async()
                 .expect("failed to make lnurl client"),
         );
 
-        let auth_client = if let Some(auth_url) = c.auth_url {
-            let a = Arc::new(MutinyAuthClient::new(
-                auth.clone(),
-                lnurl_client.clone(),
-                logger.clone(),
-                auth_url,
-            ));
-            Some(a)
-        } else {
-            None
-        };
-
-        let subscription_client = if let Some(auth_client) = auth_client {
+        let (subscription_client, auth) = if let Some(auth_client) = c.auth_client {
             if let Some(subscription_url) = c.subscription_url {
+                let auth = auth_client.auth.clone();
                 let s = Arc::new(MutinySubscriptionClient::new(
                     auth_client,
                     subscription_url,
                     logger.clone(),
                 ));
-                Some(s)
+                (Some(s), auth)
             } else {
-                None
+                (None, auth_client.auth.clone())
             }
         } else {
-            None
+            let auth_manager = AuthManager::new(c.xprivkey)?;
+            (None, auth_manager)
         };
 
         let nm = NodeManager {
             stop,
-            mnemonic,
-            network,
+            xprivkey: c.xprivkey,
+            network: c.network,
             wallet,
             gossip_sync,
             scorer,
@@ -892,11 +860,6 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// The transaction is broadcast through the configured esplora server.
     pub async fn broadcast_transaction(&self, tx: Transaction) -> Result<(), MutinyError> {
         self.wallet.broadcast_transaction(tx).await
-    }
-
-    /// Returns the mnemonic seed phrase for the wallet.
-    pub fn show_seed(&self) -> Mnemonic {
-        self.mnemonic.clone()
     }
 
     /// Returns the network of the wallet.
@@ -1933,12 +1896,13 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     fn get_scb_key(&self) -> SecretKey {
-        let seed = self.mnemonic.to_seed("");
-        let xprivkey = ExtendedPrivKey::new_master(self.network, &seed).unwrap();
         let path = DerivationPath::from_str(SCB_ENCRYPTION_KEY_DERIVATION_PATH).unwrap();
         let context = Secp256k1::new();
 
-        xprivkey.derive_priv(&context, &path).unwrap().private_key
+        self.xprivkey
+            .derive_priv(&context, &path)
+            .unwrap()
+            .private_key
     }
 
     /// Creates a static channel backup for all the nodes in the node manager.
@@ -2020,7 +1984,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             let new_node = Node::new(
                 uuid,
                 &node_index,
-                &self.mnemonic,
+                self.xprivkey,
                 self.storage.clone(),
                 self.gossip_sync.clone(),
                 self.scorer.clone(),
@@ -2348,7 +2312,7 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
     let new_node_res = Node::new(
         next_node_uuid.clone(),
         &next_node,
-        &node_manager.mnemonic,
+        node_manager.xprivkey,
         node_manager.storage.clone(),
         node_manager.gossip_sync.clone(),
         node_manager.scorer.clone(),
@@ -2398,6 +2362,7 @@ mod tests {
     use bitcoin::hashes::hex::{FromHex, ToHex};
     use bitcoin::hashes::{sha256, Hash};
     use bitcoin::secp256k1::PublicKey;
+    use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::{Network, PackedLockTime, Transaction, TxOut, Txid};
     use lightning::ln::PaymentHash;
     use lightning_invoice::Invoice;
@@ -2406,7 +2371,7 @@ mod tests {
     use crate::test_utils::*;
 
     use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
-    use crate::storage::MemoryStorage;
+    use crate::storage::{MemoryStorage, MutinyStorage};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -2417,6 +2382,8 @@ mod tests {
     async fn create_node_manager() {
         let test_name = "create_node_manager";
         log!("{}", test_name);
+        let seed = generate_seed(12).unwrap();
+        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
@@ -2424,10 +2391,10 @@ mod tests {
 
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let c = MutinyWalletConfig::new(
-            None,
+            xpriv,
             #[cfg(target_arch = "wasm32")]
             None,
-            Some(Network::Regtest),
+            Network::Regtest,
             None,
             None,
             None,
@@ -2437,29 +2404,8 @@ mod tests {
         NodeManager::new(c, storage.clone())
             .await
             .expect("node manager should initialize");
+        storage.insert_mnemonic(seed).unwrap();
         assert!(NodeManager::has_node_manager(storage));
-    }
-
-    #[test]
-    async fn correctly_show_seed() {
-        let test_name = "correctly_show_seed";
-        log!("{}", test_name);
-
-        let seed = generate_seed(12).expect("Failed to gen seed");
-        let c = MutinyWalletConfig::new(
-            Some(seed.clone()),
-            #[cfg(target_arch = "wasm32")]
-            None,
-            Some(Network::Regtest),
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
-        let nm = NodeManager::new(c, ()).await.unwrap();
-
-        assert_eq!(seed, nm.show_seed());
     }
 
     #[test]
@@ -2471,11 +2417,12 @@ mod tests {
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher));
         let seed = generate_seed(12).expect("Failed to gen seed");
+        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
         let c = MutinyWalletConfig::new(
-            Some(seed),
+            xpriv,
             #[cfg(target_arch = "wasm32")]
             None,
-            Some(Network::Regtest),
+            Network::Regtest,
             None,
             None,
             None,
@@ -2519,11 +2466,12 @@ mod tests {
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher));
         let seed = generate_seed(12).expect("Failed to gen seed");
+        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
         let c = MutinyWalletConfig::new(
-            Some(seed),
+            xpriv,
             #[cfg(target_arch = "wasm32")]
             None,
-            Some(Network::Signet),
+            Network::Signet,
             None,
             None,
             None,

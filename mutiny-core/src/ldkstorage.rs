@@ -87,10 +87,11 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         &self,
         key: &str,
         object: &W,
+        version: Option<u32>,
     ) -> Result<(), lightning::io::Error> {
         let key_with_node = self.get_key(key);
         self.storage
-            .set_data(key_with_node, object.encode())
+            .set_data(key_with_node, object.encode(), version)
             .map_err(|e| {
                 match e {
                     MutinyError::PersistenceFailed { source } => {
@@ -273,7 +274,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
     ) -> io::Result<()> {
         let key = self.get_key(payment_key(inbound, payment_hash).as_str());
         self.storage
-            .set_data(key, payment_info)
+            .set_data(key, payment_info, None)
             .map_err(io::Error::other)
     }
 
@@ -322,7 +323,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             "{CHANNEL_CLOSURE_PREFIX}{}",
             user_channel_id.to_be_bytes().to_hex()
         ));
-        self.storage.set_data(key, closure)?;
+        self.storage.set_data(key, closure, None)?;
         Ok(())
     }
 
@@ -381,7 +382,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         // add the new descriptors
         descriptors.extend(failed_hex);
 
-        self.storage.set_data(key, descriptors)?;
+        self.storage.set_data(key, descriptors, None)?;
 
         Ok(())
     }
@@ -422,7 +423,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         params: ChannelOpenParams,
     ) -> Result<(), MutinyError> {
         let key = self.get_key(&channel_open_params_key(id));
-        self.storage.set_data(key, params)
+        self.storage.set_data(key, params, None)
     }
 
     pub(crate) fn get_channel_open_params(
@@ -516,12 +517,13 @@ impl<S: MutinyStorage>
         &self,
         channel_manager: &PhantomChannelManager<S>,
     ) -> Result<(), lightning::io::Error> {
-        self.persist_local_storage(CHANNEL_MANAGER_KEY, channel_manager)
+        // fixme add version
+        self.persist_local_storage(CHANNEL_MANAGER_KEY, channel_manager, None)
     }
 
     fn persist_graph(&self, network_graph: &NetworkGraph) -> Result<(), lightning::io::Error> {
         self.storage
-            .set_data(NETWORK_GRAPH_KEY, network_graph.encode().to_hex())
+            .set_data(NETWORK_GRAPH_KEY, network_graph.encode().to_hex(), None)
             .map_err(|_| lightning::io::ErrorKind::Other.into())
     }
 
@@ -531,7 +533,7 @@ impl<S: MutinyStorage>
     ) -> Result<(), lightning::io::Error> {
         let scorer_str = scorer.encode().to_hex();
         self.storage
-            .set_data(PROB_SCORER_KEY, scorer_str)
+            .set_data(PROB_SCORER_KEY, scorer_str, None)
             .map_err(|_| lightning::io::ErrorKind::Other.into())
     }
 }
@@ -550,7 +552,15 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
             funding_txo.txid.to_hex(),
             funding_txo.index
         );
-        match self.persist_local_storage(&key, monitor) {
+        // safely convert u64 to u32
+        let update_id = monitor.get_latest_update_id();
+        let version = if update_id >= u32::MAX as u64 {
+            u32::MAX
+        } else {
+            update_id as u32
+        };
+
+        match self.persist_local_storage(&key, monitor, Some(version)) {
             Ok(()) => chain::ChannelMonitorUpdateStatus::Completed,
             Err(_) => chain::ChannelMonitorUpdateStatus::PermanentFailure,
         }
@@ -568,7 +578,15 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
             funding_txo.txid.to_hex(),
             funding_txo.index
         );
-        match self.persist_local_storage(&key, monitor) {
+        // safely convert u64 to u32
+        let update_id = monitor.get_latest_update_id();
+        let version = if update_id >= u32::MAX as u64 {
+            u32::MAX
+        } else {
+            update_id as u32
+        };
+
+        match self.persist_local_storage(&key, monitor, Some(version)) {
             Ok(()) => chain::ChannelMonitorUpdateStatus::Completed,
             Err(_) => chain::ChannelMonitorUpdateStatus::PermanentFailure,
         }

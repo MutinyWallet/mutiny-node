@@ -26,7 +26,6 @@ use crate::{lspclient::FeeRequest, storage::MutinyStorage};
 use anyhow::{anyhow, Context};
 use bdk::FeeRate;
 use bdk_esplora::esplora_client::AsyncClient;
-use bip39::Mnemonic;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
 use bitcoin::secp256k1::rand;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, BlockHash, Network, OutPoint};
@@ -40,6 +39,7 @@ use lightning::{
     util::config::ChannelConfig,
 };
 
+use bitcoin::util::bip32::ExtendedPrivKey;
 use lightning::sign::{EntropySource, InMemorySigner};
 use lightning::{
     chain::{chainmonitor, Filter, Watch},
@@ -164,7 +164,7 @@ impl<S: MutinyStorage> Node<S> {
     pub(crate) async fn new(
         uuid: String,
         node_index: &NodeIndex,
-        mnemonic: &Mnemonic,
+        xprivkey: ExtendedPrivKey,
         storage: S,
         gossip_sync: Arc<RapidGossipSync>,
         scorer: Arc<utils::Mutex<ProbScorer>>,
@@ -186,7 +186,7 @@ impl<S: MutinyStorage> Node<S> {
 
         let keys_manager = Arc::new(create_keys_manager(
             wallet.clone(),
-            mnemonic,
+            xprivkey,
             node_index.child_index,
             logger.clone(),
         )?);

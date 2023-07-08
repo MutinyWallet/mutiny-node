@@ -18,18 +18,22 @@ use bitcoin::consensus::deserialize;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
+use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use gloo_utils::format::JsValueSerdeExt;
 use lightning::routing::gossip::NodeId;
 use lightning_invoice::Invoice;
 use lnurl::lnurl::LnUrl;
+use mutiny_core::auth::MutinyAuthClient;
+use mutiny_core::lnurlauth::AuthManager;
 use mutiny_core::redshift::RedshiftManager;
+use mutiny_core::redshift::RedshiftRecipient;
 use mutiny_core::scb::EncryptedSCB;
 use mutiny_core::storage::MutinyStorage;
-use mutiny_core::{encrypt::encryption_key_from_pass, nostr::nwc::NwcProfile};
+use mutiny_core::vss::MutinyVssClient;
+use mutiny_core::{encrypt::encryption_key_from_pass, generate_seed, nostr::nwc::NwcProfile};
 use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
-use mutiny_core::{nodemanager, redshift::RedshiftRecipient};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{
@@ -40,6 +44,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct MutinyWallet {
+    mnemonic: Mnemonic,
     inner: mutiny_core::MutinyWallet<IndexedDbStorage>,
 }
 
@@ -67,33 +72,86 @@ impl MutinyWallet {
         lsp_url: Option<String>,
         auth_url: Option<String>,
         subscription_url: Option<String>,
+        storage_url: Option<String>,
         do_not_connect_peers: Option<bool>,
     ) -> Result<MutinyWallet, MutinyJsError> {
         utils::set_panic_hook();
-
-        let network: Option<Network> = network_str.map(|s| s.parse().expect("Invalid network"));
-
-        let mnemonic = match mnemonic_str {
-            Some(m) => Some(Mnemonic::from_str(&m).map_err(|_| MutinyJsError::InvalidMnemonic)?),
-            None => None,
-        };
-
         let logger = Arc::new(MutinyLogger::default());
+
         let cipher = password
             .as_ref()
             .filter(|p| !p.is_empty())
             .map(|p| encryption_key_from_pass(p))
             .transpose()?;
-        let storage = IndexedDbStorage::new(password, cipher, logger).await?;
+
+        let network: Network = network_str
+            .map(|s| s.parse().expect("Invalid network"))
+            .unwrap_or(Network::Bitcoin);
+
+        let storage =
+            IndexedDbStorage::new(password.clone(), cipher.clone(), None, logger.clone()).await?;
+
+        let mnemonic = match mnemonic_str {
+            Some(m) => {
+                let seed = Mnemonic::from_str(&m).map_err(|_| MutinyJsError::InvalidMnemonic)?;
+                storage.insert_mnemonic(seed)?
+            }
+            None => match storage.get_mnemonic() {
+                Ok(Some(mnemonic)) => mnemonic,
+                Ok(None) => {
+                    let seed = generate_seed(12)?;
+                    storage.insert_mnemonic(seed)?
+                }
+                Err(_) => {
+                    // if we get an error, then we have the wrong password
+                    return Err(MutinyJsError::IncorrectPassword);
+                }
+            },
+        };
+
+        let seed = mnemonic.to_seed("");
+        let xprivkey = ExtendedPrivKey::new_master(network, &seed).unwrap();
+
+        let (auth_client, vss_client) = if let Some(auth_url) = auth_url.clone() {
+            let auth_manager = AuthManager::new(xprivkey).unwrap();
+
+            let lnurl_client = Arc::new(
+                lnurl::Builder::default()
+                    .build_async()
+                    .expect("failed to make lnurl client"),
+            );
+
+            let auth_client = Arc::new(MutinyAuthClient::new(
+                auth_manager,
+                lnurl_client,
+                logger.clone(),
+                auth_url,
+            ));
+
+            let vss = storage_url.map(|url| {
+                Arc::new(MutinyVssClient::new(
+                    auth_client.clone(),
+                    url,
+                    xprivkey.private_key,
+                    logger.clone(),
+                ))
+            });
+
+            (Some(auth_client), vss)
+        } else {
+            (None, None)
+        };
+
+        let storage = IndexedDbStorage::new(password, cipher, vss_client, logger.clone()).await?;
 
         let mut config = mutiny_core::MutinyWalletConfig::new(
-            mnemonic,
+            xprivkey,
             websocket_proxy_addr,
             network,
             user_esplora_url,
             user_rgs_url,
             lsp_url,
-            auth_url,
+            auth_client,
             subscription_url,
         );
 
@@ -102,7 +160,7 @@ impl MutinyWallet {
         }
 
         let inner = mutiny_core::MutinyWallet::new(storage, config).await?;
-        Ok(MutinyWallet { inner })
+        Ok(MutinyWallet { mnemonic, inner })
     }
 
     /// Returns if there is a saved wallet in storage.
@@ -119,10 +177,10 @@ impl MutinyWallet {
             Ok(c) => c,
             Err(_) => return false,
         };
-        let storage = IndexedDbStorage::new(password, cipher, logger)
+        let storage = IndexedDbStorage::new(password, cipher, None, logger)
             .await
             .expect("Failed to init");
-        nodemanager::NodeManager::has_node_manager(storage)
+        NodeManager::has_node_manager(storage)
     }
 
     /// Starts up all the nodes again.
@@ -153,7 +211,7 @@ impl MutinyWallet {
     /// Returns the mnemonic seed phrase for the wallet.
     #[wasm_bindgen]
     pub fn show_seed(&self) -> String {
-        self.inner.node_manager.show_seed().to_string()
+        self.mnemonic.to_string()
     }
 
     /// Returns the network of the wallet.
@@ -972,7 +1030,7 @@ impl MutinyWallet {
     pub async fn get_logs() -> Result<JsValue /* Option<Vec<String>> */, MutinyJsError> {
         let logger = Arc::new(MutinyLogger::default());
         // Password should not be required for logs
-        let storage = IndexedDbStorage::new(None, None, logger.clone()).await?;
+        let storage = IndexedDbStorage::new(None, None, None, logger.clone()).await?;
         let stop = Arc::new(AtomicBool::new(false));
         let logger = Arc::new(MutinyLogger::with_writer(stop.clone(), storage.clone()));
         let res = JsValue::from_serde(&NodeManager::get_logs(storage, logger)?)?;
@@ -1123,7 +1181,8 @@ impl MutinyWallet {
             .filter(|p| !p.is_empty())
             .map(|p| encryption_key_from_pass(p))
             .transpose()?;
-        let storage = IndexedDbStorage::new(password, cipher, logger).await?;
+        // todo init vss
+        let storage = IndexedDbStorage::new(password, cipher, None, logger).await?;
         if storage.get_mnemonic().is_err() {
             // if we get an error, then we have the wrong password
             return Err(MutinyJsError::IncorrectPassword);
@@ -1155,7 +1214,7 @@ impl MutinyWallet {
             .filter(|p| !p.is_empty())
             .map(|p| encryption_key_from_pass(p))
             .transpose()?;
-        let storage = IndexedDbStorage::new(password, cipher, logger).await?;
+        let storage = IndexedDbStorage::new(password, cipher, None, logger).await?;
         mutiny_core::MutinyWallet::<IndexedDbStorage>::restore_mnemonic(
             storage,
             Mnemonic::from_str(&m).map_err(|_| MutinyJsError::InvalidMnemonic)?,
@@ -1226,6 +1285,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1250,6 +1310,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1283,6 +1344,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,

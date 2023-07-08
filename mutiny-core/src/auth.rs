@@ -21,8 +21,8 @@ struct CustomClaims {
     sub: String,
 }
 
-pub(crate) struct MutinyAuthClient {
-    auth: AuthManager,
+pub struct MutinyAuthClient {
+    pub auth: AuthManager,
     lnurl_client: Arc<LnUrlClient>,
     url: String,
     http_client: Client,

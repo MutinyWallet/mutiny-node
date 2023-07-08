@@ -9,7 +9,6 @@ use bdk::psbt::PsbtUtils;
 use bdk::template::DescriptorTemplateOut;
 use bdk::{FeeRate, LocalUtxo, SignOptions, TransactionDetails, Wallet};
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
-use bip39::Mnemonic;
 use bitcoin::psbt::PartiallySignedTransaction;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, OutPoint, Script, Transaction, Txid};
@@ -38,7 +37,7 @@ pub struct OnChainWallet<S: MutinyStorage> {
 
 impl<S: MutinyStorage> OnChainWallet<S> {
     pub fn new(
-        mnemonic: &Mnemonic,
+        xprivkey: ExtendedPrivKey,
         db: S,
         network: Network,
         esplora: Arc<AsyncClient>,
@@ -46,8 +45,6 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         stop: Arc<AtomicBool>,
         logger: Arc<MutinyLogger>,
     ) -> Result<OnChainWallet<S>, MutinyError> {
-        let seed = mnemonic.to_seed("");
-        let xprivkey = ExtendedPrivKey::new_master(network, &seed)?;
         let account_number = 0;
         let (receive_descriptor_template, change_descriptor_template) =
             get_tr_descriptors_for_extended_key(xprivkey, network, account_number)?;
@@ -555,6 +552,7 @@ mod tests {
     use super::*;
     use crate::test_utils::*;
     use crate::{encrypt::encryption_key_from_pass, storage::MemoryStorage};
+    use bip39::Mnemonic;
     use bitcoin::Address;
     use esplora_client::Builder;
     use std::str::FromStr;
@@ -578,8 +576,9 @@ mod tests {
             logger.clone(),
         ));
         let stop = Arc::new(AtomicBool::new(false));
+        let xpriv = ExtendedPrivKey::new_master(Network::Testnet, &mnemonic.to_seed("")).unwrap();
 
-        OnChainWallet::new(&mnemonic, db, Network::Testnet, esplora, fees, stop, logger).unwrap()
+        OnChainWallet::new(xpriv, db, Network::Testnet, esplora, fees, stop, logger).unwrap()
     }
 
     #[test]

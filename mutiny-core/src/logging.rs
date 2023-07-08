@@ -141,7 +141,7 @@ async fn write_logging_data<S: MutinyStorage>(
     }
 
     // Save the logs
-    storage.set_data(LOGGING_KEY, &existing_logs)?;
+    storage.set_data(LOGGING_KEY, &existing_logs, None)?;
 
     Ok(())
 }

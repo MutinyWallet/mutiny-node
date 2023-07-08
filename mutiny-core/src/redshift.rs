@@ -126,7 +126,7 @@ impl<S: MutinyStorage> RedshiftStorage for S {
     }
 
     fn persist_redshift(&self, redshift: Redshift) -> Result<(), MutinyError> {
-        self.set_data(get_redshift_key(&redshift.id), redshift)
+        self.set_data(get_redshift_key(&redshift.id), redshift, None)
     }
 }
 

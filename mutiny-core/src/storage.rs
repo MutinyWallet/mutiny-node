@@ -67,12 +67,22 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     fn cipher(&self) -> Option<Cipher>;
 
     /// Set a value in the storage, the value will already be encrypted if needed
-    fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
+    fn set<T>(
+        &self,
+        key: impl AsRef<str>,
+        value: T,
+        version: Option<u32>,
+    ) -> Result<(), MutinyError>
     where
         T: Serialize;
 
     /// Set a value in the storage, the function will encrypt the value if needed
-    fn set_data<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
+    fn set_data<T>(
+        &self,
+        key: impl AsRef<str>,
+        value: T,
+        version: Option<u32>,
+    ) -> Result<(), MutinyError>
     where
         T: Serialize,
     {
@@ -82,7 +92,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
 
         let json: Value = encrypt_value(key.as_ref(), data, self.cipher())?;
 
-        self.set(key, json)
+        self.set(key, json, version)
     }
 
     /// Get a value from the storage, use get_data if you want the value to be decrypted
@@ -141,7 +151,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
 
     /// Insert a mnemonic into the storage
     fn insert_mnemonic(&self, mnemonic: Mnemonic) -> Result<Mnemonic, MutinyError> {
-        self.set_data(MNEMONIC_KEY, &mnemonic)?;
+        self.set_data(MNEMONIC_KEY, &mnemonic, None)?;
         Ok(mnemonic)
     }
 
@@ -190,7 +200,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
 
         // encrypt all of the values
         for (key, value) in values.iter() {
-            self.set_data(key, value)?;
+            self.set_data(key, value, None)?;
         }
 
         Ok(())
@@ -213,7 +223,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
 
     /// Inserts the node indexes into storage
     fn insert_nodes(&self, nodes: NodeStorage) -> Result<(), MutinyError> {
-        self.set_data(NODES_KEY, nodes)
+        self.set_data(NODES_KEY, nodes, None)
     }
 
     /// Get the current fee estimates from storage
@@ -225,7 +235,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     /// Inserts the fee estimates into storage
     /// The key is block target, the value is the fee in satoshis per byte
     fn insert_fee_estimates(&self, fees: HashMap<String, f64>) -> Result<(), MutinyError> {
-        self.set_data(FEE_ESTIMATES_KEY, fees)
+        self.set_data(FEE_ESTIMATES_KEY, fees, None)
     }
 
     fn has_done_first_sync(&self) -> Result<bool, MutinyError> {
@@ -234,7 +244,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     }
 
     fn set_done_first_sync(&self) -> Result<(), MutinyError> {
-        self.set_data(FIRST_SYNC_KEY, true)
+        self.set_data(FIRST_SYNC_KEY, true, None)
     }
 }
 
@@ -270,7 +280,12 @@ impl MutinyStorage for MemoryStorage {
         self.cipher.to_owned()
     }
 
-    fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
+    fn set<T>(
+        &self,
+        key: impl AsRef<str>,
+        value: T,
+        _version: Option<u32>,
+    ) -> Result<(), MutinyError>
     where
         T: Serialize,
     {
@@ -374,7 +389,12 @@ impl MutinyStorage for () {
         None
     }
 
-    fn set<T>(&self, _key: impl AsRef<str>, _value: T) -> Result<(), MutinyError>
+    fn set<T>(
+        &self,
+        _key: impl AsRef<str>,
+        _value: T,
+        _version: Option<u32>,
+    ) -> Result<(), MutinyError>
     where
         T: Serialize,
     {
@@ -441,9 +461,9 @@ where
         match self.0.get_data::<K>(KEYCHAIN_STORE_KEY)? {
             Some(mut keychain_store) => {
                 keychain_store.append(changeset.clone());
-                self.0.set_data(KEYCHAIN_STORE_KEY, keychain_store)
+                self.0.set_data(KEYCHAIN_STORE_KEY, keychain_store, None)
             }
-            None => self.0.set_data(KEYCHAIN_STORE_KEY, changeset),
+            None => self.0.set_data(KEYCHAIN_STORE_KEY, changeset, None),
         }
     }
 

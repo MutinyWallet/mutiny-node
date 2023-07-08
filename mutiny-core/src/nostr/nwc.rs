@@ -181,7 +181,7 @@ impl NostrWalletConnect {
 
                 node_manager
                     .storage
-                    .set_data(PENDING_NWC_EVENTS_KEY, current)?;
+                    .set_data(PENDING_NWC_EVENTS_KEY, current, None)?;
 
                 return Ok(None);
             } else {
