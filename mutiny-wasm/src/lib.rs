@@ -1170,9 +1170,9 @@ impl MutinyWallet {
         old_password: Option<String>,
         new_password: Option<String>,
     ) -> Result<(), MutinyJsError> {
-        self.inner
-            .change_password(old_password, new_password)
-            .await?;
+        let old_p = old_password.filter(|p| !p.is_empty());
+        let new_p = new_password.filter(|p| !p.is_empty());
+        self.inner.change_password(old_p, new_p).await?;
         Ok(())
     }
 
