@@ -5,7 +5,7 @@ use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_trace};
 use log::error;
 use mutiny_core::logging::MutinyLogger;
-use mutiny_core::storage::{MutinyStorage, KEYCHAIN_STORE_KEY};
+use mutiny_core::storage::{MutinyStorage, VersionedValue, KEYCHAIN_STORE_KEY};
 use mutiny_core::vss::*;
 use mutiny_core::*;
 use mutiny_core::{
@@ -221,8 +221,8 @@ impl IndexedDbStorage {
                         key.version
                     );
 
-                    // we can get versions from monitors, so we should compare
-                    if key.key.contains("monitor") {
+                    if key.key.contains(MONITORS_PREFIX_KEY) {
+                        // we can get versions from monitors, so we should compare
                         if let Some(current) = map.get(&key.key) {
                             let bytes: Vec<u8> = serde_json::from_value(current.clone())?;
                             // check first byte is 1, then take u64 from next 8 bytes
@@ -231,6 +231,18 @@ impl IndexedDbStorage {
                             // if the current version is less than the version from vss, then we want to use the vss version
                             if current_version < key.version as u64 {
                                 vss_map.insert(key.key, obj.value);
+                            }
+                            continue;
+                        }
+                    } else if key.key.contains(CHANNEL_MANAGER_KEY) {
+                        // we can get versions from channel manager, so we should compare
+                        if let Some(value) = map.get(&key.key) {
+                            if let Ok(versioned) =
+                                serde_json::from_value::<VersionedValue>(value.clone())
+                            {
+                                if versioned.version < key.version {
+                                    vss_map.insert(key.key, obj.value);
+                                }
                             }
                             continue;
                         }

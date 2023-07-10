@@ -8,7 +8,7 @@ use crate::logging::MutinyLogger;
 use crate::node::{default_user_config, ChainMonitor, ProbScorer};
 use crate::node::{NetworkGraph, Router};
 use crate::nodemanager::ChannelClosure;
-use crate::storage::MutinyStorage;
+use crate::storage::{MutinyStorage, VersionedValue};
 use crate::utils;
 use anyhow::anyhow;
 use bdk_esplora::esplora_client::AsyncClient;
@@ -36,7 +36,7 @@ use lightning::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 pub const CHANNEL_MANAGER_KEY: &str = "manager";
 pub const MONITORS_PREFIX_KEY: &str = "monitors/";
@@ -61,6 +61,7 @@ pub(crate) type PhantomChannelManager<S: MutinyStorage> = LdkChannelManager<
 pub struct MutinyNodePersister<S: MutinyStorage> {
     node_id: String,
     pub(crate) storage: S,
+    manager_version: Arc<RwLock<u32>>,
     logger: Arc<MutinyLogger>,
 }
 
@@ -75,8 +76,14 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         MutinyNodePersister {
             node_id,
             storage,
+            manager_version: Arc::new(RwLock::new(0)),
             logger,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn manager_version(&self) -> u32 {
+        *self.manager_version.read().unwrap()
     }
 
     fn get_key(&self, key: &str) -> String {
@@ -164,38 +171,32 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         mutiny_logger: Arc<MutinyLogger>,
         keys_manager: Arc<PhantomKeysManager<S>>,
         router: Arc<Router>,
-        mut channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
+        channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
         esplora: Arc<AsyncClient>,
     ) -> Result<ReadChannelManager<S>, MutinyError> {
-        match self.read_value(CHANNEL_MANAGER_KEY) {
-            Ok(kv_value) => {
-                let mut channel_monitor_mut_references = Vec::new();
-                for (_, channel_monitor) in channel_monitors.iter_mut() {
-                    channel_monitor_mut_references.push(channel_monitor);
-                }
-                let read_args = ChannelManagerReadArgs::new(
-                    keys_manager.clone(),
-                    keys_manager.clone(),
-                    keys_manager,
-                    fee_estimator,
+        let key = self.get_key(CHANNEL_MANAGER_KEY);
+        match self.storage.get_data::<VersionedValue>(&key) {
+            Ok(Some(versioned_value)) => {
+                // new encoding is in hex
+                let hex: String = serde_json::from_value(versioned_value.value.clone())?;
+                let bytes = FromHex::from_hex(&hex)?;
+                let res = Self::parse_channel_manager(
+                    bytes,
                     chain_monitor,
                     mutiny_chain,
-                    router,
+                    fee_estimator,
                     mutiny_logger,
-                    default_user_config(),
-                    channel_monitor_mut_references,
-                );
-                let mut readable_kv_value = Cursor::new(kv_value);
-                let Ok((_, channel_manager)) = <(BlockHash, PhantomChannelManager<S>)>::read(&mut readable_kv_value, read_args) else {
-                    return Err(MutinyError::ReadError { source: MutinyStorageError::Other(anyhow!("could not read manager")) })
-                };
-                Ok(ReadChannelManager {
-                    channel_manager,
-                    is_restarting: true,
+                    keys_manager,
+                    router,
                     channel_monitors,
-                })
+                )?;
+
+                let mut version = self.manager_version.write().unwrap();
+                *version = versioned_value.version;
+
+                Ok(res)
             }
-            Err(_) => {
+            Ok(None) => {
                 // no key manager stored, start a new one
 
                 Self::create_new_channel_manager(
@@ -211,7 +212,59 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
                 )
                 .await
             }
+            Err(_) => {
+                // old encoding with no version number and as an array of numbers
+                let bytes = self.read_value(CHANNEL_MANAGER_KEY)?;
+                Self::parse_channel_manager(
+                    bytes,
+                    chain_monitor,
+                    mutiny_chain,
+                    fee_estimator,
+                    mutiny_logger,
+                    keys_manager,
+                    router,
+                    channel_monitors,
+                )
+            }
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn parse_channel_manager(
+        bytes: Vec<u8>,
+        chain_monitor: Arc<ChainMonitor<S>>,
+        mutiny_chain: Arc<MutinyChain<S>>,
+        fee_estimator: Arc<MutinyFeeEstimator<S>>,
+        mutiny_logger: Arc<MutinyLogger>,
+        keys_manager: Arc<PhantomKeysManager<S>>,
+        router: Arc<Router>,
+        mut channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
+    ) -> Result<ReadChannelManager<S>, MutinyError> {
+        let mut channel_monitor_mut_references = Vec::new();
+        for (_, channel_monitor) in channel_monitors.iter_mut() {
+            channel_monitor_mut_references.push(channel_monitor);
+        }
+        let read_args = ChannelManagerReadArgs::new(
+            keys_manager.clone(),
+            keys_manager.clone(),
+            keys_manager,
+            fee_estimator,
+            chain_monitor,
+            mutiny_chain,
+            router,
+            mutiny_logger,
+            default_user_config(),
+            channel_monitor_mut_references,
+        );
+        let mut readable_kv_value = Cursor::new(bytes);
+        let Ok((_, channel_manager)) = <(BlockHash, PhantomChannelManager<S>)>::read(&mut readable_kv_value, read_args) else {
+            return Err(MutinyError::ReadError { source: MutinyStorageError::Other(anyhow!("could not read manager")) })
+        };
+        Ok(ReadChannelManager {
+            channel_manager,
+            is_restarting: true,
+            channel_monitors,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -517,8 +570,18 @@ impl<S: MutinyStorage>
         &self,
         channel_manager: &PhantomChannelManager<S>,
     ) -> Result<(), lightning::io::Error> {
-        // fixme add version
-        self.persist_local_storage(CHANNEL_MANAGER_KEY, channel_manager, None)
+        let mut version = self.manager_version.write().unwrap();
+        *version += 1;
+        let key = self.get_key(CHANNEL_MANAGER_KEY);
+
+        let value = VersionedValue {
+            version: *version,
+            value: serde_json::to_value(channel_manager.encode().to_hex()).unwrap(),
+        };
+
+        self.storage
+            .set_data(key, value, Some(*version))
+            .map_err(|_| lightning::io::ErrorKind::Other.into())
     }
 
     fn persist_graph(&self, network_graph: &NetworkGraph) -> Result<(), lightning::io::Error> {
@@ -595,12 +658,24 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
 
 #[cfg(test)]
 mod test {
+    use crate::esplora::EsploraSyncClient;
     use crate::event::{HTLCStatus, MillisatAmount};
+    use crate::keymanager::create_keys_manager;
+    use crate::onchain::OnChainWallet;
     use crate::storage::MemoryStorage;
+    use bip39::Mnemonic;
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::PublicKey;
+    use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Txid;
+    use esplora_client::Builder;
+    use lightning::routing::router::DefaultRouter;
+    use lightning::routing::scoring::{
+        ProbabilisticScoringDecayParameters, ProbabilisticScoringFeeParameters,
+    };
+    use lightning::sign::EntropySource;
     use std::str::FromStr;
+    use std::sync::atomic::AtomicBool;
     use uuid::Uuid;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
@@ -728,5 +803,144 @@ mod test {
 
         let result = persister.get_failed_spendable_outputs().unwrap();
         assert!(result.is_empty());
+    }
+
+    const MANAGER_BYTES: [u8; 256] = [
+        1, 1, 246, 30, 238, 59, 99, 163, 128, 164, 119, 160, 99, 175, 50, 178, 187, 201, 124, 159,
+        249, 240, 31, 44, 66, 37, 233, 115, 152, 129, 8, 0, 0, 0, 0, 3, 123, 222, 76, 244, 143, 88,
+        178, 115, 155, 195, 17, 83, 168, 252, 26, 45, 231, 72, 39, 21, 96, 23, 203, 8, 101, 10,
+        238, 136, 77, 5, 250, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100,
+        172, 120, 225, 100, 172, 120, 225, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 113, 1,
+        2, 0, 0, 3, 2, 0, 0, 5, 33, 3, 49, 56, 184, 182, 87, 71, 249, 167, 155, 99, 242, 124, 162,
+        190, 245, 15, 63, 119, 66, 102, 88, 52, 223, 137, 219, 56, 27, 137, 175, 103, 200, 26, 7,
+        32, 23, 65, 121, 234, 117, 201, 12, 57, 255, 124, 147, 188, 210, 48, 53, 179, 20, 157, 122,
+        21, 212, 195, 166, 222, 214, 124, 167, 7, 217, 175, 93, 50, 9, 0, 11, 32, 124, 241, 131,
+        188, 131, 90, 195, 214, 250, 125, 197, 126, 163, 168, 131, 111, 78, 41, 166, 218, 20, 49,
+        233, 172, 19, 243, 93, 239, 33, 64, 36, 240,
+    ];
+
+    #[test]
+    async fn test_upgrade_channel_manager() {
+        let test_name = "test_channel_manager";
+        log!("{}", test_name);
+
+        let mnemonic = Mnemonic::from_str(
+            "shallow car virus tree add switch spring bulb midnight license modify junior",
+        )
+        .unwrap();
+
+        let network = Network::Signet;
+
+        let persister = Arc::new(get_test_persister());
+        // encode old version into persister
+        persister
+            .storage
+            .set_data(
+                persister.get_key(CHANNEL_MANAGER_KEY),
+                MANAGER_BYTES.to_vec(),
+                None,
+            )
+            .unwrap();
+
+        // need to init a bunch of stuff to read a channel manager
+
+        let logger = Arc::new(MutinyLogger::default());
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
+
+        let esplora_server_url = "https://mutinynet.com/api/".to_string();
+        let esplora = Arc::new(Builder::new(&esplora_server_url).build_async().unwrap());
+        let fees = Arc::new(MutinyFeeEstimator::new(
+            persister.storage.clone(),
+            esplora.clone(),
+            logger.clone(),
+        ));
+        let tx_sync = Arc::new(EsploraSyncClient::new(esplora_server_url, logger.clone()));
+
+        let wallet = Arc::new(
+            OnChainWallet::new(
+                xpriv,
+                persister.storage.clone(),
+                network,
+                esplora.clone(),
+                fees.clone(),
+                stop,
+                logger.clone(),
+            )
+            .unwrap(),
+        );
+
+        let km = Arc::new(create_keys_manager(wallet.clone(), xpriv, 0, logger.clone()).unwrap());
+
+        let chain = Arc::new(MutinyChain::new(tx_sync, wallet, logger.clone()));
+
+        let network_graph = Arc::new(NetworkGraph::new(network, logger.clone()));
+        let scorer = ProbScorer::new(
+            ProbabilisticScoringDecayParameters::default(),
+            network_graph.clone(),
+            logger.clone(),
+        );
+
+        // init chain monitor
+        let chain_monitor: Arc<ChainMonitor<MemoryStorage>> = Arc::new(ChainMonitor::new(
+            Some(chain.tx_sync.clone()),
+            chain.clone(),
+            logger.clone(),
+            fees.clone(),
+            persister.clone(),
+        ));
+
+        let router: Arc<Router> = Arc::new(DefaultRouter::new(
+            network_graph,
+            logger.clone(),
+            km.clone().get_secure_random_bytes(),
+            Arc::new(utils::Mutex::new(scorer)),
+            ProbabilisticScoringFeeParameters::default(),
+        ));
+
+        // make sure it correctly reads
+        let read = persister
+            .read_channel_manager(
+                network,
+                chain_monitor.clone(),
+                chain.clone(),
+                fees.clone(),
+                logger.clone(),
+                km.clone(),
+                router.clone(),
+                vec![],
+                esplora.clone(),
+            )
+            .await
+            .unwrap();
+        // starts at version 0
+        assert_eq!(persister.manager_version(), 0);
+        assert!(read.is_restarting);
+
+        // persist, should be new version
+        persister.persist_manager(&read.channel_manager).unwrap();
+        assert_eq!(persister.manager_version(), 1);
+
+        // make sure we can read with new encoding
+        let read = persister
+            .read_channel_manager(
+                network,
+                chain_monitor,
+                chain.clone(),
+                fees.clone(),
+                logger.clone(),
+                km,
+                router,
+                vec![],
+                esplora,
+            )
+            .await
+            .unwrap();
+
+        // should be same version
+        assert_eq!(persister.manager_version(), 1);
+        assert!(read.is_restarting);
     }
 }

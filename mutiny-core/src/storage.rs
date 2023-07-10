@@ -59,6 +59,12 @@ pub fn decrypt_value(
     Ok(json)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionedValue {
+    pub version: u32,
+    pub value: Value,
+}
+
 pub trait MutinyStorage: Clone + Sized + 'static {
     /// Get the password used to encrypt the storage
     fn password(&self) -> Option<&str>;
