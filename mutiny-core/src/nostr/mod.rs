@@ -132,7 +132,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                 .iter()
                 .map(|x| x.profile.clone())
                 .collect::<Vec<_>>();
-            self.storage.set_data(NWC_STORAGE_KEY, profiles)?;
+            self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
         }
 
         Ok(nwc_profile)
@@ -181,7 +181,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                 .iter()
                 .map(|x| x.profile.clone())
                 .collect::<Vec<_>>();
-            self.storage.set_data(NWC_STORAGE_KEY, profiles)?;
+            self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
         }
 
         Ok(nwc.nwc_profile())
@@ -302,7 +302,8 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         // remove from storage
         pending.retain(|x| x.invoice.payment_hash() != &hash);
-        self.storage.set_data(PENDING_NWC_EVENTS_KEY, pending)?;
+        self.storage
+            .set_data(PENDING_NWC_EVENTS_KEY, pending, None)?;
 
         Ok(event_id)
     }
@@ -323,7 +324,8 @@ impl<S: MutinyStorage> NostrManager<S> {
         // remove the invoice
         invoices.retain(|x| x.invoice.payment_hash() != hash);
 
-        self.storage.set_data(PENDING_NWC_EVENTS_KEY, invoices)?;
+        self.storage
+            .set_data(PENDING_NWC_EVENTS_KEY, invoices, None)?;
 
         Ok(())
     }
@@ -338,7 +340,8 @@ impl<S: MutinyStorage> NostrManager<S> {
         // remove expired invoices
         invoices.retain(|x| !x.is_expired());
 
-        self.storage.set_data(PENDING_NWC_EVENTS_KEY, invoices)?;
+        self.storage
+            .set_data(PENDING_NWC_EVENTS_KEY, invoices, None)?;
 
         Ok(())
     }
@@ -621,7 +624,7 @@ mod test {
         // add dummy to storage
         nostr_manager
             .storage
-            .set_data(PENDING_NWC_EVENTS_KEY, vec![inv.clone()])
+            .set_data(PENDING_NWC_EVENTS_KEY, vec![inv.clone()], None)
             .unwrap();
 
         let pending = nostr_manager.get_pending_nwc_invoices().unwrap();

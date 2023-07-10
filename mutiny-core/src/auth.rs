@@ -21,8 +21,8 @@ struct CustomClaims {
     sub: String,
 }
 
-pub(crate) struct MutinyAuthClient {
-    auth: AuthManager,
+pub struct MutinyAuthClient {
+    pub auth: AuthManager,
     lnurl_client: Arc<LnUrlClient>,
     url: String,
     http_client: Client,
@@ -75,7 +75,11 @@ impl MutinyAuthClient {
                 self.retrieve_new_jwt().await?;
                 self.authenticated_request(method, url, body).await
             }
-            _ => Ok(res),
+            StatusCode::OK | StatusCode::ACCEPTED | StatusCode::CREATED => Ok(res),
+            code => {
+                log_error!(self.logger, "Received unexpected status code: {code}");
+                Err(MutinyError::ConnectionFailed)
+            }
         }
     }
 

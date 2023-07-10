@@ -1,9 +1,11 @@
 use crate::esplora::TxSyncError;
+use aes::cipher::block_padding::UnpadError;
 use bitcoin::Network;
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning_invoice::payment::PaymentError;
 use lightning_invoice::ParseOrSemanticError;
 use lightning_rapid_gossip_sync::GraphSyncError;
+use std::string::FromUtf8Error;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -152,6 +154,24 @@ impl MutinyError {
 
     pub fn write_err(e: MutinyStorageError) -> Self {
         MutinyError::PersistenceFailed { source: e }
+    }
+}
+
+impl From<UnpadError> for MutinyError {
+    fn from(_e: UnpadError) -> Self {
+        Self::IncorrectPassword
+    }
+}
+
+impl From<base64::DecodeError> for MutinyError {
+    fn from(_e: base64::DecodeError) -> Self {
+        Self::IncorrectPassword
+    }
+}
+
+impl From<FromUtf8Error> for MutinyError {
+    fn from(_e: FromUtf8Error) -> Self {
+        Self::IncorrectPassword
     }
 }
 

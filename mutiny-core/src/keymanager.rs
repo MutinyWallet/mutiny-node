@@ -196,14 +196,12 @@ pub fn generate_seed(num_words: u8) -> Result<Mnemonic, MutinyError> {
 // key secret will be derived from `m/0'`.
 pub(crate) fn create_keys_manager<S: MutinyStorage>(
     wallet: Arc<OnChainWallet<S>>,
-    mnemonic: &Mnemonic,
+    xprivkey: ExtendedPrivKey,
     child_index: u32,
     logger: Arc<MutinyLogger>,
 ) -> Result<PhantomKeysManager<S>, MutinyError> {
     let context = Secp256k1::new();
 
-    let seed = mnemonic.to_seed("");
-    let xprivkey = ExtendedPrivKey::new_master(wallet.network, &seed)?;
     let shared_key = xprivkey.derive_priv(
         &context,
         &DerivationPath::from(vec![ChildNumber::from_hardened_idx(0)?]),
@@ -250,6 +248,7 @@ mod tests {
     use crate::onchain::OnChainWallet;
     use crate::storage::MemoryStorage;
     use bip39::Mnemonic;
+    use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Network;
     use esplora_client::Builder;
     use std::str::FromStr;
@@ -277,10 +276,11 @@ mod tests {
             logger.clone(),
         ));
         let stop = Arc::new(AtomicBool::new(false));
+        let xpriv = ExtendedPrivKey::new_master(Network::Testnet, &mnemonic.to_seed("")).unwrap();
 
         let wallet = Arc::new(
             OnChainWallet::new(
-                &mnemonic,
+                xpriv,
                 db,
                 Network::Testnet,
                 esplora,
@@ -291,21 +291,21 @@ mod tests {
             .unwrap(),
         );
 
-        let km = create_keys_manager(wallet.clone(), &mnemonic, 1, logger.clone()).unwrap();
+        let km = create_keys_manager(wallet.clone(), xpriv, 1, logger.clone()).unwrap();
         let pubkey = pubkey_from_keys_manager(&km);
         assert_eq!(
             "02cae09cf2c8842ace44068a5bf3117a494ebbf69a99e79712483c36f97cdb7b54",
             pubkey.to_string()
         );
 
-        let km = create_keys_manager(wallet.clone(), &mnemonic, 2, logger.clone()).unwrap();
+        let km = create_keys_manager(wallet.clone(), xpriv, 2, logger.clone()).unwrap();
         let second_pubkey = pubkey_from_keys_manager(&km);
         assert_eq!(
             "03fcc9eaaf0b84946ea7935e3bc4f2b498893c2f53e5d2994d6877d149601ce553",
             second_pubkey.to_string()
         );
 
-        let km = create_keys_manager(wallet, &mnemonic, 2, logger).unwrap();
+        let km = create_keys_manager(wallet, xpriv, 2, logger).unwrap();
         let second_pubkey_again = pubkey_from_keys_manager(&km);
 
         assert_eq!(second_pubkey, second_pubkey_again);

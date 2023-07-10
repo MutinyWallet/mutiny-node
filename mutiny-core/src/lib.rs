@@ -10,7 +10,7 @@
 // background file is mostly an LDK copy paste
 mod background;
 
-mod auth;
+pub mod auth;
 mod chain;
 pub mod encrypt;
 pub mod error;
@@ -21,7 +21,7 @@ mod gossip;
 mod keymanager;
 pub mod labels;
 mod ldkstorage;
-mod lnurlauth;
+pub mod lnurlauth;
 pub mod logging;
 mod lspclient;
 mod networking;
@@ -34,6 +34,7 @@ pub mod redshift;
 pub mod scb;
 pub mod storage;
 mod subscription;
+pub mod vss;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
@@ -43,6 +44,7 @@ pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
+use crate::auth::MutinyAuthClient;
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
@@ -62,14 +64,14 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct MutinyWalletConfig {
-    mnemonic: Option<Mnemonic>,
+    xprivkey: ExtendedPrivKey,
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: Option<String>,
-    network: Option<Network>,
+    network: Network,
     user_esplora_url: Option<String>,
     user_rgs_url: Option<String>,
     lsp_url: Option<String>,
-    auth_url: Option<String>,
+    auth_client: Option<Arc<MutinyAuthClient>>,
     subscription_url: Option<String>,
     do_not_connect_peers: bool,
 }
@@ -77,24 +79,24 @@ pub struct MutinyWalletConfig {
 impl MutinyWalletConfig {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        mnemonic: Option<Mnemonic>,
+        xprivkey: ExtendedPrivKey,
         #[cfg(target_arch = "wasm32")] websocket_proxy_addr: Option<String>,
-        network: Option<Network>,
+        network: Network,
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
-        auth_url: Option<String>,
+        auth_client: Option<Arc<MutinyAuthClient>>,
         subscription_url: Option<String>,
     ) -> Self {
         Self {
-            mnemonic,
+            xprivkey,
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
             network,
             user_esplora_url,
             user_rgs_url,
             lsp_url,
-            auth_url,
+            auth_client,
             subscription_url,
             do_not_connect_peers: false,
         }
@@ -135,9 +137,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         NodeManager::start_sync(node_manager.clone());
 
         // create nostr manager
-        let seed = node_manager.show_seed().to_seed("");
-        let xprivkey = ExtendedPrivKey::new_master(node_manager.get_network(), &seed)?;
-        let nostr = Arc::new(NostrManager::from_mnemonic(xprivkey, storage.clone())?);
+        let nostr = Arc::new(NostrManager::from_mnemonic(
+            node_manager.xprivkey,
+            storage.clone(),
+        )?);
 
         let mw = Self {
             config,
@@ -372,14 +375,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        encrypt::encryption_key_from_pass, nodemanager::NodeManager, MutinyWallet,
+        encrypt::encryption_key_from_pass, generate_seed, nodemanager::NodeManager, MutinyWallet,
         MutinyWalletConfig,
     };
+    use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Network;
 
     use crate::test_utils::*;
 
-    use crate::storage::MemoryStorage;
+    use crate::storage::{MemoryStorage, MutinyStorage};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -389,24 +393,28 @@ mod tests {
         let test_name = "create_mutiny_wallet";
         log!("{}", test_name);
 
+        let mnemonic = generate_seed(12).unwrap();
+        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &mnemonic.to_seed("")).unwrap();
+
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher));
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let config = MutinyWalletConfig::new(
-            None,
+            xpriv,
             #[cfg(target_arch = "wasm32")]
             None,
-            Some(Network::Regtest),
+            Network::Regtest,
             None,
             None,
             None,
             None,
             None,
         );
-        MutinyWallet::new(storage.clone(), config)
+        let mw = MutinyWallet::new(storage.clone(), config)
             .await
             .expect("mutiny wallet should initialize");
+        mw.storage.insert_mnemonic(mnemonic).unwrap();
         assert!(NodeManager::has_node_manager(storage));
     }
 
@@ -414,16 +422,17 @@ mod tests {
     async fn restart_mutiny_wallet() {
         let test_name = "restart_mutiny_wallet";
         log!("{}", test_name);
+        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &[0; 32]).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher));
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let config = MutinyWalletConfig::new(
-            None,
+            xpriv,
             #[cfg(target_arch = "wasm32")]
             None,
-            Some(Network::Regtest),
+            Network::Regtest,
             None,
             None,
             None,
@@ -433,13 +442,12 @@ mod tests {
         let mut mw = MutinyWallet::new(storage.clone(), config)
             .await
             .expect("mutiny wallet should initialize");
-        assert!(NodeManager::has_node_manager(storage));
 
-        let first_seed = mw.node_manager.show_seed();
+        let first_seed = mw.node_manager.xprivkey;
 
         assert!(mw.stop().await.is_ok());
         assert!(mw.start().await.is_ok());
-        assert_eq!(first_seed, mw.node_manager.show_seed());
+        assert_eq!(first_seed, mw.node_manager.xprivkey);
     }
 
     #[test]
@@ -447,16 +455,18 @@ mod tests {
         let test_name = "restart_mutiny_wallet_with_nodes";
         log!("{}", test_name);
 
+        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &[0; 32]).unwrap();
+
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher));
 
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let config = MutinyWalletConfig::new(
-            None,
+            xpriv,
             #[cfg(target_arch = "wasm32")]
             None,
-            Some(Network::Regtest),
+            Network::Regtest,
             None,
             None,
             None,
@@ -466,7 +476,6 @@ mod tests {
         let mut mw = MutinyWallet::new(storage.clone(), config)
             .await
             .expect("mutiny wallet should initialize");
-        assert!(NodeManager::has_node_manager(storage));
 
         assert_eq!(mw.node_manager.list_nodes().await.unwrap().len(), 1);
         assert!(mw.node_manager.new_node().await.is_ok());
@@ -481,16 +490,18 @@ mod tests {
     async fn restore_mutiny_mnemonic() {
         let test_name = "restore_mutiny_mnemonic";
         log!("{}", test_name);
+        let mnemonic = generate_seed(12).unwrap();
+        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &mnemonic.to_seed("")).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher));
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let config = MutinyWalletConfig::new(
-            None,
+            xpriv,
             #[cfg(target_arch = "wasm32")]
             None,
-            Some(Network::Regtest),
+            Network::Regtest,
             None,
             None,
             None,
@@ -500,19 +511,20 @@ mod tests {
         let mw = MutinyWallet::new(storage.clone(), config)
             .await
             .expect("mutiny wallet should initialize");
-        let seed = mw.node_manager.show_seed();
-        assert_ne!(seed.to_string(), "");
+        let seed = mw.node_manager.xprivkey;
+        assert!(!seed.private_key.is_empty());
 
         // create a second mw and make sure it has a different seed
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage2 = MemoryStorage::new(Some(pass), Some(cipher));
         assert!(!NodeManager::has_node_manager(storage2.clone()));
-        let config2 = MutinyWalletConfig::new(
-            None,
+        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &[0; 32]).unwrap();
+        let mut config2 = MutinyWalletConfig::new(
+            xpriv,
             #[cfg(target_arch = "wasm32")]
             None,
-            Some(Network::Regtest),
+            Network::Regtest,
             None,
             None,
             None,
@@ -522,8 +534,8 @@ mod tests {
         let mw2 = MutinyWallet::new(storage2.clone(), config2.clone())
             .await
             .expect("mutiny wallet should initialize");
-        let seed2 = mw2.node_manager.show_seed();
-        assert_ne!(seed.to_string(), seed2.to_string());
+        let seed2 = mw2.node_manager.xprivkey;
+        assert_ne!(seed, seed2);
 
         // now restore the first seed into the 2nd mutiny node
         mw2.stop().await.expect("should stop");
@@ -532,14 +544,18 @@ mod tests {
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage3 = MemoryStorage::new(Some(pass), Some(cipher));
-        MutinyWallet::restore_mnemonic(storage3.clone(), seed.clone())
+        MutinyWallet::restore_mnemonic(storage3.clone(), mnemonic.clone())
             .await
             .expect("mutiny wallet should restore");
 
+        config2.xprivkey = {
+            let seed = storage3.get_mnemonic().unwrap().unwrap();
+            ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap()
+        };
         let mw2 = MutinyWallet::new(storage3, config2)
             .await
             .expect("mutiny wallet should initialize");
-        let restored_seed = mw2.node_manager.show_seed();
-        assert_eq!(seed.to_string(), restored_seed.to_string());
+        let restored_seed = mw2.node_manager.xprivkey;
+        assert_eq!(seed, restored_seed);
     }
 }

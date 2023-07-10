@@ -1,4 +1,7 @@
 use crate::error::MutinyError;
+use aes::cipher::block_padding::Pkcs7;
+use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use aes::Aes256;
 use aes_gcm::Aes256Gcm;
 use aes_gcm::{
     aead::{generic_array::GenericArray, Aead},
@@ -6,8 +9,14 @@ use aes_gcm::{
 };
 use argon2::Argon2;
 use base64;
+use bitcoin::secp256k1;
+use bitcoin::secp256k1::SecretKey;
+use cbc::{Decryptor, Encryptor};
 use getrandom::getrandom;
 use std::sync::Arc;
+
+type Aes256CbcEnc = Encryptor<Aes256>;
+type Aes256CbcDec = Decryptor<Aes256>;
 
 #[derive(Clone)]
 pub struct Cipher {
@@ -47,8 +56,8 @@ pub fn encrypt(content: &str, c: Cipher) -> Result<String, MutinyError> {
     Ok(base64::encode(&result))
 }
 
-pub fn decrypt(encrypted: &str, password: &str) -> Result<String, MutinyError> {
-    let encrypted = base64::decode(encrypted).map_err(|_| MutinyError::IncorrectPassword)?;
+pub fn decrypt_with_password(encrypted: &str, password: &str) -> Result<String, MutinyError> {
+    let encrypted = base64::decode(encrypted)?;
     if encrypted.len() < 12 + 16 {
         return Err(MutinyError::IncorrectPassword);
     }
@@ -86,9 +95,40 @@ fn argon2() -> Argon2<'static> {
     Argon2::from(params.build().expect("valid params"))
 }
 
+pub fn encrypt_with_key(encryption_key: &SecretKey, bytes: &[u8]) -> Vec<u8> {
+    let iv: [u8; 16] = secp256k1::rand::random();
+
+    let cipher = Aes256CbcEnc::new(&encryption_key.secret_bytes().into(), &iv.into());
+    let mut encrypted: Vec<u8> = cipher.encrypt_padded_vec_mut::<Pkcs7>(bytes);
+    encrypted.extend(iv);
+
+    encrypted
+}
+
+pub fn decrypt_with_key(
+    encryption_key: &SecretKey,
+    bytes: Vec<u8>,
+) -> Result<Vec<u8>, MutinyError> {
+    if bytes.len() < 16 {
+        return Err(MutinyError::IncorrectPassword);
+    }
+    // split last 16 bytes off as iv
+    let iv = &bytes[bytes.len() - 16..];
+    let bytes = &bytes[..bytes.len() - 16];
+
+    let cipher = Aes256CbcDec::new(&encryption_key.secret_bytes().into(), iv.into());
+    let decrypted: Vec<u8> = cipher.decrypt_padded_vec_mut::<Pkcs7>(bytes)?;
+
+    Ok(decrypted)
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::encrypt::{decrypt, encrypt, encryption_key_from_pass};
+    use crate::encrypt::{
+        decrypt_with_key, decrypt_with_password, encrypt, encrypt_with_key,
+        encryption_key_from_pass,
+    };
+    use bitcoin::secp256k1::SecretKey;
 
     #[test]
     fn test_encryption() {
@@ -99,8 +139,19 @@ mod tests {
         let encrypted = encrypt(content, cipher).unwrap();
         println!("{encrypted}");
 
-        let decrypted = decrypt(&encrypted, password).unwrap();
+        let decrypted = decrypt_with_password(&encrypted, password).unwrap();
         println!("{decrypted}");
+        assert_eq!(content, decrypted);
+    }
+
+    #[test]
+    fn test_encryption_with_key() {
+        let key = SecretKey::from_slice(&[1u8; 32]).unwrap();
+        let content = [6u8; 32].to_vec();
+
+        let encrypted = encrypt_with_key(&key, &content);
+
+        let decrypted = decrypt_with_key(&key, encrypted).unwrap();
         assert_eq!(content, decrypted);
     }
 }

@@ -121,7 +121,7 @@ impl<S: MutinyStorage> LabelStorage for S {
         // update the labels map
         let mut address_labels = self.get_address_labels()?;
         address_labels.insert(address.to_string(), labels.clone());
-        self.set_data(ADDRESS_LABELS_MAP_KEY, address_labels)?;
+        self.set_data(ADDRESS_LABELS_MAP_KEY, address_labels, None)?;
 
         // update the label items
         let now = crate::utils::now().as_secs();
@@ -138,7 +138,7 @@ impl<S: MutinyStorage> LabelStorage for S {
                     // Update the last used timestamp
                     label_item.last_used_time = now;
 
-                    self.set_data(key, label_item)?;
+                    self.set_data(key, label_item, None)?;
                 }
                 None => {
                     // Create a new label item
@@ -147,7 +147,7 @@ impl<S: MutinyStorage> LabelStorage for S {
                         invoices: vec![],
                         last_used_time: now,
                     };
-                    self.set_data(key, label_item)?;
+                    self.set_data(key, label_item, None)?;
                 }
             }
         }
@@ -159,7 +159,7 @@ impl<S: MutinyStorage> LabelStorage for S {
         // update the labels map
         let mut invoice_labels = self.get_invoice_labels()?;
         invoice_labels.insert(invoice.clone(), labels.clone());
-        self.set_data(INVOICE_LABELS_MAP_KEY, invoice_labels)?;
+        self.set_data(INVOICE_LABELS_MAP_KEY, invoice_labels, None)?;
 
         // update the label items
         let now = crate::utils::now().as_secs();
@@ -176,7 +176,7 @@ impl<S: MutinyStorage> LabelStorage for S {
                     // Update the last used timestamp
                     label_item.last_used_time = now;
 
-                    self.set_data(key, label_item)?;
+                    self.set_data(key, label_item, None)?;
                 }
                 None => {
                     // Create a new label item
@@ -185,7 +185,7 @@ impl<S: MutinyStorage> LabelStorage for S {
                         invoices: vec![invoice.to_string()],
                         last_used_time: now,
                     };
-                    self.set_data(key, label_item)?;
+                    self.set_data(key, label_item, None)?;
                 }
             }
         }
@@ -224,7 +224,7 @@ impl<S: MutinyStorage> LabelStorage for S {
                 // convert label into a uuid for uniqueness
                 let id = Uuid::new_v4().to_string();
                 // create label item
-                self.set_data(get_label_item_key(&id), current)?;
+                self.set_data(get_label_item_key(&id), current, None)?;
 
                 // replace label in address_labels with new uuid
                 let addr_labels = self.get_address_labels()?;
@@ -241,7 +241,7 @@ impl<S: MutinyStorage> LabelStorage for S {
                         updated.insert(addr, new_labels);
                     }
                 }
-                self.set_data(ADDRESS_LABELS_MAP_KEY, updated)?;
+                self.set_data(ADDRESS_LABELS_MAP_KEY, updated, None)?;
 
                 // replace label in invoice_labels with new uuid
                 let invoice_labels = self.get_invoice_labels()?;
@@ -258,11 +258,11 @@ impl<S: MutinyStorage> LabelStorage for S {
                         updated.insert(inv, new_labels);
                     }
                 }
-                self.set_data(INVOICE_LABELS_MAP_KEY, updated)?;
+                self.set_data(INVOICE_LABELS_MAP_KEY, updated, None)?;
 
                 // create the contact
                 let key = get_contact_key(&id);
-                self.set_data(key, contact)?;
+                self.set_data(key, contact, None)?;
 
                 // delete old label item
                 self.delete(&[get_label_item_key(&label)])?;
@@ -276,14 +276,14 @@ impl<S: MutinyStorage> LabelStorage for S {
         // generate a uuid, this will be the "label" that we use to store the contact
         let id = Uuid::new_v4().to_string();
         let key = get_contact_key(&id);
-        self.set_data(key, contact)?;
+        self.set_data(key, contact, None)?;
 
         let key = get_label_item_key(&id);
         let label_item = LabelItem {
             last_used_time: crate::utils::now().as_secs(),
             ..Default::default()
         };
-        self.set_data(key, label_item)?;
+        self.set_data(key, label_item, None)?;
         Ok(id)
     }
 
@@ -291,13 +291,13 @@ impl<S: MutinyStorage> LabelStorage for S {
         let contact = self.get_contact(&id)?;
         if let Some(mut contact) = contact {
             contact.archived = Some(true);
-            self.set(get_contact_key(&id), contact)?;
+            self.set(get_contact_key(&id), contact, None)?;
         }
         Ok(())
     }
 
     fn edit_contact(&self, id: impl AsRef<str>, contact: Contact) -> Result<(), MutinyError> {
-        self.set(get_contact_key(&id), contact)
+        self.set(get_contact_key(&id), contact, None)
     }
 
     fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyError> {
@@ -509,7 +509,7 @@ mod tests {
         let storage = MemoryStorage::default();
         let labels_map = create_test_address_labels_map();
         storage
-            .set_data(ADDRESS_LABELS_MAP_KEY, labels_map.clone())
+            .set_data(ADDRESS_LABELS_MAP_KEY, labels_map.clone(), None)
             .unwrap();
 
         let result = storage.get_address_labels();
@@ -524,7 +524,7 @@ mod tests {
         let storage = MemoryStorage::default();
         let labels_map = create_test_invoice_labels_map();
         storage
-            .set_data(INVOICE_LABELS_MAP_KEY, labels_map.clone())
+            .set_data(INVOICE_LABELS_MAP_KEY, labels_map.clone(), None)
             .unwrap();
 
         let result = storage.get_invoice_labels();
@@ -541,7 +541,7 @@ mod tests {
         let labels = create_test_labels();
         for (label, label_item) in labels.clone() {
             storage
-                .set_data(get_label_item_key(label), label_item)
+                .set_data(get_label_item_key(label), label_item, None)
                 .unwrap();
         }
 
@@ -566,7 +566,7 @@ mod tests {
         let labels = create_test_labels();
         for (label, label_item) in labels.clone() {
             storage
-                .set_data(get_label_item_key(label), label_item)
+                .set_data(get_label_item_key(label), label_item, None)
                 .unwrap();
         }
 
@@ -618,7 +618,9 @@ mod tests {
 
         let contacts = create_test_contacts();
         for (id, contact) in contacts.clone() {
-            storage.set_data(get_contact_key(id), contact).unwrap();
+            storage
+                .set_data(get_contact_key(id), contact, None)
+                .unwrap();
         }
 
         let result = storage.get_contacts().unwrap();
@@ -796,7 +798,7 @@ mod tests {
         let labels = create_test_labels();
         for (label, label_item) in labels {
             storage
-                .set_data(get_label_item_key(label.clone()), label_item.clone())
+                .set_data(get_label_item_key(label.clone()), label_item.clone(), None)
                 .unwrap();
             expected_tag_items.push(TagItem::Label((label, label_item)));
         }
