@@ -26,9 +26,15 @@ pub struct MutinyVssClient {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KeyVersion {
+    pub key: String,
+    pub version: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VssKeyValueItem {
     pub key: String,
-    pub value: Option<Value>,
+    pub value: Value,
     pub version: u32,
 }
 
@@ -37,7 +43,7 @@ impl VssKeyValueItem {
     /// and returns an encrypted version of the item
     pub(crate) fn encrypt(self, encryption_key: &SecretKey) -> EncryptedVssKeyValueItem {
         // should we handle this unwrap better?
-        let bytes = self.value.unwrap().to_string().into_bytes();
+        let bytes = self.value.to_string().into_bytes();
         let iv: [u8; 16] = secp256k1::rand::random();
 
         let cipher = Aes256CbcEnc::new(&encryption_key.secret_bytes().into(), &iv.into());
@@ -74,7 +80,7 @@ impl EncryptedVssKeyValueItem {
 
         VssKeyValueItem {
             key: self.key,
-            value: Some(value),
+            value,
             version: self.version,
         }
     }
@@ -100,15 +106,6 @@ impl MutinyVssClient {
             log_error!(self.logger, "Error parsing put objects url: {e}");
             MutinyError::Other(anyhow!("Error parsing put objects url: {e}"))
         })?;
-
-        // check value is defined for all items
-        for item in &items {
-            if item.value.is_none() {
-                return Err(MutinyError::Other(anyhow!(
-                    "Value must be defined for all items"
-                )));
-            }
-        }
 
         let items = items
             .into_iter()
@@ -149,7 +146,7 @@ impl MutinyVssClient {
     pub async fn list_key_versions(
         &self,
         key_prefix: Option<String>,
-    ) -> Result<Vec<VssKeyValueItem>, MutinyError> {
+    ) -> Result<Vec<KeyVersion>, MutinyError> {
         let url = Url::parse(&format!("{}/listKeyVersions", self.url)).map_err(|e| {
             log_error!(self.logger, "Error parsing list key versions url: {e}");
             MutinyError::Other(anyhow!("Error parsing list key versions url: {e}"))
