@@ -1,22 +1,14 @@
-#![allow(dead_code)]
 use crate::auth::MutinyAuthClient;
+use crate::encrypt::{decrypt_with_key, encrypt_with_key};
 use crate::{error::MutinyError, logging::MutinyLogger};
-use aes::cipher::block_padding::Pkcs7;
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use aes::Aes256;
 use anyhow::anyhow;
-use bitcoin::secp256k1;
 use bitcoin::secp256k1::SecretKey;
-use cbc::{Decryptor, Encryptor};
 use lightning::log_error;
 use lightning::util::logger::*;
 use reqwest::{Method, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
-
-type Aes256CbcEnc = Encryptor<Aes256>;
-type Aes256CbcDec = Decryptor<Aes256>;
 
 pub struct MutinyVssClient {
     auth_client: Arc<MutinyAuthClient>,
@@ -44,16 +36,12 @@ impl VssKeyValueItem {
     pub(crate) fn encrypt(self, encryption_key: &SecretKey) -> EncryptedVssKeyValueItem {
         // should we handle this unwrap better?
         let bytes = self.value.to_string().into_bytes();
-        let iv: [u8; 16] = secp256k1::rand::random();
 
-        let cipher = Aes256CbcEnc::new(&encryption_key.secret_bytes().into(), &iv.into());
-        let mut encrypted: Vec<u8> = cipher.encrypt_padded_vec_mut::<Pkcs7>(&bytes);
-        encrypted.extend(iv);
-        let encrypted_value = base64::encode(encrypted);
+        let value = base64::encode(encrypt_with_key(encryption_key, &bytes));
 
         EncryptedVssKeyValueItem {
             key: self.key,
-            value: encrypted_value,
+            value,
             version: self.version,
         }
     }
@@ -68,13 +56,8 @@ pub struct EncryptedVssKeyValueItem {
 
 impl EncryptedVssKeyValueItem {
     pub(crate) fn decrypt(self, encryption_key: &SecretKey) -> VssKeyValueItem {
-        let bytes = base64::decode(self.value).unwrap();
-        // split last 16 bytes off as iv
-        let iv = &bytes[bytes.len() - 16..];
-        let bytes = &bytes[..bytes.len() - 16];
-
-        let cipher = Aes256CbcDec::new(&encryption_key.secret_bytes().into(), iv.into());
-        let decrypted: Vec<u8> = cipher.decrypt_padded_vec_mut::<Pkcs7>(bytes).unwrap();
+        let bytes = base64::decode(&self.value).unwrap();
+        let decrypted = decrypt_with_key(encryption_key, bytes).unwrap();
         let decrypted_value = String::from_utf8(decrypted).unwrap();
         let value = serde_json::from_str(&decrypted_value).unwrap();
 

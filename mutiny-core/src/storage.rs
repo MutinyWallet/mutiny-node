@@ -1,4 +1,4 @@
-use crate::encrypt::{decrypt, encrypt, encryption_key_from_pass, Cipher};
+use crate::encrypt::{decrypt_with_password, encrypt, encryption_key_from_pass, Cipher};
 use crate::error::{MutinyError, MutinyStorageError};
 use crate::ldkstorage::CHANNEL_MANAGER_KEY;
 use crate::nodemanager::NodeStorage;
@@ -50,7 +50,7 @@ pub fn decrypt_value(
     let json: Value = match password {
         Some(pw) if needs_encryption(key.as_ref()) => {
             let str: String = serde_json::from_value(value)?;
-            let ciphertext = decrypt(&str, pw)?;
+            let ciphertext = decrypt_with_password(&str, pw)?;
             serde_json::from_str(&ciphertext)?
         }
         _ => value,

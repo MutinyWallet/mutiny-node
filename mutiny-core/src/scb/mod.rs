@@ -1,24 +1,18 @@
 pub mod message_handler;
 
+use crate::encrypt::{decrypt_with_key, encrypt_with_key};
 use crate::error::MutinyError;
 use crate::nodemanager::NodeIndex;
-use aes::cipher::block_padding::Pkcs7;
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use aes::Aes256;
 use bitcoin::bech32::{FromBase32, ToBase32, Variant};
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::{PublicKey, SecretKey};
-use bitcoin::{bech32, secp256k1, OutPoint};
-use cbc::{Decryptor, Encryptor};
+use bitcoin::{bech32, OutPoint};
 use lightning::io::{Cursor, Read};
 use lightning::ln::msgs::DecodeError;
 use lightning::util::ser::{Readable, Writeable, Writer};
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::str::FromStr;
-
-type Aes256CbcEnc = Encryptor<Aes256>;
-type Aes256CbcDec = Decryptor<Aes256>;
 
 pub const SCB_ENCRYPTION_KEY_DERIVATION_PATH: &str = "m/444'/444'/444'";
 
@@ -84,12 +78,9 @@ pub struct StaticChannelBackupStorage {
 impl StaticChannelBackupStorage {
     pub(crate) fn encrypt(&self, secret_key: &SecretKey) -> EncryptedSCB {
         let bytes = self.encode();
-        let iv: [u8; 16] = secp256k1::rand::random();
+        let encrypted_scb = encrypt_with_key(secret_key, &bytes);
 
-        let cipher = Aes256CbcEnc::new(&secret_key.secret_bytes().into(), &iv.into());
-        let encrypted_scb: Vec<u8> = cipher.encrypt_padded_vec_mut::<Pkcs7>(&bytes);
-
-        EncryptedSCB { encrypted_scb, iv }
+        EncryptedSCB { encrypted_scb }
     }
 }
 
@@ -160,7 +151,6 @@ impl Readable for StaticChannelBackupStorage {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct EncryptedSCB {
     pub(crate) encrypted_scb: Vec<u8>,
-    pub(crate) iv: [u8; 16],
 }
 
 impl EncryptedSCB {
@@ -168,13 +158,8 @@ impl EncryptedSCB {
         &self,
         secret_key: &SecretKey,
     ) -> Result<StaticChannelBackupStorage, MutinyError> {
-        let cipher =
-            Aes256CbcDec::new(&secret_key.secret_bytes().into(), self.iv.as_slice().into());
-        let result = cipher
-            .decrypt_padded_vec_mut::<Pkcs7>(&self.encrypted_scb)
-            .map_err(|_| MutinyError::InvalidMnemonic)?;
-
-        let mut cursor = Cursor::new(result);
+        let bytes = decrypt_with_key(secret_key, self.encrypted_scb.clone())?;
+        let mut cursor = Cursor::new(bytes);
         Ok(StaticChannelBackupStorage::read(&mut cursor).expect("decoding succeeds"))
     }
 }
@@ -184,7 +169,6 @@ impl Writeable for EncryptedSCB {
         let len = self.encrypted_scb.len() as u32;
         writer.write_all(&len.to_be_bytes())?;
         writer.write_all(&self.encrypted_scb)?;
-        writer.write_all(&self.iv)?;
         Ok(())
     }
 }
@@ -194,9 +178,7 @@ impl Readable for EncryptedSCB {
         let len: u32 = Readable::read(reader)?;
         let mut encrypted_scb = vec![0u8; len as usize];
         reader.read_exact(&mut encrypted_scb)?;
-        let mut iv = [0u8; 16];
-        reader.read_exact(&mut iv)?;
-        Ok(Self { encrypted_scb, iv })
+        Ok(Self { encrypted_scb })
     }
 }
 

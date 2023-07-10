@@ -214,31 +214,29 @@ impl IndexedDbStorage {
                 // todo only get keys we want (probably will filter out scb)
                 for key in keys {
                     let obj = vss.get_object(&key.key).await?;
-                    if let Some(value) = obj.value {
-                        log_trace!(
-                            logger,
-                            "Found vss key {} with version {}",
-                            key.key,
-                            key.version
-                        );
+                    log_trace!(
+                        logger,
+                        "Found vss key {} with version {}",
+                        key.key,
+                        key.version
+                    );
 
-                        // we can get versions from monitors, so we should compare
-                        if key.key.contains("monitor") {
-                            if let Some(current) = map.get(&key.key) {
-                                let bytes: Vec<u8> = serde_json::from_value(current.clone())?;
-                                // check first byte is 1, then take u64 from next 8 bytes
-                                let current_version =
-                                    u64::from_be_bytes(bytes[1..9].try_into().unwrap());
-                                // if the current version is less than the version from vss, then we want to use the vss version
-                                if current_version < key.version as u64 {
-                                    vss_map.insert(key.key, value);
-                                }
-                                continue;
+                    // we can get versions from monitors, so we should compare
+                    if key.key.contains("monitor") {
+                        if let Some(current) = map.get(&key.key) {
+                            let bytes: Vec<u8> = serde_json::from_value(current.clone())?;
+                            // check first byte is 1, then take u64 from next 8 bytes
+                            let current_version =
+                                u64::from_be_bytes(bytes[1..9].try_into().unwrap());
+                            // if the current version is less than the version from vss, then we want to use the vss version
+                            if current_version < key.version as u64 {
+                                vss_map.insert(key.key, obj.value);
                             }
+                            continue;
                         }
-
-                        vss_map.insert(key.key, value);
                     }
+
+                    vss_map.insert(key.key, obj.value);
                 }
                 map.extend(vss_map);
                 Ok(map)
@@ -326,7 +324,7 @@ impl MutinyStorage for IndexedDbStorage {
             if let (Some(vss), Some(version)) = (vss, version) {
                 let item = VssKeyValueItem {
                     key: key_clone.clone(),
-                    value: Some(data_clone.clone()),
+                    value: data_clone.clone(),
                     version,
                 };
                 let vss_fut = vss.put_objects(vec![item]);
