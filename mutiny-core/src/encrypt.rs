@@ -57,7 +57,7 @@ pub fn encrypt(content: &str, c: Cipher) -> Result<String, MutinyError> {
 }
 
 pub fn decrypt_with_password(encrypted: &str, password: &str) -> Result<String, MutinyError> {
-    let encrypted = base64::decode(encrypted).map_err(|_| MutinyError::IncorrectPassword)?;
+    let encrypted = base64::decode(encrypted)?;
     if encrypted.len() < 12 + 16 {
         return Err(MutinyError::IncorrectPassword);
     }
@@ -117,7 +117,7 @@ pub fn decrypt_with_key(
     let bytes = &bytes[..bytes.len() - 16];
 
     let cipher = Aes256CbcDec::new(&encryption_key.secret_bytes().into(), iv.into());
-    let decrypted: Vec<u8> = cipher.decrypt_padded_vec_mut::<Pkcs7>(bytes).unwrap();
+    let decrypted: Vec<u8> = cipher.decrypt_padded_vec_mut::<Pkcs7>(bytes)?;
 
     Ok(decrypted)
 }

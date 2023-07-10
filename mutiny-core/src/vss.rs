@@ -55,17 +55,20 @@ pub struct EncryptedVssKeyValueItem {
 }
 
 impl EncryptedVssKeyValueItem {
-    pub(crate) fn decrypt(self, encryption_key: &SecretKey) -> VssKeyValueItem {
-        let bytes = base64::decode(&self.value).unwrap();
-        let decrypted = decrypt_with_key(encryption_key, bytes).unwrap();
-        let decrypted_value = String::from_utf8(decrypted).unwrap();
-        let value = serde_json::from_str(&decrypted_value).unwrap();
+    pub(crate) fn decrypt(
+        self,
+        encryption_key: &SecretKey,
+    ) -> Result<VssKeyValueItem, MutinyError> {
+        let bytes = base64::decode(&self.value)?;
+        let decrypted = decrypt_with_key(encryption_key, bytes)?;
+        let decrypted_value = String::from_utf8(decrypted)?;
+        let value = serde_json::from_str(&decrypted_value)?;
 
-        VssKeyValueItem {
+        Ok(VssKeyValueItem {
             key: self.key,
             value,
             version: self.version,
-        }
+        })
     }
 }
 
@@ -123,7 +126,7 @@ impl MutinyVssClient {
                 MutinyError::Other(anyhow!("Error parsing get objects response: {e}"))
             })?;
 
-        Ok(result.decrypt(&self.encryption_key))
+        result.decrypt(&self.encryption_key)
     }
 
     pub async fn list_key_versions(
