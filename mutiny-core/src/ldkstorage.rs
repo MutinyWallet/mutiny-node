@@ -36,7 +36,8 @@ use lightning::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 pub const CHANNEL_MANAGER_KEY: &str = "manager";
 pub const MONITORS_PREFIX_KEY: &str = "monitors/";
@@ -61,7 +62,7 @@ pub(crate) type PhantomChannelManager<S: MutinyStorage> = LdkChannelManager<
 pub struct MutinyNodePersister<S: MutinyStorage> {
     node_id: String,
     pub(crate) storage: S,
-    manager_version: Arc<RwLock<u32>>,
+    manager_version: Arc<AtomicU32>,
     logger: Arc<MutinyLogger>,
 }
 
@@ -76,14 +77,14 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         MutinyNodePersister {
             node_id,
             storage,
-            manager_version: Arc::new(RwLock::new(0)),
+            manager_version: Arc::new(AtomicU32::new(0)),
             logger,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn manager_version(&self) -> u32 {
-        *self.manager_version.read().unwrap()
+        self.manager_version.load(Ordering::Relaxed)
     }
 
     fn get_key(&self, key: &str) -> String {
@@ -191,8 +192,8 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
                     channel_monitors,
                 )?;
 
-                let mut version = self.manager_version.write().unwrap();
-                *version = versioned_value.version;
+                self.manager_version
+                    .swap(versioned_value.version, Ordering::Relaxed);
 
                 Ok(res)
             }
@@ -570,17 +571,17 @@ impl<S: MutinyStorage>
         &self,
         channel_manager: &PhantomChannelManager<S>,
     ) -> Result<(), lightning::io::Error> {
-        let mut version = self.manager_version.write().unwrap();
-        *version += 1;
+        let old = self.manager_version.fetch_add(1, Ordering::Relaxed);
+        let version = old + 1;
         let key = self.get_key(CHANNEL_MANAGER_KEY);
 
         let value = VersionedValue {
-            version: *version,
+            version,
             value: serde_json::to_value(channel_manager.encode().to_hex()).unwrap(),
         };
 
         self.storage
-            .set_data(key, value, Some(*version))
+            .set_data(key, value, Some(version))
             .map_err(|_| lightning::io::ErrorKind::Other.into())
     }
 
