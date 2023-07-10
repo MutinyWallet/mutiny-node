@@ -198,7 +198,7 @@ mod tests {
         let value: Value = serde_json::from_str("\"world\"").unwrap();
         let obj = VssKeyValueItem {
             key: key.clone(),
-            value: Some(value.clone()),
+            value: value.clone(),
             version: 0,
         };
 
@@ -208,11 +208,7 @@ mod tests {
         assert_eq!(obj, result);
 
         let result = client.list_key_versions(None).await.unwrap();
-        let key_version = VssKeyValueItem {
-            key,
-            value: None,
-            version: 0,
-        };
+        let key_version = KeyVersion { key, version: 0 };
 
         assert_eq!(vec![key_version], result);
         assert_eq!(result.len(), 1);
@@ -226,7 +222,7 @@ mod tests {
         let value: Value = serde_json::from_str("\"world\"").unwrap();
         let obj = VssKeyValueItem {
             key: key.clone(),
-            value: Some(value.clone()),
+            value: value.clone(),
             version: 0,
         };
 
@@ -237,7 +233,7 @@ mod tests {
         let value1: Value = serde_json::from_str("\"new world\"").unwrap();
         let obj1 = VssKeyValueItem {
             key: key.clone(),
-            value: Some(value1.clone()),
+            value: value1.clone(),
             version: 1,
         };
 
