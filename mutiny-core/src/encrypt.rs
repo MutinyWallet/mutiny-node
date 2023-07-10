@@ -124,7 +124,11 @@ pub fn decrypt_with_key(
 
 #[cfg(test)]
 mod tests {
-    use crate::encrypt::{decrypt_with_password, encrypt, encryption_key_from_pass};
+    use crate::encrypt::{
+        decrypt_with_key, decrypt_with_password, encrypt, encrypt_with_key,
+        encryption_key_from_pass,
+    };
+    use bitcoin::secp256k1::SecretKey;
 
     #[test]
     fn test_encryption() {
@@ -137,6 +141,17 @@ mod tests {
 
         let decrypted = decrypt_with_password(&encrypted, password).unwrap();
         println!("{decrypted}");
+        assert_eq!(content, decrypted);
+    }
+
+    #[test]
+    fn test_encryption_with_key() {
+        let key = SecretKey::from_slice(&[1u8; 32]).unwrap();
+        let content = [6u8; 32].to_vec();
+
+        let encrypted = encrypt_with_key(&key, &content);
+
+        let decrypted = decrypt_with_key(&key, encrypted).unwrap();
         assert_eq!(content, decrypted);
     }
 }
