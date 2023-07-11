@@ -11,7 +11,7 @@ use std::sync::{Arc, RwLock};
 
 pub const KEYCHAIN_STORE_KEY: &str = "bdk_keychain";
 pub(crate) const MNEMONIC_KEY: &str = "mnemonic";
-const NODES_KEY: &str = "nodes";
+pub const NODES_KEY: &str = "nodes";
 const FEE_ESTIMATES_KEY: &str = "fee_estimates";
 const FIRST_SYNC_KEY: &str = "first_sync";
 
@@ -229,7 +229,8 @@ pub trait MutinyStorage: Clone + Sized + 'static {
 
     /// Inserts the node indexes into storage
     fn insert_nodes(&self, nodes: NodeStorage) -> Result<(), MutinyError> {
-        self.set_data(NODES_KEY, nodes, None)
+        let version = Some(nodes.version);
+        self.set_data(NODES_KEY, nodes, version)
     }
 
     /// Get the current fee estimates from storage
