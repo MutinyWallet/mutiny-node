@@ -2,10 +2,11 @@ use anyhow::anyhow;
 use gloo_storage::{LocalStorage, Storage};
 use gloo_utils::format::JsValueSerdeExt;
 use lightning::util::logger::Logger;
-use lightning::{log_debug, log_error, log_trace};
+use lightning::{log_debug, log_error};
 use log::error;
 use mutiny_core::logging::MutinyLogger;
-use mutiny_core::storage::{MutinyStorage, VersionedValue, KEYCHAIN_STORE_KEY};
+use mutiny_core::nodemanager::NodeStorage;
+use mutiny_core::storage::{MutinyStorage, VersionedValue, KEYCHAIN_STORE_KEY, NODES_KEY};
 use mutiny_core::vss::*;
 use mutiny_core::*;
 use mutiny_core::{
@@ -214,7 +215,7 @@ impl IndexedDbStorage {
                 // todo only get keys we want (probably will filter out scb)
                 for key in keys {
                     let obj = vss.get_object(&key.key).await?;
-                    log_trace!(
+                    log_debug!(
                         logger,
                         "Found vss key {} with version {}",
                         key.key,
@@ -239,6 +240,18 @@ impl IndexedDbStorage {
                         if let Some(value) = map.get(&key.key) {
                             if let Ok(versioned) =
                                 serde_json::from_value::<VersionedValue>(value.clone())
+                            {
+                                if versioned.version < key.version {
+                                    vss_map.insert(key.key, obj.value);
+                                }
+                            }
+                            continue;
+                        }
+                    } else if key.key == NODES_KEY {
+                        // we can get version from node storage, so we should compare
+                        if let Some(value) = map.get(&key.key) {
+                            if let Ok(versioned) =
+                                serde_json::from_value::<NodeStorage>(value.clone())
                             {
                                 if versioned.version < key.version {
                                     vss_map.insert(key.key, obj.value);

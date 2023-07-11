@@ -69,6 +69,8 @@ const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct NodeStorage {
     pub nodes: HashMap<String, NodeIndex>,
+    #[serde(default)]
+    pub version: u32,
 }
 
 // This is the NodeIndex reference that is saved to the DB
@@ -647,6 +649,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         storage.insert_nodes(NodeStorage {
             nodes: updated_nodes,
+            version: node_storage.version + 1,
         })?;
 
         log_info!(logger, "inserted updated nodes");
@@ -2301,6 +2304,7 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         archived: Some(false),
     };
 
+    existing_nodes.version += 1;
     existing_nodes
         .nodes
         .insert(next_node_uuid.clone(), next_node.clone());
