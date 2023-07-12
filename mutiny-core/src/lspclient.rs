@@ -156,6 +156,8 @@ impl LspClient {
                         return Err(MutinyError::LspFundingError);
                     } else if error_body.message.starts_with("Failed to connect to peer") {
                         return Err(MutinyError::LspConnectionError);
+                    } else if error_body.message == "Invoice amount is too high" {
+                        return Err(MutinyError::LspAmountTooHighError);
                     }
                 }
             }
