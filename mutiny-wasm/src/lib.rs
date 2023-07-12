@@ -228,11 +228,17 @@ impl MutinyWallet {
     pub fn get_new_address(
         &self,
         labels: JsValue, /* Vec<String> */
-    ) -> Result<String, MutinyJsError> {
+    ) -> Result<MutinyBip21RawMaterials, MutinyJsError> {
         let labels: Vec<String> = labels
             .into_serde()
             .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        Ok(self.inner.node_manager.get_new_address(labels)?.to_string())
+        let address = self.inner.node_manager.get_new_address(labels.clone())?;
+        Ok(MutinyBip21RawMaterials {
+            address: address.to_string(),
+            invoice: None,
+            btc_amount: None,
+            labels,
+        })
     }
 
     /// Gets the current balance of the on-chain wallet.
