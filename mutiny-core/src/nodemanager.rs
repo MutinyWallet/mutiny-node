@@ -352,9 +352,22 @@ impl PartialOrd for TransactionDetails {
 
 impl Ord for TransactionDetails {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.confirmation_time
-            .cmp(&other.confirmation_time)
-            .then_with(|| self.txid.cmp(&other.txid))
+        match (self.confirmation_time, other.confirmation_time) {
+            (ConfirmationTime::Confirmed { .. }, ConfirmationTime::Confirmed { .. }) => self
+                .confirmation_time
+                .cmp(&self.confirmation_time)
+                .then_with(|| self.txid.cmp(&other.txid)),
+            (ConfirmationTime::Confirmed { .. }, ConfirmationTime::Unconfirmed { .. }) => {
+                core::cmp::Ordering::Less
+            }
+            (ConfirmationTime::Unconfirmed { .. }, ConfirmationTime::Confirmed { .. }) => {
+                core::cmp::Ordering::Greater
+            }
+            (
+                ConfirmationTime::Unconfirmed { last_seen: a },
+                ConfirmationTime::Unconfirmed { last_seen: b },
+            ) => a.cmp(&b).then_with(|| self.txid.cmp(&other.txid)),
+        }
     }
 }
 
@@ -423,7 +436,7 @@ impl ActivityItem {
         match self {
             ActivityItem::OnChain(t) => match t.confirmation_time {
                 ConfirmationTime::Confirmed { time, .. } => Some(time),
-                ConfirmationTime::Unconfirmed { last_seen } => Some(last_seen),
+                ConfirmationTime::Unconfirmed { .. } => None,
             },
             ActivityItem::Lightning(i) => Some(i.last_updated),
             ActivityItem::ChannelClosed(c) => Some(c.timestamp),
@@ -2673,9 +2686,7 @@ mod tests {
             received: 0,
             sent: 0,
             fee: None,
-            confirmation_time: ConfirmationTime::Unconfirmed {
-                last_seen: u64::MAX,
-            },
+            confirmation_time: ConfirmationTime::Unconfirmed { last_seen: 0_u64 },
             labels: vec![],
         };
 
