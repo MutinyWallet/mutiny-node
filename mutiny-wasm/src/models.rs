@@ -443,10 +443,10 @@ impl From<nodemanager::NodeIdentity> for NodeIdentity {
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
 pub struct MutinyBip21RawMaterials {
-    address: String,
-    invoice: String,
-    btc_amount: Option<String>,
-    labels: Vec<String>,
+    pub(crate) address: String,
+    pub(crate) invoice: Option<String>,
+    pub(crate) btc_amount: Option<String>,
+    pub(crate) labels: Vec<String>,
 }
 
 #[wasm_bindgen]
@@ -462,7 +462,7 @@ impl MutinyBip21RawMaterials {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn invoice(&self) -> String {
+    pub fn invoice(&self) -> Option<String> {
         self.invoice.clone()
     }
 
@@ -481,7 +481,7 @@ impl From<nodemanager::MutinyBip21RawMaterials> for MutinyBip21RawMaterials {
     fn from(m: nodemanager::MutinyBip21RawMaterials) -> Self {
         MutinyBip21RawMaterials {
             address: m.address.to_string(),
-            invoice: m.invoice.to_string(),
+            invoice: Some(m.invoice.to_string()),
             btc_amount: m.btc_amount,
             labels: m.labels,
         }
