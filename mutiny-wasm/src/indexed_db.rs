@@ -210,63 +210,94 @@ impl IndexedDbStorage {
             Some(vss) => {
                 log_debug!(logger, "Reading from vss");
                 let keys = vss.list_key_versions(None).await?;
-                let mut vss_map = HashMap::new();
-                // todo do this in parallel
-                // todo only get keys we want (probably will filter out scb)
-                for key in keys {
-                    let obj = vss.get_object(&key.key).await?;
-                    log_debug!(
-                        logger,
-                        "Found vss key {} with version {}",
-                        key.key,
-                        key.version
-                    );
+                let mut futs = vec![];
+                for kv in keys {
+                    futs.push(Self::handle_vss_key(kv, vss, &map, logger));
+                }
+                let results = futures::future::join_all(futs).await;
+                for result in results {
+                    if let Some((key, value)) = result? {
+                        map.insert(key, value);
+                    }
+                }
+                Ok(map)
+            }
+        }
+    }
 
-                    if key.key.contains(MONITORS_PREFIX_KEY) {
-                        // we can get versions from monitors, so we should compare
-                        if let Some(current) = map.get(&key.key) {
+    async fn handle_vss_key(
+        kv: KeyVersion,
+        vss: &MutinyVssClient,
+        current: &HashMap<String, Value>,
+        logger: &MutinyLogger,
+    ) -> Result<Option<(String, Value)>, MutinyError> {
+        log_debug!(
+            logger,
+            "Found vss key {} with version {}",
+            kv.key,
+            kv.version
+        );
+
+        match kv.key.as_str() {
+            NODES_KEY => {
+                let obj = vss.get_object(&kv.key).await?;
+                // we can get version from node storage, so we should compare
+                match current.get(&kv.key) {
+                    Some(value) => {
+                        if let Ok(versioned) = serde_json::from_value::<NodeStorage>(value.clone())
+                        {
+                            if versioned.version < kv.version {
+                                return Ok(Some((kv.key, obj.value)));
+                            }
+                        }
+                    }
+                    None => return Ok(Some((kv.key, obj.value))),
+                }
+            }
+            key => {
+                if key.contains(MONITORS_PREFIX_KEY) {
+                    let obj = vss.get_object(&kv.key).await?;
+                    // we can get versions from monitors, so we should compare
+                    match current.get(&kv.key) {
+                        Some(current) => {
                             let bytes: Vec<u8> = serde_json::from_value(current.clone())?;
                             // check first byte is 1, then take u64 from next 8 bytes
                             let current_version =
                                 u64::from_be_bytes(bytes[1..9].try_into().unwrap());
                             // if the current version is less than the version from vss, then we want to use the vss version
-                            if current_version < key.version as u64 {
-                                vss_map.insert(key.key, obj.value);
+                            if current_version < kv.version as u64 {
+                                return Ok(Some((kv.key, obj.value)));
                             }
-                            continue;
                         }
-                    } else if key.key.contains(CHANNEL_MANAGER_KEY) {
-                        // we can get versions from channel manager, so we should compare
-                        if let Some(value) = map.get(&key.key) {
+                        None => return Ok(Some((kv.key, obj.value))),
+                    }
+                } else if key.contains(CHANNEL_MANAGER_KEY) {
+                    let obj = vss.get_object(&kv.key).await?;
+                    // we can get versions from channel manager, so we should compare
+                    match current.get(&kv.key) {
+                        Some(value) => {
                             if let Ok(versioned) =
                                 serde_json::from_value::<VersionedValue>(value.clone())
                             {
-                                if versioned.version < key.version {
-                                    vss_map.insert(key.key, obj.value);
+                                if versioned.version < kv.version {
+                                    return Ok(Some((kv.key, obj.value)));
                                 }
                             }
-                            continue;
                         }
-                    } else if key.key == NODES_KEY {
-                        // we can get version from node storage, so we should compare
-                        if let Some(value) = map.get(&key.key) {
-                            if let Ok(versioned) =
-                                serde_json::from_value::<NodeStorage>(value.clone())
-                            {
-                                if versioned.version < key.version {
-                                    vss_map.insert(key.key, obj.value);
-                                }
-                            }
-                            continue;
-                        }
+                        None => return Ok(Some((kv.key, obj.value))),
                     }
-
-                    vss_map.insert(key.key, obj.value);
                 }
-                map.extend(vss_map);
-                Ok(map)
             }
         }
+
+        log_debug!(
+            logger,
+            "Skipping vss key {} with version {}",
+            kv.key,
+            kv.version
+        );
+
+        Ok(None)
     }
 
     async fn build_indexed_db_database() -> Result<Rexie, MutinyError> {
