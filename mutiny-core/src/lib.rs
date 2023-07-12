@@ -184,17 +184,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     continue;
                 }
 
-                // check we have lightning channels ready
-                if nm
-                    .get_node(&from_node)
-                    .await
-                    .map(|n| n.channel_manager.list_usable_channels().is_empty())
-                    .unwrap_or(true)
-                {
-                    utils::sleep(1_000).await;
-                    continue;
-                }
-
                 if let Err(e) = nostr.clear_expired_nwc_invoices() {
                     log_warn!(nm.logger, "Failed to clear expired NWC invoices: {e}");
                 }
