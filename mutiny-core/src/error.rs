@@ -59,6 +59,9 @@ pub enum MutinyError {
     /// LSP indicated it could not fund the channel requested.
     #[error("Failed to request channel from LSP due to funding error.")]
     LspFundingError,
+    /// LSP indicated the amount is too high to fund.
+    #[error("Failed to request channel from LSP due to amount being too high.")]
+    LspAmountTooHighError,
     /// LSP indicated it was not connected to the client node.
     #[error("Failed to have a connection to the LSP node.")]
     LspConnectionError,

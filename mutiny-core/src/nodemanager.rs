@@ -913,6 +913,11 @@ impl<S: MutinyStorage> NodeManager<S> {
     ///   stating "Cannot fund new channel at this time". This means that the LSP cannot support
     ///   a new channel at this time.
     ///
+    /// - [`MutinyError::LspAmountTooHighError`]: Returned if the LSP server returns an error with
+    ///   a status of 500, indicating an "Internal Server Error", and a message stating "Invoice
+    ///   amount is too high". This means that the LSP cannot support the amount that the user
+    ///   requested. The user should request a smaller amount from the LSP.
+    ///
     /// - [`MutinyError::LspConnectionError`]: Returned if the LSP server returns an error with
     ///   a status of 500, indicating an "Internal Server Error", and a message that starts with
     ///   "Failed to connect to peer". This means that the LSP is not connected to our node.
