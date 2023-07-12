@@ -9,6 +9,7 @@ use bitcoin::secp256k1::{PublicKey, Secp256k1, Signing};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use futures_util::lock::Mutex;
 use nostr::key::SecretKey;
+use nostr::nips::nip47::*;
 use nostr::prelude::encrypt;
 use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
 use nostr_sdk::Client;
@@ -232,13 +233,10 @@ impl<S: MutinyStorage> NostrManager<S> {
             .unwrap_or_default())
     }
 
-    /// Approves an invoice and sends the payment
-    pub async fn approve_invoice(
+    fn find_nwc_data(
         &self,
         hash: sha256::Hash,
-        node_manager: &NodeManager<S>,
-        from_node: &PublicKey,
-    ) -> Result<EventId, MutinyError> {
+    ) -> Result<(NostrWalletConnect, PendingNwcInvoice), MutinyError> {
         let pending: Vec<PendingNwcInvoice> = self
             .storage
             .get_data(PENDING_NWC_EVENTS_KEY)?
@@ -258,6 +256,15 @@ impl<S: MutinyStorage> NostrManager<S> {
                 .clone()
         };
 
+        Ok((nwc, inv.to_owned()))
+    }
+
+    async fn broadcast_nwc_response(
+        &self,
+        resp: Response,
+        nwc: NostrWalletConnect,
+        inv: PendingNwcInvoice,
+    ) -> Result<EventId, MutinyError> {
         let client = Client::new(&self.primary_key);
 
         #[cfg(target_arch = "wasm32")]
@@ -268,10 +275,6 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         add_relay_res.expect("Failed to add relays");
         client.connect().await;
-
-        let resp = nwc
-            .pay_nwc_invoice(node_manager, from_node, &inv.invoice)
-            .await?;
 
         let encrypted = encrypt(
             &nwc.server_key.secret_key().unwrap(),
@@ -291,6 +294,24 @@ impl<S: MutinyStorage> NostrManager<S> {
             .await
             .map_err(|e| MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}")))?;
 
+        Ok(event_id)
+    }
+
+    /// Approves an invoice and sends the payment
+    pub async fn approve_invoice(
+        &self,
+        hash: sha256::Hash,
+        node_manager: &NodeManager<S>,
+        from_node: &PublicKey,
+    ) -> Result<EventId, MutinyError> {
+        let (nwc, inv) = self.find_nwc_data(hash)?;
+
+        let resp = nwc
+            .pay_nwc_invoice(node_manager, from_node, &inv.invoice)
+            .await?;
+
+        let event_id = self.broadcast_nwc_response(resp, nwc, inv).await?;
+
         // get lock for writing
         self.pending_nwc_lock.lock().await;
 
@@ -309,7 +330,23 @@ impl<S: MutinyStorage> NostrManager<S> {
     }
 
     /// Removes an invoice from the pending list, will also remove expired invoices
-    pub async fn deny_invoice(&self, hash: &sha256::Hash) -> Result<(), MutinyError> {
+    pub async fn deny_invoice(&self, hash: sha256::Hash) -> Result<(), MutinyError> {
+        // need to tell relay to remove the invoice
+        // doesn't work in test environment
+        #[cfg(not(test))]
+        {
+            let resp = Response {
+                result_type: Method::PayInvoice,
+                error: Some(NIP47Error {
+                    code: ErrorCode::Other,
+                    message: "Rejected".to_string(),
+                }),
+                result: None,
+            };
+            let (nwc, inv) = self.find_nwc_data(hash)?;
+            self.broadcast_nwc_response(resp, nwc, inv).await?;
+        }
+
         // wait for lock
         self.pending_nwc_lock.lock().await;
 
@@ -322,7 +359,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         invoices.retain(|x| !x.is_expired());
 
         // remove the invoice
-        invoices.retain(|x| x.invoice.payment_hash() != hash);
+        invoices.retain(|x| x.invoice.payment_hash() != &hash);
 
         self.storage
             .set_data(PENDING_NWC_EVENTS_KEY, invoices, None)?;
@@ -631,7 +668,7 @@ mod test {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].invoice, inv.invoice);
 
-        block_on(nostr_manager.deny_invoice(inv.invoice.payment_hash())).unwrap();
+        block_on(nostr_manager.deny_invoice(inv.invoice.payment_hash().to_owned())).unwrap();
 
         let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
         assert_eq!(pending.len(), 0);
