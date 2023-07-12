@@ -228,7 +228,7 @@ impl<S: MutinyStorage> Node<S> {
             logger.clone(),
             keys_manager.clone().get_secure_random_bytes(),
             scorer.clone(),
-            ProbabilisticScoringFeeParameters::default(),
+            scoring_params(),
         ));
 
         // init channel manager
@@ -1453,6 +1453,13 @@ impl<S: MutinyStorage> Node<S> {
         }
 
         Ok(())
+    }
+}
+
+pub(crate) fn scoring_params() -> ProbabilisticScoringFeeParameters {
+    ProbabilisticScoringFeeParameters {
+        base_penalty_amount_multiplier_msat: 8192 * 4, // default * 4
+        ..Default::default()
     }
 }
 

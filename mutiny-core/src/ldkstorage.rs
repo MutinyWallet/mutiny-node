@@ -659,11 +659,11 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
 
 #[cfg(test)]
 mod test {
-    use crate::esplora::EsploraSyncClient;
     use crate::event::{HTLCStatus, MillisatAmount};
     use crate::keymanager::create_keys_manager;
     use crate::onchain::OnChainWallet;
     use crate::storage::MemoryStorage;
+    use crate::{esplora::EsploraSyncClient, node::scoring_params};
     use bip39::Mnemonic;
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::PublicKey;
@@ -671,9 +671,7 @@ mod test {
     use bitcoin::Txid;
     use esplora_client::Builder;
     use lightning::routing::router::DefaultRouter;
-    use lightning::routing::scoring::{
-        ProbabilisticScoringDecayParameters, ProbabilisticScoringFeeParameters,
-    };
+    use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
     use lightning::sign::EntropySource;
     use std::str::FromStr;
     use std::sync::atomic::AtomicBool;
@@ -898,7 +896,7 @@ mod test {
             logger.clone(),
             km.clone().get_secure_random_bytes(),
             Arc::new(utils::Mutex::new(scorer)),
-            ProbabilisticScoringFeeParameters::default(),
+            scoring_params(),
         ));
 
         // make sure it correctly reads
