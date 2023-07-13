@@ -930,6 +930,11 @@ impl<S: MutinyStorage> Node<S> {
             return Err(MutinyError::NonUniquePaymentHash);
         }
 
+        if self.channel_manager.list_channels().is_empty() {
+            // No channels so routing will always fail
+            return Err(MutinyError::RoutingFailed);
+        }
+
         // make sure node at least has one connection before attempting payment
         // wait for connection before paying, or otherwise instant fail anyways
         for _ in 0..DEFAULT_PAYMENT_TIMEOUT {
@@ -937,7 +942,7 @@ impl<S: MutinyStorage> Node<S> {
             if self.stop.load(Ordering::Relaxed) {
                 return Err(MutinyError::NotRunning);
             }
-            if !self.peer_manager.get_peer_node_ids().is_empty() {
+            if !self.channel_manager.list_usable_channels().is_empty() {
                 break;
             }
             sleep(1_000).await;
