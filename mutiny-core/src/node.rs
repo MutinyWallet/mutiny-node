@@ -40,6 +40,7 @@ use lightning::{
 };
 
 use bitcoin::util::bip32::ExtendedPrivKey;
+use lightning::ln::PaymentSecret;
 use lightning::sign::{EntropySource, InMemorySigner};
 use lightning::{
     chain::{chainmonitor, Filter, Watch},
@@ -1097,6 +1098,10 @@ impl<S: MutinyStorage> Node<S> {
 
         let mut entropy = [0u8; 32];
         getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
+        let payment_secret = PaymentSecret(entropy);
+
+        let mut entropy = [0u8; 32];
+        getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
         let preimage = PaymentPreimage(entropy);
 
         let amt_msats = amt_sats * 1000;
@@ -1108,9 +1113,11 @@ impl<S: MutinyStorage> Node<S> {
             payment_params,
         };
 
+        let recipient_onion = RecipientOnionFields::secret_only(payment_secret);
+
         let pay_result = self.channel_manager.send_spontaneous_payment_with_retry(
             Some(preimage),
-            RecipientOnionFields::spontaneous_empty(),
+            recipient_onion,
             payment_id,
             route_params,
             Self::retry_strategy(),
