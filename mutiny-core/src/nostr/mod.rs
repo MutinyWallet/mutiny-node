@@ -368,7 +368,8 @@ impl<S: MutinyStorage> NostrManager<S> {
     }
 
     /// Goes through all pending NWC invoices and removes the expired ones
-    pub fn clear_expired_nwc_invoices(&self) -> Result<(), MutinyError> {
+    pub async fn clear_expired_nwc_invoices(&self) -> Result<(), MutinyError> {
+        self.pending_nwc_lock.lock().await;
         let mut invoices: Vec<PendingNwcInvoice> = self
             .storage
             .get_data(PENDING_NWC_EVENTS_KEY)?
@@ -376,6 +377,10 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         // remove expired invoices
         invoices.retain(|x| !x.is_expired());
+
+        // sort and dedup
+        invoices.sort();
+        invoices.dedup();
 
         self.storage
             .set_data(PENDING_NWC_EVENTS_KEY, invoices, None)?;
