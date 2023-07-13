@@ -899,6 +899,10 @@ impl<S: MutinyStorage> Node<S> {
         }
     }
 
+    fn retry_strategy() -> Retry {
+        Retry::Attempts(15)
+    }
+
     /// init_invoice_payment sends off the payment but does not wait for results
     /// use pay_invoice_with_timeout to wait for results
     pub async fn init_invoice_payment(
@@ -947,7 +951,7 @@ impl<S: MutinyStorage> Node<S> {
                 pay_zero_value_invoice(
                     invoice,
                     amt_msats,
-                    Retry::Attempts(5),
+                    Self::retry_strategy(),
                     self.channel_manager.as_ref(),
                 ),
                 amt_msats,
@@ -957,7 +961,11 @@ impl<S: MutinyStorage> Node<S> {
                 return Err(MutinyError::InvoiceInvalid);
             }
             (
-                pay_invoice(invoice, Retry::Attempts(5), self.channel_manager.as_ref()),
+                pay_invoice(
+                    invoice,
+                    Self::retry_strategy(),
+                    self.channel_manager.as_ref(),
+                ),
                 invoice.amount_milli_satoshis().unwrap(),
             )
         };
@@ -1105,7 +1113,7 @@ impl<S: MutinyStorage> Node<S> {
             RecipientOnionFields::spontaneous_empty(),
             payment_id,
             route_params,
-            Retry::Attempts(5),
+            Self::retry_strategy(),
         );
 
         let payment_hash = PaymentHash(Sha256::hash(&preimage.0).into_inner());
@@ -1458,7 +1466,8 @@ impl<S: MutinyStorage> Node<S> {
 
 pub(crate) fn scoring_params() -> ProbabilisticScoringFeeParameters {
     ProbabilisticScoringFeeParameters {
-        base_penalty_amount_multiplier_msat: 8192 * 4, // default * 4
+        base_penalty_amount_multiplier_msat: 8192 * 5, // default * 5
+        base_penalty_msat: 500 * 4,                    // default * 4
         ..Default::default()
     }
 }
