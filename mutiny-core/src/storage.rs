@@ -2,8 +2,12 @@ use crate::encrypt::{decrypt_with_password, encrypt, encryption_key_from_pass, C
 use crate::error::{MutinyError, MutinyStorageError};
 use crate::ldkstorage::CHANNEL_MANAGER_KEY;
 use crate::nodemanager::NodeStorage;
+use crate::utils::spawn;
+use crate::vss::{MutinyVssClient, VssKeyValueItem};
 use bdk::chain::{Append, PersistBackend};
 use bip39::Mnemonic;
+use lightning::log_error;
+use lightning::util::logger::Logger;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -72,13 +76,11 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     /// Get the encryption key used for storage
     fn cipher(&self) -> Option<Cipher>;
 
+    /// Get the VSS client used for storage
+    fn vss_client(&self) -> Option<Arc<MutinyVssClient>>;
+
     /// Set a value in the storage, the value will already be encrypted if needed
-    fn set<T>(
-        &self,
-        key: impl AsRef<str>,
-        value: T,
-        version: Option<u32>,
-    ) -> Result<(), MutinyError>
+    fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
     where
         T: Serialize;
 
@@ -96,9 +98,22 @@ pub trait MutinyStorage: Clone + Sized + 'static {
             source: MutinyStorageError::SerdeError { source: e },
         })?;
 
+        if let (Some(vss), Some(version)) = (self.vss_client(), version) {
+            let item = VssKeyValueItem {
+                key: key.as_ref().to_string(),
+                value: data.clone(),
+                version,
+            };
+            spawn(async move {
+                if let Err(e) = vss.put_objects(vec![item]).await {
+                    log_error!(vss.logger, "Failed to put object in VSS: {e}");
+                }
+            });
+        }
+
         let json: Value = encrypt_value(key.as_ref(), data, self.cipher())?;
 
-        self.set(key, json, version)
+        self.set(key, json)
     }
 
     /// Get a value from the storage, use get_data if you want the value to be decrypted
@@ -287,12 +302,11 @@ impl MutinyStorage for MemoryStorage {
         self.cipher.to_owned()
     }
 
-    fn set<T>(
-        &self,
-        key: impl AsRef<str>,
-        value: T,
-        _version: Option<u32>,
-    ) -> Result<(), MutinyError>
+    fn vss_client(&self) -> Option<Arc<MutinyVssClient>> {
+        None
+    }
+
+    fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
     where
         T: Serialize,
     {
@@ -396,12 +410,11 @@ impl MutinyStorage for () {
         None
     }
 
-    fn set<T>(
-        &self,
-        _key: impl AsRef<str>,
-        _value: T,
-        _version: Option<u32>,
-    ) -> Result<(), MutinyError>
+    fn vss_client(&self) -> Option<Arc<MutinyVssClient>> {
+        None
+    }
+
+    fn set<T>(&self, _key: impl AsRef<str>, _value: T) -> Result<(), MutinyError>
     where
         T: Serialize,
     {

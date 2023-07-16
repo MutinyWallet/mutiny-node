@@ -357,12 +357,11 @@ impl MutinyStorage for IndexedDbStorage {
         self.cipher.to_owned()
     }
 
-    fn set<T>(
-        &self,
-        key: impl AsRef<str>,
-        value: T,
-        version: Option<u32>,
-    ) -> Result<(), MutinyError>
+    fn vss_client(&self) -> Option<Arc<MutinyVssClient>> {
+        self.vss.clone()
+    }
+
+    fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
     where
         T: Serialize,
     {
@@ -375,28 +374,8 @@ impl MutinyStorage for IndexedDbStorage {
         let key_clone = key.clone();
         let data_clone = data.clone();
         let logger = self.logger.clone();
-        let vss = self.vss.clone();
         spawn_local(async move {
-            if let (Some(vss), Some(version)) = (vss, version) {
-                let item = VssKeyValueItem {
-                    key: key_clone.clone(),
-                    value: data_clone.clone(),
-                    version,
-                };
-                let vss_fut = vss.put_objects(vec![item]);
-                let db_fut = Self::save_to_indexed_db(&indexed_db, &key_clone, &data_clone);
-                let (vss_result, db_result) = futures::join!(vss_fut, db_fut);
-
-                if let Err(e) = vss_result {
-                    log_error!(logger, "Failed to save ({key_clone}) to vss: {e}");
-                }
-
-                if let Err(e) = db_result {
-                    log_error!(logger, "Failed to save ({key_clone}) to indexed db: {e}");
-                }
-            } else if let Err(e) =
-                Self::save_to_indexed_db(&indexed_db, &key_clone, &data_clone).await
-            {
+            if let Err(e) = Self::save_to_indexed_db(&indexed_db, &key_clone, &data_clone).await {
                 log_error!(logger, "Failed to save ({key_clone}) to indexed db: {e}");
             };
         });
@@ -644,7 +623,7 @@ mod tests {
         let result: Option<String> = storage.get(key).unwrap();
         assert_eq!(result, None);
 
-        storage.set(key, value, None).unwrap();
+        storage.set(key, value).unwrap();
 
         let result: Option<String> = storage.get(key).unwrap();
         assert_eq!(result, Some(value.to_string()));
@@ -718,7 +697,7 @@ mod tests {
             .await
             .unwrap();
 
-        storage.set(key, value, None).unwrap();
+        storage.set(key, value).unwrap();
 
         IndexedDbStorage::clear().await.unwrap();
 
