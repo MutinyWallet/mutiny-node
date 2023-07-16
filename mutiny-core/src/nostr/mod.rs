@@ -220,6 +220,8 @@ impl<S: MutinyStorage> NostrManager<S> {
             client.send_event(info_event).await.map_err(|e| {
                 MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}"))
             })?;
+
+            let _ = client.disconnect().await;
         }
 
         Ok(profile)
@@ -293,6 +295,8 @@ impl<S: MutinyStorage> NostrManager<S> {
             .send_event(response)
             .await
             .map_err(|e| MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}")))?;
+
+        let _ = client.disconnect().await;
 
         Ok(event_id)
     }
