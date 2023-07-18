@@ -184,7 +184,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     continue;
                 }
 
-                if let Err(e) = nostr.clear_expired_nwc_invoices() {
+                if let Err(e) = nostr.clear_expired_nwc_invoices().await {
                     log_warn!(nm.logger, "Failed to clear expired NWC invoices: {e}");
                 }
 
