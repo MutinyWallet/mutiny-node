@@ -441,6 +441,27 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         Ok(())
     }
 
+    /// Persists the failed spendable outputs to storage.
+    /// Previously failed spendable outputs are overwritten.
+    ///
+    /// This is used to retry spending them later.
+    pub fn set_failed_spendable_outputs(
+        &self,
+        descriptors: Vec<SpendableOutputDescriptor>,
+    ) -> anyhow::Result<()> {
+        let key = self.get_key(FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY);
+
+        // convert the failed descriptors to hex
+        let descriptors_hex: Vec<String> = descriptors
+            .into_iter()
+            .map(|desc| desc.encode().to_hex())
+            .collect();
+
+        self.storage.set_data(key, descriptors_hex, None)?;
+
+        Ok(())
+    }
+
     /// Retrieves the failed spendable outputs from storage
     pub fn get_failed_spendable_outputs(&self) -> anyhow::Result<Vec<SpendableOutputDescriptor>> {
         let key = self.get_key(FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY);

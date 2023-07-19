@@ -409,7 +409,23 @@ impl<S: MutinyStorage> Node<S> {
                         log_info!(logger, "Successfully retried spendable outputs");
                         persister.clear_failed_spendable_outputs()?;
                     }
-                    Err(e) => log_warn!(logger, "Failed to retry spendable outputs {e}"),
+                    Err(_) => {
+                        // retry them individually then only save failed ones
+                        // if there was only one we don't need to retry
+                        if retry_spendable_outputs.len() > 1 {
+                            let mut failed = vec![];
+                            for o in retry_spendable_outputs {
+                                if event_handler
+                                    .handle_spendable_outputs(&[o.clone()])
+                                    .await
+                                    .is_err()
+                                {
+                                    failed.push(o);
+                                }
+                            }
+                            persister.set_failed_spendable_outputs(failed)?;
+                        };
+                    }
                 }
             }
         }
