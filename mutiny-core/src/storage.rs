@@ -159,15 +159,16 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     {
         let keys = self.scan_keys(prefix, suffix)?;
 
-        Ok(keys
-            .into_iter()
-            .filter_map(|key| {
-                self.get_data(&key)
-                    .ok()
-                    .flatten()
-                    .map(|value: T| (key, value))
-            })
-            .collect())
+        let mut map = HashMap::with_capacity(keys.len());
+
+        for key in keys {
+            let kv = self.get_data::<T>(&key)?;
+            if let Some(v) = kv {
+                map.insert(key, v);
+            }
+        }
+
+        Ok(map)
     }
 
     /// Insert a mnemonic into the storage

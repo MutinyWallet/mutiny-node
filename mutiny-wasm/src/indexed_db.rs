@@ -4,9 +4,12 @@ use gloo_utils::format::JsValueSerdeExt;
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error};
 use log::error;
+use mutiny_core::encrypt::encryption_key_from_pass;
 use mutiny_core::logging::MutinyLogger;
 use mutiny_core::nodemanager::NodeStorage;
-use mutiny_core::storage::{MutinyStorage, VersionedValue, KEYCHAIN_STORE_KEY, NODES_KEY};
+use mutiny_core::storage::{
+    MemoryStorage, MutinyStorage, VersionedValue, KEYCHAIN_STORE_KEY, NODES_KEY,
+};
 use mutiny_core::vss::*;
 use mutiny_core::*;
 use mutiny_core::{
@@ -45,11 +48,11 @@ impl IndexedDbStorage {
         logger: Arc<MutinyLogger>,
     ) -> Result<IndexedDbStorage, MutinyError> {
         let indexed_db = Arc::new(RwLock::new(Some(Self::build_indexed_db_database().await?)));
+        let password = password.filter(|p| !p.is_empty());
 
-        let map = Self::read_all(&indexed_db, vss.as_deref(), &logger).await?;
+        let map = Self::read_all(&indexed_db, password.clone(), vss.as_deref(), &logger).await?;
         let memory = Arc::new(RwLock::new(map));
 
-        let password = password.filter(|p| !p.is_empty());
         Ok(IndexedDbStorage {
             password,
             cipher,
@@ -147,6 +150,7 @@ impl IndexedDbStorage {
 
     pub(crate) async fn read_all(
         indexed_db: &Arc<RwLock<Option<Rexie>>>,
+        password: Option<String>,
         vss: Option<&MutinyVssClient>,
         logger: &MutinyLogger,
     ) -> Result<HashMap<String, Value>, MutinyError> {
@@ -172,10 +176,19 @@ impl IndexedDbStorage {
             })?
         };
 
-        let mut map = HashMap::new();
+        let cipher = password
+            .as_ref()
+            .filter(|p| !p.is_empty())
+            .map(|p| encryption_key_from_pass(p))
+            .transpose()?;
+
+        // use a memory storage to handle encryption and decryption
+        let map = MemoryStorage::new(password, cipher);
+
         let all_json = store.get_all(None, None, None, None).await.map_err(|e| {
             MutinyError::read_err(anyhow!("Failed to get all from store: {e}").into())
         })?;
+
         for (key, value) in all_json {
             let key = key
                 .as_string()
@@ -184,7 +197,7 @@ impl IndexedDbStorage {
                 ))))?;
 
             let json: Value = value.into_serde()?;
-            map.insert(key, json);
+            map.set(key, json)?;
         }
 
         // get the local storage data, this should take priority if it is being used
@@ -200,13 +213,16 @@ impl IndexedDbStorage {
                 // from either malicious 3rd party or a previous version of the wallet
                 if write_to_local_storage(&key) {
                     let value: Value = LocalStorage::get(&key).unwrap();
-                    map.insert(key, value);
+                    map.set(key, value)?;
                 }
             }
         }
 
         match vss {
-            None => Ok(map),
+            None => {
+                let final_map = map.memory.read().unwrap();
+                Ok(final_map.clone())
+            }
             Some(vss) => {
                 log_debug!(logger, "Reading from vss");
                 let keys = vss.list_key_versions(None).await?;
@@ -217,10 +233,11 @@ impl IndexedDbStorage {
                 let results = futures::future::join_all(futs).await;
                 for result in results {
                     if let Some((key, value)) = result? {
-                        map.insert(key, value);
+                        map.set_data(key, value, None)?;
                     }
                 }
-                Ok(map)
+                let final_map = map.memory.read().unwrap();
+                Ok(final_map.clone())
             }
         }
     }
@@ -228,7 +245,7 @@ impl IndexedDbStorage {
     async fn handle_vss_key(
         kv: KeyVersion,
         vss: &MutinyVssClient,
-        current: &HashMap<String, Value>,
+        current: &MemoryStorage,
         logger: &MutinyLogger,
     ) -> Result<Option<(String, Value)>, MutinyError> {
         log_debug!(
@@ -242,25 +259,23 @@ impl IndexedDbStorage {
             NODES_KEY => {
                 let obj = vss.get_object(&kv.key).await?;
                 // we can get version from node storage, so we should compare
-                match current.get(&kv.key) {
-                    Some(value) => {
-                        if let Ok(versioned) = serde_json::from_value::<NodeStorage>(value.clone())
+                match current.get_data::<NodeStorage>(&kv.key)? {
+                    Some(versioned) => {
+                        if versioned.version <= kv.version
+                            && serde_json::from_value::<NodeStorage>(obj.value.clone()).is_ok()
                         {
-                            if versioned.version < kv.version {
-                                return Ok(Some((kv.key, obj.value)));
-                            }
+                            return Ok(Some((kv.key, obj.value)));
                         }
                     }
                     None => return Ok(Some((kv.key, obj.value))),
                 }
             }
             key => {
-                if key.contains(MONITORS_PREFIX_KEY) {
+                if key.starts_with(MONITORS_PREFIX_KEY) {
                     let obj = vss.get_object(&kv.key).await?;
                     // we can get versions from monitors, so we should compare
-                    match current.get(&kv.key) {
-                        Some(current) => {
-                            let bytes: Vec<u8> = serde_json::from_value(current.clone())?;
+                    match current.get::<Vec<u8>>(&kv.key)? {
+                        Some(bytes) => {
                             // check first byte is 1, then take u64 from next 8 bytes
                             let current_version =
                                 u64::from_be_bytes(bytes[1..9].try_into().unwrap());
@@ -271,20 +286,23 @@ impl IndexedDbStorage {
                         }
                         None => return Ok(Some((kv.key, obj.value))),
                     }
-                } else if key.contains(CHANNEL_MANAGER_KEY) {
+                } else if key.starts_with(CHANNEL_MANAGER_KEY) {
                     let obj = vss.get_object(&kv.key).await?;
                     // we can get versions from channel manager, so we should compare
-                    match current.get(&kv.key) {
-                        Some(value) => {
-                            if let Ok(versioned) =
-                                serde_json::from_value::<VersionedValue>(value.clone())
+                    match current.get_data::<VersionedValue>(&kv.key)? {
+                        Some(versioned) => {
+                            if versioned.version <= kv.version
+                                && serde_json::from_value::<VersionedValue>(obj.value.clone())
+                                    .is_ok()
                             {
-                                if versioned.version < kv.version {
-                                    return Ok(Some((kv.key, obj.value)));
-                                }
+                                return Ok(Some((kv.key, obj.value)));
                             }
                         }
-                        None => return Ok(Some((kv.key, obj.value))),
+                        None => {
+                            if serde_json::from_value::<VersionedValue>(obj.value.clone()).is_ok() {
+                                return Ok(Some((kv.key, obj.value)));
+                            }
+                        }
                     }
                 }
             }
@@ -315,7 +333,13 @@ impl IndexedDbStorage {
 
     #[cfg(test)]
     pub(crate) async fn reload_from_indexed_db(&self) -> Result<(), MutinyError> {
-        let map = Self::read_all(&self.indexed_db, self.vss.as_deref(), &self.logger).await?;
+        let map = Self::read_all(
+            &self.indexed_db,
+            self.password.clone(),
+            self.vss.as_deref(),
+            &self.logger,
+        )
+        .await?;
         let mut memory = self
             .memory
             .try_write()
@@ -472,7 +496,13 @@ impl MutinyStorage for IndexedDbStorage {
             self.indexed_db.clone()
         };
 
-        let map = Self::read_all(&indexed_db, self.vss.as_deref(), &self.logger).await?;
+        let map = Self::read_all(
+            &indexed_db,
+            self.password.clone(),
+            self.vss.as_deref(),
+            &self.logger,
+        )
+        .await?;
         let memory = Arc::new(RwLock::new(map));
         self.indexed_db = indexed_db;
         self.memory = memory;
