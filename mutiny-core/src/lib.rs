@@ -212,7 +212,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     pin_mut!(delay_fut);
                     select! {
                         notification = read_fut => {
-                                if let Ok(RelayPoolNotification::Event(_url, event)) = notification {
+                            match notification {
+                                Ok(RelayPoolNotification::Event(_url, event)) => {
                                     if event.kind == Kind::WalletConnectRequest && event.verify().is_ok() {
                                         match nostr.handle_nwc_request(event, &nm, &from_node).await {
                                             Ok(Some(event)) => {
@@ -226,7 +227,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                             }
                                         }
                                     }
-                                }
+                                },
+                                Ok(RelayPoolNotification::Message(_, _)) => {}, // ignore messages
+                                Ok(RelayPoolNotification::Shutdown) => break, // if we disconnect, we restart to reconnect
+                                Err(_) => break, // if we are erroring we should reconnect
+                            }
                         }
                         _ = delay_fut => {
                             if nm.stop.load(Ordering::Relaxed) {
@@ -234,6 +239,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                             }
                         }
                     }
+                }
+
+                if let Err(e) = client.disconnect().await {
+                    log_warn!(nm.logger, "Error disconnecting from relays: {e}");
                 }
             }
         });
