@@ -16,6 +16,7 @@ use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::Network;
 use bitcoin::{BlockHash, Transaction};
 use futures::{try_join, TryFutureExt};
+use lightning::chain::chainmonitor::{MonitorUpdateId, Persist};
 use lightning::chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate};
 use lightning::chain::transaction::OutPoint;
 use lightning::chain::BestBlock;
@@ -28,11 +29,7 @@ use lightning::sign::{InMemorySigner, SpendableOutputDescriptor, WriteableEcdsaC
 use lightning::util::logger::Logger;
 use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
-use lightning::{chain, log_trace};
-use lightning::{
-    chain::chainmonitor::{MonitorUpdateId, Persist},
-    log_error,
-};
+use lightning::{chain, log_debug, log_error, log_trace};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
@@ -126,23 +123,59 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         }
     }
 
+    fn get_channel_monitor_data(&self) -> Result<Vec<Vec<u8>>, MutinyError> {
+        let suffix = self.node_id.as_str();
+        let result = self
+            .storage
+            .scan::<VersionedValue>(MONITORS_PREFIX_KEY, Some(suffix));
+
+        match result {
+            Ok(res) => {
+                // get bytes value from VersionedValue
+                let mut values = Vec::with_capacity(res.len());
+                for v in res.into_values() {
+                    let hex: String = serde_json::from_value(v.value)?;
+                    let bytes = FromHex::from_hex(&hex)?;
+                    values.push(bytes);
+                }
+                Ok(values)
+            }
+            Err(_) => {
+                log_debug!(
+                    self.logger,
+                    "Failed to read channel monitors, trying old encoding"
+                );
+                // failed to read, try old version
+                let channel_monitor_list = self
+                    .storage
+                    .scan::<Vec<u8>>(MONITORS_PREFIX_KEY, Some(suffix))?;
+
+                Ok(channel_monitor_list.into_values().collect())
+            }
+        }
+    }
+
     pub fn read_channel_monitors(
         &self,
         keys_manager: Arc<PhantomKeysManager<S>>,
     ) -> Result<Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>, io::Error> {
         // Get all the channel monitor buffers that exist for this node
-        let suffix = self.node_id.as_str();
-        let channel_monitor_list: HashMap<String, Vec<u8>> = self
-            .storage
-            .scan(MONITORS_PREFIX_KEY, Some(suffix))
+        let channel_monitor_list = self
+            .get_channel_monitor_data()
             .map_err(|_| io::ErrorKind::Other)?;
 
+        log_debug!(
+            self.logger,
+            "Read {} channel monitors from storage",
+            channel_monitor_list.len()
+        );
+
         let res = channel_monitor_list
-            .iter()
-            .fold(Ok(Vec::new()), |current_res, (_, data)| match current_res {
+            .into_iter()
+            .fold(Ok(Vec::new()), |current_res, data| match current_res {
                 Err(e) => Err(e),
                 Ok(mut accum) => {
-                    let mut buffer = lightning::io::Cursor::new(data);
+                    let mut buffer = Cursor::new(data);
                     match <(BlockHash, ChannelMonitor<InMemorySigner>)>::read(
                         &mut buffer,
                         (keys_manager.as_ref(), keys_manager.as_ref()),
@@ -175,6 +208,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
         esplora: Arc<AsyncClient>,
     ) -> Result<ReadChannelManager<S>, MutinyError> {
+        log_debug!(mutiny_logger, "Reading channel manager from storage");
         let key = self.get_key(CHANNEL_MANAGER_KEY);
         match self.storage.get_data::<VersionedValue>(&key) {
             Ok(Some(versioned_value)) => {

@@ -14,7 +14,7 @@ pub struct MutinyVssClient {
     auth_client: Arc<MutinyAuthClient>,
     url: String,
     encryption_key: SecretKey,
-    logger: Arc<MutinyLogger>,
+    pub logger: Arc<MutinyLogger>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

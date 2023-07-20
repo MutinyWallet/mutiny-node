@@ -291,13 +291,13 @@ impl<S: MutinyStorage> LabelStorage for S {
         let contact = self.get_contact(&id)?;
         if let Some(mut contact) = contact {
             contact.archived = Some(true);
-            self.set(get_contact_key(&id), contact, None)?;
+            self.set_data(get_contact_key(&id), contact, None)?;
         }
         Ok(())
     }
 
     fn edit_contact(&self, id: impl AsRef<str>, contact: Contact) -> Result<(), MutinyError> {
-        self.set(get_contact_key(&id), contact, None)
+        self.set_data(get_contact_key(&id), contact, None)
     }
 
     fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyError> {
