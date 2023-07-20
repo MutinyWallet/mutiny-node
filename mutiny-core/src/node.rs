@@ -1493,17 +1493,9 @@ impl<S: MutinyStorage> Node<S> {
 }
 
 pub(crate) fn scoring_params() -> ProbabilisticScoringFeeParameters {
-    // Disallow Voltage C2
-    let mut manual_node_penalties = hashbrown::HashMap::with_capacity(1);
-    let node_id =
-        NodeId::from_str("02cfdc6b60e5931d174a342b20b50d6a2a17c6e4ef8e077ea54069a3541ad50eb0")
-            .unwrap();
-    manual_node_penalties.insert(node_id, u64::MAX);
-
     ProbabilisticScoringFeeParameters {
         base_penalty_amount_multiplier_msat: 8192 * 5, // default * 5
         base_penalty_msat: 500 * 4,                    // default * 4
-        manual_node_penalties,
         ..Default::default()
     }
 }
