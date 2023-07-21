@@ -2409,7 +2409,7 @@ mod tests {
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
-        let storage = MemoryStorage::new(Some(pass), Some(cipher));
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
 
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let c = MutinyWalletConfig::new(
@@ -2437,7 +2437,7 @@ mod tests {
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
-        let storage = MemoryStorage::new(Some(pass), Some(cipher));
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
         let seed = generate_seed(12).expect("Failed to gen seed");
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
         let c = MutinyWalletConfig::new(
@@ -2486,7 +2486,7 @@ mod tests {
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
-        let storage = MemoryStorage::new(Some(pass), Some(cipher));
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
         let seed = generate_seed(12).expect("Failed to gen seed");
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
         let c = MutinyWalletConfig::new(

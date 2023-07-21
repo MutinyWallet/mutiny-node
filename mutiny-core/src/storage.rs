@@ -276,21 +276,27 @@ pub struct MemoryStorage {
     pub password: Option<String>,
     pub cipher: Option<Cipher>,
     pub memory: Arc<RwLock<HashMap<String, Value>>>,
+    pub vss_client: Option<Arc<MutinyVssClient>>,
 }
 
 impl MemoryStorage {
-    pub fn new(password: Option<String>, cipher: Option<Cipher>) -> Self {
+    pub fn new(
+        password: Option<String>,
+        cipher: Option<Cipher>,
+        vss_client: Option<Arc<MutinyVssClient>>,
+    ) -> Self {
         Self {
             cipher,
             password,
             memory: Arc::new(RwLock::new(HashMap::new())),
+            vss_client,
         }
     }
 }
 
 impl Default for MemoryStorage {
     fn default() -> Self {
-        Self::new(None, None)
+        Self::new(None, None, None)
     }
 }
 
@@ -304,7 +310,7 @@ impl MutinyStorage for MemoryStorage {
     }
 
     fn vss_client(&self) -> Option<Arc<MutinyVssClient>> {
-        None
+        self.vss_client.clone()
     }
 
     fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
@@ -514,7 +520,7 @@ mod tests {
 
         let seed = keymanager::generate_seed(12).unwrap();
 
-        let storage = MemoryStorage::new(None, None);
+        let storage = MemoryStorage::default();
         let mnemonic = storage.insert_mnemonic(seed).unwrap();
 
         let stored_mnemonic = storage.get_mnemonic().unwrap();
@@ -530,7 +536,7 @@ mod tests {
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
-        let storage = MemoryStorage::new(Some(pass), Some(cipher));
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
 
         let mnemonic = storage.insert_mnemonic(seed).unwrap();
 

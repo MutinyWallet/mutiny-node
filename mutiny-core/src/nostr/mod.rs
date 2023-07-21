@@ -514,7 +514,7 @@ mod test {
         let xprivkey =
             ExtendedPrivKey::new_master(Network::Bitcoin, &mnemonic.to_seed("")).unwrap();
 
-        let storage = MemoryStorage::new(None, None);
+        let storage = MemoryStorage::new(None, None, None);
 
         NostrManager::from_mnemonic(xprivkey, storage).unwrap()
     }

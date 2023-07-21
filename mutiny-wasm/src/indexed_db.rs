@@ -183,7 +183,7 @@ impl IndexedDbStorage {
             .transpose()?;
 
         // use a memory storage to handle encryption and decryption
-        let map = MemoryStorage::new(password, cipher);
+        let map = MemoryStorage::new(password, cipher, None);
 
         let all_json = store.get_all(None, None, None, None).await.map_err(|e| {
             MutinyError::read_err(anyhow!("Failed to get all from store: {e}").into())
