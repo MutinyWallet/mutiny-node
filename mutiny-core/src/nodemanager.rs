@@ -11,7 +11,7 @@ use crate::scb::{
     EncryptedSCB, StaticChannelBackup, StaticChannelBackupStorage,
     SCB_ENCRYPTION_KEY_DERIVATION_PATH,
 };
-use crate::storage::{MutinyStorage, KEYCHAIN_STORE_KEY};
+use crate::storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY};
 use crate::utils::sleep;
 use crate::MutinyWalletConfig;
 use crate::{
@@ -64,6 +64,7 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
+pub const DEVICE_LOCK_INTERVAL_SECS: u64 = 60;
 
 // This is the NodeStorage object saved to the DB
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -555,6 +556,26 @@ impl<S: MutinyStorage> NodeManager<S> {
             .unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
 
         let logger = Arc::new(MutinyLogger::with_writer(stop.clone(), storage.clone()));
+
+        // Need to prevent other devices from running at the same time
+        if !c.skip_device_lock {
+            storage.set_device_lock()?;
+        }
+
+        let storage_clone = storage.clone();
+        let logger_clone = logger.clone();
+        let stop_clone = stop.clone();
+        utils::spawn(async move {
+            loop {
+                if stop_clone.load(Ordering::Relaxed) {
+                    break;
+                }
+                sleep((DEVICE_LOCK_INTERVAL_SECS * 1_000) as i32).await;
+                if let Err(e) = storage_clone.set_device_lock() {
+                    log_error!(logger_clone, "Error setting device lock: {e}");
+                }
+            }
+        });
 
         let esplora_server_url = get_esplora_url(c.network, c.user_esplora_url);
         let tx_sync = Arc::new(EsploraSyncClient::new(esplora_server_url, logger.clone()));
@@ -2257,7 +2278,8 @@ impl<S: MutinyStorage> NodeManager<S> {
         let serde_map = serde_json::map::Map::from_iter(map.into_iter().filter(|(k, _)| {
             // filter out logs and network graph
             // these are really big and not needed for export
-            !matches!(k.as_str(), LOGGING_KEY | NETWORK_GRAPH_KEY)
+            // filter out device id so a new one is generated
+            !matches!(k.as_str(), LOGGING_KEY | NETWORK_GRAPH_KEY | DEVICE_ID_KEY)
         }));
 
         // shut back down after reading if it was already closed
@@ -2412,7 +2434,7 @@ mod tests {
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
-        let storage = MemoryStorage::new(Some(pass), Some(cipher));
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
 
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let c = MutinyWalletConfig::new(
@@ -2425,6 +2447,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         );
         NodeManager::new(c, storage.clone())
             .await
@@ -2440,7 +2463,7 @@ mod tests {
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
-        let storage = MemoryStorage::new(Some(pass), Some(cipher));
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
         let seed = generate_seed(12).expect("Failed to gen seed");
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
         let c = MutinyWalletConfig::new(
@@ -2453,6 +2476,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         );
         let nm = NodeManager::new(c, storage)
             .await
@@ -2489,7 +2513,7 @@ mod tests {
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
-        let storage = MemoryStorage::new(Some(pass), Some(cipher));
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
         let seed = generate_seed(12).expect("Failed to gen seed");
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
         let c = MutinyWalletConfig::new(
@@ -2502,6 +2526,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         );
         let nm = NodeManager::new(c, storage)
             .await

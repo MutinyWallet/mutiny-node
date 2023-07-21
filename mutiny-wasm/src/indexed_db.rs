@@ -7,9 +7,7 @@ use log::error;
 use mutiny_core::encrypt::encryption_key_from_pass;
 use mutiny_core::logging::MutinyLogger;
 use mutiny_core::nodemanager::NodeStorage;
-use mutiny_core::storage::{
-    MemoryStorage, MutinyStorage, VersionedValue, KEYCHAIN_STORE_KEY, NODES_KEY,
-};
+use mutiny_core::storage::*;
 use mutiny_core::vss::*;
 use mutiny_core::*;
 use mutiny_core::{
@@ -183,7 +181,7 @@ impl IndexedDbStorage {
             .transpose()?;
 
         // use a memory storage to handle encryption and decryption
-        let map = MemoryStorage::new(password, cipher);
+        let map = MemoryStorage::new(password, cipher, None);
 
         let all_json = store.get_all(None, None, None, None).await.map_err(|e| {
             MutinyError::read_err(anyhow!("Failed to get all from store: {e}").into())
@@ -263,6 +261,20 @@ impl IndexedDbStorage {
                     Some(versioned) => {
                         if versioned.version <= kv.version
                             && serde_json::from_value::<NodeStorage>(obj.value.clone()).is_ok()
+                        {
+                            return Ok(Some((kv.key, obj.value)));
+                        }
+                    }
+                    None => return Ok(Some((kv.key, obj.value))),
+                }
+            }
+            DEVICE_LOCK_KEY => {
+                let obj = vss.get_object(&kv.key).await?;
+                // we can get version from device lock, so we should compare
+                match current.get_data::<DeviceLock>(&kv.key)? {
+                    Some(versioned) => {
+                        if versioned.time <= kv.version
+                            && serde_json::from_value::<DeviceLock>(obj.value.clone()).is_ok()
                         {
                             return Ok(Some((kv.key, obj.value)));
                         }

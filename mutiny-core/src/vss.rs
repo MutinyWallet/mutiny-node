@@ -158,44 +158,11 @@ impl MutinyVssClient {
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
-    use crate::auth::MutinyAuthClient;
-    use crate::logging::MutinyLogger;
     use crate::test_utils::*;
-    use std::sync::Arc;
-
-    async fn create_client() -> MutinyVssClient {
-        // Set up test auth client
-        let auth_manager = create_manager();
-        let lnurl_client = Arc::new(
-            lnurl::Builder::default()
-                .build_async()
-                .expect("failed to make lnurl client"),
-        );
-        let logger = Arc::new(MutinyLogger::default());
-        let url = "https://auth-staging.mutinywallet.com";
-
-        let auth_client =
-            MutinyAuthClient::new(auth_manager, lnurl_client, logger.clone(), url.to_string());
-
-        // Test authenticate method
-        match auth_client.authenticate().await {
-            Ok(_) => assert!(auth_client.is_authenticated().is_some()),
-            Err(e) => panic!("Authentication failed with error: {:?}", e),
-        };
-
-        let encryption_key = SecretKey::from_slice(&[2; 32]).unwrap();
-
-        MutinyVssClient::new(
-            Arc::new(auth_client),
-            "https://storage-staging.mutinywallet.com".to_string(),
-            encryption_key,
-            logger,
-        )
-    }
 
     #[tokio::test]
     async fn test_vss() {
-        let client = create_client().await;
+        let client = create_vss_client().await;
 
         let key = "hello".to_string();
         let value: Value = serde_json::from_str("\"world\"").unwrap();
@@ -219,7 +186,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_vss_versions() {
-        let client = create_client().await;
+        let client = create_vss_client().await;
 
         let key = "hello".to_string();
         let value: Value = serde_json::from_str("\"world\"").unwrap();
