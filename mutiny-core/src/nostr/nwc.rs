@@ -9,7 +9,7 @@ use bitcoin::util::bip32::ExtendedPrivKey;
 use futures_util::lock::Mutex;
 use lightning::util::logger::Logger;
 use lightning::{log_error, log_warn};
-use lightning_invoice::Invoice;
+use lightning_invoice::Bolt11Invoice;
 use nostr::key::XOnlyPublicKey;
 use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
@@ -105,7 +105,7 @@ impl NostrWalletConnect {
         &self,
         node_manager: &NodeManager<S>,
         from_node: &PublicKey,
-        invoice: &Invoice,
+        invoice: &Bolt11Invoice,
     ) -> Result<Response, MutinyError> {
         // todo we could get the author of the event we zapping and use that as the label
         let labels = vec![self.profile.name.clone()];
@@ -152,7 +152,7 @@ impl NostrWalletConnect {
                 return Ok(None);
             }
 
-            let invoice = Invoice::from_str(&req.params.invoice)
+            let invoice = Bolt11Invoice::from_str(&req.params.invoice)
                 .map_err(|_| anyhow!("Failed to parse invoice"))?;
 
             // if the invoice has expired, skip it
@@ -288,7 +288,7 @@ pub struct PendingNwcInvoice {
     /// Index of the profile that received the invoice
     pub index: u32,
     /// The invoice that awaiting approval
-    pub invoice: Invoice,
+    pub invoice: Bolt11Invoice,
     /// The nostr event id of the request
     pub event_id: EventId,
     /// The nostr pubkey of the request
