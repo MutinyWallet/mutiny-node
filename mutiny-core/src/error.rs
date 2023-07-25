@@ -251,6 +251,12 @@ impl From<lightning::ln::msgs::DecodeError> for MutinyError {
     }
 }
 
+impl From<lightning::ln::script::InvalidShutdownScript> for MutinyError {
+    fn from(_e: lightning::ln::script::InvalidShutdownScript) -> Self {
+        MutinyError::InvalidArgumentsError
+    }
+}
+
 impl From<ParseOrSemanticError> for MutinyError {
     fn from(_e: ParseOrSemanticError) -> Self {
         Self::InvoiceInvalid

@@ -49,6 +49,7 @@ use lightning::events::ClosureReason;
 use lightning::io::Read;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning::ln::msgs::DecodeError;
+use lightning::ln::script::ShutdownScript;
 use lightning::ln::PaymentHash;
 use lightning::routing::gossip::NodeId;
 use lightning::util::logger::*;
@@ -1830,6 +1831,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     pub async fn close_channel(
         &self,
         outpoint: &OutPoint,
+        address: Option<Address>,
         force: bool,
         abandon: bool,
     ) -> Result<(), MutinyError> {
@@ -1880,8 +1882,20 @@ impl<S: MutinyStorage> NodeManager<S> {
                             MutinyError::ChannelClosingFailed
                         })?;
                 } else {
+                    // convert address to ShutdownScript
+                    let shutdown_script = if let Some(addr) = address {
+                        Some(ShutdownScript::try_from(addr.script_pubkey())?)
+                    } else {
+                        None
+                    };
+
                     node.channel_manager
-                        .close_channel(&channel.channel_id, &channel.counterparty.node_id)
+                        .close_channel_with_feerate_and_script(
+                            &channel.channel_id,
+                            &channel.counterparty.node_id,
+                            None,
+                            shutdown_script,
+                        )
                         .map_err(|e| {
                             log_error!(
                                 self.logger,
