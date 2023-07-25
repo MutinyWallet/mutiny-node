@@ -57,7 +57,7 @@ use bitcoin::Network;
 use futures::{pin_mut, select, FutureExt};
 use lightning::util::logger::Logger;
 use lightning::{log_error, log_info, log_warn};
-use lightning_invoice::Invoice;
+use lightning_invoice::Bolt11Invoice;
 use nostr_sdk::{Client, RelayPoolNotification};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -249,7 +249,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Pay the subscription invoice. This will post a NWC automatically afterwards.
-    pub async fn pay_subscription_invoice(&self, inv: &Invoice) -> Result<(), MutinyError> {
+    pub async fn pay_subscription_invoice(&self, inv: &Bolt11Invoice) -> Result<(), MutinyError> {
         if let Some(subscription_client) = self.node_manager.subscription_client.clone() {
             let nodes = self.node_manager.nodes.lock().await;
             let first_node_pubkey = if let Some(node) = nodes.values().next() {

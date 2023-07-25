@@ -54,7 +54,7 @@ use lightning::routing::gossip::NodeId;
 use lightning::util::logger::*;
 use lightning::util::ser::{Readable, Writeable, Writer};
 use lightning::{log_debug, log_error, log_info, log_warn};
-use lightning_invoice::{Invoice, InvoiceDescription};
+use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::lnurl::LnUrl;
 use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use reqwest::Client;
@@ -154,14 +154,14 @@ pub struct NodeIdentity {
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct MutinyBip21RawMaterials {
     pub address: Address,
-    pub invoice: Invoice,
+    pub invoice: Bolt11Invoice,
     pub btc_amount: Option<String>,
     pub labels: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct MutinyInvoice {
-    pub bolt11: Option<Invoice>,
+    pub bolt11: Option<Bolt11Invoice>,
     pub description: Option<String>,
     pub payment_hash: sha256::Hash,
     pub preimage: Option<String>,
@@ -175,17 +175,17 @@ pub struct MutinyInvoice {
     pub last_updated: u64,
 }
 
-impl From<Invoice> for MutinyInvoice {
-    fn from(value: Invoice) -> Self {
+impl From<Bolt11Invoice> for MutinyInvoice {
+    fn from(value: Bolt11Invoice) -> Self {
         let description = match value.description() {
-            InvoiceDescription::Direct(a) => {
+            Bolt11InvoiceDescription::Direct(a) => {
                 if a.is_empty() {
                     None
                 } else {
                     Some(a.to_string())
                 }
             }
-            InvoiceDescription::Hash(_) => None,
+            Bolt11InvoiceDescription::Hash(_) => None,
         };
 
         let timestamp = value.duration_since_epoch().as_secs();
@@ -1510,7 +1510,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     pub async fn pay_invoice(
         &self,
         from_node: &PublicKey,
-        invoice: &Invoice,
+        invoice: &Bolt11Invoice,
         amt_sats: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
@@ -1540,7 +1540,10 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Decodes a lightning invoice into useful information.
     /// Will return an error if the invoice is for a different network.
-    pub async fn decode_invoice(&self, invoice: Invoice) -> Result<MutinyInvoice, MutinyError> {
+    pub async fn decode_invoice(
+        &self,
+        invoice: Bolt11Invoice,
+    ) -> Result<MutinyInvoice, MutinyError> {
         if invoice.network() != self.network {
             return Err(MutinyError::IncorrectNetwork(invoice.network()));
         }
@@ -1598,7 +1601,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         match response {
             LnUrlResponse::LnUrlPayResponse(pay) => {
                 let msats = amount_sats * 1000;
-                let invoice = self.lnurl_client.get_invoice(&pay, msats).await?;
+                let invoice = self.lnurl_client.get_invoice(&pay, msats, None).await?;
 
                 self.pay_invoice(from_node, &invoice.invoice(), None, labels)
                     .await
@@ -1652,7 +1655,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Gets an invoice from the node manager.
     /// This includes sent and received invoices.
-    pub async fn get_invoice(&self, invoice: &Invoice) -> Result<MutinyInvoice, MutinyError> {
+    pub async fn get_invoice(&self, invoice: &Bolt11Invoice) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
         let inv_opt: Option<MutinyInvoice> =
             nodes.iter().find_map(|(_, n)| n.get_invoice(invoice).ok());
@@ -2128,7 +2131,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Returns a lightning invoice so that the plan can be paid for to start it.
     pub async fn subscribe_to_plan(&self, id: u8) -> Result<MutinyInvoice, MutinyError> {
         if let Some(subscription_client) = self.subscription_client.clone() {
-            Ok(Invoice::from_str(&subscription_client.subscribe_to_plan(id).await?)?.into())
+            Ok(Bolt11Invoice::from_str(&subscription_client.subscribe_to_plan(id).await?)?.into())
         } else {
             Err(MutinyError::SubscriptionClientNotConfigured)
         }
@@ -2387,7 +2390,7 @@ mod tests {
     use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::{Network, PackedLockTime, Transaction, TxOut, Txid};
     use lightning::ln::PaymentHash;
-    use lightning_invoice::Invoice;
+    use lightning_invoice::Bolt11Invoice;
     use std::str::FromStr;
 
     use crate::test_utils::*;
@@ -2562,7 +2565,7 @@ mod tests {
         )
         .unwrap();
 
-        let invoice = Invoice::from_str(BOLT_11).unwrap();
+        let invoice = Bolt11Invoice::from_str(BOLT_11).unwrap();
 
         let labels = vec!["label1".to_string(), "label2".to_string()];
 

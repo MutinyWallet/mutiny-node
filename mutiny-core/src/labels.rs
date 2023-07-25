@@ -2,7 +2,7 @@ use crate::error::MutinyError;
 use crate::nodemanager::NodeManager;
 use crate::storage::MutinyStorage;
 use bitcoin::{Address, XOnlyPublicKey};
-use lightning_invoice::Invoice;
+use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
 use serde::{Deserialize, Serialize};
@@ -56,7 +56,7 @@ pub trait LabelStorage {
     /// Get a map of addresses to labels. This can be used to get all the labels for an address
     fn get_address_labels(&self) -> Result<HashMap<String, Vec<String>>, MutinyError>;
     /// Get a map of invoices to labels. This can be used to get all the labels for an invoice
-    fn get_invoice_labels(&self) -> Result<HashMap<Invoice, Vec<String>>, MutinyError>;
+    fn get_invoice_labels(&self) -> Result<HashMap<Bolt11Invoice, Vec<String>>, MutinyError>;
     /// Get all the existing labels
     fn get_labels(&self) -> Result<HashMap<String, LabelItem>, MutinyError>;
     /// Get information about a label
@@ -68,7 +68,11 @@ pub trait LabelStorage {
     /// Set the labels for an invoice, replacing any existing labels
     /// If you do not want to replace any existing labels, use `get_invoice_labels` to get the existing labels,
     /// add the new labels, and then use `set_invoice_labels` to set the new labels
-    fn set_invoice_labels(&self, invoice: Invoice, labels: Vec<String>) -> Result<(), MutinyError>;
+    fn set_invoice_labels(
+        &self,
+        invoice: Bolt11Invoice,
+        labels: Vec<String>,
+    ) -> Result<(), MutinyError>;
     /// Get all the existing contacts
     fn get_contacts(&self) -> Result<HashMap<String, Contact>, MutinyError>;
     /// Get a contact by label, the label should be a uuid
@@ -95,8 +99,9 @@ impl<S: MutinyStorage> LabelStorage for S {
         Ok(res.unwrap_or_default()) // if no labels exist, return an empty map
     }
 
-    fn get_invoice_labels(&self) -> Result<HashMap<Invoice, Vec<String>>, MutinyError> {
-        let res: Option<HashMap<Invoice, Vec<String>>> = self.get_data(INVOICE_LABELS_MAP_KEY)?;
+    fn get_invoice_labels(&self) -> Result<HashMap<Bolt11Invoice, Vec<String>>, MutinyError> {
+        let res: Option<HashMap<Bolt11Invoice, Vec<String>>> =
+            self.get_data(INVOICE_LABELS_MAP_KEY)?;
         Ok(res.unwrap_or_default()) // if no labels exist, return an empty map
     }
 
@@ -155,7 +160,11 @@ impl<S: MutinyStorage> LabelStorage for S {
         Ok(())
     }
 
-    fn set_invoice_labels(&self, invoice: Invoice, labels: Vec<String>) -> Result<(), MutinyError> {
+    fn set_invoice_labels(
+        &self,
+        invoice: Bolt11Invoice,
+        labels: Vec<String>,
+    ) -> Result<(), MutinyError> {
         // update the labels map
         let mut invoice_labels = self.get_invoice_labels()?;
         invoice_labels.insert(invoice.clone(), labels.clone());
@@ -334,7 +343,7 @@ impl<S: MutinyStorage> LabelStorage for NodeManager<S> {
         self.storage.get_address_labels()
     }
 
-    fn get_invoice_labels(&self) -> Result<HashMap<Invoice, Vec<String>>, MutinyError> {
+    fn get_invoice_labels(&self) -> Result<HashMap<Bolt11Invoice, Vec<String>>, MutinyError> {
         self.storage.get_invoice_labels()
     }
 
@@ -350,7 +359,11 @@ impl<S: MutinyStorage> LabelStorage for NodeManager<S> {
         self.storage.set_address_labels(address, labels)
     }
 
-    fn set_invoice_labels(&self, invoice: Invoice, labels: Vec<String>) -> Result<(), MutinyError> {
+    fn set_invoice_labels(
+        &self,
+        invoice: Bolt11Invoice,
+        labels: Vec<String>,
+    ) -> Result<(), MutinyError> {
         self.storage.set_invoice_labels(invoice, labels)
     }
 
@@ -392,7 +405,7 @@ mod tests {
     use super::*;
     use crate::test_utils::*;
     use bitcoin::Address;
-    use lightning_invoice::Invoice;
+    use lightning_invoice::Bolt11Invoice;
     use std::collections::HashMap;
     use std::str::FromStr;
 
@@ -417,18 +430,18 @@ mod tests {
         labels
     }
 
-    fn create_test_invoice_labels_map() -> HashMap<Invoice, Vec<String>> {
+    fn create_test_invoice_labels_map() -> HashMap<Bolt11Invoice, Vec<String>> {
         let mut labels = HashMap::new();
         labels.insert(
-            Invoice::from_str("lnbc923720n1pj9nrefpp5pczykgk37af5388n8dzynljpkzs7sje4melqgazlwv9y3apay8jqhp5rd8saxz3juve3eejq7z5fjttxmpaq88d7l92xv34n4h3mq6kwq2qcqzzsxqzfvsp5z0jwpehkuz9f2kv96h62p8x30nku76aj8yddpcust7g8ad0tr52q9qyyssqfy622q25helv8cj8hyxqltws4rdwz0xx2hw0uh575mn7a76cp3q4jcptmtjkjs4a34dqqxn8uy70d0qlxqleezv4zp84uk30pp5q3nqq4c9gkz").unwrap(),
+            Bolt11Invoice::from_str("lnbc923720n1pj9nrefpp5pczykgk37af5388n8dzynljpkzs7sje4melqgazlwv9y3apay8jqhp5rd8saxz3juve3eejq7z5fjttxmpaq88d7l92xv34n4h3mq6kwq2qcqzzsxqzfvsp5z0jwpehkuz9f2kv96h62p8x30nku76aj8yddpcust7g8ad0tr52q9qyyssqfy622q25helv8cj8hyxqltws4rdwz0xx2hw0uh575mn7a76cp3q4jcptmtjkjs4a34dqqxn8uy70d0qlxqleezv4zp84uk30pp5q3nqq4c9gkz").unwrap(),
             vec!["test1".to_string()],
         );
         labels.insert(
-            Invoice::from_str("lnbc923720n1pj9nre4pp58zjsgd3xkyj33wv6rfmsshg9hqdpqrh8dyaulzwg62x6h3qs39tqhp5vqcr4c3tnxyxr08rk28n8mkphe6c5gfusmyncpmdh604trq3cafqcqzzsxqzfvsp5un4ey9rh0pl23648xtng2k6gtw7w2p6ldaexl6ylwcuhnsnxnsfs9qyyssqxnhr6jvdqfwr97qk7dtsnqaps78r7fjlpyz5z57r2k70az5tvvss4tpucycqpph8gx0vxxr7xse442zf8wxlskln8n77qkd4kad4t5qp92lvrm").unwrap(),
+            Bolt11Invoice::from_str("lnbc923720n1pj9nre4pp58zjsgd3xkyj33wv6rfmsshg9hqdpqrh8dyaulzwg62x6h3qs39tqhp5vqcr4c3tnxyxr08rk28n8mkphe6c5gfusmyncpmdh604trq3cafqcqzzsxqzfvsp5un4ey9rh0pl23648xtng2k6gtw7w2p6ldaexl6ylwcuhnsnxnsfs9qyyssqxnhr6jvdqfwr97qk7dtsnqaps78r7fjlpyz5z57r2k70az5tvvss4tpucycqpph8gx0vxxr7xse442zf8wxlskln8n77qkd4kad4t5qp92lvrm").unwrap(),
             vec!["test2".to_string()],
         );
         labels.insert(
-            Invoice::from_str("lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm").unwrap(),
+            Bolt11Invoice::from_str("lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm").unwrap(),
             vec!["test3".to_string()],
         );
         labels
@@ -599,7 +612,7 @@ mod tests {
 
         let storage = MemoryStorage::default();
 
-        let invoice = Invoice::from_str("lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm").unwrap();
+        let invoice = Bolt11Invoice::from_str("lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm").unwrap();
         let labels = vec!["label1".to_string(), "label2".to_string()];
 
         let result = storage.set_invoice_labels(invoice.clone(), labels.clone());
@@ -716,7 +729,7 @@ mod tests {
         let storage = MemoryStorage::default();
 
         let address = Address::from_str("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa").unwrap();
-        let invoice = Invoice::from_str("lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm").unwrap();
+        let invoice = Bolt11Invoice::from_str("lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm").unwrap();
         let label = "test_label".to_string();
         let other_label = "other_label".to_string();
         let contact = create_test_contacts().iter().next().unwrap().1.to_owned();

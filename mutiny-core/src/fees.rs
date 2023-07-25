@@ -174,6 +174,9 @@ impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
 
 fn num_blocks_from_conf_target(confirmation_target: ConfirmationTarget) -> usize {
     match confirmation_target {
+        // MempoolMinimum is only used for anchor channels which we don't support.
+        // Just setting it to the max confirmation target for now.
+        ConfirmationTarget::MempoolMinimum => 1008,
         // Background is VERY lax and may never confirm if used directly
         // it is only meant for lower ranges of transaction to enter mempool
         ConfirmationTarget::Background => 1008,
@@ -184,6 +187,7 @@ fn num_blocks_from_conf_target(confirmation_target: ConfirmationTarget) -> usize
 
 fn fallback_fee_from_conf_target(confirmation_target: ConfirmationTarget) -> u32 {
     match confirmation_target {
+        ConfirmationTarget::MempoolMinimum => 3 * 250,
         ConfirmationTarget::Background => 10 * 250,
         ConfirmationTarget::Normal => 20 * 250,
         ConfirmationTarget::HighPriority => 50 * 250,

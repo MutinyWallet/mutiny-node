@@ -2,7 +2,7 @@ use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, OutPoint, XOnlyPublicKey};
 use gloo_utils::format::JsValueSerdeExt;
-use lightning_invoice::{Invoice, InvoiceDescription};
+use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::labels::Contact as MutinyContact;
@@ -109,7 +109,7 @@ impl From<nodemanager::ActivityItem> for ActivityItem {
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
 pub struct MutinyInvoice {
-    bolt11: Option<Invoice>,
+    bolt11: Option<Bolt11Invoice>,
     description: Option<String>,
     payment_hash: String,
     preimage: Option<String>,
@@ -872,8 +872,8 @@ pub struct PendingNwcInvoice {
 impl From<nostr::nwc::PendingNwcInvoice> for PendingNwcInvoice {
     fn from(value: nostr::nwc::PendingNwcInvoice) -> Self {
         let invoice_description = match value.invoice.description() {
-            InvoiceDescription::Direct(desc) => Some(desc.to_string()),
-            InvoiceDescription::Hash(_) => None,
+            Bolt11InvoiceDescription::Direct(desc) => Some(desc.to_string()),
+            Bolt11InvoiceDescription::Hash(_) => None,
         };
 
         let timestamp = value.invoice.duration_since_epoch().as_secs();

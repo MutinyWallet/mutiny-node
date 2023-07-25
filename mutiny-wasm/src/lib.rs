@@ -22,7 +22,7 @@ use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use gloo_utils::format::JsValueSerdeExt;
 use lightning::routing::gossip::NodeId;
-use lightning_invoice::Invoice;
+use lightning_invoice::Bolt11Invoice;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::auth::MutinyAuthClient;
 use mutiny_core::lnurlauth::AuthManager;
@@ -566,7 +566,7 @@ impl MutinyWallet {
         labels: JsValue, /* Vec<String> */
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let from_node = PublicKey::from_str(&from_node)?;
-        let invoice = Invoice::from_str(&invoice_str)?;
+        let invoice = Bolt11Invoice::from_str(&invoice_str)?;
         let labels: Vec<String> = labels
             .into_serde()
             .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
@@ -605,7 +605,7 @@ impl MutinyWallet {
     /// Will return an error if the invoice is for a different network.
     #[wasm_bindgen]
     pub async fn decode_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
-        let invoice = Invoice::from_str(&invoice)?;
+        let invoice = Bolt11Invoice::from_str(&invoice)?;
         Ok(self
             .inner
             .node_manager
@@ -672,7 +672,7 @@ impl MutinyWallet {
     /// This includes sent and received invoices.
     #[wasm_bindgen]
     pub async fn get_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
-        let invoice = Invoice::from_str(&invoice)?;
+        let invoice = Bolt11Invoice::from_str(&invoice)?;
         Ok(self.inner.node_manager.get_invoice(&invoice).await?.into())
     }
 
@@ -964,7 +964,7 @@ impl MutinyWallet {
         invoice: String,
         labels: JsValue, /* Vec<String> */
     ) -> Result<(), MutinyJsError> {
-        let invoice = Invoice::from_str(&invoice)?;
+        let invoice = Bolt11Invoice::from_str(&invoice)?;
         let labels: Vec<String> = labels
             .into_serde()
             .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
@@ -1161,7 +1161,7 @@ impl MutinyWallet {
 
     /// Pay the subscription invoice. This will post a NWC automatically afterwards.
     pub async fn pay_subscription_invoice(&self, invoice_str: String) -> Result<(), MutinyJsError> {
-        let invoice = Invoice::from_str(&invoice_str)?;
+        let invoice = Bolt11Invoice::from_str(&invoice_str)?;
         self.inner.pay_subscription_invoice(&invoice).await?;
         Ok(())
     }

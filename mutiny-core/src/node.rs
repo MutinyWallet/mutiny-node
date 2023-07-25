@@ -42,6 +42,7 @@ use lightning::{
 use bitcoin::util::bip32::ExtendedPrivKey;
 use lightning::ln::PaymentSecret;
 use lightning::sign::{EntropySource, InMemorySigner};
+use lightning::util::config::MaxDustHTLCExposure;
 use lightning::{
     chain::{chainmonitor, Filter, Watch},
     ln::{
@@ -65,7 +66,7 @@ use lightning_invoice::payment::PaymentError;
 use lightning_invoice::{
     payment::{pay_invoice, pay_zero_value_invoice},
     utils::{create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice},
-    Invoice,
+    Bolt11Invoice,
 };
 use std::collections::HashMap;
 use std::{
@@ -650,7 +651,7 @@ impl<S: MutinyStorage> Node<S> {
         amount_sat: Option<u64>,
         labels: Vec<String>,
         route_hints: Option<Vec<PhantomRouteHints>>,
-    ) -> Result<Invoice, MutinyError> {
+    ) -> Result<Bolt11Invoice, MutinyError> {
         // the amount to create for the invoice whether or not there is an lsp
         let (amount_sat, lsp_fee_msat) = if let Some(lsp) = self.lsp_client.clone() {
             // LSP requires an amount:
@@ -708,7 +709,7 @@ impl<S: MutinyStorage> Node<S> {
             self.connect_peer(PubkeyConnectionInfo::new(&lsp.connection_string)?, None)
                 .await?;
             let lsp_invoice_str = lsp.get_lsp_invoice(invoice.to_string()).await?;
-            let lsp_invoice = Invoice::from_str(&lsp_invoice_str)?;
+            let lsp_invoice = Bolt11Invoice::from_str(&lsp_invoice_str)?;
 
             if invoice.network() != self.network {
                 return Err(MutinyError::IncorrectNetwork(invoice.network()));
@@ -732,7 +733,7 @@ impl<S: MutinyStorage> Node<S> {
         fee_amount_msat: Option<u64>,
         labels: Vec<String>,
         route_hints: Option<Vec<PhantomRouteHints>>,
-    ) -> Result<Invoice, MutinyError> {
+    ) -> Result<Bolt11Invoice, MutinyError> {
         let amount_msat = amount_sat.map(|s| s * 1_000);
         // Set description to empty string to make smallest possible invoice/QR code
         let description = "".to_string();
@@ -813,7 +814,7 @@ impl<S: MutinyStorage> Node<S> {
         Ok(invoice)
     }
 
-    pub fn get_invoice(&self, invoice: &Invoice) -> Result<MutinyInvoice, MutinyError> {
+    pub fn get_invoice(&self, invoice: &Bolt11Invoice) -> Result<MutinyInvoice, MutinyError> {
         self.get_invoice_by_hash(invoice.payment_hash())
     }
 
@@ -924,7 +925,7 @@ impl<S: MutinyStorage> Node<S> {
     /// use pay_invoice_with_timeout to wait for results
     pub async fn init_invoice_payment(
         &self,
-        invoice: &Invoice,
+        invoice: &Bolt11Invoice,
         amt_sats: Option<u64>,
         labels: Vec<String>,
     ) -> Result<PaymentHash, MutinyError> {
@@ -1091,7 +1092,7 @@ impl<S: MutinyStorage> Node<S> {
 
     pub async fn pay_invoice_with_timeout(
         &self,
-        invoice: &Invoice,
+        invoice: &Bolt11Invoice,
         amt_sats: Option<u64>,
         timeout_secs: Option<u64>,
         labels: Vec<String>,
@@ -1753,7 +1754,7 @@ pub(crate) fn default_user_config() -> UserConfig {
             // 20k sats, 4x more than normal due to high fee rates
             // Any lightning payment above this, but below current
             // HTLC fees will have issues paying until anchor outputs
-            max_dust_htlc_exposure_msat: 20_000_000,
+            max_dust_htlc_exposure: MaxDustHTLCExposure::FixedLimitMsat(20_000_000),
             ..Default::default()
         },
         ..Default::default()

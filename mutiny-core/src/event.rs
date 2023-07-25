@@ -19,7 +19,7 @@ use lightning::{
     util::errors::APIError,
     util::logger::Logger,
 };
-use lightning_invoice::Invoice;
+use lightning_invoice::Bolt11Invoice;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -35,7 +35,7 @@ pub(crate) struct PaymentInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_paid_msat: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bolt11: Option<Invoice>,
+    pub bolt11: Option<Bolt11Invoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payee_pubkey: Option<PublicKey>,
     pub last_update: u64,
