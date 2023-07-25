@@ -123,56 +123,20 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         }
     }
 
-    fn get_channel_monitor_data(&self) -> Result<Vec<Vec<u8>>, MutinyError> {
-        let suffix = self.node_id.as_str();
-        let result = self
-            .storage
-            .scan::<VersionedValue>(MONITORS_PREFIX_KEY, Some(suffix));
-
-        match result {
-            Ok(res) => {
-                // get bytes value from VersionedValue
-                let mut values = Vec::with_capacity(res.len());
-                for v in res.into_values() {
-                    let hex: String = serde_json::from_value(v.value)?;
-                    let bytes = FromHex::from_hex(&hex)?;
-                    values.push(bytes);
-                }
-                Ok(values)
-            }
-            Err(_) => {
-                log_debug!(
-                    self.logger,
-                    "Failed to read channel monitors, trying old encoding"
-                );
-                // failed to read, try old version
-                let channel_monitor_list = self
-                    .storage
-                    .scan::<Vec<u8>>(MONITORS_PREFIX_KEY, Some(suffix))?;
-
-                Ok(channel_monitor_list.into_values().collect())
-            }
-        }
-    }
-
     pub fn read_channel_monitors(
         &self,
         keys_manager: Arc<PhantomKeysManager<S>>,
     ) -> Result<Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>, io::Error> {
         // Get all the channel monitor buffers that exist for this node
-        let channel_monitor_list = self
-            .get_channel_monitor_data()
+        let suffix = self.node_id.as_str();
+        let channel_monitor_list: HashMap<String, Vec<u8>> = self
+            .storage
+            .scan(MONITORS_PREFIX_KEY, Some(suffix))
             .map_err(|_| io::ErrorKind::Other)?;
 
-        log_debug!(
-            self.logger,
-            "Read {} channel monitors from storage",
-            channel_monitor_list.len()
-        );
-
         let res = channel_monitor_list
-            .into_iter()
-            .fold(Ok(Vec::new()), |current_res, data| match current_res {
+            .iter()
+            .fold(Ok(Vec::new()), |current_res, (_, data)| match current_res {
                 Err(e) => Err(e),
                 Ok(mut accum) => {
                     let mut buffer = Cursor::new(data);
