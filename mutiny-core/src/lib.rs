@@ -117,7 +117,7 @@ impl MutinyWalletConfig {
 /// bitcoin and the lightning functionality.
 pub struct MutinyWallet<S: MutinyStorage> {
     config: MutinyWalletConfig,
-    storage: S,
+    pub storage: S,
     pub node_manager: Arc<NodeManager<S>>,
     pub nostr: Arc<NostrManager<S>>,
 }

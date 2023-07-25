@@ -253,6 +253,22 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     /// Deletes all data from the storage
     async fn clear() -> Result<(), MutinyError>;
 
+    /// Deletes all data from the storage and removes lock from VSS
+    async fn delete_all(&self) -> Result<(), MutinyError> {
+        Self::clear().await?;
+        // remove lock from VSS if is is enabled
+        if self.vss_client().is_some() {
+            let device = self.get_device_id()?;
+            // set time to 0 to unlock
+            let lock = DeviceLock { time: 0, device };
+            // still update the version so it is written to VSS
+            let time = now().as_secs() as u32;
+            self.set_data(DEVICE_LOCK_KEY, lock, Some(time))?;
+        }
+
+        Ok(())
+    }
+
     /// Gets the node indexes from storage
     fn get_nodes(&self) -> Result<NodeStorage, MutinyError> {
         let res: Option<NodeStorage> = self.get_data(NODES_KEY)?;

@@ -1212,6 +1212,15 @@ impl MutinyWallet {
         Ok(())
     }
 
+    /// Clears storage and deletes all data.
+    ///
+    /// All data in VSS persists but the device lock is cleared.
+    #[wasm_bindgen]
+    pub async fn delete_all(&self) -> Result<(), MutinyJsError> {
+        self.inner.storage.delete_all().await?;
+        Ok(())
+    }
+
     /// Restore's the mnemonic after deleting the previous state.
     ///
     /// Backup the state beforehand. Does not restore lightning data.
