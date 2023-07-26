@@ -708,8 +708,13 @@ impl<S: MutinyStorage> Node<S> {
         if let Some(lsp) = self.lsp_client.clone() {
             self.connect_peer(PubkeyConnectionInfo::new(&lsp.connection_string)?, None)
                 .await?;
-            let lsp_invoice_str = lsp.get_lsp_invoice(invoice.to_string()).await?;
-            let lsp_invoice = Bolt11Invoice::from_str(&lsp_invoice_str)?;
+            let lsp_invoice = match lsp.get_lsp_invoice(invoice.to_string()).await {
+                Ok(lsp_invoice_str) => Bolt11Invoice::from_str(&lsp_invoice_str)?,
+                Err(e) => {
+                    log_error!(self.logger, "Failed to get invoice from LSP: {e}");
+                    return Err(e);
+                }
+            };
 
             if invoice.network() != self.network {
                 return Err(MutinyError::IncorrectNetwork(invoice.network()));
