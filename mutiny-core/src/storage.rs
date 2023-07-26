@@ -1,8 +1,8 @@
 use crate::encrypt::{decrypt_with_password, encrypt, encryption_key_from_pass, Cipher};
 use crate::error::{MutinyError, MutinyStorageError};
 use crate::ldkstorage::CHANNEL_MANAGER_KEY;
-use crate::nodemanager::NodeStorage;
-use crate::utils::spawn;
+use crate::nodemanager::{NodeStorage, DEVICE_LOCK_INTERVAL_SECS};
+use crate::utils::{now, spawn};
 use crate::vss::{MutinyVssClient, VssKeyValueItem};
 use bdk::chain::{Append, PersistBackend};
 use bip39::Mnemonic;
@@ -12,12 +12,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use uuid::Uuid;
 
 pub const KEYCHAIN_STORE_KEY: &str = "bdk_keychain";
 pub(crate) const MNEMONIC_KEY: &str = "mnemonic";
 pub const NODES_KEY: &str = "nodes";
 const FEE_ESTIMATES_KEY: &str = "fee_estimates";
 const FIRST_SYNC_KEY: &str = "first_sync";
+pub(crate) const DEVICE_ID_KEY: &str = "device_id";
+pub const DEVICE_LOCK_KEY: &str = "device_lock";
 
 fn needs_encryption(key: &str) -> bool {
     match key {
@@ -67,6 +70,22 @@ pub fn decrypt_value(
 pub struct VersionedValue {
     pub version: u32,
     pub value: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceLock {
+    pub time: u32,
+    pub device: String,
+}
+
+impl DeviceLock {
+    /// Check if the device is locked
+    /// This is determined if the time is less than 2 minutes ago
+    pub fn is_locked(&self, id: &str) -> bool {
+        let now = now().as_secs();
+        let diff = now - self.time as u64;
+        diff < DEVICE_LOCK_INTERVAL_SECS * 2 && self.device != id
+    }
 }
 
 pub trait MutinyStorage: Clone + Sized + 'static {
@@ -234,6 +253,22 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     /// Deletes all data from the storage
     async fn clear() -> Result<(), MutinyError>;
 
+    /// Deletes all data from the storage and removes lock from VSS
+    async fn delete_all(&self) -> Result<(), MutinyError> {
+        Self::clear().await?;
+        // remove lock from VSS if is is enabled
+        if self.vss_client().is_some() {
+            let device = self.get_device_id()?;
+            // set time to 0 to unlock
+            let lock = DeviceLock { time: 0, device };
+            // still update the version so it is written to VSS
+            let time = now().as_secs() as u32;
+            self.set_data(DEVICE_LOCK_KEY, lock, Some(time))?;
+        }
+
+        Ok(())
+    }
+
     /// Gets the node indexes from storage
     fn get_nodes(&self) -> Result<NodeStorage, MutinyError> {
         let res: Option<NodeStorage> = self.get_data(NODES_KEY)?;
@@ -269,6 +304,34 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     fn set_done_first_sync(&self) -> Result<(), MutinyError> {
         self.set_data(FIRST_SYNC_KEY, true, None)
     }
+
+    fn get_device_id(&self) -> Result<String, MutinyError> {
+        match self.get_data(DEVICE_ID_KEY)? {
+            Some(id) => Ok(id),
+            None => {
+                let new_id = Uuid::new_v4().to_string();
+                self.set_data(DEVICE_ID_KEY, &new_id, None)?;
+                Ok(new_id)
+            }
+        }
+    }
+
+    fn get_device_lock(&self) -> Result<Option<DeviceLock>, MutinyError> {
+        self.get_data(DEVICE_LOCK_KEY)
+    }
+
+    fn set_device_lock(&self) -> Result<(), MutinyError> {
+        let device = self.get_device_id()?;
+        if let Some(lock) = self.get_device_lock()? {
+            if lock.is_locked(&device) {
+                return Err(MutinyError::AlreadyRunning);
+            }
+        }
+
+        let time = now().as_secs() as u32;
+        let lock = DeviceLock { time, device };
+        self.set_data(DEVICE_LOCK_KEY, lock, Some(time))
+    }
 }
 
 #[derive(Clone)]
@@ -276,21 +339,45 @@ pub struct MemoryStorage {
     pub password: Option<String>,
     pub cipher: Option<Cipher>,
     pub memory: Arc<RwLock<HashMap<String, Value>>>,
+    pub vss_client: Option<Arc<MutinyVssClient>>,
 }
 
 impl MemoryStorage {
-    pub fn new(password: Option<String>, cipher: Option<Cipher>) -> Self {
+    pub fn new(
+        password: Option<String>,
+        cipher: Option<Cipher>,
+        vss_client: Option<Arc<MutinyVssClient>>,
+    ) -> Self {
         Self {
             cipher,
             password,
             memory: Arc::new(RwLock::new(HashMap::new())),
+            vss_client,
         }
+    }
+
+    pub async fn load_from_vss(&self) -> Result<(), MutinyError> {
+        if let Some(vss) = self.vss_client() {
+            let keys = vss.list_key_versions(None).await?;
+            let mut items = HashMap::new();
+            for key in keys {
+                let obj = vss.get_object(&key.key).await?;
+                items.insert(key.key, obj.value);
+            }
+            let mut map = self
+                .memory
+                .try_write()
+                .map_err(|e| MutinyError::write_err(e.into()))?;
+            map.extend(items);
+        }
+
+        Ok(())
     }
 }
 
 impl Default for MemoryStorage {
     fn default() -> Self {
-        Self::new(None, None)
+        Self::new(None, None, None)
     }
 }
 
@@ -304,7 +391,7 @@ impl MutinyStorage for MemoryStorage {
     }
 
     fn vss_client(&self) -> Option<Arc<MutinyVssClient>> {
-        None
+        self.vss_client.clone()
     }
 
     fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
@@ -501,6 +588,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::test_utils::*;
+    use crate::utils::sleep;
     use crate::{encrypt::encryption_key_from_pass, storage::MemoryStorage};
     use crate::{keymanager, storage::MutinyStorage};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
@@ -514,7 +602,7 @@ mod tests {
 
         let seed = keymanager::generate_seed(12).unwrap();
 
-        let storage = MemoryStorage::new(None, None);
+        let storage = MemoryStorage::default();
         let mnemonic = storage.insert_mnemonic(seed).unwrap();
 
         let stored_mnemonic = storage.get_mnemonic().unwrap();
@@ -530,11 +618,57 @@ mod tests {
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
-        let storage = MemoryStorage::new(Some(pass), Some(cipher));
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
 
         let mnemonic = storage.insert_mnemonic(seed).unwrap();
 
         let stored_mnemonic = storage.get_mnemonic().unwrap();
         assert_eq!(Some(mnemonic), stored_mnemonic);
+    }
+
+    #[test]
+    async fn test_device_lock() {
+        let test_name = "test_device_lock";
+        log!("{}", test_name);
+
+        let vss = std::sync::Arc::new(create_vss_client().await);
+        let storage = MemoryStorage::new(None, None, Some(vss.clone()));
+        storage.load_from_vss().await.unwrap();
+
+        let id = storage.get_device_id().unwrap();
+        let lock = storage.get_device_lock().unwrap();
+        assert_eq!(None, lock);
+
+        storage.set_device_lock().unwrap();
+        // sleep 1 second to make sure it writes to VSS
+        sleep(1_000).await;
+
+        let lock = storage.get_device_lock().unwrap();
+        assert!(lock.is_some());
+        assert!(!lock.clone().unwrap().is_locked(&id));
+        assert!(lock.clone().unwrap().is_locked("different_id"));
+        assert_eq!(lock.unwrap().device, id);
+
+        // make sure we can set lock again, should work because same device id
+        storage.set_device_lock().unwrap();
+        // sleep 1 second to make sure it writes to VSS
+        sleep(1_000).await;
+
+        // create new storage with new device id and make sure we can't set lock
+        let storage = MemoryStorage::new(None, None, Some(vss));
+        storage.load_from_vss().await.unwrap();
+
+        let new_id = storage.get_device_id().unwrap();
+        assert_ne!(id, new_id);
+
+        let lock = storage.get_device_lock().unwrap();
+        assert!(lock.is_some());
+        // not locked for active device
+        assert!(!lock.clone().unwrap().is_locked(&id));
+        // is locked for new device
+        assert!(lock.clone().unwrap().is_locked(&new_id));
+        assert_eq!(lock.unwrap().device, id);
+
+        assert!(storage.set_device_lock().is_err())
     }
 }

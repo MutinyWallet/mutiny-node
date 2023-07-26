@@ -208,7 +208,7 @@ mod test {
 
     #[cfg(not(target_arch = "wasm32"))]
     async fn create_fee_estimator() -> MutinyFeeEstimator<MemoryStorage> {
-        let storage = MemoryStorage::new(None, None);
+        let storage = MemoryStorage::default();
         let esplora = Arc::new(
             Builder::new("https://mutinynet.com/api")
                 .build_async()

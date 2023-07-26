@@ -74,6 +74,7 @@ impl MutinyWallet {
         subscription_url: Option<String>,
         storage_url: Option<String>,
         do_not_connect_peers: Option<bool>,
+        skip_device_lock: Option<bool>,
     ) -> Result<MutinyWallet, MutinyJsError> {
         utils::set_panic_hook();
         let logger = Arc::new(MutinyLogger::default());
@@ -153,6 +154,7 @@ impl MutinyWallet {
             lsp_url,
             auth_client,
             subscription_url,
+            skip_device_lock.unwrap_or(false),
         );
 
         if let Some(true) = do_not_connect_peers {
@@ -1210,6 +1212,15 @@ impl MutinyWallet {
         Ok(())
     }
 
+    /// Clears storage and deletes all data.
+    ///
+    /// All data in VSS persists but the device lock is cleared.
+    #[wasm_bindgen]
+    pub async fn delete_all(&self) -> Result<(), MutinyJsError> {
+        self.inner.storage.delete_all().await?;
+        Ok(())
+    }
+
     /// Restore's the mnemonic after deleting the previous state.
     ///
     /// Backup the state beforehand. Does not restore lightning data.
@@ -1297,6 +1308,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1321,6 +1333,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1355,6 +1368,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
