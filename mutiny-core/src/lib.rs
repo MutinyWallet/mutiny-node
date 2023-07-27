@@ -73,6 +73,7 @@ pub struct MutinyWalletConfig {
     lsp_url: Option<String>,
     auth_client: Option<Arc<MutinyAuthClient>>,
     subscription_url: Option<String>,
+    scorer_url: Option<String>,
     do_not_connect_peers: bool,
     skip_device_lock: bool,
 }
@@ -88,6 +89,7 @@ impl MutinyWalletConfig {
         lsp_url: Option<String>,
         auth_client: Option<Arc<MutinyAuthClient>>,
         subscription_url: Option<String>,
+        scorer_url: Option<String>,
         skip_device_lock: bool,
     ) -> Self {
         Self {
@@ -97,6 +99,7 @@ impl MutinyWalletConfig {
             network,
             user_esplora_url,
             user_rgs_url,
+            scorer_url,
             lsp_url,
             auth_client,
             subscription_url,
@@ -411,6 +414,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         );
         let mw = MutinyWallet::new(storage.clone(), config)
@@ -435,6 +439,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Regtest,
+            None,
             None,
             None,
             None,
@@ -470,6 +475,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Regtest,
+            None,
             None,
             None,
             None,
@@ -511,6 +517,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         );
         let mw = MutinyWallet::new(storage.clone(), config)
@@ -530,6 +537,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Regtest,
+            None,
             None,
             None,
             None,

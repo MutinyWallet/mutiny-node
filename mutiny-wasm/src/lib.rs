@@ -73,6 +73,7 @@ impl MutinyWallet {
         auth_url: Option<String>,
         subscription_url: Option<String>,
         storage_url: Option<String>,
+        scorer_url: Option<String>,
         do_not_connect_peers: Option<bool>,
         skip_device_lock: Option<bool>,
     ) -> Result<MutinyWallet, MutinyJsError> {
@@ -154,6 +155,7 @@ impl MutinyWallet {
             lsp_url,
             auth_client,
             subscription_url,
+            scorer_url,
             skip_device_lock.unwrap_or(false),
         );
 
@@ -1309,6 +1311,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1333,6 +1336,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1368,6 +1372,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
