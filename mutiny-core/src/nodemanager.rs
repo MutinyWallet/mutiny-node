@@ -599,8 +599,15 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let chain = Arc::new(MutinyChain::new(tx_sync, wallet.clone(), logger.clone()));
 
-        let (gossip_sync, scorer) =
-            get_gossip_sync(&storage, c.user_rgs_url, c.network, logger.clone()).await?;
+        let (gossip_sync, scorer) = get_gossip_sync(
+            &storage,
+            c.user_rgs_url,
+            c.scorer_url,
+            c.auth_client.clone(),
+            c.network,
+            logger.clone(),
+        )
+        .await?;
 
         let scorer = Arc::new(utils::Mutex::new(scorer));
 
@@ -2447,6 +2454,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         );
         NodeManager::new(c, storage.clone())
@@ -2471,6 +2479,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Regtest,
+            None,
             None,
             None,
             None,
@@ -2521,6 +2530,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Signet,
+            None,
             None,
             None,
             None,
