@@ -1,5 +1,10 @@
 # mutiny-node
 
+[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/MutinyWallet/mutiny-core/blob/master/LICENSE)
+[![mutiny-core on crates.io](https://img.shields.io/crates/v/mutiny-core.svg)](https://crates.io/crates/mutiny-core)
+[![mutiny-core on docs.rs](https://docs.rs/mutiny-core/badge.svg)](https://docs.rs/mutiny-core)
+[![npm version](https://badge.fury.io/js/@mutinywallet%2Fmutiny-wasm.svg)](https://badge.fury.io/js/@mutinywallet%2Fmutiny-wasm)
+
 The mutiny node that powers the mutiny web frontend.
 
 The original frontend proof of concept has moved to [here](https://github.com/MutinyWallet/mutiny-web-poc). While the latest version is being worked on [here](https://github.com/MutinyWallet/mutiny-web).
