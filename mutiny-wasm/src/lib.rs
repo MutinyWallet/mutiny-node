@@ -34,6 +34,8 @@ use mutiny_core::vss::MutinyVssClient;
 use mutiny_core::{encrypt::encryption_key_from_pass, generate_seed, nostr::nwc::NwcProfile};
 use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
+use nostr::key::XOnlyPublicKey;
+use nostr::prelude::FromBech32;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{
@@ -1167,6 +1169,13 @@ impl MutinyWallet {
     pub async fn pay_subscription_invoice(&self, invoice_str: String) -> Result<(), MutinyJsError> {
         let invoice = Bolt11Invoice::from_str(&invoice_str)?;
         self.inner.pay_subscription_invoice(&invoice).await?;
+        Ok(())
+    }
+
+    /// Get contacts from the given npub and sync them to the wallet
+    pub async fn sync_nostr_contacts(&self, npub_str: String) -> Result<(), MutinyJsError> {
+        let npub = XOnlyPublicKey::from_bech32(&npub_str)?;
+        self.inner.sync_nostr_contacts(npub, None).await?;
         Ok(())
     }
 

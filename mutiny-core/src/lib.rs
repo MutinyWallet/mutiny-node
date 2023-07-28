@@ -45,11 +45,13 @@ pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
 use crate::auth::MutinyAuthClient;
+use crate::labels::{Contact, LabelStorage};
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{nostr::NostrManager, utils::sleep};
-use ::nostr::Kind;
+use ::nostr::key::XOnlyPublicKey;
+use ::nostr::{Keys, Kind};
 use bip39::Mnemonic;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
@@ -61,6 +63,7 @@ use lightning_invoice::Bolt11Invoice;
 use nostr_sdk::{Client, RelayPoolNotification};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct MutinyWalletConfig {
@@ -306,6 +309,58 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         } else {
             Err(MutinyError::SubscriptionClientNotConfigured)
         }
+    }
+
+    /// Get contacts from the given npub and sync them to the wallet
+    pub async fn sync_nostr_contacts(
+        &self,
+        npub: XOnlyPublicKey,
+        timeout: Option<Duration>,
+    ) -> Result<(), MutinyError> {
+        let keys = Keys::from_public_key(npub);
+        let client = Client::new(&keys);
+
+        #[cfg(target_arch = "wasm32")]
+        client.add_relay("wss://relay.damus.io").await.unwrap();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        client
+            .add_relay("wss://relay.damus.io", None)
+            .await
+            .unwrap();
+
+        client.connect().await;
+
+        let mut metadata = client.get_contact_list_metadata(timeout).await.unwrap();
+
+        let contacts = self.storage.get_contacts()?;
+
+        for (id, contact) in contacts {
+            if let Some(npub) = contact.npub {
+                // need to convert to nostr::XOnlyPublicKey
+                let npub = XOnlyPublicKey::from_slice(&npub.serialize()).unwrap();
+                if let Some(meta) = metadata.get(&npub) {
+                    let updated = contact.update_with_metadata(meta.clone());
+                    self.storage.edit_contact(id, updated)?;
+                    metadata.remove(&npub);
+                }
+            }
+        }
+
+        for (npub, meta) in metadata {
+            // need to convert from nostr::XOnlyPublicKey
+            let npub = bitcoin::XOnlyPublicKey::from_slice(&npub.serialize()).unwrap();
+            let contact = Contact::create_from_metadata(npub, meta);
+
+            if contact.name.is_empty() {
+                continue;
+            }
+
+            self.storage.create_new_contact(contact)?;
+        }
+
+        client.disconnect().await.unwrap();
+        Ok(())
     }
 
     /// Stops all of the nodes and background processes.

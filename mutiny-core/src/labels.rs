@@ -5,8 +5,10 @@ use bitcoin::{Address, XOnlyPublicKey};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
+use nostr::Metadata;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::str::FromStr;
 use uuid::Uuid;
 
 const ADDRESS_LABELS_MAP_KEY: &str = "address_labels";
@@ -24,7 +26,7 @@ pub struct LabelItem {
     pub last_used_time: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, Ord, PartialEq, PartialOrd, Hash)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, Ord, PartialEq, PartialOrd, Hash)]
 pub struct Contact {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -34,8 +36,39 @@ pub struct Contact {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lnurl: Option<LnUrl>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub archived: Option<bool>,
     pub last_used: u64,
+}
+
+impl Contact {
+    /// Update the contact with metadata from their Nostr profile
+    pub fn update_with_metadata(mut self, metadata: Metadata) -> Self {
+        self.name = metadata.display_name.or(metadata.name).unwrap_or(self.name);
+
+        let ln_address = metadata
+            .lud16
+            .and_then(|lud16| LightningAddress::from_str(&lud16).ok());
+        self.ln_address = ln_address.or(self.ln_address);
+
+        let lnurl = metadata
+            .lud06
+            .and_then(|lud06| LnUrl::from_str(&lud06).ok());
+        self.lnurl = lnurl.or(self.lnurl);
+
+        self.image_url = metadata.picture.or(self.image_url);
+
+        self
+    }
+
+    pub fn create_from_metadata(npub: XOnlyPublicKey, metadata: Metadata) -> Self {
+        let init = Self {
+            npub: Some(npub),
+            ..Default::default()
+        };
+        init.update_with_metadata(metadata)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, Ord, PartialEq, PartialOrd, Hash)]
@@ -485,6 +518,7 @@ mod tests {
                 ln_address: None,
                 lnurl: None,
                 archived: Some(false),
+                image_url: None,
                 last_used: 0,
             },
         );
@@ -496,6 +530,7 @@ mod tests {
                 ln_address: None,
                 lnurl: None,
                 archived: Some(false),
+                image_url: None,
                 last_used: 0,
             },
         );
@@ -507,6 +542,7 @@ mod tests {
                 ln_address: None,
                 lnurl: None,
                 archived: Some(false),
+                image_url: None,
                 last_used: 0,
             },
         );
@@ -660,6 +696,7 @@ mod tests {
             ln_address: None,
             lnurl: None,
             archived: Some(false),
+            image_url: None,
             last_used: 0,
         };
         let id = storage.create_new_contact(contact.clone()).unwrap();
@@ -681,6 +718,7 @@ mod tests {
             ln_address: None,
             lnurl: None,
             archived: Some(false),
+            image_url: None,
             last_used: 0,
         };
         let id = storage.create_new_contact(contact).unwrap();
@@ -706,6 +744,7 @@ mod tests {
             ln_address: None,
             lnurl: None,
             archived: Some(false),
+            image_url: None,
             last_used: 0,
         };
         let id = storage.create_new_contact(contact).unwrap();
