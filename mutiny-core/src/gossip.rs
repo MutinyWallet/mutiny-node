@@ -60,8 +60,6 @@ async fn get_scorer(
 
 async fn get_gossip_data(
     storage: &impl MutinyStorage,
-    remote_scorer_url: Option<String>,
-    auth_client: Option<Arc<MutinyAuthClient>>,
     logger: Arc<MutinyLogger>,
 ) -> Result<Option<Gossip>, MutinyError> {
     // Get the `last_sync_timestamp`
@@ -82,46 +80,10 @@ async fn get_gossip_data(
 
     log_debug!(logger, "Got network graph, getting scorer...");
 
-    // Get the probabilistic scorer
-    let scorer = match (remote_scorer_url, &auth_client) {
-        (Some(url), Some(client)) => match get_remote_scorer_bytes(client, &url).await {
-            Ok(scorer_bytes) => {
-                let mut readable_bytes = lightning::io::Cursor::new(scorer_bytes);
-                let params = ProbabilisticScoringDecayParameters::default();
-                let args = (params, Arc::clone(&network_graph), Arc::clone(&logger));
-                match ProbScorer::read(&mut readable_bytes, args) {
-                    Ok(scorer) => {
-                        log_debug!(logger, "retrieved remote scorer");
-                        Some(scorer)
-                    }
-                    Err(_) => {
-                        log_error!(
-                            logger,
-                            "failed to parse remote scorer, failing back to local"
-                        );
-                        get_scorer(storage, network_graph.clone(), logger.clone()).await?
-                    }
-                }
-            }
-            Err(_) => {
-                log_error!(
-                    logger,
-                    "failed to retrieve remote scorer, failing back to local"
-                );
-                get_scorer(storage, network_graph.clone(), logger.clone()).await?
-            }
-        },
-        _ => {
-            log_debug!(logger, "only getting local scorer");
-            get_scorer(storage, network_graph.clone(), logger.clone()).await?
-        }
-    };
+    let scorer = get_scorer(storage, network_graph.clone(), logger.clone()).await?;
 
     if scorer.is_none() {
-        log_warn!(
-            logger,
-            "Could not read probabilistic scorer from database or remote server"
-        );
+        log_warn!(logger, "Could not read probabilistic scorer from database");
     }
 
     let gossip = Gossip {
@@ -183,18 +145,17 @@ pub async fn get_gossip_sync(
     logger: Arc<MutinyLogger>,
 ) -> Result<(RapidGossipSync, ProbScorer), MutinyError> {
     // if we error out, we just use the default gossip data
-    let gossip_data =
-        match get_gossip_data(storage, remote_scorer_url, auth_client, logger.clone()).await {
-            Ok(Some(gossip_data)) => gossip_data,
-            Ok(None) => Gossip::new(network, logger.clone()),
-            Err(e) => {
-                log_error!(
-                    logger,
-                    "Error getting gossip data from storage: {e}, re-syncing gossip..."
-                );
-                Gossip::new(network, logger.clone())
-            }
-        };
+    let mut gossip_data = match get_gossip_data(storage, logger.clone()).await {
+        Ok(Some(gossip_data)) => gossip_data,
+        Ok(None) => Gossip::new(network, logger.clone()),
+        Err(e) => {
+            log_error!(
+                logger,
+                "Error getting gossip data from storage: {e}, re-syncing gossip..."
+            );
+            Gossip::new(network, logger.clone())
+        }
+    };
 
     log_debug!(
         &logger,
@@ -204,6 +165,36 @@ pub async fn get_gossip_sync(
 
     // get network graph
     let gossip_sync = RapidGossipSync::new(gossip_data.network_graph.clone(), logger.clone());
+
+    // Try to get remote scorer if remote_scorer_url and auth_client are available
+    if let (Some(url), Some(client)) = (remote_scorer_url, &auth_client) {
+        match get_remote_scorer_bytes(client, &url).await {
+            Ok(scorer_bytes) => {
+                let mut readable_bytes = lightning::io::Cursor::new(scorer_bytes);
+                let params = ProbabilisticScoringDecayParameters::default();
+                let args = (
+                    params,
+                    Arc::clone(&gossip_data.network_graph),
+                    Arc::clone(&logger),
+                );
+                if let Ok(remote_scorer) = ProbScorer::read(&mut readable_bytes, args) {
+                    log_debug!(logger, "retrieved remote scorer");
+                    gossip_data.scorer = Some(remote_scorer);
+                } else {
+                    log_error!(
+                        logger,
+                        "failed to parse remote scorer, keeping the local one"
+                    );
+                }
+            }
+            Err(_) => {
+                log_error!(
+                    logger,
+                    "failed to retrieve remote scorer, keeping the local one"
+                );
+            }
+        }
+    }
 
     let prob_scorer = match gossip_data.scorer {
         Some(scorer) => scorer,
@@ -593,7 +584,7 @@ mod test {
                 .await
                 .unwrap();
 
-        let data = get_gossip_data(&storage, None, None, logger).await.unwrap();
+        let data = get_gossip_data(&storage, logger).await.unwrap();
 
         assert!(data.is_some());
         assert!(data.unwrap().last_sync_timestamp > 0);
