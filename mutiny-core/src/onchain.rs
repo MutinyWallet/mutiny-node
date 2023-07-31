@@ -115,7 +115,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                 spks,
                 core::iter::empty(),
                 core::iter::empty(),
-                50,
+                20,
                 5,
             )
             .await?;
