@@ -203,6 +203,18 @@ impl From<lnurl::Error> for MutinyJsError {
     }
 }
 
+impl From<nostr::secp256k1::Error> for MutinyJsError {
+    fn from(_: nostr::secp256k1::Error) -> Self {
+        Self::InvalidArgumentsError
+    }
+}
+
+impl From<nostr::nips::nip19::Error> for MutinyJsError {
+    fn from(_: nostr::nips::nip19::Error) -> Self {
+        Self::InvalidArgumentsError
+    }
+}
+
 impl From<ParseOrSemanticError> for MutinyJsError {
     fn from(_e: ParseOrSemanticError) -> Self {
         Self::InvoiceInvalid

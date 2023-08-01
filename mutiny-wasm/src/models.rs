@@ -1,6 +1,8 @@
+use ::nostr::key::XOnlyPublicKey;
+use ::nostr::prelude::{FromBech32, ToBech32};
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::{Address, OutPoint, XOnlyPublicKey};
+use bitcoin::{Address, OutPoint};
 use gloo_utils::format::JsValueSerdeExt;
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::lightning_address::LightningAddress;
@@ -683,11 +685,14 @@ impl TagItem {
 impl From<(String, MutinyContact)> for TagItem {
     fn from(m: (String, MutinyContact)) -> Self {
         let (id, contact) = m;
+        let npub = contact
+            .npub
+            .map(|a| XOnlyPublicKey::from_slice(&a.serialize()).unwrap());
         TagItem {
             id,
             kind: TagKind::Contact,
             name: contact.name,
-            npub: contact.npub,
+            npub,
             ln_address: contact.ln_address,
             lnurl: contact.lnurl,
             last_used_time: contact.last_used,
@@ -717,11 +722,13 @@ impl From<labels::TagItem> for TagItem {
 pub struct Contact {
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    npub: Option<XOnlyPublicKey>,
+    npub: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ln_address: Option<LightningAddress>,
     #[serde(skip_serializing_if = "Option::is_none")]
     lnurl: Option<LnUrl>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_url: Option<String>,
     pub last_used: u64,
 }
 
@@ -733,9 +740,9 @@ impl Contact {
         npub: Option<String>,
         ln_address: Option<String>,
         lnurl: Option<String>,
+        image_url: Option<String>,
     ) -> Result<Contact, MutinyJsError> {
         // Convert the parameters into the types expected by the struct
-        let npub = npub.map(|s| XOnlyPublicKey::from_str(&s)).transpose()?;
         let ln_address = ln_address
             .map(|s| LightningAddress::from_str(&s))
             .transpose()?;
@@ -746,6 +753,7 @@ impl Contact {
             npub,
             ln_address,
             lnurl,
+            image_url,
             last_used: utils::now().as_secs(),
         })
     }
@@ -762,7 +770,7 @@ impl Contact {
 
     #[wasm_bindgen(getter)]
     pub fn npub(&self) -> Option<String> {
-        self.npub.map(|a| a.to_string())
+        self.npub.clone()
     }
 
     #[wasm_bindgen(getter)]
@@ -778,12 +786,15 @@ impl Contact {
 
 impl From<Contact> for MutinyContact {
     fn from(c: Contact) -> Self {
+        let npub = c.npub.and_then(|n| XOnlyPublicKey::from_bech32(n).ok());
+        let npub = npub.map(|a| bitcoin::XOnlyPublicKey::from_slice(&a.serialize()).unwrap());
         MutinyContact {
             name: c.name,
-            npub: c.npub,
+            npub,
             ln_address: c.ln_address,
             lnurl: c.lnurl,
             archived: Some(false),
+            image_url: c.image_url,
             last_used: c.last_used,
         }
     }
@@ -791,11 +802,18 @@ impl From<Contact> for MutinyContact {
 
 impl From<MutinyContact> for Contact {
     fn from(c: MutinyContact) -> Self {
+        let npub = c.npub.and_then(|a| {
+            XOnlyPublicKey::from_slice(&a.serialize())
+                .unwrap()
+                .to_bech32()
+                .ok()
+        });
         Contact {
             name: c.name,
-            npub: c.npub,
+            npub,
             ln_address: c.ln_address,
             lnurl: c.lnurl,
+            image_url: c.image_url,
             last_used: c.last_used,
         }
     }
