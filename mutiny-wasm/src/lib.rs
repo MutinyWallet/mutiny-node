@@ -806,7 +806,7 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .close_channel(&outpoint, force, abandon)
+            .close_channel(&outpoint, None, force, abandon)
             .await?)
     }
 
