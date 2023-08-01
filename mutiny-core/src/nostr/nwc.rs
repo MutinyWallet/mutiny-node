@@ -160,6 +160,22 @@ impl NostrWalletConnect {
                 return Ok(None);
             }
 
+            // if the invoice has no amount, we cannot pay it
+            if invoice.amount_milli_satoshis().is_none() {
+                log_warn!(
+                    node_manager.logger,
+                    "NWC Invoice amount not set, cannot pay: {invoice}"
+                );
+                return Ok(None);
+            }
+
+            // if we have already paid this invoice, skip it
+            let node = node_manager.get_node(from_node).await?;
+            if node.get_invoice(&invoice).is_ok_and(|i| i.paid) {
+                return Ok(None);
+            }
+            drop(node);
+
             // if we need approval, just save in the db for later
             if self.profile.require_approval {
                 let pending = PendingNwcInvoice {
@@ -185,14 +201,6 @@ impl NostrWalletConnect {
 
                 return Ok(None);
             } else {
-                if invoice.amount_milli_satoshis().is_none() {
-                    log_error!(
-                        node_manager.logger,
-                        "NWC Invoice amount not set, cannot pay: {invoice}"
-                    );
-                    return Ok(None);
-                }
-
                 let msats = invoice.amount_milli_satoshis().unwrap();
 
                 // verify amount is under our limit
