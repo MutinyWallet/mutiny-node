@@ -768,7 +768,7 @@ impl<S: MutinyStorage> Node<S> {
                     amount_msat,
                     description,
                     now,
-                    1500,
+                    3600,
                     Some(40),
                 )
             }
@@ -776,7 +776,7 @@ impl<S: MutinyStorage> Node<S> {
                 amount_msat,
                 None,
                 description,
-                1500,
+                3600,
                 r,
                 self.keys_manager.clone(),
                 self.keys_manager.clone(),
