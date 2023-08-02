@@ -25,7 +25,6 @@ use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{lspclient::FeeRequest, storage::MutinyStorage};
 use anyhow::{anyhow, Context};
 use bdk::FeeRate;
-use bdk_esplora::esplora_client::AsyncClient;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
 use bitcoin::secp256k1::rand;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, BlockHash, Network, OutPoint};
@@ -39,6 +38,7 @@ use lightning::{
     util::config::ChannelConfig,
 };
 
+use crate::multiesplora::MultiEsploraClient;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use lightning::ln::PaymentSecret;
 use lightning::sign::{EntropySource, InMemorySigner};
@@ -174,7 +174,7 @@ impl<S: MutinyStorage> Node<S> {
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
         wallet: Arc<OnChainWallet<S>>,
         network: Network,
-        esplora: Arc<AsyncClient>,
+        esplora: &MultiEsploraClient,
         lsp_clients: &[LspClient],
         logger: Arc<MutinyLogger>,
         do_not_connect_peers: bool,

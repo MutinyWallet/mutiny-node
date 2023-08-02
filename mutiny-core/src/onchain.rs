@@ -8,11 +8,10 @@ use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::psbt::PsbtUtils;
 use bdk::template::DescriptorTemplateOut;
 use bdk::{FeeRate, LocalUtxo, SignOptions, TransactionDetails, Wallet};
-use bdk_esplora::{esplora_client, EsploraAsyncExt};
+use bdk_esplora::EsploraAsyncExt;
 use bitcoin::psbt::PartiallySignedTransaction;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, OutPoint, Script, Transaction, Txid};
-use esplora_client::AsyncClient;
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_warn};
@@ -21,6 +20,7 @@ use crate::error::MutinyError;
 use crate::fees::MutinyFeeEstimator;
 use crate::labels::*;
 use crate::logging::MutinyLogger;
+use crate::multiesplora::MultiEsploraClient;
 use crate::storage::{MutinyStorage, OnChainStorage};
 use crate::utils::{now, sleep};
 
@@ -29,7 +29,7 @@ pub struct OnChainWallet<S: MutinyStorage> {
     pub wallet: Arc<RwLock<Wallet<OnChainStorage<S>>>>,
     pub(crate) storage: S,
     pub network: Network,
-    pub blockchain: Arc<AsyncClient>,
+    pub blockchain: Arc<MultiEsploraClient>,
     pub fees: Arc<MutinyFeeEstimator<S>>,
     pub(crate) stop: Arc<AtomicBool>,
     logger: Arc<MutinyLogger>,
@@ -40,7 +40,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         xprivkey: ExtendedPrivKey,
         db: S,
         network: Network,
-        esplora: Arc<AsyncClient>,
+        esplora: Arc<MultiEsploraClient>,
         fees: Arc<MutinyFeeEstimator<S>>,
         stop: Arc<AtomicBool>,
         logger: Arc<MutinyLogger>,
@@ -615,8 +615,10 @@ pub(crate) fn get_esplora_url(network: Network, user_provided_url: Option<String
         url
     } else {
         match network {
-            Network::Bitcoin => "https://mempool.space/api",
-            Network::Testnet => "https://mempool.space/testnet/api",
+            Network::Bitcoin => "https://mempool.space/api https://blockstream.info/api",
+            Network::Testnet => {
+                "https://mempool.space/testnet/api https://blockstream.info/testnet/api"
+            }
             Network::Signet => "https://mutinynet.com/api",
             Network::Regtest => "http://localhost:3003",
         }
@@ -643,6 +645,7 @@ mod tests {
                 .build_async()
                 .unwrap(),
         );
+        let esplora = Arc::new(MultiEsploraClient::new(vec![esplora]));
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let db = MemoryStorage::new(Some(pass), Some(cipher), None);

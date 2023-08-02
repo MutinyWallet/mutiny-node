@@ -245,6 +245,7 @@ mod tests {
     use super::create_keys_manager;
     use crate::fees::MutinyFeeEstimator;
     use crate::logging::MutinyLogger;
+    use crate::multiesplora::MultiEsploraClient;
     use crate::onchain::OnChainWallet;
     use crate::storage::MemoryStorage;
     use bip39::Mnemonic;
@@ -266,6 +267,7 @@ mod tests {
                 .build_async()
                 .unwrap(),
         );
+        let esplora = Arc::new(MultiEsploraClient::new(vec![esplora]));
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let db = MemoryStorage::new(Some(pass), Some(cipher), None);
