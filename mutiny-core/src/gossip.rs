@@ -335,11 +335,7 @@ impl LnPeerMetadata {
         };
 
         // combine nodes from both
-        let mut nodes: Vec<String> = primary
-            .nodes
-            .into_iter()
-            .chain(secondary.nodes.into_iter())
-            .collect();
+        let mut nodes: Vec<String> = primary.nodes.into_iter().chain(secondary.nodes).collect();
 
         // remove duplicates
         nodes.sort();

@@ -1,5 +1,9 @@
 // wasm is considered "extra_unused_type_parameters"
-#![allow(incomplete_features, clippy::extra_unused_type_parameters)]
+#![allow(
+    incomplete_features,
+    clippy::extra_unused_type_parameters,
+    clippy::arc_with_non_send_sync
+)]
 #![feature(async_fn_in_trait)]
 
 extern crate mutiny_core;

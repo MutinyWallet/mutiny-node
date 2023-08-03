@@ -1169,7 +1169,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                 log_warn!(self.logger, "Failed to get bdk history: {e}");
                 e
             })
-            .unwrap_or(vec![]);
+            .unwrap_or_default();
 
         let mut activity = Vec::with_capacity(lightning.len() + onchain.len());
         for ln in lightning {
@@ -2117,7 +2117,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             .collect();
 
         // correctly set is_connected
-        for mut peer in &mut storage_peers {
+        for peer in &mut storage_peers {
             if connected_peers.contains(&peer.pubkey) {
                 peer.is_connected = true;
             }
