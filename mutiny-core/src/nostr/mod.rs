@@ -111,6 +111,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             .read()
             .unwrap()
             .iter()
+            .filter(|x| !x.profile.archived)
             .map(|x| x.nwc_profile())
             .collect()
     }
@@ -169,6 +170,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             index,
             relay: "wss://nostr.mutinywallet.com".to_string(),
             enabled: true,
+            archived: false,
             spending_conditions,
         };
         let nwc = NostrWalletConnect::new(&Secp256k1::new(), self.xprivkey, profile)?;

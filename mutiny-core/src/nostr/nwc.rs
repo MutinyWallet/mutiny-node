@@ -45,6 +45,9 @@ pub(crate) struct Profile {
     pub index: u32,
     pub relay: String,
     pub enabled: bool,
+    /// Archived profiles will not be displayed
+    #[serde(default)]
+    pub archived: bool,
     /// Require approval before sending a payment
     #[serde(default)]
     pub spending_conditions: SpendingConditions,
@@ -217,6 +220,7 @@ impl NostrWalletConnect {
                                 self.profile.spending_conditions =
                                     SpendingConditions::SingleUse(single_use);
                                 self.profile.enabled = false;
+                                self.profile.archived = true;
                                 needs_save = true;
                                 resp
                             }
@@ -292,6 +296,7 @@ impl NostrWalletConnect {
             index: self.profile.index,
             relay: self.profile.relay.clone(),
             enabled: self.profile.enabled,
+            archived: self.profile.archived,
             nwc_uri: self.get_nwc_uri().expect("failed to get nwc uri"),
             spending_conditions: self.profile.spending_conditions.clone(),
         }
@@ -305,6 +310,8 @@ pub struct NwcProfile {
     pub index: u32,
     pub relay: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub archived: bool,
     pub nwc_uri: String,
     #[serde(default)]
     pub spending_conditions: SpendingConditions,
@@ -316,6 +323,7 @@ impl NwcProfile {
             name: self.name.clone(),
             index: self.index,
             relay: self.relay.clone(),
+            archived: self.archived,
             enabled: self.enabled,
             spending_conditions: self.spending_conditions.clone(),
         }
