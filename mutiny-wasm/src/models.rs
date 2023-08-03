@@ -857,12 +857,11 @@ impl NwcProfile {
         self.nwc_uri.clone()
     }
 
-    #[wasm_bindgen(getter)]
+    #[wasm_bindgen]
     pub fn sharable_url(&self, url_prefix: String) -> Option<String> {
         match self.spending_conditions {
             SpendingConditions::SingleUse(ref single_use) => {
                 let encoded = urlencoding::encode(&self.nwc_uri);
-                // todo figure out how to change the url
                 Some(format!(
                     "{}/gift?amount={}&nwc_uri={}",
                     url_prefix, single_use.amount_sats, encoded
