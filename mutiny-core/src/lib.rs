@@ -48,7 +48,7 @@ pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 use crate::auth::MutinyAuthClient;
 use crate::labels::{Contact, LabelStorage};
 use crate::nostr::nwc::SpendingConditions;
-use crate::storage::MutinyStorage;
+use crate::storage::{MutinyStorage, NEED_FULL_SYNC_KEY};
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{nostr::NostrManager, utils::sleep};
@@ -162,6 +162,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         // start the nostr wallet connect background process
         mw.start_nostr_wallet_connect(first_node).await;
+
+        #[cfg(not(test))]
+        {
+            // if we need a full sync from a restore
+            if mw.storage.get(NEED_FULL_SYNC_KEY)?.unwrap_or_default() {
+                mw.node_manager.wallet.full_sync().await?;
+                mw.storage.delete(&[NEED_FULL_SYNC_KEY])?;
+            }
+        }
 
         Ok(mw)
     }
@@ -417,6 +426,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         self.start().await?;
 
+        self.node_manager.wallet.full_sync().await?;
+
         Ok(())
     }
 
@@ -429,6 +440,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         S::clear().await?;
         storage.start().await?;
         storage.insert_mnemonic(m)?;
+        storage.set_data(NEED_FULL_SYNC_KEY, true, None)?;
         Ok(())
     }
 }
