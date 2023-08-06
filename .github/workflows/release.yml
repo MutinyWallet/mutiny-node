@@ -10,7 +10,7 @@ jobs:
 
       - uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: nightly-2023-04-16
           components: clippy
           target: wasm32-unknown-unknown
           override: true
@@ -45,7 +45,7 @@ jobs:
 
       - uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: nightly-2023-04-16
           components: clippy
           target: wasm32-unknown-unknown
           override: true
@@ -68,11 +68,11 @@ jobs:
 
       - name: Build wasm
         env:
-          RUSTUP_TOOLCHAIN: nightly
+          RUSTUP_TOOLCHAIN: nightly-2023-04-16
         run: wasm-pack build ./mutiny-wasm --release --target web --scope mutinywallet
 
       - name: Publish wasm
         run: wasm-pack publish --access public -t web
         env:
-          RUSTUP_TOOLCHAIN: nightly
+          RUSTUP_TOOLCHAIN: nightly-2023-04-16
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

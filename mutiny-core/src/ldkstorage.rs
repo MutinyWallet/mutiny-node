@@ -134,10 +134,11 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             .scan(MONITORS_PREFIX_KEY, Some(suffix))
             .map_err(|_| io::ErrorKind::Other)?;
 
-        let res =
-            channel_monitor_list
-                .into_iter()
-                .try_fold(Vec::new(), |mut accum, (_, data)| {
+        let res = channel_monitor_list
+            .iter()
+            .fold(Ok(Vec::new()), |current_res, (_, data)| match current_res {
+                Err(e) => Err(e),
+                Ok(mut accum) => {
                     let mut buffer = Cursor::new(data);
                     match <(BlockHash, ChannelMonitor<InMemorySigner>)>::read(
                         &mut buffer,
@@ -152,7 +153,8 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
                             format!("Failed to deserialize ChannelMonitor: {e}"),
                         )),
                     }
-                })?;
+                }
+            })?;
 
         Ok(res)
     }
@@ -254,12 +256,8 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             channel_monitor_mut_references,
         );
         let mut readable_kv_value = Cursor::new(bytes);
-        let Ok((_, channel_manager)) =
-            <(BlockHash, PhantomChannelManager<S>)>::read(&mut readable_kv_value, read_args)
-        else {
-            return Err(MutinyError::ReadError {
-                source: MutinyStorageError::Other(anyhow!("could not read manager")),
-            });
+        let Ok((_, channel_manager)) = <(BlockHash, PhantomChannelManager<S>)>::read(&mut readable_kv_value, read_args) else {
+            return Err(MutinyError::ReadError { source: MutinyStorageError::Other(anyhow!("could not read manager")) })
         };
         Ok(ReadChannelManager {
             channel_manager,

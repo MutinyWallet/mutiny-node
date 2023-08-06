@@ -24,13 +24,13 @@ jobs:
       - name: Install nightly toolchain
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: nightly-2023-04-16
           components: rustfmt
           profile: minimal
 
       - name: Check formatting
         run: |
-          cargo +nightly fmt -- --check
+          cargo +nightly-2023-04-16 fmt -- --check
 
   website:
     name: Build WASM binary
@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: nightly-2023-04-16
           target: wasm32-unknown-unknown
           override: true
           profile: minimal
@@ -61,20 +61,20 @@ jobs:
 
       - name: Build wasm package
         env:
-          RUSTUP_TOOLCHAIN: nightly
+          RUSTUP_TOOLCHAIN: nightly-2023-04-16
         run: wasm-pack build ./mutiny-wasm --release --target web
 
   browser_tests:
     name: Browser Tests
     runs-on: ubuntu-latest
     env:
-      RUSTUP_TOOLCHAIN: nightly
+      RUSTUP_TOOLCHAIN: nightly-2023-04-16
       WASM_BINDGEN_TEST_TIMEOUT: 240
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: nightly-2023-04-16
           target: wasm32-unknown-unknown
           override: true
           profile: minimal
@@ -112,7 +112,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: nightly-2023-04-16
           components: clippy
           target: wasm32-unknown-unknown
           override: true
@@ -155,7 +155,7 @@ jobs:
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: nightly-2023-04-16
           override: true
           profile: minimal
           components: clippy
@@ -202,7 +202,7 @@ jobs:
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: nightly-2023-04-16
           override: true
           profile: minimal
           components: clippy
@@ -249,7 +249,7 @@ jobs:
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: nightly-2023-04-16
           override: true
           profile: minimal
           components: clippy
