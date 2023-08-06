@@ -5,13 +5,13 @@ use crate::fees::MutinyFeeEstimator;
 use crate::gossip::{NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 use crate::keymanager::PhantomKeysManager;
 use crate::logging::MutinyLogger;
+use crate::multiesplora::MultiEsploraClient;
 use crate::node::{default_user_config, ChainMonitor, ProbScorer};
 use crate::node::{NetworkGraph, Router};
 use crate::nodemanager::ChannelClosure;
 use crate::storage::{MutinyStorage, VersionedValue};
 use crate::utils;
 use anyhow::anyhow;
-use bdk_esplora::esplora_client::AsyncClient;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::Network;
 use bitcoin::{BlockHash, Transaction};
@@ -170,7 +170,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         keys_manager: Arc<PhantomKeysManager<S>>,
         router: Arc<Router>,
         channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
-        esplora: Arc<AsyncClient>,
+        esplora: &MultiEsploraClient,
     ) -> Result<ReadChannelManager<S>, MutinyError> {
         log_debug!(mutiny_logger, "Reading channel manager from storage");
         let key = self.get_key(CHANNEL_MANAGER_KEY);
@@ -276,7 +276,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         keys_manager: Arc<PhantomKeysManager<S>>,
         router: Arc<Router>,
         channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
-        esplora: Arc<AsyncClient>,
+        esplora: &MultiEsploraClient,
     ) -> Result<ReadChannelManager<S>, MutinyError> {
         // if regtest, we don't need to get the tip hash and can
         // just use genesis, this also lets us use regtest in tests
@@ -869,7 +869,8 @@ mod test {
         let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
 
         let esplora_server_url = "https://mutinynet.com/api/".to_string();
-        let esplora = Arc::new(Builder::new(&esplora_server_url).build_async().unwrap());
+        let esplora_client = Arc::new(Builder::new(&esplora_server_url).build_async().unwrap());
+        let esplora = Arc::new(MultiEsploraClient::new(vec![esplora_client]));
         let fees = Arc::new(MutinyFeeEstimator::new(
             persister.storage.clone(),
             esplora.clone(),
@@ -929,7 +930,7 @@ mod test {
                 km.clone(),
                 router.clone(),
                 vec![],
-                esplora.clone(),
+                &esplora,
             )
             .await
             .unwrap();
@@ -952,7 +953,7 @@ mod test {
                 km,
                 router,
                 vec![],
-                esplora,
+                &esplora,
             )
             .await
             .unwrap();

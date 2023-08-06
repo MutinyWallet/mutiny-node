@@ -145,11 +145,11 @@ use lightning::{log_debug, log_error, log_info, log_trace};
 
 use bitcoin::{BlockHash, Script, Txid};
 
-use bdk_esplora::esplora_client::r#async::AsyncClient;
-use bdk_esplora::esplora_client::Builder;
-
+use crate::multiesplora::MultiEsploraClient;
 use core::ops::Deref;
+use esplora_client::Builder;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Synchronizes LDK with a given [`Esplora`] server.
 ///
@@ -185,8 +185,9 @@ where
     pub fn new(server_url: String, logger: L) -> Self {
         let builder = Builder::new(&server_url);
         let client = builder.build_async().unwrap();
+        let multi = MultiEsploraClient::new(vec![Arc::new(client)]);
 
-        EsploraSyncClient::from_client(client, logger)
+        EsploraSyncClient::from_client(multi, logger)
     }
 
     /// Returns a new [`EsploraSyncClient`] object using the given Esplora client.
@@ -528,7 +529,7 @@ where
 type MutexType<I> = futures::lock::Mutex<I>;
 
 // The underlying client type.
-type EsploraClientType = AsyncClient;
+type EsploraClientType = MultiEsploraClient;
 
 impl<L: Deref> Filter for EsploraSyncClient<L>
 where

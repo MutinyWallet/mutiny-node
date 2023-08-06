@@ -6,6 +6,7 @@ use std::{collections::HashMap, ops::Deref, sync::Arc};
 use crate::gossip::*;
 use crate::lnurlauth::AuthManager;
 use crate::logging::LOGGING_KEY;
+use crate::multiesplora::MultiEsploraClient;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
 use crate::scb::{
     EncryptedSCB, StaticChannelBackup, StaticChannelBackupStorage,
@@ -34,7 +35,6 @@ use crate::{
 use crate::{labels::LabelStorage, subscription::MutinySubscriptionClient};
 use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::{wallet::AddressIndex, LocalUtxo};
-use bdk_esplora::esplora_client::AsyncClient;
 use bitcoin::blockdata::script;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::hashes::{sha256, Hash};
@@ -42,6 +42,7 @@ use bitcoin::secp256k1::{rand, PublicKey, Secp256k1, SecretKey};
 use bitcoin::util::bip32::{DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use core::time::Duration;
+use esplora_client::Builder;
 use futures::{future::join_all, lock::Mutex};
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::chain::Confirm;
@@ -520,7 +521,7 @@ pub struct NodeManager<S: MutinyStorage> {
     network: Network,
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
-    esplora: Arc<AsyncClient>,
+    esplora: Arc<MultiEsploraClient>,
     pub(crate) wallet: Arc<OnChainWallet<S>>,
     gossip_sync: Arc<RapidGossipSync>,
     scorer: Arc<utils::Mutex<ProbScorer>>,
@@ -579,9 +580,23 @@ impl<S: MutinyStorage> NodeManager<S> {
         });
 
         let esplora_server_url = get_esplora_url(c.network, c.user_esplora_url);
-        let tx_sync = Arc::new(EsploraSyncClient::new(esplora_server_url, logger.clone()));
+        let esplora_clients = {
+            // esplora_server_url is a space separated list of urls
+            let urls = esplora_server_url.split(' ').collect::<Vec<_>>();
+            let mut clients = Vec::with_capacity(urls.len());
+            for url in urls {
+                let client = Builder::new(url).build_async()?;
+                clients.push(Arc::new(client));
+            }
+            clients
+        };
+        let esplora = MultiEsploraClient::new(esplora_clients);
+        let tx_sync = Arc::new(EsploraSyncClient::from_client(
+            esplora.clone(),
+            logger.clone(),
+        ));
 
-        let esplora = Arc::new(tx_sync.client().clone());
+        let esplora = Arc::new(esplora);
         let fee_estimator = Arc::new(MutinyFeeEstimator::new(
             storage.clone(),
             esplora.clone(),
@@ -661,7 +676,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                 fee_estimator.clone(),
                 wallet.clone(),
                 c.network,
-                esplora.clone(),
+                &esplora,
                 &lsp_clients,
                 logger.clone(),
                 c.do_not_connect_peers,
@@ -2058,7 +2073,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                 self.fee_estimator.clone(),
                 self.wallet.clone(),
                 self.network,
-                self.esplora.clone(),
+                &self.esplora,
                 &self.lsp_clients,
                 self.logger.clone(),
                 true,
@@ -2117,7 +2132,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             .collect();
 
         // correctly set is_connected
-        for mut peer in &mut storage_peers {
+        for peer in &mut storage_peers {
             if connected_peers.contains(&peer.pubkey) {
                 peer.is_connected = true;
             }
@@ -2389,7 +2404,7 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         node_manager.fee_estimator.clone(),
         node_manager.wallet.clone(),
         node_manager.network,
-        node_manager.esplora.clone(),
+        &node_manager.esplora,
         &node_manager.lsp_clients,
         node_manager.logger.clone(),
         node_manager.do_not_connect_peers,

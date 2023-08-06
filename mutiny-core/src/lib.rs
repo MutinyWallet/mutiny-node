@@ -24,6 +24,7 @@ mod ldkstorage;
 pub mod lnurlauth;
 pub mod logging;
 mod lspclient;
+mod multiesplora;
 mod networking;
 mod node;
 pub mod nodemanager;

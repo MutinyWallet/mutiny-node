@@ -1,8 +1,8 @@
 use crate::logging::MutinyLogger;
+use crate::multiesplora::MultiEsploraClient;
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, utils};
 use bdk::FeeRate;
-use esplora_client::AsyncClient;
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::{
     ConfirmationTarget, FeeEstimator, FEERATE_FLOOR_SATS_PER_KW,
@@ -24,7 +24,7 @@ pub(crate) const TAPROOT_OUTPUT_SIZE: usize = 43;
 #[derive(Clone)]
 pub struct MutinyFeeEstimator<S: MutinyStorage> {
     storage: S,
-    esplora: Arc<AsyncClient>,
+    esplora: Arc<MultiEsploraClient>,
     logger: Arc<MutinyLogger>,
     last_fee_update_time_secs: Arc<Mutex<Option<u64>>>,
 }
@@ -32,7 +32,7 @@ pub struct MutinyFeeEstimator<S: MutinyStorage> {
 impl<S: MutinyStorage> MutinyFeeEstimator<S> {
     pub fn new(
         storage: S,
-        esplora: Arc<AsyncClient>,
+        esplora: Arc<MultiEsploraClient>,
         logger: Arc<MutinyLogger>,
     ) -> MutinyFeeEstimator<S> {
         MutinyFeeEstimator {
@@ -214,6 +214,7 @@ mod test {
                 .build_async()
                 .unwrap(),
         );
+        let esplora = Arc::new(MultiEsploraClient::new(vec![esplora]));
         let logger = Arc::new(MutinyLogger::default());
 
         MutinyFeeEstimator::new(storage, esplora, logger)
