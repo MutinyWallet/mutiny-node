@@ -345,7 +345,9 @@ pub struct PendingNwcInvoice {
 
 impl PartialOrd for PendingNwcInvoice {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+        self.invoice
+            .to_string()
+            .partial_cmp(&other.invoice.to_string())
     }
 }
 
