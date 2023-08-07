@@ -45,16 +45,20 @@ mod utils;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
+use std::collections::HashMap;
 
 use crate::auth::MutinyAuthClient;
 use crate::labels::{Contact, LabelStorage};
 use crate::nostr::nwc::SpendingConditions;
+use crate::nostr::Zap;
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, NEED_FULL_SYNC_KEY};
+use crate::utils::now;
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
-use ::nostr::{Keys, Kind};
+use ::nostr::prelude::FromBech32;
+use ::nostr::{Filter, Keys, Kind, Timestamp};
 use bip39::Mnemonic;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
@@ -435,6 +439,75 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         client.disconnect().await?;
         Ok(())
+    }
+
+    /// Gets all the Zaps that have been received by our contacts
+    pub async fn get_contact_zaps(
+        &self,
+        relay: &str,
+        timeout: Option<Duration>,
+    ) -> Result<Vec<Zap>, MutinyError> {
+        let contacts = self.storage.get_contacts()?;
+        let contacts_by_npub: HashMap<XOnlyPublicKey, Contact> = contacts
+            .into_iter()
+            .filter_map(|(_, contact)| {
+                contact.npub.and_then(|npub| {
+                    // convert to nostr::XOnlyPublicKey
+                    let npub = XOnlyPublicKey::from_slice(&npub.serialize()).unwrap();
+
+                    if npub
+                        == XOnlyPublicKey::from_bech32(
+                            "npub1wxl6njlcgygduct7jkgzrvyvd9fylj4pqvll6p32h59wyetm5fxqjchcan",
+                        )
+                        .unwrap()
+                    {
+                        None
+                    } else {
+                        Some((npub, contact))
+                    }
+                })
+            })
+            .collect::<HashMap<_, _>>();
+
+        let npubs = contacts_by_npub.keys().cloned().collect::<Vec<_>>();
+
+        let keys = Keys::generate();
+        let client = Client::new(&keys);
+
+        #[cfg(target_arch = "wasm32")]
+        client.add_relay(relay).await.unwrap();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        client.add_relay(relay, None).await.unwrap();
+
+        client.connect().await;
+
+        let since = now() - Duration::from_secs(60 * 60 * 24 * 4);
+        let filters = npubs
+            .chunks(10)
+            .map(|npubs| {
+                Filter::new()
+                    .kind(Kind::Zap)
+                    .pubkeys(npubs.to_vec())
+                    .since(Timestamp::from(since.as_secs()))
+                    .limit(500)
+            })
+            .collect();
+        let events = client.get_events_of(filters, timeout).await?;
+
+        let mut zaps: Vec<Zap> = Vec::new();
+        for event in events {
+            let zap = Zap::from_event(event, &contacts_by_npub);
+            if let Some(zap) = zap {
+                zaps.push(zap)
+            };
+        }
+
+        // sort zaps descending by timestamp
+        zaps.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        zaps.dedup();
+
+        Ok(zaps)
     }
 
     /// Stops all of the nodes and background processes.

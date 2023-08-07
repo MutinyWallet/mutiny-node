@@ -1,3 +1,4 @@
+use crate::labels::Contact;
 use crate::nodemanager::NodeManager;
 use crate::nostr::nwc::{
     NostrWalletConnect, NwcProfile, PendingNwcInvoice, Profile, SingleUseSpendingConditions,
@@ -5,15 +6,17 @@ use crate::nostr::nwc::{
 };
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
-use bitcoin::hashes::sha256;
+use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{PublicKey, Secp256k1, Signing};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use futures_util::lock::Mutex;
+use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use nostr::key::SecretKey;
 use nostr::nips::nip47::*;
 use nostr::prelude::{encrypt, XOnlyPublicKey};
 use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Metadata, Tag};
 use nostr_sdk::Client;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::str::FromStr;
@@ -617,6 +620,141 @@ pub(crate) async fn get_contact_list_metadata(
     }
 
     Ok(contacts)
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Zap {
+    pub from: Contact,
+    pub to: Contact,
+    pub timestamp: u64,
+    pub amount_sats: u64,
+    pub event_id: Option<EventId>,
+    pub note: Option<String>,
+}
+
+impl Zap {
+    pub fn from_event(
+        event: Event,
+        contacts_by_npub: &HashMap<XOnlyPublicKey, Contact>,
+    ) -> Option<Zap> {
+        if event.kind != Kind::Zap {
+            return None;
+        }
+
+        let to = event.tags.iter().find_map(|tag| {
+            if let Tag::PubKey(p, _) = tag {
+                contacts_by_npub.get(p).cloned()
+            } else {
+                None
+            }
+        });
+
+        let request = event.tags.iter().find_map(|tag| {
+            if let Tag::Description(desc) = tag {
+                // decode the description as json to an event
+                let event = Event::from_json(desc).ok();
+                match event {
+                    Some(event) => {
+                        // if the event is the correct kind, return the pubkey
+                        if event.kind == Kind::ZapRequest {
+                            Some(event)
+                        } else {
+                            None
+                        }
+                    }
+                    None => None,
+                }
+            } else {
+                None
+            }
+        });
+
+        let request = match request {
+            Some(request) => request,
+            None => return None,
+        };
+
+        let from = contacts_by_npub.get(&request.pubkey).cloned();
+
+        if let (Some(to), Some(from)) = (to, from) {
+            let invoice = event.tags.iter().find_map(|tag| {
+                if let Tag::Bolt11(invoice) = tag {
+                    Bolt11Invoice::from_str(invoice).ok()
+                } else {
+                    None
+                }
+            });
+
+            let invoice = match invoice {
+                Some(inv) => inv,
+                None => return None,
+            };
+
+            // verify correct description hash
+            if let Bolt11InvoiceDescription::Hash(hash) = invoice.description() {
+                if hash.0 != sha256::Hash::hash(request.as_json().as_bytes()) {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+
+            let amount_tag = request.tags.iter().find_map(|tag| {
+                if let Tag::Amount(amt) = tag {
+                    Some(*amt)
+                } else {
+                    None
+                }
+            });
+
+            let amount_sats = match amount_tag {
+                Some(amount_msats) => {
+                    // if we have an amount tag, verify that it matches the invoice
+                    if !invoice
+                        .amount_milli_satoshis()
+                        .is_some_and(|msats| msats == amount_msats)
+                    {
+                        return None;
+                    }
+
+                    amount_msats / 1_000
+                }
+                None => {
+                    // if the amount is not in the tags, try to parse it from the invoice
+                    if let Some(msats) = invoice.amount_milli_satoshis() {
+                        msats / 1_000
+                    } else {
+                        return None;
+                    }
+                }
+            };
+
+            let event_id = request.tags.into_iter().find_map(|tag| {
+                if let Tag::Event(event_id, _, _) = tag {
+                    Some(event_id)
+                } else {
+                    None
+                }
+            });
+
+            let note = if request.content.is_empty() {
+                None
+            } else {
+                Some(request.content)
+            };
+
+            Some(Zap {
+                from,
+                to,
+                timestamp: event.created_at.as_u64(),
+                amount_sats,
+                event_id,
+                note,
+            })
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]

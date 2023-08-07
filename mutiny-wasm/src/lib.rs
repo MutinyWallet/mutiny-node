@@ -31,6 +31,7 @@ use lnurl::lnurl::LnUrl;
 use mutiny_core::auth::MutinyAuthClient;
 use mutiny_core::lnurlauth::AuthManager;
 use mutiny_core::nostr::nwc::SpendingConditions;
+use mutiny_core::nostr::Zap;
 use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::redshift::RedshiftRecipient;
 use mutiny_core::scb::EncryptedSCB;
@@ -41,6 +42,7 @@ use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
 use nostr::key::XOnlyPublicKey;
 use nostr::prelude::FromBech32;
+use nostr::Event;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{
@@ -1234,6 +1236,34 @@ impl MutinyWallet {
         let npub = XOnlyPublicKey::from_bech32(&npub_str)?;
         self.inner.sync_nostr_contacts(npub, None).await?;
         Ok(())
+    }
+
+    pub fn get_zap(&self, event: JsValue) -> Result<JsValue, MutinyJsError> {
+        let event: Event = event
+            .into_serde()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        let contacts = self.inner.storage.get_contacts()?;
+        let contacts_by_npub = contacts
+            .into_iter()
+            .filter_map(|(_, contact)| {
+                contact.npub.map(|npub| {
+                    // convert to nostr::XOnlyPublicKey
+                    let npub = XOnlyPublicKey::from_slice(&npub.serialize()).unwrap();
+                    (npub, contact)
+                })
+            })
+            .collect();
+
+        Ok(Zap::from_event(event, &contacts_by_npub)
+            .and_then(|zap| JsValue::from_serde(&zap).ok())
+            .unwrap_or(JsValue::UNDEFINED))
+    }
+
+    /// Gets all the Zaps that have been received by our contacts
+    pub async fn get_contact_zaps(&self) -> Result<JsValue /* Vec<Zap> */, MutinyJsError> {
+        let relay = "wss://relay.damus.io";
+        let zaps = self.inner.get_contact_zaps(relay, None).await?;
+        Ok(JsValue::from_serde(&zaps)?)
     }
 
     /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.

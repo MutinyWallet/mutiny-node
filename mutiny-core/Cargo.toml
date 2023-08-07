@@ -34,7 +34,7 @@ futures-util = { version = "0.3", default-features = false }
 reqwest = { version = "0.11", default-features = false, features = ["json"] }
 async-trait = "0.1.68"
 url = { version = "2.3.1", features = ["serde"] }
-nostr = { version = "0.22.0-bitcoin-v0.29", default-features = false, features = ["nip47"] }
+nostr = { version = "0.22.0-bitcoin-v0.29", default-features = false, features = ["nip47", "nip19"] }
 nostr-sdk = { version = "0.22.0-bitcoin-v0.29", default-features = false }
 cbc = { version = "0.1", features = ["alloc"] }
 aes = { version = "0.8" }

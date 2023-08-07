@@ -533,7 +533,7 @@ pub struct NodeManager<S: MutinyStorage> {
     pub(crate) node_storage: Mutex<NodeStorage>,
     pub(crate) nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node<S>>>>>,
     auth: AuthManager,
-    lnurl_client: Arc<LnUrlClient>,
+    pub(crate) lnurl_client: Arc<LnUrlClient>,
     pub(crate) lsp_clients: Vec<LspClient>,
     pub(crate) subscription_client: Option<Arc<MutinySubscriptionClient>>,
     pub(crate) logger: Arc<MutinyLogger>,
