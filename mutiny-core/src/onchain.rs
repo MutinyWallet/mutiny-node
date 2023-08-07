@@ -538,10 +538,8 @@ pub(crate) fn get_esplora_url(network: Network, user_provided_url: Option<String
         url
     } else {
         match network {
-            Network::Bitcoin => "https://mempool.space/api https://blockstream.info/api",
-            Network::Testnet => {
-                "https://mempool.space/testnet/api https://blockstream.info/testnet/api"
-            }
+            Network::Bitcoin => "https://mutiny.mempool.space/api",
+            Network::Testnet => "https://mempool.space/testnet/api",
             Network::Signet => "https://mutinynet.com/api",
             Network::Regtest => "http://localhost:3003",
         }
