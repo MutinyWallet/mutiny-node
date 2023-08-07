@@ -12,7 +12,7 @@ use crate::scb::{
     EncryptedSCB, StaticChannelBackup, StaticChannelBackupStorage,
     SCB_ENCRYPTION_KEY_DERIVATION_PATH,
 };
-use crate::storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY};
+use crate::storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY};
 use crate::utils::sleep;
 use crate::MutinyWalletConfig;
 use crate::{
@@ -522,7 +522,7 @@ pub struct NodeManager<S: MutinyStorage> {
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
     esplora: Arc<MultiEsploraClient>,
-    pub(crate) wallet: Arc<OnChainWallet<S>>,
+    wallet: Arc<OnChainWallet<S>>,
     gossip_sync: Arc<RapidGossipSync>,
     scorer: Arc<utils::Mutex<ProbScorer>>,
     chain: Arc<MutinyChain<S>>,
@@ -2293,7 +2293,6 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         // delete the bdk keychain store
         self.storage.delete(&[KEYCHAIN_STORE_KEY])?;
-        self.storage.set_data(NEED_FULL_SYNC_KEY, true, None)?;
 
         // shut back down after reading if it was already closed
         if needs_db_connection {
