@@ -2315,7 +2315,10 @@ impl<S: MutinyStorage> NodeManager<S> {
             // filter out logs and network graph
             // these are really big and not needed for export
             // filter out device id so a new one is generated
-            !matches!(k.as_str(), LOGGING_KEY | NETWORK_GRAPH_KEY | DEVICE_ID_KEY)
+            !matches!(
+                k.as_str(),
+                LOGGING_KEY | NETWORK_GRAPH_KEY | PROB_SCORER_KEY | DEVICE_ID_KEY
+            )
         }));
 
         // shut back down after reading if it was already closed
