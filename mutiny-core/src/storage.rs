@@ -570,7 +570,11 @@ where
         match self.0.get_data::<K>(KEYCHAIN_STORE_KEY)? {
             Some(mut keychain_store) => {
                 keychain_store.append(changeset.clone());
-                self.0.set_data(KEYCHAIN_STORE_KEY, keychain_store, None)
+                if !keychain_store.is_empty() {
+                    self.0.set_data(KEYCHAIN_STORE_KEY, keychain_store, None)
+                } else {
+                    Ok(())
+                }
             }
             None => self.0.set_data(KEYCHAIN_STORE_KEY, changeset, None),
         }
