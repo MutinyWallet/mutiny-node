@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -91,83 +91,6 @@ impl<S: MutinyStorage> OnChainWallet<S> {
     }
 
     pub async fn sync(&self) -> Result<(), MutinyError> {
-        // get first wallet lock that only needs to read
-        let (checkpoints, spks, txids) = {
-            if let Ok(wallet) = self.wallet.try_read() {
-                let checkpoints = wallet.checkpoints();
-
-                let spk_vec = wallet
-                    .spk_index()
-                    .unused_spks(..)
-                    .map(|(k, v)| (*k, v.clone()))
-                    .collect::<Vec<_>>();
-
-                let mut spk_map = BTreeMap::new();
-                for ((a, b), c) in spk_vec {
-                    spk_map.entry(a).or_insert_with(Vec::new).push((b, c));
-                }
-
-                let chain = wallet.local_chain();
-                let chain_tip = chain.tip().unwrap_or_default();
-
-                let unconfirmed_txids = wallet
-                    .tx_graph()
-                    .list_chain_txs(chain, chain_tip)
-                    .filter(|canonical_tx| !canonical_tx.observed_as.is_confirmed())
-                    .map(|canonical_tx| canonical_tx.node.txid)
-                    .collect::<Vec<Txid>>();
-
-                (checkpoints.clone(), spk_map, unconfirmed_txids)
-            } else {
-                log_error!(self.logger, "Could not get wallet lock to sync");
-                return Err(MutinyError::WalletOperationFailed);
-            }
-        };
-
-        let update = self
-            .blockchain
-            .scan(&checkpoints, spks, txids, core::iter::empty(), 20, 5)
-            .await?;
-
-        // get new wallet lock for writing and apply the update
-        for _ in 0..10 {
-            match self.wallet.try_write() {
-                Ok(mut wallet) => match wallet.apply_update(update) {
-                    Ok(changed) => {
-                        // commit the changes if there were any
-                        if changed {
-                            wallet.commit()?;
-                        }
-
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        // failed to apply wallet update
-                        log_error!(self.logger, "Could not apply wallet update: {e}");
-                        return Err(MutinyError::Other(anyhow!("Could not apply update: {e}")));
-                    }
-                },
-                Err(e) => {
-                    // if we can't get the lock, we just return and try again later
-                    log_error!(
-                        self.logger,
-                        "Could not get wallet lock: {e}, retrying in 250ms"
-                    );
-
-                    if self.stop.load(Ordering::Relaxed) {
-                        return Err(MutinyError::NotRunning);
-                    };
-
-                    sleep(250).await;
-                }
-            }
-        }
-
-        log_error!(self.logger, "Could not get wallet lock after 10 retries");
-        Err(MutinyError::WalletOperationFailed)
-    }
-
-    pub async fn full_sync(&self) -> Result<(), MutinyError> {
         // get first wallet lock that only needs to read
         let (checkpoints, spks) = {
             if let Ok(wallet) = self.wallet.try_read() {
