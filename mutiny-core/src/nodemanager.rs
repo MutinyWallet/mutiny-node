@@ -2166,7 +2166,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Returns None if there's no subscription at all.
     /// Returns Some(u64) for their unix expiration timestamp, which may be in the
     /// past or in the future, depending on whether or not it is currently active.
-    pub async fn check_subscribed(&self) -> Result<Option<u64>, MutinyError> {
+    pub(crate) async fn check_subscribed(&self) -> Result<Option<u64>, MutinyError> {
         if let Some(subscription_client) = self.subscription_client.clone() {
             Ok(subscription_client.check_subscribed().await?)
         } else {

@@ -1171,13 +1171,14 @@ impl MutinyWallet {
     }
 
     /// Checks whether or not the user is subscribed to Mutiny+.
+    /// Submits a NWC string to keep the subscription active if not expired.
     ///
     /// Returns None if there's no subscription at all.
     /// Returns Some(u64) for their unix expiration timestamp, which may be in the
     /// past or in the future, depending on whether or not it is currently active.
     #[wasm_bindgen]
     pub async fn check_subscribed(&self) -> Result<Option<u64>, MutinyJsError> {
-        Ok(self.inner.node_manager.check_subscribed().await?)
+        Ok(self.inner.check_subscribed().await?)
     }
 
     /// Gets the subscription plans for Mutiny+ subscriptions
