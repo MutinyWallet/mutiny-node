@@ -368,7 +368,7 @@ impl IndexedDbStorage {
 fn used_once(key: &str) -> bool {
     matches!(
         key,
-        NETWORK_GRAPH_KEY | PROB_SCORER_KEY | GOSSIP_SYNC_TIME_KEY | KEYCHAIN_STORE_KEY
+        NETWORK_GRAPH_KEY | PROB_SCORER_KEY | GOSSIP_SYNC_TIME_KEY
     )
 }
 
