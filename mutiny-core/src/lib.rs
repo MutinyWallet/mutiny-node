@@ -279,7 +279,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             let expired = self.node_manager.check_subscribed().await?;
             if let Some(expired_time) = expired {
                 // if not expired, make sure nwc is created and submitted
-                if expired_time > crate::utils::now().as_secs() {
+                // account for 3 day grace period
+                if expired_time + 86_400 * 3 > crate::utils::now().as_secs() {
                     // now submit the NWC string if never created before
                     self.ensure_mutiny_nwc_profile(subscription_client).await?;
                 }
