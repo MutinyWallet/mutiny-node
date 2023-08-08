@@ -59,7 +59,7 @@ use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::Network;
 use futures::{pin_mut, select, FutureExt};
-use lightning::util::logger::Logger;
+use lightning::{log_debug, util::logger::Logger};
 use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use nostr_sdk::{Client, RelayPoolNotification};
@@ -220,16 +220,29 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
                 add_relay_res.expect("Failed to add relays");
                 client.connect().await;
-                client.subscribe(nostr.get_nwc_filters()).await;
+
+                let mut last_filters = nostr.get_nwc_filters();
+                client.subscribe(last_filters.clone()).await;
 
                 // handle NWC requests
                 let mut notifications = client.notifications();
 
+                let mut next_filter_check = crate::utils::now().as_secs() + 5;
                 loop {
                     let read_fut = notifications.recv().fuse();
                     let delay_fut = Box::pin(utils::sleep(1_000)).fuse();
-                    pin_mut!(read_fut);
-                    pin_mut!(delay_fut);
+
+                    // Determine the time for filter check.
+                    // Since delay runs every second, needs to allow for filter check to run too
+                    let current_time = crate::utils::now().as_secs();
+                    let time_until_next_filter_check =
+                        (next_filter_check.saturating_sub(current_time)) * 1_000;
+                    let filter_check_fut = Box::pin(utils::sleep(
+                        time_until_next_filter_check.try_into().unwrap(),
+                    ))
+                    .fuse();
+
+                    pin_mut!(read_fut, delay_fut, filter_check_fut);
                     select! {
                         notification = read_fut => {
                             match notification {
@@ -257,6 +270,17 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                             if nm.stop.load(Ordering::Relaxed) {
                                 break;
                             }
+                        }
+                        _ = filter_check_fut => {
+                            // Check if the filters have changed
+                            let current_filters = nostr.get_nwc_filters();
+                            if current_filters != last_filters {
+                                log_debug!(nm.logger, "subscribing to new nwc filters");
+                                client.subscribe(current_filters.clone()).await;
+                                last_filters = current_filters;
+                            }
+                            // Set the time for the next filter check
+                            next_filter_check = crate::utils::now().as_secs() + 5;
                         }
                     }
                 }
