@@ -259,6 +259,28 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         });
     }
 
+    /// Checks whether or not the user is subscribed to Mutiny+.
+    /// Submits a NWC string to keep the subscription active if not expired.
+    ///
+    /// Returns None if there's no subscription at all.
+    /// Returns Some(u64) for their unix expiration timestamp, which may be in the
+    /// past or in the future, depending on whether or not it is currently active.
+    pub async fn check_subscribed(&self) -> Result<Option<u64>, MutinyError> {
+        if let Some(subscription_client) = self.node_manager.subscription_client.clone() {
+            let expired = self.node_manager.check_subscribed().await?;
+            if let Some(expired_time) = expired {
+                // if not expired, make sure nwc is created and submitted
+                if expired_time > crate::utils::now().as_secs() {
+                    // now submit the NWC string if never created before
+                    self.ensure_mutiny_nwc_profile(subscription_client).await?;
+                }
+            }
+            Ok(expired)
+        } else {
+            Err(MutinyError::SubscriptionClientNotConfigured)
+        }
+    }
+
     /// Pay the subscription invoice. This will post a NWC automatically afterwards.
     pub async fn pay_subscription_invoice(&self, inv: &Bolt11Invoice) -> Result<(), MutinyError> {
         if let Some(subscription_client) = self.node_manager.subscription_client.clone() {
@@ -280,37 +302,37 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 )
                 .await?;
 
-            // now submit the NWC string
-            let nwc_profiles = self.nostr.profiles();
-            let reserved_profile_index = ReservedProfile::MutinySubscription.info().1;
-            let profile_opt = nwc_profiles
-                .iter()
-                .find(|profile| profile.index == reserved_profile_index);
-
-            let nwc_uri = match profile_opt {
-                Some(profile) => {
-                    // profile with the reserved index already exists, do something with it
-                    profile.nwc_uri.clone()
-                }
-                None => {
-                    // profile with the reserved index does not exist, create a new one
-                    let profile = self
-                        .nostr
-                        .create_new_nwc_profile(
-                            ProfileType::Reserved(ReservedProfile::MutinySubscription),
-                            SpendingConditions::RequireApproval,
-                        )
-                        .await?;
-                    profile.nwc_uri
-                }
-            };
-
-            subscription_client.submit_nwc(nwc_uri).await?;
+            // now submit the NWC string if never created before
+            self.ensure_mutiny_nwc_profile(subscription_client).await?;
 
             Ok(())
         } else {
             Err(MutinyError::SubscriptionClientNotConfigured)
         }
+    }
+
+    async fn ensure_mutiny_nwc_profile(
+        &self,
+        subscription_client: Arc<subscription::MutinySubscriptionClient>,
+    ) -> Result<(), MutinyError> {
+        let nwc_profiles = self.nostr.profiles();
+        let reserved_profile_index = ReservedProfile::MutinySubscription.info().1;
+        let profile_opt = nwc_profiles
+            .iter()
+            .find(|profile| profile.index == reserved_profile_index);
+        if profile_opt.is_none() {
+            // profile with the reserved index does not exist, create a new one
+            let profile = self
+                .nostr
+                .create_new_nwc_profile(
+                    ProfileType::Reserved(ReservedProfile::MutinySubscription),
+                    SpendingConditions::RequireApproval,
+                )
+                .await?;
+            // only should have to submit the NWC if never created locally before
+            subscription_client.submit_nwc(profile.nwc_uri).await?;
+        };
+        Ok(())
     }
 
     /// Get contacts from the given npub and sync them to the wallet
