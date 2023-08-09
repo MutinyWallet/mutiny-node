@@ -113,6 +113,9 @@ pub enum MutinyJsError {
     /// Node pubkey given is invalid
     #[error("The given node pubkey is invalid.")]
     PubkeyInvalid,
+    /// Error getting nostr data
+    #[error("Failed to get nostr data.")]
+    NostrError,
     /// Error getting the bitcoin price
     #[error("Failed to get the bitcoin price.")]
     BitcoinPriceError,
@@ -173,6 +176,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::PubkeyInvalid => MutinyJsError::PubkeyInvalid,
             MutinyError::IncorrectLnUrlFunction => MutinyJsError::IncorrectLnUrlFunction,
             MutinyError::BadAmountError => MutinyJsError::BadAmountError,
+            MutinyError::NostrError => MutinyJsError::NostrError,
             MutinyError::BitcoinPriceError => MutinyJsError::BitcoinPriceError,
             MutinyError::IncorrectPassword => MutinyJsError::IncorrectPassword,
             MutinyError::Other(_) => MutinyJsError::UnknownError,

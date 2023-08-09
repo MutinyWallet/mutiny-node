@@ -354,17 +354,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let client = Client::new(&keys);
 
         #[cfg(target_arch = "wasm32")]
-        client.add_relay("wss://relay.damus.io").await.unwrap();
+        client.add_relay("wss://relay.damus.io").await?;
 
         #[cfg(not(target_arch = "wasm32"))]
-        client
-            .add_relay("wss://relay.damus.io", None)
-            .await
-            .unwrap();
+        client.add_relay("wss://relay.damus.io", None).await?;
 
         client.connect().await;
 
-        let mut metadata = client.get_contact_list_metadata(timeout).await.unwrap();
+        let mut metadata = nostr::get_contact_list_metadata(&client, timeout).await?;
 
         let contacts = self.storage.get_contacts()?;
 
@@ -392,7 +389,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             self.storage.create_new_contact(contact)?;
         }
 
-        client.disconnect().await.unwrap();
+        client.disconnect().await?;
         Ok(())
     }
 

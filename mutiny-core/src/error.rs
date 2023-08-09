@@ -128,6 +128,9 @@ pub enum MutinyError {
     /// Error getting the bitcoin price
     #[error("Failed to get the bitcoin price.")]
     BitcoinPriceError,
+    /// Error getting nostr data
+    #[error("Failed to get nostr data.")]
+    NostrError,
     /// Incorrect password entered.
     #[error("Incorrect password entered.")]
     IncorrectPassword,
@@ -351,5 +354,11 @@ impl From<bdk_chain::local_chain::InsertBlockNotMatchingError> for MutinyError {
 impl From<bdk::wallet::InsertTxError> for MutinyError {
     fn from(_e: bdk::wallet::InsertTxError) -> Self {
         Self::WalletSyncError
+    }
+}
+
+impl From<nostr_sdk::client::Error> for MutinyError {
+    fn from(_e: nostr_sdk::client::Error) -> Self {
+        Self::NostrError
     }
 }

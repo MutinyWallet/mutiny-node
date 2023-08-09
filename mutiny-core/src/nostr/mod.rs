@@ -11,12 +11,14 @@ use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use futures_util::lock::Mutex;
 use nostr::key::SecretKey;
 use nostr::nips::nip47::*;
-use nostr::prelude::encrypt;
-use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
+use nostr::prelude::{encrypt, XOnlyPublicKey};
+use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Metadata, Tag};
 use nostr_sdk::Client;
+use std::collections::HashMap;
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 pub mod nwc;
 
@@ -576,6 +578,40 @@ impl<S: MutinyStorage> NostrManager<S> {
             pending_nwc_lock: Arc::new(Mutex::new(())),
         })
     }
+}
+
+// ported from nostr-sdk but with bug fix
+pub(crate) async fn get_contact_list_metadata(
+    client: &Client,
+    timeout: Option<Duration>,
+) -> Result<HashMap<XOnlyPublicKey, Metadata>, nostr_sdk::client::Error> {
+    let public_keys = client.get_contact_list_public_keys(timeout).await?;
+    let mut contacts: HashMap<XOnlyPublicKey, Metadata> =
+        public_keys.iter().map(|p| (*p, Metadata::new())).collect();
+
+    let chunk_size: usize = 10;
+    for chunk in public_keys.chunks(chunk_size) {
+        let mut filters: Vec<Filter> = Vec::new();
+        for public_key in chunk.iter() {
+            filters.push(
+                Filter::new()
+                    .author(public_key.to_string())
+                    .kind(Kind::Metadata)
+                    .limit(1),
+            );
+        }
+        let events: Vec<Event> = client.get_events_of(filters, timeout).await?;
+        for event in events.into_iter() {
+            // skip metadata we can't parse
+            if let Ok(metadata) = Metadata::from_json(&event.content) {
+                if let Some(m) = contacts.get_mut(&event.pubkey) {
+                    *m = metadata
+                };
+            }
+        }
+    }
+
+    Ok(contacts)
 }
 
 #[cfg(test)]
