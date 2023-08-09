@@ -48,7 +48,7 @@ pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 use crate::auth::MutinyAuthClient;
 use crate::labels::{Contact, LabelStorage};
 use crate::nostr::nwc::SpendingConditions;
-use crate::storage::{MutinyStorage, NEED_FULL_SYNC_KEY};
+use crate::storage::{MutinyStorage, DEVICE_ID_KEY, NEED_FULL_SYNC_KEY};
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{nostr::NostrManager, utils::sleep};
@@ -459,11 +459,13 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Backup the state beforehand. Does not restore lightning data.
     /// Should refresh or restart afterwards. Wallet should be stopped.
     pub async fn restore_mnemonic(mut storage: S, m: Mnemonic) -> Result<(), MutinyError> {
+        let device_id = storage.get_device_id()?;
         storage.stop();
         S::clear().await?;
         storage.start().await?;
         storage.insert_mnemonic(m)?;
         storage.set_data(NEED_FULL_SYNC_KEY, true, None)?;
+        storage.set_data(DEVICE_ID_KEY, device_id, None)?;
         Ok(())
     }
 }
