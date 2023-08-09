@@ -276,11 +276,13 @@ impl NostrWalletConnect {
                         .get_data(PENDING_NWC_EVENTS_KEY)?
                         .unwrap_or_default();
 
-                    current.push(pending);
+                    if !current.contains(&pending) {
+                        current.push(pending);
 
-                    node_manager
-                        .storage
-                        .set_data(PENDING_NWC_EVENTS_KEY, current, None)?;
+                        node_manager
+                            .storage
+                            .set_data(PENDING_NWC_EVENTS_KEY, current, None)?;
+                    }
 
                     return Ok((None, needs_save));
                 }
