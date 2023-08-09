@@ -59,6 +59,8 @@ use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::lnurl::LnUrl;
 use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
+use nostr::key::XOnlyPublicKey;
+use nostr::{EventBuilder, Keys, Kind, Tag, TagKind};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1638,6 +1640,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         from_node: &PublicKey,
         lnurl: &LnUrl,
         amount_sats: u64,
+        zap_npub: Option<XOnlyPublicKey>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let response = self.lnurl_client.make_request(&lnurl.url).await?;
@@ -1645,7 +1648,29 @@ impl<S: MutinyStorage> NodeManager<S> {
         match response {
             LnUrlResponse::LnUrlPayResponse(pay) => {
                 let msats = amount_sats * 1000;
-                let invoice = self.lnurl_client.get_invoice(&pay, msats, None).await?;
+
+                // if user's npub is given, do an anon zap
+                let zap_request = match zap_npub {
+                    Some(zap_npub) => {
+                        let tags = vec![
+                            Tag::PubKey(zap_npub, None),
+                            Tag::Amount(msats),
+                            Tag::Lnurl(lnurl.to_string()),
+                            Tag::Relays(vec!["wss://nostr.mutinywallet.com".into()]),
+                            Tag::Generic(TagKind::Custom("anon".to_string()), vec![]),
+                        ];
+                        EventBuilder::new(Kind::ZapRequest, "", &tags)
+                            .to_event(&Keys::generate())
+                            .ok()
+                            .map(|z| z.as_json())
+                    }
+                    None => None,
+                };
+
+                let invoice = self
+                    .lnurl_client
+                    .get_invoice(&pay, msats, zap_request)
+                    .await?;
 
                 self.pay_invoice(from_node, &invoice.invoice(), None, labels)
                     .await
