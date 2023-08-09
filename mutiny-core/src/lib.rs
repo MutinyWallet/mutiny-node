@@ -3,6 +3,7 @@
 #![allow(
     incomplete_features,
     clippy::extra_unused_type_parameters,
+    clippy::arc_with_non_send_sync,
     type_alias_bounds
 )]
 #![feature(io_error_other)]
