@@ -641,6 +641,7 @@ impl MutinyWallet {
         from_node: String,
         lnurl: String,
         amount_sats: u64,
+        zap_npub: Option<String>,
         labels: JsValue, /* Vec<String> */
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let from_node = PublicKey::from_str(&from_node)?;
@@ -648,10 +649,18 @@ impl MutinyWallet {
         let labels: Vec<String> = labels
             .into_serde()
             .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+
+        let zap_npub = match zap_npub.filter(|z| !z.is_empty()) {
+            Some(z) => {
+                Some(XOnlyPublicKey::from_bech32(&z).or_else(|_| XOnlyPublicKey::from_str(&z))?)
+            }
+            None => None,
+        };
+
         Ok(self
             .inner
             .node_manager
-            .lnurl_pay(&from_node, &lnurl, amount_sats, labels)
+            .lnurl_pay(&from_node, &lnurl, amount_sats, zap_npub, labels)
             .await?
             .into())
     }
