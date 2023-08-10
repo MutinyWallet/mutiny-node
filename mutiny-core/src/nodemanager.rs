@@ -1184,7 +1184,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                 log_warn!(self.logger, "Failed to get bdk history: {e}");
                 e
             })
-            .unwrap_or(vec![]);
+            .unwrap_or_default();
 
         let mut activity = Vec::with_capacity(lightning.len() + onchain.len());
         for ln in lightning {

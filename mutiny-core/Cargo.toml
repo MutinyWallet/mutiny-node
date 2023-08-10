@@ -50,7 +50,7 @@ log = "=0.4.18"
 futures = "0.3.25"
 thiserror = "1.0"
 anyhow = "1.0"
-miniscript = { version = "9.0.0", default-features = false, features = ["no-std"] }
+miniscript = { version = "9.0.2", default-features = false, features = ["no-std"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.33"
