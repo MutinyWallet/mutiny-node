@@ -1,6 +1,7 @@
 use crate::keymanager::PhantomKeysManager;
 use crate::labels::LabelStorage;
 use crate::ldkstorage::ChannelOpenParams;
+use crate::networking::socket::MutinySocketDescriptor;
 use crate::nodemanager::ChannelClosure;
 use crate::scb::StaticChannelBackup;
 use crate::{
@@ -21,6 +22,7 @@ use crate::{
 };
 
 use crate::scb::message_handler::SCBMessageHandler;
+use crate::messagehandler::MutinyMessageHandler;
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{lspclient::FeeRequest, storage::MutinyStorage};
 use anyhow::{anyhow, Context};
@@ -29,6 +31,7 @@ use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
 use bitcoin::secp256k1::rand;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, BlockHash, Network, OutPoint};
 use core::time::Duration;
+use ldk_lsp_client::LiquidityManager as LDKLSPLiquidityManager;
 use lightning::chain::channelmonitor::ChannelMonitor;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use lightning::{
@@ -90,7 +93,7 @@ pub(crate) type MessageHandler<S: MutinyStorage> = LdkMessageHandler<
     Arc<PhantomChannelManager<S>>,
     Arc<GossipMessageHandler<S>>,
     Arc<IgnoringMessageHandler>,
-    Arc<SCBMessageHandler>,
+    Arc<MutinyMessageHandler<S>>,
 >;
 
 pub(crate) type ChainMonitor<S: MutinyStorage> = chainmonitor::ChainMonitor<
@@ -111,6 +114,30 @@ pub(crate) type Router = DefaultRouter<
 >;
 
 pub(crate) type ProbScorer = ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>;
+
+pub type SimpleArcLiquidityManager<SD, M, T, F, L, S> = LDKLSPLiquidityManager<
+	Arc<PhantomKeysManager<S>>,
+	Arc<M>,
+	Arc<T>,
+	Arc<F>,
+	Arc<Router>,
+	Arc<PhantomKeysManager<S>>,
+	SD,
+	Arc<L>,
+	Arc<GossipMessageHandler<S>>,
+	Arc<PhantomChannelManager<S>>,
+	Arc<IgnoringMessageHandler>,
+	Arc<PhantomKeysManager<S>>,
+>;
+
+pub type LiquidityManager<S: MutinyStorage> = SimpleArcLiquidityManager<
+    MutinySocketDescriptor,
+	ChainMonitor<S>,
+	MutinyChain<S>,
+	MutinyFeeEstimator<S>,
+	MutinyLogger,
+    S
+>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConnectionType {
@@ -304,11 +331,20 @@ impl<S: MutinyStorage> Node<S> {
 
         // init peer manager
         let scb_message_handler = Arc::new(SCBMessageHandler::new());
+
+        let liquidity_manager = Arc::new(LiquidityManager::new(
+            keys_manager.clone(),
+            None,
+            channel_manager.clone(),
+        ));
+
+        let mutiny_message_handler = Arc::new(MutinyMessageHandler { scb: scb_message_handler.clone(), liquidity: liquidity_manager.clone() });
+
         let ln_msg_handler = MessageHandler {
             chan_handler: channel_manager.clone(),
             route_handler,
             onion_message_handler: Arc::new(IgnoringMessageHandler {}),
-            custom_message_handler: scb_message_handler.clone(),
+            custom_message_handler: mutiny_message_handler,
         };
 
         log_info!(logger, "creating lsp client");

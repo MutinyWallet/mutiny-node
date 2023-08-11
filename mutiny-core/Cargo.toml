@@ -41,6 +41,7 @@ aes = { version = "0.8" }
 jwt-compact = { version = "0.8.0-beta.1", features = ["es256k"] }
 argon2 = { version = "0.5.0", features = ["password-hash", "alloc"] }
 hashbrown = { version = "0.8" }
+ldk-lsp-client = { path = "/Users/johncantrell/Development/ldk-lsp" }
 
 base64 = "0.13.0"
 pbkdf2 = "0.11"
