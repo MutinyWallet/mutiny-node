@@ -48,7 +48,7 @@ pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
 use crate::auth::MutinyAuthClient;
 use crate::labels::{Contact, LabelStorage};
-use crate::nostr::nwc::SpendingConditions;
+use crate::nostr::nwc::{NwcProfileTag, SpendingConditions};
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, NEED_FULL_SYNC_KEY};
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
@@ -373,18 +373,30 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let profile_opt = nwc_profiles
             .iter()
             .find(|profile| profile.index == reserved_profile_index);
-        if profile_opt.is_none() {
-            // profile with the reserved index does not exist, create a new one
-            let profile = self
-                .nostr
-                .create_new_nwc_profile(
-                    ProfileType::Reserved(ReservedProfile::MutinySubscription),
-                    SpendingConditions::RequireApproval,
-                )
-                .await?;
-            // only should have to submit the NWC if never created locally before
-            subscription_client.submit_nwc(profile.nwc_uri).await?;
-        };
+
+        match profile_opt {
+            None => {
+                // profile with the reserved index does not exist, create a new one
+                let profile = self
+                    .nostr
+                    .create_new_nwc_profile(
+                        ProfileType::Reserved(ReservedProfile::MutinySubscription),
+                        SpendingConditions::RequireApproval,
+                        NwcProfileTag::Subscription,
+                    )
+                    .await?;
+                // only should have to submit the NWC if never created locally before
+                subscription_client.submit_nwc(profile.nwc_uri).await?;
+            }
+            Some(profile) => {
+                if profile.tag != NwcProfileTag::Subscription {
+                    let mut nwc = profile.clone();
+                    nwc.tag = NwcProfileTag::Subscription;
+                    self.nostr.edit_profile(nwc)?;
+                }
+            }
+        }
+
         Ok(())
     }
 

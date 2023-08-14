@@ -362,3 +362,15 @@ impl From<nostr_sdk::client::Error> for MutinyError {
         Self::NostrError
     }
 }
+
+impl From<nostr::nips::nip04::Error> for MutinyError {
+    fn from(_e: nostr::nips::nip04::Error) -> Self {
+        Self::NostrError
+    }
+}
+
+impl From<nostr::event::builder::Error> for MutinyError {
+    fn from(_e: nostr::event::builder::Error) -> Self {
+        Self::NostrError
+    }
+}

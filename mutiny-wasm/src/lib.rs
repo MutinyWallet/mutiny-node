@@ -30,7 +30,7 @@ use lightning_invoice::Bolt11Invoice;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::auth::MutinyAuthClient;
 use mutiny_core::lnurlauth::AuthManager;
-use mutiny_core::nostr::nwc::SpendingConditions;
+use mutiny_core::nostr::nwc::{NwcProfileTag, SpendingConditions};
 use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::redshift::RedshiftRecipient;
 use mutiny_core::scb::EncryptedSCB;
@@ -1084,7 +1084,12 @@ impl MutinyWallet {
     /// Get nostr wallet connect profiles
     #[wasm_bindgen]
     pub fn get_nwc_profiles(&self) -> Result<JsValue /* Vec<NwcProfile> */, MutinyJsError> {
-        Ok(JsValue::from_serde(&self.inner.nostr.profiles())?)
+        let profiles = self.inner.nostr.profiles();
+        let p = profiles
+            .into_iter()
+            .map(models::NwcProfile::from)
+            .collect::<Vec<_>>();
+        Ok(JsValue::from_serde(&p)?)
     }
 
     /// Create a nostr wallet connect profile
@@ -1096,7 +1101,11 @@ impl MutinyWallet {
         Ok(self
             .inner
             .nostr
-            .create_new_nwc_profile(ProfileType::Normal { name }, SpendingConditions::default())
+            .create_new_nwc_profile(
+                ProfileType::Normal { name },
+                SpendingConditions::default(),
+                NwcProfileTag::General,
+            )
             .await?
             .into())
     }
@@ -1135,14 +1144,13 @@ impl MutinyWallet {
         &self,
         amount_sats: u64,
         nwc_uri: String,
-    ) -> Result<String, MutinyJsError> {
+    ) -> Result<Option<String>, MutinyJsError> {
         Ok(self
             .inner
             .nostr
             .claim_single_use_nwc(amount_sats, &nwc_uri, self.inner.node_manager.as_ref())
-            .await
-            .map_err(|_| MutinyJsError::UnknownError)?
-            .to_hex())
+            .await?
+            .map(|r| r.message))
     }
 
     /// Get nostr wallet connect URI
