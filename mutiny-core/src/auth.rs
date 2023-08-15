@@ -116,7 +116,7 @@ impl MutinyAuthClient {
         };
         url.set_scheme(ws_scheme)
             .map_err(|_| MutinyError::LnUrlFailure)?;
-        url.set_path("/v1/lnurlAuth");
+        url.set_path("/v2/lnurlAuth");
 
         let mut ws = WebSocketImpl::new(url.to_string()).await.map_err(|e| {
             log_error!(self.logger, "Error starting up auth ws: {e}");
