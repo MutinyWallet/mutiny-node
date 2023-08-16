@@ -484,7 +484,7 @@ impl From<nodemanager::MutinyBip21RawMaterials> for MutinyBip21RawMaterials {
     fn from(m: nodemanager::MutinyBip21RawMaterials) -> Self {
         MutinyBip21RawMaterials {
             address: m.address.to_string(),
-            invoice: Some(m.invoice.to_string()),
+            invoice: m.invoice.map(|i| i.to_string()),
             btc_amount: m.btc_amount,
             labels: m.labels,
         }
