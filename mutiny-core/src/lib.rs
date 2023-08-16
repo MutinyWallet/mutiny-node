@@ -24,7 +24,7 @@ pub mod labels;
 mod ldkstorage;
 pub mod lnurlauth;
 pub mod logging;
-mod lspclient;
+mod lsp;
 mod messagehandler;
 mod multiesplora;
 mod networking;
@@ -78,6 +78,8 @@ pub struct MutinyWalletConfig {
     user_esplora_url: Option<String>,
     user_rgs_url: Option<String>,
     lsp_url: Option<String>,
+    lsp_connection_string: Option<String>,
+    lsp_token: Option<String>,
     auth_client: Option<Arc<MutinyAuthClient>>,
     subscription_url: Option<String>,
     scorer_url: Option<String>,
@@ -94,6 +96,8 @@ impl MutinyWalletConfig {
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
+        lsp_connection_string: Option<String>,
+        lsp_token: Option<String>,
         auth_client: Option<Arc<MutinyAuthClient>>,
         subscription_url: Option<String>,
         scorer_url: Option<String>,
@@ -108,6 +112,8 @@ impl MutinyWalletConfig {
             user_rgs_url,
             scorer_url,
             lsp_url,
+            lsp_connection_string,
+            lsp_token,
             auth_client,
             subscription_url,
             do_not_connect_peers: false,
@@ -532,6 +538,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
             false,
         );
         let mw = MutinyWallet::new(storage.clone(), config)
@@ -556,6 +564,8 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Regtest,
+            None,
+            None,
             None,
             None,
             None,
@@ -592,6 +602,8 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Regtest,
+            None,
+            None,
             None,
             None,
             None,
@@ -635,6 +647,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
             false,
         );
         let mw = MutinyWallet::new(storage.clone(), config)
@@ -654,6 +668,8 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Regtest,
+            None,
+            None,
             None,
             None,
             None,

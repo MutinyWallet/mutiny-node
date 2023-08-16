@@ -1,14 +1,14 @@
 pack:
-    wasm-pack build ./mutiny-wasm --dev --target web --scope mutinywallet
+    wasm-pack build ./mutiny-wasm --dev --target web --scope johncantrell97
 
 link:
-    wasm-pack build ./mutiny-wasm --dev --target web --scope mutinywallet && cd mutiny-wasm/pkg && pnpm link --global
+    wasm-pack build ./mutiny-wasm --dev --target web --scope johncantrell97 && cd mutiny-wasm/pkg && pnpm link --global
 
 login:
-    wasm-pack login --scope=@mutinywallet
+    wasm-pack login --scope=@johncantrell97
 
 release:
-    wasm-pack build ./mutiny-wasm --release --target web --scope mutinywallet
+    wasm-pack build ./mutiny-wasm --release --target web --scope johncantrell97
 
 publish:
     wasm-pack publish --access public -t web

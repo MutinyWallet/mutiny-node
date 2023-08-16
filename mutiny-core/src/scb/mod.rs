@@ -210,6 +210,8 @@ mod test {
     use bitcoin::hashes::hex::FromHex;
     use std::str::FromStr;
 
+    use crate::lsp::LspConfig;
+
     use super::*;
 
     // copied from ben's signet node
@@ -580,7 +582,7 @@ mod test {
 
         let node_index = NodeIndex {
             child_index: 0,
-            lsp: Some("https://signet-lsp.mutinywallet.com".to_string()),
+            lsp: Some(LspConfig::Voltage("https://signet-lsp.mutinywallet.com".to_string())),
             archived: Some(false),
         };
 
@@ -622,7 +624,7 @@ mod test {
 
         let node_index = NodeIndex {
             child_index: 0,
-            lsp: Some("https://signet-lsp.mutinywallet.com".to_string()),
+            lsp: Some(LspConfig::Voltage("https://signet-lsp.mutinywallet.com".to_string())),
             archived: Some(false),
         };
 

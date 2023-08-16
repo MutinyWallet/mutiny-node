@@ -3,9 +3,12 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::{error::MutinyError, utils};
+use async_trait::async_trait;
+
+use super::{Lsp, FeeRequest, InvoiceRequest};
 
 #[derive(Clone, Debug)]
-pub(crate) struct LspClient {
+pub struct LspClient {
     pub pubkey: PublicKey,
     pub connection_string: String,
     pub url: String,
@@ -50,12 +53,6 @@ pub struct ProposalRequest {
 #[derive(Serialize, Deserialize)]
 pub struct ProposalResponse {
     pub jit_bolt11: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct FeeRequest {
-    pub pubkey: String,
-    pub amount_msat: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -121,8 +118,33 @@ impl LspClient {
             http_client,
         })
     }
+}
 
-    pub(crate) async fn get_lsp_invoice(&self, bolt11: String) -> Result<String, MutinyError> {
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+impl Lsp for LspClient {
+
+    async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> Result<u64, MutinyError> {
+        let request = self
+            .http_client
+            .post(format!("{}{}", &self.url, FEE_PATH))
+            .json(&fee_request)
+            .build()
+            .map_err(|_| MutinyError::LspGenericError)?;
+        let response: reqwest::Response =
+            utils::fetch_with_timeout(&self.http_client, request).await?;
+
+        let fee_response: FeeResponse = response
+            .json()
+            .await
+            .map_err(|_| MutinyError::LspGenericError)?;
+
+        Ok(fee_response.fee_amount_msat)
+    }
+
+    async fn get_lsp_invoice(&self, invoice_request: InvoiceRequest) -> Result<String, MutinyError> {
+        let bolt11 = invoice_request.bolt11.ok_or(MutinyError::LspGenericError)?;
+
         let payload = ProposalRequest {
             bolt11,
             host: None,
@@ -165,28 +187,15 @@ impl LspClient {
                 }
             }
         }
-
         Err(MutinyError::LspGenericError)
     }
 
-    pub(crate) async fn get_lsp_fee_msat(
-        &self,
-        fee_request: FeeRequest,
-    ) -> Result<u64, MutinyError> {
-        let request = self
-            .http_client
-            .post(format!("{}{}", &self.url, FEE_PATH))
-            .json(&fee_request)
-            .build()
-            .map_err(|_| MutinyError::LspGenericError)?;
-        let response: reqwest::Response =
-            utils::fetch_with_timeout(&self.http_client, request).await?;
+    
+    fn get_lsp_pubkey(&self) -> PublicKey {
+        self.pubkey.clone()
+    }
 
-        let fee_response: FeeResponse = response
-            .json()
-            .await
-            .map_err(|_| MutinyError::LspGenericError)?;
-
-        Ok(fee_response.fee_amount_msat)
+    fn get_lsp_connection_string(&self) -> String {
+        self.connection_string.clone()
     }
 }

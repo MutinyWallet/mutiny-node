@@ -323,7 +323,7 @@ pub(crate) async fn connect_peer_if_necessary<S: MutinyStorage>(
         // first check to see if the fee rate is mostly up to date
         // if not, we need to have updated fees or force closures
         // could occur due to UpdateFee message conflicts.
-        fee_estimator.update_fee_estimates_if_necessary().await?;
+        // fee_estimator.update_fee_estimates_if_necessary().await?;
 
         connect_peer(
             #[cfg(target_arch = "wasm32")]
