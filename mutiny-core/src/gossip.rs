@@ -241,12 +241,13 @@ async fn fetch_updated_gossip(
     let http_client = Client::builder()
         .build()
         .map_err(|_| MutinyError::RapidGossipSyncError)?;
-    let rgs_response = http_client
-        .get(rgs_url)
-        .send()
-        .await
+
+    let request = http_client
+        .get(&rgs_url)
+        .build()
         .map_err(|_| MutinyError::RapidGossipSyncError)?;
 
+    let rgs_response = utils::fetch_with_timeout(&http_client, request).await?;
     let rgs_data = rgs_response
         .bytes()
         .await

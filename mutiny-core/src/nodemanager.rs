@@ -2262,12 +2262,12 @@ impl<S: MutinyStorage> NodeManager<S> {
             .build()
             .map_err(|_| MutinyError::BitcoinPriceError)?;
 
-        let resp = client
+        let request = client
             .get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd")
-            .send()
-            .await
+            .build()
             .map_err(|_| MutinyError::BitcoinPriceError)?;
 
+        let resp: reqwest::Response = utils::fetch_with_timeout(&client, request).await?;
         let response: CoingeckoResponse = resp
             .error_for_status()
             .map_err(|_| MutinyError::BitcoinPriceError)?
