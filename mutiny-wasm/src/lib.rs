@@ -83,8 +83,10 @@ impl MutinyWallet {
         scorer_url: Option<String>,
         do_not_connect_peers: Option<bool>,
         skip_device_lock: Option<bool>,
+        safe_mode: Option<bool>,
     ) -> Result<MutinyWallet, MutinyJsError> {
         utils::set_panic_hook();
+        let safe_mode = safe_mode.unwrap_or(false);
         let logger = Arc::new(MutinyLogger::default());
 
         let cipher = password
@@ -121,7 +123,9 @@ impl MutinyWallet {
         let seed = mnemonic.to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(network, &seed).unwrap();
 
-        let (auth_client, vss_client) = if let Some(auth_url) = auth_url.clone() {
+        let (auth_client, vss_client) = if safe_mode {
+            (None, None)
+        } else if let Some(auth_url) = auth_url.clone() {
             let auth_manager = AuthManager::new(xprivkey).unwrap();
 
             let lnurl_client = Arc::new(
@@ -170,8 +174,16 @@ impl MutinyWallet {
             config = config.with_do_not_connect_peers();
         }
 
+        if safe_mode {
+            config = config.with_safe_mode();
+        }
+
         let inner = mutiny_core::MutinyWallet::new(storage, config).await?;
         Ok(MutinyWallet { mnemonic, inner })
+    }
+
+    pub fn is_safe_mode(&self) -> bool {
+        self.inner.config.safe_mode
     }
 
     /// Returns if there is a saved wallet in storage.
@@ -1366,6 +1378,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1390,6 +1403,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1426,6 +1440,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,

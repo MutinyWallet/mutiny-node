@@ -159,7 +159,7 @@ pub struct NodeIdentity {
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct MutinyBip21RawMaterials {
     pub address: Address,
-    pub invoice: Bolt11Invoice,
+    pub invoice: Option<Bolt11Invoice>,
     pub btc_amount: Option<String>,
     pub labels: Vec<String>,
 }
@@ -539,6 +539,7 @@ pub struct NodeManager<S: MutinyStorage> {
     pub(crate) logger: Arc<MutinyLogger>,
     bitcoin_price_cache: Arc<Mutex<Option<(f32, Duration)>>>,
     do_not_connect_peers: bool,
+    pub safe_mode: bool,
 }
 
 impl<S: MutinyStorage> NodeManager<S> {
@@ -634,7 +635,8 @@ impl<S: MutinyStorage> NodeManager<S> {
         // load lsp clients, if any
         let lsp_clients: Vec<LspClient> = match c.lsp_url.clone() {
             // check if string is some and not an empty string
-            Some(lsp_urls) if !lsp_urls.is_empty() => {
+            // and safe_mode is not enabled
+            Some(lsp_urls) if !lsp_urls.is_empty() && !c.safe_mode => {
                 let urls: Vec<&str> = lsp_urls.split(',').collect();
 
                 let futs = urls.into_iter().map(|url| LspClient::new(url.trim()));
@@ -657,63 +659,69 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let node_storage = storage.get_nodes()?;
 
-        // Remove the archived nodes, we don't need to start them up.
-        let unarchived_nodes = node_storage
-            .clone()
-            .nodes
-            .into_iter()
-            .filter(|(_, n)| !n.is_archived());
+        let nodes = if c.safe_mode {
+            // If safe mode is enabled, we don't start any nodes
+            log_warn!(logger, "Safe mode enabled, not starting any nodes");
+            Arc::new(Mutex::new(HashMap::new()))
+        } else {
+            // Remove the archived nodes, we don't need to start them up.
+            let unarchived_nodes = node_storage
+                .clone()
+                .nodes
+                .into_iter()
+                .filter(|(_, n)| !n.is_archived());
 
-        let mut nodes_map = HashMap::new();
+            let mut nodes_map = HashMap::new();
 
-        for node_item in unarchived_nodes {
-            let node = Node::new(
-                node_item.0,
-                &node_item.1,
-                c.xprivkey,
-                storage.clone(),
-                gossip_sync.clone(),
-                scorer.clone(),
-                chain.clone(),
-                fee_estimator.clone(),
-                wallet.clone(),
-                c.network,
-                &esplora,
-                &lsp_clients,
-                logger.clone(),
-                c.do_not_connect_peers,
-                false,
-                #[cfg(target_arch = "wasm32")]
-                websocket_proxy_addr.clone(),
-            )
-            .await?;
+            for node_item in unarchived_nodes {
+                let node = Node::new(
+                    node_item.0,
+                    &node_item.1,
+                    c.xprivkey,
+                    storage.clone(),
+                    gossip_sync.clone(),
+                    scorer.clone(),
+                    chain.clone(),
+                    fee_estimator.clone(),
+                    wallet.clone(),
+                    c.network,
+                    &esplora,
+                    &lsp_clients,
+                    logger.clone(),
+                    c.do_not_connect_peers,
+                    false,
+                    #[cfg(target_arch = "wasm32")]
+                    websocket_proxy_addr.clone(),
+                )
+                .await?;
 
-            let id = node
-                .keys_manager
-                .get_node_id(Recipient::Node)
-                .expect("Failed to get node id");
+                let id = node
+                    .keys_manager
+                    .get_node_id(Recipient::Node)
+                    .expect("Failed to get node id");
 
-            nodes_map.insert(id, Arc::new(node));
-        }
+                nodes_map.insert(id, Arc::new(node));
+            }
 
-        // when we create the nodes we set the LSP if one is missing
-        // we need to save it to local storage after startup in case
-        // a LSP was set.
-        let updated_nodes: HashMap<String, NodeIndex> = nodes_map
-            .values()
-            .map(|n| (n._uuid.clone(), n.node_index()))
-            .collect();
+            // when we create the nodes we set the LSP if one is missing
+            // we need to save it to local storage after startup in case
+            // a LSP was set.
+            let updated_nodes: HashMap<String, NodeIndex> = nodes_map
+                .values()
+                .map(|n| (n._uuid.clone(), n.node_index()))
+                .collect();
 
-        log_info!(logger, "inserting updated nodes");
+            log_info!(logger, "inserting updated nodes");
 
-        storage.insert_nodes(NodeStorage {
-            nodes: updated_nodes,
-            version: node_storage.version + 1,
-        })?;
+            storage.insert_nodes(NodeStorage {
+                nodes: updated_nodes,
+                version: node_storage.version + 1,
+            })?;
 
-        log_info!(logger, "inserted updated nodes");
+            log_info!(logger, "inserted updated nodes");
 
-        let nodes = Arc::new(Mutex::new(nodes_map));
+            Arc::new(Mutex::new(nodes_map))
+        };
 
         let lnurl_client = Arc::new(
             lnurl::Builder::default()
@@ -760,6 +768,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             logger,
             bitcoin_price_cache: Arc::new(Mutex::new(None)),
             do_not_connect_peers: c.do_not_connect_peers,
+            safe_mode: c.safe_mode,
         };
 
         Ok(nm)
@@ -988,19 +997,21 @@ impl<S: MutinyStorage> NodeManager<S> {
         amount: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyBip21RawMaterials, MutinyError> {
-        let invoice = self.create_invoice(amount, labels.clone()).await?;
+        // If we are in safe mode, we don't create invoices
+        let invoice = if self.safe_mode {
+            None
+        } else {
+            let inv = self.create_invoice(amount, labels.clone()).await?;
+            Some(inv.bolt11.ok_or(MutinyError::WalletOperationFailed)?)
+        };
 
         let Ok(address) = self.get_new_address(labels.clone()) else {
             return Err(MutinyError::WalletOperationFailed);
         };
 
-        let Some(bolt11) = invoice.bolt11 else {
-            return Err(MutinyError::WalletOperationFailed);
-        };
-
         Ok(MutinyBip21RawMaterials {
             address,
-            invoice: bolt11,
+            invoice,
             btc_amount: amount.map(|amount| bitcoin::Amount::from_sat(amount).to_btc().to_string()),
             labels,
         })
@@ -1349,7 +1360,10 @@ impl<S: MutinyStorage> NodeManager<S> {
         // to addresses that are in our bdk wallet. This way
         // they are found on this iteration of syncing instead
         // of the next one.
-        if let Err(e) = self.sync_ldk().await {
+        // Skip if we are in safe mode.
+        if self.safe_mode {
+            log_info!(self.logger, "Skipping ldk sync in safe mode");
+        } else if let Err(e) = self.sync_ldk().await {
             log_error!(self.logger, "Failed to sync ldk: {e}");
             return Err(e);
         }
@@ -1380,6 +1394,10 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Creates a new lightning node and adds it to the manager.
     pub async fn new_node(&self) -> Result<NodeIdentity, MutinyError> {
+        if self.safe_mode {
+            return Err(MutinyError::NotRunning);
+        }
+
         create_new_node_from_node_manager(self).await
     }
 
@@ -2571,6 +2589,42 @@ mod tests {
             let retrieved_node = node_storage.nodes.get(&node_identity.uuid).unwrap();
             assert_eq!(1, retrieved_node.child_index);
         }
+    }
+
+    #[test]
+    async fn safe_mode_tests() {
+        let test_name = "safe_mode_tests";
+        log!("{}", test_name);
+
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
+        let seed = generate_seed(12).expect("Failed to gen seed");
+        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
+        let c = MutinyWalletConfig::new(
+            xpriv,
+            #[cfg(target_arch = "wasm32")]
+            None,
+            Network::Regtest,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
+        let c = c.with_safe_mode();
+
+        let nm = NodeManager::new(c, storage)
+            .await
+            .expect("node manager should initialize");
+
+        let bip21 = nm.create_bip21(None, vec![]).await.unwrap();
+        assert!(bip21.invoice.is_none());
+
+        let new_node = nm.new_node().await;
+        assert!(new_node.is_err());
     }
 
     #[test]

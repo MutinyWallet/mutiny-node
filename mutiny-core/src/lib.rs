@@ -82,6 +82,7 @@ pub struct MutinyWalletConfig {
     scorer_url: Option<String>,
     do_not_connect_peers: bool,
     skip_device_lock: bool,
+    pub safe_mode: bool,
 }
 
 impl MutinyWalletConfig {
@@ -111,12 +112,18 @@ impl MutinyWalletConfig {
             subscription_url,
             do_not_connect_peers: false,
             skip_device_lock,
+            safe_mode: false,
         }
     }
 
     pub fn with_do_not_connect_peers(mut self) -> Self {
         self.do_not_connect_peers = true;
         self
+    }
+
+    pub fn with_safe_mode(mut self) -> Self {
+        self.safe_mode = true;
+        self.with_do_not_connect_peers()
     }
 }
 
@@ -125,7 +132,7 @@ impl MutinyWalletConfig {
 /// It contains the NodeManager, which is the main interface to manage the
 /// bitcoin and the lightning functionality.
 pub struct MutinyWallet<S: MutinyStorage> {
-    config: MutinyWalletConfig,
+    pub config: MutinyWalletConfig,
     pub storage: S,
     pub node_manager: Arc<NodeManager<S>>,
     pub nostr: Arc<NostrManager<S>>,
@@ -137,14 +144,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         config: MutinyWalletConfig,
     ) -> Result<MutinyWallet<S>, MutinyError> {
         let node_manager = Arc::new(NodeManager::new(config.clone(), storage.clone()).await?);
-
-        // if we don't have any nodes, create one
-        let first_node = {
-            match node_manager.list_nodes().await?.pop() {
-                Some(node) => node,
-                None => node_manager.new_node().await?.pubkey,
-            }
-        };
 
         NodeManager::start_sync(node_manager.clone());
 
@@ -161,9 +160,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             nostr,
         };
 
-        // start the nostr wallet connect background process
-        mw.start_nostr_wallet_connect(first_node).await;
-
         #[cfg(not(test))]
         {
             // if we need a full sync from a restore
@@ -172,6 +168,23 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 mw.storage.delete(&[NEED_FULL_SYNC_KEY])?;
             }
         }
+
+        // if we are in safe mode, don't create any nodes or
+        // start any nostr services
+        if mw.config.safe_mode {
+            return Ok(mw);
+        }
+
+        // if we don't have any nodes, create one
+        let first_node = {
+            match mw.node_manager.list_nodes().await?.pop() {
+                Some(node) => node,
+                None => mw.node_manager.new_node().await?.pubkey,
+            }
+        };
+
+        // start the nostr wallet connect background process
+        mw.start_nostr_wallet_connect(first_node).await;
 
         Ok(mw)
     }
@@ -183,7 +196,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         self.node_manager =
             Arc::new(NodeManager::new(self.config.clone(), self.storage.clone()).await?);
         NodeManager::start_sync(self.node_manager.clone());
-        NodeManager::start_redshifts(self.node_manager.clone());
+
+        // Redshifts disabled in safe mode
+        if !self.config.safe_mode {
+            NodeManager::start_redshifts(self.node_manager.clone());
+        }
+
         Ok(())
     }
 
