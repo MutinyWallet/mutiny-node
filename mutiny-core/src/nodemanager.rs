@@ -1394,6 +1394,10 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Creates a new lightning node and adds it to the manager.
     pub async fn new_node(&self) -> Result<NodeIdentity, MutinyError> {
+        if self.safe_mode {
+            return Err(MutinyError::NotRunning);
+        }
+
         create_new_node_from_node_manager(self).await
     }
 
@@ -2585,6 +2589,42 @@ mod tests {
             let retrieved_node = node_storage.nodes.get(&node_identity.uuid).unwrap();
             assert_eq!(1, retrieved_node.child_index);
         }
+    }
+
+    #[test]
+    async fn safe_mode_tests() {
+        let test_name = "safe_mode_tests";
+        log!("{}", test_name);
+
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
+        let seed = generate_seed(12).expect("Failed to gen seed");
+        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
+        let c = MutinyWalletConfig::new(
+            xpriv,
+            #[cfg(target_arch = "wasm32")]
+            None,
+            Network::Regtest,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
+        let c = c.with_safe_mode();
+
+        let nm = NodeManager::new(c, storage)
+            .await
+            .expect("node manager should initialize");
+
+        let bip21 = nm.create_bip21(None, vec![]).await.unwrap();
+        assert!(bip21.invoice.is_none());
+
+        let new_node = nm.new_node().await;
+        assert!(new_node.is_err());
     }
 
     #[test]
