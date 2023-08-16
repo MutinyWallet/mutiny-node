@@ -255,36 +255,42 @@ impl IndexedDbStorage {
 
         match kv.key.as_str() {
             NODES_KEY => {
-                let obj = vss.get_object(&kv.key).await?;
                 // we can get version from node storage, so we should compare
                 match current.get_data::<NodeStorage>(&kv.key)? {
-                    Some(versioned) => {
-                        if versioned.version <= kv.version
-                            && serde_json::from_value::<NodeStorage>(obj.value.clone()).is_ok()
-                        {
-                            return Ok(Some((kv.key, obj.value)));
+                    Some(local) => {
+                        if local.version < kv.version {
+                            let obj = vss.get_object(&kv.key).await?;
+                            if serde_json::from_value::<NodeStorage>(obj.value.clone()).is_ok() {
+                                return Ok(Some((kv.key, obj.value)));
+                            }
                         }
                     }
-                    None => return Ok(Some((kv.key, obj.value))),
+                    None => {
+                        let obj = vss.get_object(&kv.key).await?;
+                        return Ok(Some((kv.key, obj.value)));
+                    }
                 }
             }
             DEVICE_LOCK_KEY => {
-                let obj = vss.get_object(&kv.key).await?;
                 // we can get version from device lock, so we should compare
                 match current.get_data::<DeviceLock>(&kv.key)? {
-                    Some(versioned) => {
-                        if versioned.time <= kv.version
-                            && serde_json::from_value::<DeviceLock>(obj.value.clone()).is_ok()
-                        {
-                            return Ok(Some((kv.key, obj.value)));
+                    Some(lock) => {
+                        // we use time as version for device lock
+                        if lock.time < kv.version {
+                            let obj = vss.get_object(&kv.key).await?;
+                            if serde_json::from_value::<DeviceLock>(obj.value.clone()).is_ok() {
+                                return Ok(Some((kv.key, obj.value)));
+                            }
                         }
                     }
-                    None => return Ok(Some((kv.key, obj.value))),
+                    None => {
+                        let obj = vss.get_object(&kv.key).await?;
+                        return Ok(Some((kv.key, obj.value)));
+                    }
                 }
             }
             key => {
                 if key.starts_with(MONITORS_PREFIX_KEY) {
-                    let obj = vss.get_object(&kv.key).await?;
                     // we can get versions from monitors, so we should compare
                     match current.get::<Vec<u8>>(&kv.key)? {
                         Some(bytes) => {
@@ -293,24 +299,30 @@ impl IndexedDbStorage {
                                 u64::from_be_bytes(bytes[1..9].try_into().unwrap());
                             // if the current version is less than the version from vss, then we want to use the vss version
                             if current_version < kv.version as u64 {
-                                return Ok(Some((kv.key, obj.value)));
-                            }
-                        }
-                        None => return Ok(Some((kv.key, obj.value))),
-                    }
-                } else if key.starts_with(CHANNEL_MANAGER_KEY) {
-                    let obj = vss.get_object(&kv.key).await?;
-                    // we can get versions from channel manager, so we should compare
-                    match current.get_data::<VersionedValue>(&kv.key)? {
-                        Some(versioned) => {
-                            if versioned.version <= kv.version
-                                && serde_json::from_value::<VersionedValue>(obj.value.clone())
-                                    .is_ok()
-                            {
+                                let obj = vss.get_object(&kv.key).await?;
                                 return Ok(Some((kv.key, obj.value)));
                             }
                         }
                         None => {
+                            let obj = vss.get_object(&kv.key).await?;
+                            return Ok(Some((kv.key, obj.value)));
+                        }
+                    }
+                } else if key.starts_with(CHANNEL_MANAGER_KEY) {
+                    // we can get versions from channel manager, so we should compare
+                    match current.get_data::<VersionedValue>(&kv.key)? {
+                        Some(local) => {
+                            if local.version < kv.version {
+                                let obj = vss.get_object(&kv.key).await?;
+                                if serde_json::from_value::<VersionedValue>(obj.value.clone())
+                                    .is_ok()
+                                {
+                                    return Ok(Some((kv.key, obj.value)));
+                                }
+                            }
+                        }
+                        None => {
+                            let obj = vss.get_object(&kv.key).await?;
                             if serde_json::from_value::<VersionedValue>(obj.value.clone()).is_ok() {
                                 return Ok(Some((kv.key, obj.value)));
                             }
