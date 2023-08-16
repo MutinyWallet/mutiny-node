@@ -2,7 +2,7 @@ use bitcoin::secp256k1::PublicKey;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use crate::error::MutinyError;
+use crate::{error::MutinyError, utils};
 
 #[derive(Clone, Debug)]
 pub(crate) struct LspClient {
@@ -76,11 +76,13 @@ const FEE_PATH: &str = "/api/v1/fee";
 impl LspClient {
     pub async fn new(url: &str) -> Result<Self, MutinyError> {
         let http_client = Client::new();
-        let get_info_response: GetInfoResponse = http_client
+        let request = http_client
             .get(format!("{}{}", url, GET_INFO_PATH))
-            .send()
-            .await
-            .map_err(|_| MutinyError::LspGenericError)?
+            .build()
+            .map_err(|_| MutinyError::LspGenericError)?;
+        let response: reqwest::Response = utils::fetch_with_timeout(&http_client, request).await?;
+
+        let get_info_response: GetInfoResponse = response
             .json()
             .await
             .map_err(|_| MutinyError::LspGenericError)?;
@@ -127,14 +129,15 @@ impl LspClient {
             port: None,
         };
 
-        let response: reqwest::Response = self
+        let request = self
             .http_client
             .post(format!("{}{}", &self.url, PROPOSAL_PATH))
             .json(&payload)
-            .send()
-            .await
+            .build()
             .map_err(|_| MutinyError::LspGenericError)?;
 
+        let response: reqwest::Response =
+            utils::fetch_with_timeout(&self.http_client, request).await?;
         let status = response.status().as_u16();
         if (200..300).contains(&status) {
             let proposal_response: ProposalResponse = response
@@ -170,13 +173,16 @@ impl LspClient {
         &self,
         fee_request: FeeRequest,
     ) -> Result<u64, MutinyError> {
-        let fee_response: FeeResponse = self
+        let request = self
             .http_client
             .post(format!("{}{}", &self.url, FEE_PATH))
             .json(&fee_request)
-            .send()
-            .await
-            .map_err(|_| MutinyError::LspGenericError)?
+            .build()
+            .map_err(|_| MutinyError::LspGenericError)?;
+        let response: reqwest::Response =
+            utils::fetch_with_timeout(&self.http_client, request).await?;
+
+        let fee_response: FeeResponse = response
             .json()
             .await
             .map_err(|_| MutinyError::LspGenericError)?;

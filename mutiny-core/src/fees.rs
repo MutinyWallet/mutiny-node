@@ -87,15 +87,15 @@ struct MempoolFees {
 
 impl<S: MutinyStorage> MutinyFeeEstimator<S> {
     async fn get_mempool_recommended_fees(&self) -> anyhow::Result<HashMap<String, f64>> {
-        let fees = self
-            .esplora
-            .client()
-            .get(&format!("{}/v1/fees/recommended", self.esplora.url()))
-            .send()
+        let client = self.esplora.client();
+        let request = client
+            .get(format!("{}/v1/fees/recommended", self.esplora.url()))
+            .build()?;
+
+        let fees_response = utils::fetch_with_timeout(&client, request)
             .await?
-            .error_for_status()?
-            .json::<MempoolFees>()
-            .await?;
+            .error_for_status()?;
+        let fees = fees_response.json::<MempoolFees>().await?;
 
         // convert to hashmap of num blocks -> fee rate
         let mut fee_estimates = HashMap::new();

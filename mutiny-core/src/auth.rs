@@ -4,6 +4,7 @@ use crate::{
     lnurlauth::{make_lnurl_auth_connection, AuthManager},
     logging::MutinyLogger,
     networking::websocket::{SimpleWebSocket, WebSocketImpl},
+    utils,
 };
 use jwt_compact::UntrustedToken;
 use lightning::util::logger::*;
@@ -101,10 +102,11 @@ impl MutinyAuthClient {
             request = request.json(&json);
         }
 
-        request
-            .send()
-            .await
-            .map_err(|_| MutinyError::ConnectionFailed)
+        utils::fetch_with_timeout(
+            &self.http_client,
+            request.build().expect("should build req"),
+        )
+        .await
     }
 
     async fn retrieve_new_jwt(&self) -> Result<String, MutinyError> {
