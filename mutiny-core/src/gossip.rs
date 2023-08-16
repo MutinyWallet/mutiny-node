@@ -138,7 +138,6 @@ fn write_gossip_data(
 
 pub async fn get_gossip_sync(
     storage: &impl MutinyStorage,
-    user_rgs_url: Option<String>,
     remote_scorer_url: Option<String>,
     auth_client: Option<Arc<MutinyAuthClient>>,
     network: Network,
@@ -204,33 +203,10 @@ pub async fn get_gossip_sync(
         }
     };
 
-    if let Some(rgs_url) = get_rgs_url(network, user_rgs_url, Some(gossip_data.last_sync_timestamp))
-    {
-        log_info!(&logger, "RGS URL: {}", rgs_url);
-
-        let now = utils::now().as_secs();
-        let fetch_result = fetch_updated_gossip(
-            rgs_url,
-            now,
-            gossip_data.last_sync_timestamp,
-            &gossip_sync,
-            storage,
-            &logger,
-        )
-        .await;
-
-        if fetch_result.is_err() {
-            log_warn!(
-                logger,
-                "Failed to fetch updated gossip, using default gossip data"
-            );
-        }
-    }
-
     Ok((gossip_sync, prob_scorer))
 }
 
-async fn fetch_updated_gossip(
+pub(crate) async fn fetch_updated_gossip(
     rgs_url: String,
     now: u64,
     last_sync_timestamp: u32,
@@ -487,12 +463,12 @@ pub(crate) fn save_ln_peer_info(
 
 pub(crate) fn get_rgs_url(
     network: Network,
-    user_provided_url: Option<String>,
+    user_provided_url: &Option<String>,
     last_sync_time: Option<u32>,
 ) -> Option<String> {
     let last_sync_time = last_sync_time.unwrap_or(0);
-    if let Some(url) = user_provided_url.filter(|url| !url.is_empty()) {
-        let url = url.strip_suffix('/').unwrap_or(&url);
+    if let Some(url) = user_provided_url.as_ref().filter(|url| !url.is_empty()) {
+        let url = url.strip_suffix('/').unwrap_or(url);
         Some(format!("{url}/{last_sync_time}"))
     } else {
         match network {
@@ -576,10 +552,9 @@ mod test {
         let storage = MemoryStorage::default();
 
         let logger = Arc::new(MutinyLogger::default());
-        let _gossip_sync =
-            get_gossip_sync(&storage, None, None, None, Network::Regtest, logger.clone())
-                .await
-                .unwrap();
+        let _gossip_sync = get_gossip_sync(&storage, None, None, Network::Regtest, logger.clone())
+            .await
+            .unwrap();
 
         let data = get_gossip_data(&storage, logger).await.unwrap();
 
