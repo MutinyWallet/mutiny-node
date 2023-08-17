@@ -51,6 +51,10 @@ pub(crate) struct Profile {
     /// Require approval before sending a payment
     #[serde(default)]
     pub spending_conditions: SpendingConditions,
+    /// index to use to derive nostr keys for child index
+    /// set to Option so that we keep using `index` for reserved + existing
+    #[serde(default)]
+    pub child_key_index: Option<u32>,
 }
 
 impl PartialOrd for Profile {
@@ -78,8 +82,13 @@ impl NostrWalletConnect {
         xprivkey: ExtendedPrivKey,
         profile: Profile,
     ) -> Result<NostrWalletConnect, MutinyError> {
+        let key_derivation_index = if let Some(s) = profile.child_key_index {
+            s
+        } else {
+            profile.index
+        };
         let (client_key, server_key) =
-            NostrManager::<()>::derive_nwc_keys(context, xprivkey, profile.index)?;
+            NostrManager::<()>::derive_nwc_keys(context, xprivkey, key_derivation_index)?;
 
         Ok(Self {
             client_key,
@@ -301,6 +310,7 @@ impl NostrWalletConnect {
             archived: self.profile.archived,
             nwc_uri: self.get_nwc_uri().expect("failed to get nwc uri"),
             spending_conditions: self.profile.spending_conditions.clone(),
+            child_key_index: self.profile.child_key_index,
         }
     }
 }
@@ -317,6 +327,8 @@ pub struct NwcProfile {
     pub nwc_uri: String,
     #[serde(default)]
     pub spending_conditions: SpendingConditions,
+    #[serde(default)]
+    pub child_key_index: Option<u32>,
 }
 
 impl NwcProfile {
@@ -328,6 +340,7 @@ impl NwcProfile {
             archived: self.archived,
             enabled: self.enabled,
             spending_conditions: self.spending_conditions.clone(),
+            child_key_index: self.child_key_index,
         }
     }
 }
