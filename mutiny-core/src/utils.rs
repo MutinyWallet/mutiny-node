@@ -78,6 +78,18 @@ async fn fetch(client: &Client, req: reqwest::Request) -> Result<reqwest::Respon
         .map_err(|_| MutinyError::ConnectionFailed)
 }
 
+pub fn get_random_bip32_child_index() -> u32 {
+    let mut buffer = [0u8; 4];
+    getrandom::getrandom(&mut buffer).unwrap();
+
+    // Convert the byte buffer to u32
+    let random_value = u32::from_le_bytes(buffer);
+
+    // Restrict to [0, 2^31 - 1]
+    let max_value = 2u32.pow(31) - 1;
+    random_value % (max_value + 1)
+}
+
 pub type LockResult<Guard> = Result<Guard, ()>;
 
 pub struct Mutex<T: ?Sized> {

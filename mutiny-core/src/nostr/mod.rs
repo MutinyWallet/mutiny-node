@@ -1,10 +1,10 @@
-use crate::error::MutinyError;
 use crate::nodemanager::NodeManager;
 use crate::nostr::nwc::{
     NostrWalletConnect, NwcProfile, PendingNwcInvoice, Profile, SingleUseSpendingConditions,
     SpendingConditions, PENDING_NWC_EVENTS_KEY,
 };
 use crate::storage::MutinyStorage;
+use crate::{error::MutinyError, utils::get_random_bip32_child_index};
 use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, Signing};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
@@ -151,25 +151,30 @@ impl<S: MutinyStorage> NostrManager<S> {
     ) -> Result<NwcProfile, MutinyError> {
         let mut profiles = self.nwc.write().unwrap();
 
-        let normal_profiles_count = profiles
-            .iter()
-            .filter(|&nwc| nwc.profile.index >= USER_NWC_PROFILE_START_INDEX)
-            .count() as u32;
-
-        let (name, index) = match profile_type {
+        let (name, index, child_key_index) = match profile_type {
             ProfileType::Reserved(reserved_profile) => {
                 let (name, index) = reserved_profile.info();
-                (name.to_string(), index)
+                (name.to_string(), index, None)
             }
             // Ensure normal profiles start from 1000
             ProfileType::Normal { name } => {
-                (name, normal_profiles_count + USER_NWC_PROFILE_START_INDEX)
+                let normal_profiles_count = profiles
+                    .iter()
+                    .filter(|&nwc| nwc.profile.index >= USER_NWC_PROFILE_START_INDEX)
+                    .count() as u32;
+
+                (
+                    name,
+                    normal_profiles_count + USER_NWC_PROFILE_START_INDEX,
+                    Some(get_random_bip32_child_index()),
+                )
             }
         };
 
         let profile = Profile {
             name,
             index,
+            child_key_index,
             relay: "wss://nostr.mutinywallet.com".to_string(),
             enabled: true,
             archived: false,
@@ -712,6 +717,65 @@ mod test {
 
         assert_eq!(profile.name, name);
         assert_eq!(profile.index, 1000);
+        assert!(profile.child_key_index.is_some());
+
+        // create a non child_key_index profile
+        let non_child_key_index_profile = Profile {
+            name,
+            index: 1001,
+            relay: "wss://nostr.mutinywallet.com".to_string(),
+            enabled: true,
+            archived: false,
+            child_key_index: None,
+            spending_conditions: Default::default(),
+        };
+        let mut profiles = nostr_manager.nwc.write().unwrap();
+        let nwc = NostrWalletConnect::new(
+            &Secp256k1::new(),
+            nostr_manager.xprivkey,
+            non_child_key_index_profile,
+        )
+        .unwrap();
+        let original_nwc_uri = nwc.get_nwc_uri().unwrap();
+        profiles.push(nwc);
+        profiles.sort_by_key(|nwc| nwc.profile.index);
+        {
+            let profiles = profiles
+                .iter()
+                .map(|x| x.profile.clone())
+                .collect::<Vec<_>>();
+            nostr_manager
+                .storage
+                .set_data(NWC_STORAGE_KEY, profiles, None)
+                .unwrap();
+        }
+        // now read it and make sure the NWC URI is still correct
+        let profiles: Vec<Profile> = nostr_manager
+            .storage
+            .get_data(NWC_STORAGE_KEY)
+            .unwrap()
+            .unwrap_or_default();
+        let mut new_profile = profiles[2].clone();
+        let new_nwc = NostrWalletConnect::new(
+            &Secp256k1::new(),
+            nostr_manager.xprivkey,
+            new_profile.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(new_profile.clone().index, 1001);
+        assert!(new_profile.child_key_index.is_none());
+        assert_eq!(original_nwc_uri, new_nwc.get_nwc_uri().unwrap());
+
+        // if we change the index then it should change the private key/nwc
+        new_profile.index = 1002;
+        let changed_nwc = NostrWalletConnect::new(
+            &Secp256k1::new(),
+            nostr_manager.xprivkey,
+            new_profile.clone(),
+        )
+        .unwrap();
+        assert_ne!(original_nwc_uri, changed_nwc.get_nwc_uri().unwrap());
     }
 
     #[test]
