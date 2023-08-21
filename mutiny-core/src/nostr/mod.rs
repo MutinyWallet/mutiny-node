@@ -91,7 +91,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             .read()
             .unwrap()
             .iter()
-            .filter(|x| x.profile.enabled)
+            .filter(|x| x.profile.enabled && !x.profile.archived)
             .map(|nwc| nwc.create_nwc_filter())
             .collect()
     }
