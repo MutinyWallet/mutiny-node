@@ -41,7 +41,7 @@ use lightning::{
 use crate::multiesplora::MultiEsploraClient;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use lightning::ln::PaymentSecret;
-use lightning::sign::{EntropySource, InMemorySigner};
+use lightning::sign::{EntropySource, InMemorySigner, NodeSigner, Recipient};
 use lightning::util::config::MaxDustHTLCExposure;
 use lightning::{
     chain::{chainmonitor, Filter, Watch},
@@ -520,6 +520,12 @@ impl<S: MutinyStorage> Node<S> {
                 .await;
             });
         }
+
+        log_info!(
+            logger,
+            "Node started: {}",
+            keys_manager.get_node_id(Recipient::Node).unwrap()
+        );
 
         Ok(Node {
             _uuid: uuid,
