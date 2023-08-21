@@ -1123,6 +1123,12 @@ impl MutinyWallet {
         Ok(self.inner.nostr.edit_profile(profile)?.into())
     }
 
+    /// Finds a nostr wallet connect profile by index
+    #[wasm_bindgen]
+    pub async fn get_nwc_profile(&self, index: u32) -> Result<models::NwcProfile, MutinyJsError> {
+        Ok(self.inner.nostr.get_profile(index)?.into())
+    }
+
     /// Create a single use nostr wallet connect profile
     #[wasm_bindgen]
     pub async fn create_single_use_nwc(

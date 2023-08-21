@@ -147,6 +147,17 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(nwc_profile)
     }
 
+    pub fn get_profile(&self, index: u32) -> Result<NwcProfile, MutinyError> {
+        let profiles = self.nwc.read().unwrap();
+
+        let nwc = profiles
+            .iter()
+            .find(|nwc| nwc.profile.index == index)
+            .ok_or(MutinyError::NotFound)?;
+
+        Ok(nwc.nwc_profile())
+    }
+
     /// Creates a new NWC profile and saves to storage
     pub(crate) fn create_new_profile(
         &self,
