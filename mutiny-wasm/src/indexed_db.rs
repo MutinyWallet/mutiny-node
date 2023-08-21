@@ -210,8 +210,10 @@ impl IndexedDbStorage {
                 // this is to prevent any unexpected data from being added to the map
                 // from either malicious 3rd party or a previous version of the wallet
                 if write_to_local_storage(&key) {
-                    let value: Value = LocalStorage::get(&key).unwrap();
-                    map.set(key, value)?;
+                    // compare versions between local storage and indexed db storage
+                    if let Some((key, value)) = Self::handle_local_storage_key(key, &map, logger)? {
+                        map.set_data(key, value, None)?;
+                    }
                 }
             }
         }
@@ -238,6 +240,76 @@ impl IndexedDbStorage {
                 Ok(final_map.clone())
             }
         }
+    }
+
+    fn handle_local_storage_key(
+        key: String,
+        current: &MemoryStorage,
+        logger: &MutinyLogger,
+    ) -> Result<Option<(String, Value)>, MutinyError> {
+        if key.starts_with(MONITORS_PREFIX_KEY) {
+            // we can get versions from monitors, so we should compare
+            match current.get::<Vec<u8>>(&key)? {
+                Some(bytes) => {
+                    // check first byte is 1, then take u64 from next 8 bytes
+                    let current_version = u64::from_be_bytes(bytes[1..9].try_into().unwrap());
+
+                    let obj: Value = LocalStorage::get(&key).unwrap();
+                    let value = decrypt_value(&key, obj, current.password())?;
+                    if let Ok(local_bytes) = serde_json::from_value::<Vec<u8>>(value.clone()) {
+                        let local_version =
+                            u64::from_be_bytes(local_bytes[1..9].try_into().unwrap());
+
+                        // if the current version is less than the version from local storage
+                        // then we want to use the local storage version
+                        if current_version < local_version {
+                            log_debug!(
+                                logger,
+                                "Using local storage key {key} with version {}",
+                                local_version
+                            );
+                            return Ok(Some((key, value)));
+                        }
+                    }
+                }
+                None => {
+                    let value: Value = LocalStorage::get(&key).unwrap();
+                    return Ok(Some((key, value)));
+                }
+            }
+        } else if key.starts_with(CHANNEL_MANAGER_KEY) {
+            // we can get versions from channel manager, so we should compare
+            match current.get_data::<VersionedValue>(&key)? {
+                Some(local) => {
+                    let obj: Value = LocalStorage::get(&key).unwrap();
+                    let value = decrypt_value(&key, obj, current.password())?;
+
+                    // if the current version is less than the version from local storage
+                    // then we want to use the local storage version
+                    if let Ok(v) = serde_json::from_value::<VersionedValue>(value.clone()) {
+                        if v.version > local.version {
+                            log_debug!(
+                                logger,
+                                "Using local storage key {key} with version {}",
+                                v.version
+                            );
+                            return Ok(Some((key, value)));
+                        }
+                    }
+                }
+                None => {
+                    let obj: Value = LocalStorage::get(&key).unwrap();
+                    let value = decrypt_value(&key, obj, current.password())?;
+                    if serde_json::from_value::<VersionedValue>(value.clone()).is_ok() {
+                        return Ok(Some((key, value)));
+                    }
+                }
+            }
+        }
+
+        log_debug!(logger, "Skipping local storage key {key}");
+
+        Ok(None)
     }
 
     async fn handle_vss_key(
