@@ -378,10 +378,12 @@ impl IndexedDbStorage {
 ///
 /// We also need to skip writing them to the in memory storage on updates.
 fn used_once(key: &str) -> bool {
-    matches!(
-        key,
-        NETWORK_GRAPH_KEY | PROB_SCORER_KEY | GOSSIP_SYNC_TIME_KEY
-    )
+    match key {
+        NETWORK_GRAPH_KEY | PROB_SCORER_KEY | GOSSIP_SYNC_TIME_KEY => true,
+        str if str.starts_with(MONITORS_PREFIX_KEY) => true,
+        str if str.starts_with(CHANNEL_MANAGER_KEY) => true,
+        _ => false,
+    }
 }
 
 /// To help prevent force closes we save to local storage as well as indexed db.
