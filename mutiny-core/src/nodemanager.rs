@@ -21,6 +21,7 @@ use crate::{
     esplora::EsploraSyncClient,
     fees::MutinyFeeEstimator,
     gossip,
+    gossip::{fetch_updated_gossip, get_rgs_url},
     logging::MutinyLogger,
     lspclient::LspClient,
     node::{Node, ProbScorer, PubkeyConnectionInfo, RapidGossipSync},
@@ -523,6 +524,7 @@ pub struct NodeManager<S: MutinyStorage> {
     network: Network,
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
+    user_rgs_url: Option<String>,
     esplora: Arc<MultiEsploraClient>,
     pub(crate) wallet: Arc<OnChainWallet<S>>,
     gossip_sync: Arc<RapidGossipSync>,
@@ -620,7 +622,6 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let (gossip_sync, scorer) = get_gossip_sync(
             &storage,
-            c.user_rgs_url,
             c.scorer_url,
             c.auth_client.clone(),
             c.network,
@@ -760,6 +761,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             nodes,
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
+            user_rgs_url: c.user_rgs_url,
             esplora,
             auth,
             lnurl_client,
@@ -898,6 +900,14 @@ impl<S: MutinyStorage> NodeManager<S> {
                 // If we are stopped, don't sync
                 if nm.stop.load(Ordering::Relaxed) {
                     return;
+                }
+
+                if !synced {
+                    if let Err(e) = nm.sync_rgs().await {
+                        log_error!(nm.logger, "Failed to sync RGS: {e}");
+                    } else {
+                        log_info!(nm.logger, "RGS Synced!");
+                    }
                 }
 
                 // we don't need to re-sync fees every time
@@ -1342,6 +1352,39 @@ impl<S: MutinyStorage> NodeManager<S> {
             .sync(confirmables)
             .await
             .map_err(|_e| MutinyError::ChainAccessFailed)?;
+
+        Ok(())
+    }
+
+    /// Syncs the rapid gossip sync data.
+    /// Will be skipped if in safe mode.
+    async fn sync_rgs(&self) -> Result<(), MutinyError> {
+        // Skip syncing RGS if we are in safe mode.
+        if self.safe_mode {
+            log_info!(self.logger, "Skipping rgs sync in safe mode");
+        } else {
+            let last_rgs_sync_timestamp = self
+                .gossip_sync
+                .network_graph()
+                .get_last_rapid_gossip_sync_timestamp();
+
+            if let Some(rgs_url) =
+                get_rgs_url(self.network, &self.user_rgs_url, last_rgs_sync_timestamp)
+            {
+                log_info!(self.logger, "RGS URL: {rgs_url}");
+
+                let now = utils::now().as_secs();
+                fetch_updated_gossip(
+                    rgs_url,
+                    now,
+                    last_rgs_sync_timestamp.unwrap_or_default(),
+                    &self.gossip_sync,
+                    &self.storage,
+                    &self.logger,
+                )
+                .await?;
+            }
+        }
 
         Ok(())
     }
