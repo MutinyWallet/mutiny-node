@@ -12,6 +12,8 @@ use bitcoin::secp256k1::{PublicKey, Secp256k1, Signing};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use futures::{pin_mut, select, FutureExt};
 use futures_util::lock::Mutex;
+use lightning::log_warn;
+use lightning::util::logger::Logger;
 use nostr::key::SecretKey;
 use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt, XOnlyPublicKey};
@@ -521,7 +523,8 @@ impl<S: MutinyStorage> NostrManager<S> {
         let filter = Filter::new()
             .kind(Kind::WalletConnectResponse)
             .author(nwc.public_key.to_hex())
-            .pubkey(secret.public_key());
+            .pubkey(secret.public_key())
+            .event(request_event.id);
 
         client.subscribe(vec![filter]).await;
 
@@ -560,7 +563,14 @@ impl<S: MutinyStorage> NostrManager<S> {
                 notification = read_fut => {
                     match notification {
                         Ok(RelayPoolNotification::Event(_url, event)) => {
-                            if event.kind == Kind::WalletConnectResponse && event.verify().is_ok() {
+                            let has_e_tag = event.tags.iter().any(|x| {
+                                if let Tag::Event(id, _, _) = x {
+                                    *id == request_event.id
+                                } else {
+                                        false
+                                }
+                            });
+                            if has_e_tag && event.kind == Kind::WalletConnectResponse && event.verify().is_ok() {
                                 let decrypted = decrypt(&nwc.secret, &nwc.public_key, &event.content)?;
                                 let resp: Response = serde_json::from_str(&decrypted)?;
 
@@ -570,14 +580,10 @@ impl<S: MutinyStorage> NostrManager<S> {
                                     match resp.result {
                                         Some(result) => {
                                             let preimage: Vec<u8> = FromHex::from_hex(&result.preimage)?;
-                                            if sha256::Hash::hash(&preimage) == invoice.payment_hash {
-                                                return Ok(None);
-                                            } else {
-                                                return Ok(Some(NIP47Error {
-                                                    code: ErrorCode::QuotaExceeded,
-                                                    message: "Already Claimed".to_string(),
-                                                }));
+                                            if sha256::Hash::hash(&preimage) != invoice.payment_hash {
+                                                log_warn!(node_manager.logger, "Received payment preimage that does not represent the invoice hash");
                                             }
+                                            return Ok(None);
                                         },
                                         None => return Ok(resp.error),
                                     }
