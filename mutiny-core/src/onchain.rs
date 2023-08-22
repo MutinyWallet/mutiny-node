@@ -9,12 +9,14 @@ use bdk::psbt::PsbtUtils;
 use bdk::template::DescriptorTemplateOut;
 use bdk::{FeeRate, LocalUtxo, SignOptions, TransactionDetails, Wallet};
 use bdk_esplora::EsploraAsyncExt;
+use bitcoin::consensus::serialize;
+use bitcoin::hashes::hex::ToHex;
 use bitcoin::psbt::PartiallySignedTransaction;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, OutPoint, Script, Transaction, Txid};
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::util::logger::Logger;
-use lightning::{log_debug, log_error, log_warn};
+use lightning::{log_debug, log_error, log_info, log_warn};
 
 use crate::error::MutinyError;
 use crate::fees::MutinyFeeEstimator;
@@ -69,6 +71,9 @@ impl<S: MutinyStorage> OnChainWallet<S> {
 
     pub async fn broadcast_transaction(&self, tx: Transaction) -> Result<(), MutinyError> {
         let txid = tx.txid();
+        log_info!(self.logger, "Broadcasting transaction: {txid}");
+        log_debug!(self.logger, "Transaction: {}", serialize(&tx).to_hex());
+
         if let Err(e) = self.blockchain.broadcast(&tx).await {
             log_error!(self.logger, "Failed to broadcast transaction ({txid}): {e}");
             return Err(MutinyError::Other(anyhow!(
