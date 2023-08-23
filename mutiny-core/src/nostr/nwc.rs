@@ -265,7 +265,14 @@ impl NostrWalletConnect {
                                 resp
                             }
                             Err(e) => {
-                                // todo handle timeout errors
+                                if let MutinyError::PaymentTimeout = e {
+                                    needs_save = true;
+                                    log_error!(
+                                        node_manager.logger,
+                                        "Payment timeout, disabling nwc profile"
+                                    );
+                                    self.profile.enabled = false;
+                                }
                                 Response {
                                     result_type: Method::PayInvoice,
                                     error: Some(NIP47Error {
