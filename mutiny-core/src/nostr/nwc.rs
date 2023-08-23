@@ -6,6 +6,7 @@ use crate::utils;
 use anyhow::anyhow;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, Signing};
 use bitcoin::util::bip32::ExtendedPrivKey;
+use core::fmt;
 use futures_util::lock::Mutex;
 use lightning::util::logger::Logger;
 use lightning::{log_error, log_warn};
@@ -39,6 +40,30 @@ impl Default for SpendingConditions {
     }
 }
 
+/// Type of Nostr Wallet Connect profile
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum NwcProfileTag {
+    Subscription,
+    Gift,
+    General,
+}
+
+impl Default for NwcProfileTag {
+    fn default() -> Self {
+        Self::General
+    }
+}
+
+impl fmt::Display for NwcProfileTag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Subscription => write!(f, "Subscription"),
+            Self::Gift => write!(f, "Gift"),
+            Self::General => write!(f, "General"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct Profile {
     pub name: String,
@@ -55,6 +80,8 @@ pub(crate) struct Profile {
     /// set to Option so that we keep using `index` for reserved + existing
     #[serde(default)]
     pub child_key_index: Option<u32>,
+    #[serde(default)]
+    pub tag: NwcProfileTag,
 }
 
 impl PartialOrd for Profile {
@@ -210,15 +237,19 @@ impl NostrWalletConnect {
             // if we need approval, just save in the db for later
             match self.profile.spending_conditions.clone() {
                 SpendingConditions::SingleUse(mut single_use) => {
-                    // check if we have already spent
-                    if single_use.spent {
-                        return Ok((None, needs_save));
-                    }
-
                     let msats = invoice.amount_milli_satoshis().unwrap();
 
-                    // verify amount is under our limit
-                    let content = if msats <= single_use.amount_sats * 1_000 {
+                    // check if we have already spent
+                    let content = if single_use.spent {
+                        Response {
+                            result_type: Method::PayInvoice,
+                            error: Some(NIP47Error {
+                                code: ErrorCode::QuotaExceeded,
+                                message: "Already Claimed".to_string(),
+                            }),
+                            result: None,
+                        }
+                    } else if msats <= single_use.amount_sats * 1_000 {
                         match self
                             .pay_nwc_invoice(node_manager, from_node, &invoice)
                             .await
@@ -234,7 +265,14 @@ impl NostrWalletConnect {
                                 resp
                             }
                             Err(e) => {
-                                // todo handle timeout errors
+                                if let MutinyError::PaymentTimeout = e {
+                                    needs_save = true;
+                                    log_error!(
+                                        node_manager.logger,
+                                        "Payment timeout, disabling nwc profile"
+                                    );
+                                    self.profile.enabled = false;
+                                }
                                 Response {
                                     result_type: Method::PayInvoice,
                                     error: Some(NIP47Error {
@@ -311,6 +349,7 @@ impl NostrWalletConnect {
             nwc_uri: self.get_nwc_uri().expect("failed to get nwc uri"),
             spending_conditions: self.profile.spending_conditions.clone(),
             child_key_index: self.profile.child_key_index,
+            tag: self.profile.tag,
         }
     }
 }
@@ -329,6 +368,8 @@ pub struct NwcProfile {
     pub spending_conditions: SpendingConditions,
     #[serde(default)]
     pub child_key_index: Option<u32>,
+    #[serde(default)]
+    pub tag: NwcProfileTag,
 }
 
 impl NwcProfile {
@@ -341,6 +382,7 @@ impl NwcProfile {
             enabled: self.enabled,
             spending_conditions: self.spending_conditions.clone(),
             child_key_index: self.child_key_index,
+            tag: self.tag,
         }
     }
 }

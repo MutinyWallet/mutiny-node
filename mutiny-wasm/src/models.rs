@@ -11,7 +11,8 @@ use mutiny_core::labels::Contact as MutinyContact;
 use mutiny_core::nostr::nwc::SpendingConditions;
 use mutiny_core::redshift::{RedshiftRecipient, RedshiftStatus};
 use mutiny_core::*;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
+use serde_json::json;
 use std::str::FromStr;
 use wasm_bindgen::prelude::*;
 
@@ -820,7 +821,7 @@ impl From<MutinyContact> for Contact {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 #[wasm_bindgen]
 pub struct NwcProfile {
     name: String,
@@ -829,10 +830,36 @@ pub struct NwcProfile {
     pub max_single_amt_sats: u64,
     relay: String,
     pub enabled: bool,
+    pub archived: bool,
     /// Require approval before sending a payment
     pub require_approval: bool,
     spending_conditions: SpendingConditions,
     nwc_uri: String,
+    tag: String,
+}
+
+impl Serialize for NwcProfile {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let json = json!({
+            "name": self.name,
+            "index": self.index,
+            "max_single_amt_sats": self.max_single_amt_sats,
+            "relay": self.relay,
+            "enabled": self.enabled,
+            "archived": self.archived,
+            "require_approval": self.require_approval,
+            "spending_conditions": json!(self.spending_conditions),
+            "nwc_uri": self.nwc_uri,
+            "tag": self.tag,
+            "gift_amt": self.gift_amt(),
+            "url_suffix": self.url_suffix(),
+        });
+
+        json.serialize(serializer)
+    }
 }
 
 #[wasm_bindgen]
@@ -857,17 +884,30 @@ impl NwcProfile {
         self.nwc_uri.clone()
     }
 
-    #[wasm_bindgen]
-    pub fn sharable_url(&self, url_prefix: String) -> Option<String> {
-        match self.spending_conditions {
-            SpendingConditions::SingleUse(ref single_use) => {
-                let encoded = urlencoding::encode(&self.nwc_uri);
-                Some(format!(
-                    "{}/gift?amount={}&nwc_uri={}",
-                    url_prefix, single_use.amount_sats, encoded
-                ))
-            }
-            SpendingConditions::RequireApproval => None,
+    #[wasm_bindgen(getter)]
+    pub fn tag(&self) -> String {
+        self.tag.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn gift_amt(&self) -> Option<u64> {
+        if let SpendingConditions::SingleUse(ref cond) = self.spending_conditions {
+            Some(cond.amount_sats)
+        } else {
+            None
+        }
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn url_suffix(&self) -> Option<String> {
+        if let SpendingConditions::SingleUse(ref cond) = self.spending_conditions {
+            let encoded = urlencoding::encode(&self.nwc_uri);
+            Some(format!(
+                "/gift?amount={}&nwc_uri={}",
+                cond.amount_sats, encoded
+            ))
+        } else {
+            None
         }
     }
 }
@@ -891,9 +931,11 @@ impl From<nostr::nwc::NwcProfile> for NwcProfile {
             relay: value.relay,
             max_single_amt_sats,
             enabled: value.enabled,
+            archived: value.archived,
             require_approval,
             spending_conditions: value.spending_conditions,
             nwc_uri: value.nwc_uri,
+            tag: value.tag.to_string(),
         }
     }
 }

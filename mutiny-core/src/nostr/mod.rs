@@ -1,22 +1,28 @@
 use crate::nodemanager::NodeManager;
 use crate::nostr::nwc::{
-    NostrWalletConnect, NwcProfile, PendingNwcInvoice, Profile, SingleUseSpendingConditions,
-    SpendingConditions, PENDING_NWC_EVENTS_KEY,
+    NostrWalletConnect, NwcProfile, NwcProfileTag, PendingNwcInvoice, Profile,
+    SingleUseSpendingConditions, SpendingConditions, PENDING_NWC_EVENTS_KEY,
 };
 use crate::storage::MutinyStorage;
+use crate::utils;
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
-use bitcoin::hashes::sha256;
+use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{PublicKey, Secp256k1, Signing};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
+use futures::{pin_mut, select, FutureExt};
 use futures_util::lock::Mutex;
+use lightning::log_warn;
+use lightning::util::logger::Logger;
 use nostr::key::SecretKey;
 use nostr::nips::nip47::*;
-use nostr::prelude::{encrypt, XOnlyPublicKey};
+use nostr::prelude::{decrypt, encrypt, XOnlyPublicKey};
 use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Metadata, Tag};
-use nostr_sdk::Client;
+use nostr_sdk::{Client, RelayPoolNotification};
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::str::FromStr;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -87,7 +93,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             .read()
             .unwrap()
             .iter()
-            .filter(|x| x.profile.enabled)
+            .filter(|x| x.profile.enabled && !x.profile.archived)
             .map(|nwc| nwc.create_nwc_filter())
             .collect()
     }
@@ -143,11 +149,23 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(nwc_profile)
     }
 
+    pub fn get_profile(&self, index: u32) -> Result<NwcProfile, MutinyError> {
+        let profiles = self.nwc.read().unwrap();
+
+        let nwc = profiles
+            .iter()
+            .find(|nwc| nwc.profile.index == index)
+            .ok_or(MutinyError::NotFound)?;
+
+        Ok(nwc.nwc_profile())
+    }
+
     /// Creates a new NWC profile and saves to storage
     pub(crate) fn create_new_profile(
         &self,
         profile_type: ProfileType,
         spending_conditions: SpendingConditions,
+        tag: NwcProfileTag,
     ) -> Result<NwcProfile, MutinyError> {
         let mut profiles = self.nwc.write().unwrap();
 
@@ -179,6 +197,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             enabled: true,
             archived: false,
             spending_conditions,
+            tag,
         };
         let nwc = NostrWalletConnect::new(&Secp256k1::new(), self.xprivkey, profile)?;
 
@@ -203,8 +222,9 @@ impl<S: MutinyStorage> NostrManager<S> {
         &self,
         profile_type: ProfileType,
         spending_conditions: SpendingConditions,
+        tag: NwcProfileTag,
     ) -> Result<NwcProfile, MutinyError> {
-        let profile = self.create_new_profile(profile_type, spending_conditions)?;
+        let profile = self.create_new_profile(profile_type, spending_conditions, tag)?;
 
         let info_event = self.nwc.read().unwrap().iter().find_map(|nwc| {
             if nwc.profile.index == profile.index {
@@ -247,7 +267,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             amount_sats,
             spent: false,
         });
-        self.create_new_nwc_profile(profile, spending_conditions)
+        self.create_new_nwc_profile(profile, spending_conditions, NwcProfileTag::Gift)
             .await
     }
 
@@ -468,8 +488,9 @@ impl<S: MutinyStorage> NostrManager<S> {
         amount_sats: u64,
         nwc_uri: &str,
         node_manager: &NodeManager<S>,
-    ) -> anyhow::Result<EventId> {
-        let nwc = NostrWalletConnectURI::from_str(nwc_uri)?;
+    ) -> Result<Option<NIP47Error>, MutinyError> {
+        let nwc = NostrWalletConnectURI::from_str(nwc_uri)
+            .map_err(|_| MutinyError::InvalidArgumentsError)?;
         let secret = Keys::new(nwc.secret);
         let client = Client::new(&secret);
 
@@ -485,17 +506,27 @@ impl<S: MutinyStorage> NostrManager<S> {
         let invoice = node_manager
             .create_invoice(Some(amount_sats), vec!["Gift".to_string()])
             .await?;
+        // unwrap is safe, we just created it
+        let bolt11 = invoice.bolt11.unwrap();
 
         let req = Request {
             method: Method::PayInvoice,
             params: RequestParams {
-                invoice: invoice.bolt11.unwrap().to_string(),
+                invoice: bolt11.to_string(),
             },
         };
         let encrypted = encrypt(&nwc.secret, &nwc.public_key, req.as_json())?;
         let p_tag = Tag::PubKey(nwc.public_key, None);
         let request_event =
             EventBuilder::new(Kind::WalletConnectRequest, encrypted, &[p_tag]).to_event(&secret)?;
+
+        let filter = Filter::new()
+            .kind(Kind::WalletConnectResponse)
+            .author(nwc.public_key.to_hex())
+            .pubkey(secret.public_key())
+            .event(request_event.id);
+
+        client.subscribe(vec![filter]).await;
 
         client
             .send_event(request_event.clone())
@@ -504,9 +535,79 @@ impl<S: MutinyStorage> NostrManager<S> {
                 MutinyError::Other(anyhow::anyhow!("Failed to send request event: {e:?}"))
             })?;
 
+        let mut notifications = client.notifications();
+
+        let start_time = utils::now();
+
+        // every second, check for response event, invoice paid, or timeout
+        loop {
+            let now = utils::now();
+            if now - start_time > Duration::from_secs(30) {
+                client.disconnect().await?;
+                return Err(MutinyError::PaymentTimeout);
+            }
+
+            // check if the invoice has been paid, if so, return, otherwise continue
+            // checking for response event
+            if let Ok(invoice) = node_manager.get_invoice(&bolt11).await {
+                if invoice.paid {
+                    break;
+                }
+            }
+
+            let read_fut = notifications.recv().fuse();
+            let delay_fut = Box::pin(utils::sleep(1_000)).fuse();
+
+            pin_mut!(read_fut, delay_fut);
+            select! {
+                notification = read_fut => {
+                    match notification {
+                        Ok(RelayPoolNotification::Event(_url, event)) => {
+                            let has_e_tag = event.tags.iter().any(|x| {
+                                if let Tag::Event(id, _, _) = x {
+                                    *id == request_event.id
+                                } else {
+                                        false
+                                }
+                            });
+                            if has_e_tag && event.kind == Kind::WalletConnectResponse && event.verify().is_ok() {
+                                let decrypted = decrypt(&nwc.secret, &nwc.public_key, &event.content)?;
+                                let resp: Response = serde_json::from_str(&decrypted)?;
+
+                                if resp.result_type == Method::PayInvoice {
+                                    client.disconnect().await?;
+
+                                    match resp.result {
+                                        Some(result) => {
+                                            let preimage: Vec<u8> = FromHex::from_hex(&result.preimage)?;
+                                            if sha256::Hash::hash(&preimage) != invoice.payment_hash {
+                                                log_warn!(node_manager.logger, "Received payment preimage that does not represent the invoice hash");
+                                            }
+                                            return Ok(None);
+                                        },
+                                        None => return Ok(resp.error),
+                                    }
+                                }
+                            }
+                        },
+                        Ok(RelayPoolNotification::Message(_, _)) => {}, // ignore messages
+                        Ok(RelayPoolNotification::Shutdown) =>
+                            return Err(MutinyError::ConnectionFailed),
+                        Err(_) => return Err(MutinyError::ConnectionFailed),
+                    }
+                }
+                _ = delay_fut => {
+                    if node_manager.stop.load(Ordering::Relaxed) {
+                        client.disconnect().await?;
+                        return Err(MutinyError::NotRunning);
+                    }
+                }
+            }
+        }
+
         client.disconnect().await?;
 
-        Ok(request_event.id)
+        Ok(None)
     }
 
     /// Derives the client and server keys for Nostr Wallet Connect given a profile index
@@ -652,6 +753,7 @@ mod test {
             .create_new_profile(
                 ProfileType::Normal { name: name.clone() },
                 SpendingConditions::default(),
+                Default::default(),
             )
             .unwrap();
 
@@ -684,6 +786,7 @@ mod test {
             .create_new_profile(
                 ProfileType::Reserved(ReservedProfile::MutinySubscription),
                 SpendingConditions::default(),
+                Default::default(),
             )
             .unwrap();
 
@@ -712,6 +815,7 @@ mod test {
             .create_new_profile(
                 ProfileType::Normal { name: name.clone() },
                 SpendingConditions::default(),
+                Default::default(),
             )
             .unwrap();
 
@@ -728,6 +832,7 @@ mod test {
             archived: false,
             child_key_index: None,
             spending_conditions: Default::default(),
+            tag: Default::default(),
         };
         let mut profiles = nostr_manager.nwc.write().unwrap();
         let nwc = NostrWalletConnect::new(
@@ -788,6 +893,7 @@ mod test {
             .create_new_profile(
                 ProfileType::Normal { name: name.clone() },
                 SpendingConditions::default(),
+                Default::default(),
             )
             .unwrap();
 
@@ -824,7 +930,11 @@ mod test {
         let name = "test".to_string();
 
         let profile = nostr_manager
-            .create_new_profile(ProfileType::Normal { name }, SpendingConditions::default())
+            .create_new_profile(
+                ProfileType::Normal { name },
+                SpendingConditions::default(),
+                Default::default(),
+            )
             .unwrap();
 
         let inv = PendingNwcInvoice {
