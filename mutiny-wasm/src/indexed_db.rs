@@ -707,15 +707,19 @@ impl MutinyStorage for IndexedDbStorage {
 
 #[cfg(test)]
 mod tests {
-    use crate::indexed_db::IndexedDbStorage;
+    use super::*;
+    use crate::indexed_db::{IndexedDbStorage, WALLET_OBJECT_STORE_NAME};
     use crate::utils::sleep;
     use crate::utils::test::log;
     use bip39::Mnemonic;
+    use gloo_storage::{LocalStorage, Storage};
     use mutiny_core::storage::MutinyStorage;
     use mutiny_core::{encrypt::encryption_key_from_pass, logging::MutinyLogger};
+    use rexie::TransactionMode;
     use serde_json::json;
     use std::str::FromStr;
     use std::sync::Arc;
+    use wasm_bindgen::JsValue;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -879,5 +883,77 @@ mod tests {
 
         // clear the storage to clean up
         IndexedDbStorage::clear().await.unwrap();
+    }
+
+    // first byte must be 0, then the u64 in big endian, then 2 dummy bytes after
+    const MONITOR_VERSION_MAX: [u8; 11] = [0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1];
+    const MONITOR_VERSION_0: [u8; 11] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+
+    async fn compare_local_storage_versions(
+        test_name: &str,
+        local_storage: [u8; 11],
+        indexed_db: [u8; 11],
+    ) -> [u8; 11] {
+        let key = format!("{MONITORS_PREFIX_KEY}test_{test_name}");
+        // set in local storage
+        LocalStorage::set(&key, local_storage).unwrap();
+        // set in indexed db
+        let rexie = IndexedDbStorage::build_indexed_db_database().await.unwrap();
+        let tx = rexie
+            .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)
+            .unwrap();
+        let store = tx.store(WALLET_OBJECT_STORE_NAME).unwrap();
+        store
+            .put(
+                &JsValue::from_serde(&indexed_db).unwrap(),
+                Some(&JsValue::from(&key)),
+            )
+            .await
+            .unwrap();
+
+        tx.done().await.unwrap();
+
+        let logger = Arc::new(MutinyLogger::default());
+        let storage = IndexedDbStorage::new(None, None, None, logger)
+            .await
+            .unwrap();
+
+        let bytes: [u8; 11] = storage.get(&key).unwrap().unwrap();
+
+        // clear the storage to clean up
+        IndexedDbStorage::clear().await.unwrap();
+
+        bytes
+    }
+
+    #[test]
+    async fn test_local_storage_version_0_indexed_db_version_max() {
+        let test_name = "test_local_storage_version_0_indexed_db_version_max";
+        log!("{test_name}");
+
+        let bytes =
+            compare_local_storage_versions(test_name, MONITOR_VERSION_0, MONITOR_VERSION_MAX).await;
+        assert_eq!(bytes, MONITOR_VERSION_MAX);
+    }
+
+    #[test]
+    async fn test_local_storage_version_max_indexed_db_version_0() {
+        let test_name = "test_local_storage_version_max_indexed_db_version_0";
+        log!("{test_name}");
+
+        let bytes =
+            compare_local_storage_versions(test_name, MONITOR_VERSION_MAX, MONITOR_VERSION_0).await;
+        assert_eq!(bytes, MONITOR_VERSION_MAX);
+    }
+
+    #[test]
+    async fn test_local_storage_version_max_indexed_db_version_max() {
+        let test_name = "test_local_storage_version_max_indexed_db_version_max";
+        log!("{test_name}");
+
+        let bytes =
+            compare_local_storage_versions(test_name, MONITOR_VERSION_MAX, MONITOR_VERSION_MAX)
+                .await;
+        assert_eq!(bytes, MONITOR_VERSION_MAX);
     }
 }
