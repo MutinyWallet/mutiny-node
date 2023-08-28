@@ -42,6 +42,7 @@ impl Gossip {
     }
 }
 
+#[allow(dead_code)]
 async fn get_scorer(
     storage: &impl MutinyStorage,
     network_graph: Arc<NetworkGraph>,
@@ -58,6 +59,7 @@ async fn get_scorer(
     }
 }
 
+#[allow(dead_code)]
 async fn get_gossip_data(
     storage: &impl MutinyStorage,
     logger: Arc<MutinyLogger>,
@@ -137,24 +139,15 @@ fn write_gossip_data(
 }
 
 pub async fn get_gossip_sync(
-    storage: &impl MutinyStorage,
+    _storage: &impl MutinyStorage,
     remote_scorer_url: Option<String>,
     auth_client: Option<Arc<MutinyAuthClient>>,
     network: Network,
     logger: Arc<MutinyLogger>,
 ) -> Result<(RapidGossipSync, ProbScorer), MutinyError> {
-    // if we error out, we just use the default gossip data
-    let mut gossip_data = match get_gossip_data(storage, logger.clone()).await {
-        Ok(Some(gossip_data)) => gossip_data,
-        Ok(None) => Gossip::new(network, logger.clone()),
-        Err(e) => {
-            log_error!(
-                logger,
-                "Error getting gossip data from storage: {e}, re-syncing gossip..."
-            );
-            Gossip::new(network, logger.clone())
-        }
-    };
+    // Always get default gossip until fixed:
+    // https://github.com/lightningdevkit/rapid-gossip-sync-server/issues/45
+    let mut gossip_data = Gossip::new(network, logger.clone());
 
     log_debug!(
         &logger,
