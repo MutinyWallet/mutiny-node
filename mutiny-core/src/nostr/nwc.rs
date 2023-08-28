@@ -84,6 +84,12 @@ pub(crate) struct Profile {
     pub tag: NwcProfileTag,
 }
 
+impl Profile {
+    pub fn active(&self) -> bool {
+        self.enabled && !self.archived
+    }
+}
+
 impl PartialOrd for Profile {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.index.partial_cmp(&other.index)
@@ -196,7 +202,7 @@ impl NostrWalletConnect {
     ) -> anyhow::Result<(Option<Event>, bool)> {
         let client_pubkey = self.client_key.public_key();
         let mut needs_save = false;
-        if self.profile.enabled
+        if self.profile.active()
             && event.kind == Kind::WalletConnectRequest
             && event.pubkey == client_pubkey
         {
