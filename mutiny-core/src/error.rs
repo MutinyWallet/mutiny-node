@@ -134,6 +134,9 @@ pub enum MutinyError {
     /// Incorrect password entered.
     #[error("Incorrect password entered.")]
     IncorrectPassword,
+    /// Cannot change password to the same password
+    #[error("Cannot change password to the same password.")]
+    SamePassword,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

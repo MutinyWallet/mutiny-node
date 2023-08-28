@@ -466,6 +466,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             return Err(MutinyError::IncorrectPassword);
         }
 
+        if old == new {
+            return Err(MutinyError::SamePassword);
+        }
+
         log_info!(self.node_manager.logger, "Changing password");
 
         self.stop().await?;

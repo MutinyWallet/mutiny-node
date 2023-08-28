@@ -134,6 +134,9 @@ pub enum MutinyJsError {
     /// Incorrect password entered.
     #[error("Incorrect password entered.")]
     IncorrectPassword,
+    /// Cannot change password to the same password
+    #[error("Cannot change password to the same password.")]
+    SamePassword,
     /// Unknown error.
     #[error("Unknown Error")]
     UnknownError,
@@ -179,6 +182,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::NostrError => MutinyJsError::NostrError,
             MutinyError::BitcoinPriceError => MutinyJsError::BitcoinPriceError,
             MutinyError::IncorrectPassword => MutinyJsError::IncorrectPassword,
+            MutinyError::SamePassword => MutinyJsError::SamePassword,
             MutinyError::Other(_) => MutinyJsError::UnknownError,
             MutinyError::SubscriptionClientNotConfigured => {
                 MutinyJsError::SubscriptionClientNotConfigured
