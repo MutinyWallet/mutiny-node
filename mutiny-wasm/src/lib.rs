@@ -1018,6 +1018,20 @@ impl MutinyWallet {
         )?)
     }
 
+    pub fn get_contacts_sorted(&self) -> Result<JsValue /* Map<String, Contact>*/, MutinyJsError> {
+        let mut contacts: Vec<Contact> = self
+            .inner
+            .node_manager
+            .get_contacts()?
+            .into_values()
+            .map(|v| v.into())
+            .collect();
+
+        contacts.sort();
+
+        Ok(JsValue::from_serde(&contacts)?)
+    }
+
     pub fn get_contact(&self, label: String) -> Result<Option<TagItem>, MutinyJsError> {
         Ok(self
             .inner
@@ -1051,15 +1065,17 @@ impl MutinyWallet {
     }
 
     pub fn get_tag_items(&self) -> Result<JsValue /* Vec<TagItem> */, MutinyJsError> {
-        Ok(JsValue::from_serde(
-            &self
-                .inner
-                .node_manager
-                .get_tag_items()?
-                .into_iter()
-                .map(|t| t.into())
-                .collect::<Vec<TagItem>>(),
-        )?)
+        let mut tags: Vec<TagItem> = self
+            .inner
+            .node_manager
+            .get_tag_items()?
+            .into_iter()
+            .map(|t| t.into())
+            .collect();
+
+        tags.sort();
+
+        Ok(JsValue::from_serde(&tags)?)
     }
 
     /// Gets the current bitcoin price in USD.

@@ -651,6 +651,24 @@ pub struct TagItem {
     pub last_used_time: u64,
 }
 
+impl PartialOrd for TagItem {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TagItem {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        // sort last used time in descending order
+        // then sort by name and id
+        other
+            .last_used_time
+            .cmp(&self.last_used_time)
+            .then(self.name.cmp(&other.name))
+            .then(self.id.cmp(&other.id))
+    }
+}
+
 #[wasm_bindgen]
 impl TagItem {
     #[wasm_bindgen(getter)]
@@ -732,6 +750,23 @@ pub struct Contact {
     #[serde(skip_serializing_if = "Option::is_none")]
     image_url: Option<String>,
     pub last_used: u64,
+}
+
+impl PartialOrd for Contact {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Contact {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        // sort last used time in descending order
+        // then sort by name
+        other
+            .last_used
+            .cmp(&self.last_used)
+            .then(self.name.cmp(&other.name))
+    }
 }
 
 #[wasm_bindgen]
