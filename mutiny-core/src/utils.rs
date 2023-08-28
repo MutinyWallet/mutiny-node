@@ -125,6 +125,7 @@ impl<T> Mutex<T> {
         }
     }
 
+    #[allow(clippy::result_unit_err)]
     pub fn lock(&self) -> LockResult<MutexGuard<'_, T>> {
         Ok(MutexGuard {
             lock: self.inner.borrow_mut(),

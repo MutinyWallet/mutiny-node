@@ -279,8 +279,8 @@ impl IndexedDbStorage {
             }
         } else if key.starts_with(CHANNEL_MANAGER_KEY) {
             // we can get versions from channel manager, so we should compare
-            match current.get_data::<VersionedValue>(&key)? {
-                Some(local) => {
+            match current.get_data::<VersionedValue>(&key) {
+                Ok(Some(local)) => {
                     let obj: Value = LocalStorage::get(&key).unwrap();
                     let value = decrypt_value(&key, obj, current.password())?;
 
@@ -297,13 +297,14 @@ impl IndexedDbStorage {
                         }
                     }
                 }
-                None => {
+                Ok(None) => {
                     let obj: Value = LocalStorage::get(&key).unwrap();
                     let value = decrypt_value(&key, obj, current.password())?;
                     if serde_json::from_value::<VersionedValue>(value.clone()).is_ok() {
                         return Ok(Some((key, value)));
                     }
                 }
+                Err(_) => return Err(MutinyError::IncorrectPassword),
             }
         }
 
@@ -712,6 +713,7 @@ mod tests {
     use crate::utils::sleep;
     use crate::utils::test::log;
     use bip39::Mnemonic;
+    use bitcoin::hashes::hex::ToHex;
     use gloo_storage::{LocalStorage, Storage};
     use mutiny_core::storage::MutinyStorage;
     use mutiny_core::{encrypt::encryption_key_from_pass, logging::MutinyLogger};
@@ -955,5 +957,45 @@ mod tests {
             compare_local_storage_versions(test_name, MONITOR_VERSION_MAX, MONITOR_VERSION_MAX)
                 .await;
         assert_eq!(bytes, MONITOR_VERSION_MAX);
+    }
+
+    #[test]
+    async fn test_correct_incorrect_password_error() {
+        let test_name = "test_correct_incorrect_password_error";
+        log!("{test_name}");
+        let logger = Arc::new(MutinyLogger::default());
+
+        let key = format!("{CHANNEL_MANAGER_KEY}_test_{test_name}");
+        let data = VersionedValue {
+            version: 69,
+            // just use this as dummy data
+            value: Value::String(MONITOR_VERSION_MAX.to_hex()),
+        };
+        let storage = IndexedDbStorage::new(None, None, None, logger.clone())
+            .await
+            .unwrap();
+
+        storage.set_data(&key, data, None).unwrap();
+        // wait for the storage to be persisted
+        utils::sleep(1_000).await;
+
+        let password = Some("password".to_string());
+        let cipher = password
+            .as_ref()
+            .filter(|p| !p.is_empty())
+            .map(|p| encryption_key_from_pass(p))
+            .transpose()
+            .unwrap();
+
+        let result = IndexedDbStorage::new(password, cipher, None, logger).await;
+
+        match result {
+            Err(MutinyError::IncorrectPassword) => (),
+            Ok(_) => panic!("Expected IncorrectPassword error, got Ok"),
+            Err(e) => panic!("Expected IncorrectPassword error, got {:?}", e),
+        }
+
+        // clear the storage to clean up
+        IndexedDbStorage::clear().await.unwrap();
     }
 }
