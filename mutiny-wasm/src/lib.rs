@@ -30,7 +30,7 @@ use lightning_invoice::Bolt11Invoice;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::auth::MutinyAuthClient;
 use mutiny_core::lnurlauth::AuthManager;
-use mutiny_core::nostr::nwc::{NwcProfileTag, SpendingConditions};
+use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
 use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::redshift::RedshiftRecipient;
 use mutiny_core::scb::EncryptedSCB;
@@ -1140,6 +1140,31 @@ impl MutinyWallet {
             .into())
     }
 
+    /// Create a budgeted nostr wallet connect profile
+    #[wasm_bindgen]
+    pub async fn create_budget_nwc_profile(
+        &self,
+        name: String,
+        budget: u64,
+        period: BudgetPeriod,
+        single_max: Option<u64>,
+    ) -> Result<models::NwcProfile, MutinyJsError> {
+        let budget = BudgetedSpendingConditions {
+            budget,
+            period: period.into(),
+            payments: vec![],
+            single_max,
+        };
+        let sp = SpendingConditions::Budget(budget);
+
+        Ok(self
+            .inner
+            .nostr
+            .create_new_nwc_profile(ProfileType::Normal { name }, sp, NwcProfileTag::General)
+            .await?
+            .into())
+    }
+
     /// Edits a nostr wallet connect profile
     #[wasm_bindgen]
     pub async fn edit_nwc_profile(
@@ -1151,6 +1176,22 @@ impl MutinyWallet {
             .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
 
         Ok(self.inner.nostr.edit_profile(profile)?.into())
+    }
+
+    /// Set budget for a NWC Profile
+    #[wasm_bindgen]
+    pub async fn set_nwc_profile_budget(
+        &self,
+        profile_index: u32,
+        budget_sats: u64,
+        period: BudgetPeriod,
+        single_max_sats: Option<u64>,
+    ) -> Result<models::NwcProfile, MutinyJsError> {
+        Ok(self
+            .inner
+            .nostr
+            .set_nwc_profile_budget(profile_index, budget_sats, period.into(), single_max_sats)?
+            .into())
     }
 
     /// Finds a nostr wallet connect profile by index

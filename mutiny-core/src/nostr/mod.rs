@@ -1,7 +1,8 @@
 use crate::nodemanager::NodeManager;
 use crate::nostr::nwc::{
-    NostrWalletConnect, NwcProfile, NwcProfileTag, PendingNwcInvoice, Profile,
-    SingleUseSpendingConditions, SpendingConditions, PENDING_NWC_EVENTS_KEY,
+    BudgetPeriod, BudgetedSpendingConditions, NostrWalletConnect, NwcProfile, NwcProfileTag,
+    PendingNwcInvoice, Profile, SingleUseSpendingConditions, SpendingConditions,
+    PENDING_NWC_EVENTS_KEY,
 };
 use crate::storage::MutinyStorage;
 use crate::utils;
@@ -19,7 +20,6 @@ use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
 use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
 use nostr_sdk::{Client, RelayPoolNotification};
-use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
@@ -133,6 +133,41 @@ impl<S: MutinyStorage> NostrManager<S> {
             .ok_or(MutinyError::NotFound)?;
 
         nwc.profile = profile.profile();
+
+        let nwc_profile = nwc.nwc_profile();
+
+        // save to storage
+        {
+            let profiles = profiles
+                .iter()
+                .map(|x| x.profile.clone())
+                .collect::<Vec<_>>();
+            self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+        }
+
+        Ok(nwc_profile)
+    }
+
+    pub fn set_nwc_profile_budget(
+        &self,
+        profile_index: u32,
+        budget_sats: u64,
+        budget_period: BudgetPeriod,
+        single_max_sats: Option<u64>,
+    ) -> Result<NwcProfile, MutinyError> {
+        let mut profiles = self.nwc.write().unwrap();
+
+        let nwc = profiles
+            .iter_mut()
+            .find(|nwc| nwc.profile.index == profile_index)
+            .ok_or(MutinyError::NotFound)?;
+
+        nwc.profile.spending_conditions = SpendingConditions::Budget(BudgetedSpendingConditions {
+            budget: budget_sats,
+            single_max: single_max_sats,
+            payments: vec![],
+            period: budget_period,
+        });
 
         let nwc_profile = nwc.nwc_profile();
 
@@ -449,37 +484,32 @@ impl<S: MutinyStorage> NostrManager<S> {
         };
 
         if let Some(mut nwc) = nwc {
-            let (event, needs_save) = nwc
-                .handle_nwc_request(
-                    event,
-                    node_manager,
-                    from_node,
-                    self.pending_nwc_lock.deref(),
-                )
+            let event = nwc
+                .handle_nwc_request(event, node_manager, from_node, self)
                 .await?;
-
-            // update the profile if needed
-            if needs_save {
-                let mut vec = self.nwc.write().unwrap();
-
-                // update the profile
-                for item in vec.iter_mut() {
-                    if item.profile.index == nwc.profile.index {
-                        item.profile = nwc.profile;
-                        break;
-                    }
-                }
-
-                let profiles = vec.iter().map(|x| x.profile.clone()).collect::<Vec<_>>();
-                drop(vec); // drop the lock, no longer needed
-
-                self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
-            }
-
             Ok(event)
         } else {
             Ok(None)
         }
+    }
+
+    pub(crate) fn save_nwc_profile(&self, nwc: NostrWalletConnect) -> Result<(), MutinyError> {
+        let mut vec = self.nwc.write().unwrap();
+
+        // update the profile
+        for item in vec.iter_mut() {
+            if item.profile.index == nwc.profile.index {
+                item.profile = nwc.profile;
+                break;
+            }
+        }
+
+        let profiles = vec.iter().map(|x| x.profile.clone()).collect::<Vec<_>>();
+        drop(vec); // drop the lock, no longer needed
+
+        self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+
+        Ok(())
     }
 
     pub async fn claim_single_use_nwc(

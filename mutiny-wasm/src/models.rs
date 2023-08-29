@@ -904,7 +904,11 @@ impl Serialize for NwcProfile {
             "spending_conditions": json!(self.spending_conditions),
             "nwc_uri": self.nwc_uri,
             "tag": self.tag,
-            "gift_amt": self.gift_amt(),
+            "budget_amount": self.budget_amount(),
+            "budget_period": self.budget_period(),
+            "budget_remaining": self.budget_remaining(),
+            "active_payments": self._active_payments(),
+            "spending_conditions_type": self.spending_conditions_type(),
             "url_suffix": self.url_suffix(),
         });
 
@@ -917,6 +921,15 @@ impl NwcProfile {
     #[wasm_bindgen(getter)]
     pub fn value(&self) -> JsValue {
         JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn spending_conditions_type(&self) -> String {
+        match self.spending_conditions {
+            SpendingConditions::SingleUse(_) => "SingleUse".to_string(),
+            SpendingConditions::RequireApproval => "RequireApproval".to_string(),
+            SpendingConditions::Budget(_) => "Budget".to_string(),
+        }
     }
 
     #[wasm_bindgen(getter)]
@@ -940,12 +953,57 @@ impl NwcProfile {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn gift_amt(&self) -> Option<u64> {
-        if let SpendingConditions::SingleUse(ref cond) = self.spending_conditions {
-            Some(cond.amount_sats)
-        } else {
-            None
+    pub fn budget_amount(&self) -> Option<u64> {
+        match &self.spending_conditions {
+            SpendingConditions::Budget(budget) => Some(budget.budget),
+            SpendingConditions::SingleUse(single) => Some(single.amount_sats),
+            SpendingConditions::RequireApproval => None,
         }
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn budget_period(&self) -> Option<String> {
+        match &self.spending_conditions {
+            SpendingConditions::Budget(budget) => match budget.period {
+                nostr::nwc::BudgetPeriod::Day => Some("Day".to_string()),
+                nostr::nwc::BudgetPeriod::Week => Some("Week".to_string()),
+                nostr::nwc::BudgetPeriod::Month => Some("Month".to_string()),
+                nostr::nwc::BudgetPeriod::Year => Some("Year".to_string()),
+                nostr::nwc::BudgetPeriod::Seconds(secs) => Some(format!("{secs} Seconds")),
+            },
+            SpendingConditions::SingleUse(_) => None,
+            SpendingConditions::RequireApproval => None,
+        }
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn budget_remaining(&self) -> Option<u64> {
+        match &self.spending_conditions {
+            SpendingConditions::Budget(budget) => Some(budget.budget_remaining()),
+            SpendingConditions::SingleUse(single) => {
+                if single.spent {
+                    Some(0)
+                } else {
+                    Some(single.amount_sats)
+                }
+            }
+            SpendingConditions::RequireApproval => None,
+        }
+    }
+
+    fn _active_payments(&self) -> Vec<String> {
+        match &self.spending_conditions {
+            SpendingConditions::Budget(budget) => {
+                budget.payments.iter().map(|x| x.hash.clone()).collect()
+            }
+            SpendingConditions::SingleUse(_) => vec![],
+            SpendingConditions::RequireApproval => vec![],
+        }
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn active_payments(&self) -> JsValue /* Vec<String> */ {
+        JsValue::from_serde(&serde_json::to_value(self._active_payments()).unwrap()).unwrap()
     }
 
     #[wasm_bindgen(getter)]
@@ -973,6 +1031,7 @@ impl From<nostr::nwc::NwcProfile> for NwcProfile {
                 }
             }
             SpendingConditions::RequireApproval => (true, 0),
+            SpendingConditions::Budget(budget) => (false, budget.single_max.unwrap_or_default()),
         };
 
         NwcProfile {
@@ -1049,6 +1108,40 @@ impl From<nodemanager::Plan> for Plan {
         Plan {
             id: m.id,
             amount_sat: m.amount_sat,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[wasm_bindgen]
+pub enum BudgetPeriod {
+    Day,
+    Week,
+    Month,
+    Year,
+}
+
+impl From<BudgetPeriod> for nostr::nwc::BudgetPeriod {
+    fn from(value: BudgetPeriod) -> Self {
+        match value {
+            BudgetPeriod::Day => Self::Day,
+            BudgetPeriod::Week => Self::Week,
+            BudgetPeriod::Month => Self::Month,
+            BudgetPeriod::Year => Self::Year,
+        }
+    }
+}
+
+impl TryFrom<nostr::nwc::BudgetPeriod> for BudgetPeriod {
+    type Error = ();
+
+    fn try_from(value: nostr::nwc::BudgetPeriod) -> Result<Self, Self::Error> {
+        match value {
+            nostr::nwc::BudgetPeriod::Day => Ok(Self::Day),
+            nostr::nwc::BudgetPeriod::Week => Ok(Self::Week),
+            nostr::nwc::BudgetPeriod::Month => Ok(Self::Month),
+            nostr::nwc::BudgetPeriod::Year => Ok(Self::Year),
+            nostr::nwc::BudgetPeriod::Seconds(_) => Err(()),
         }
     }
 }
