@@ -1650,8 +1650,9 @@ impl<S: MutinyStorage> NodeManager<S> {
     pub async fn decode_invoice(
         &self,
         invoice: Bolt11Invoice,
+        network: Option<Network>,
     ) -> Result<MutinyInvoice, MutinyError> {
-        if invoice.network() != self.network {
+        if invoice.network() != network.unwrap_or(self.network) {
             return Err(MutinyError::IncorrectNetwork(invoice.network()));
         }
 
