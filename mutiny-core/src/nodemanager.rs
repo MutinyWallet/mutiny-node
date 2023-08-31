@@ -1368,9 +1368,11 @@ impl<S: MutinyStorage> NodeManager<S> {
                 .network_graph()
                 .get_last_rapid_gossip_sync_timestamp();
 
-            if let Some(rgs_url) =
-                get_rgs_url(self.network, &self.user_rgs_url, last_rgs_sync_timestamp)
-            {
+            if let Some(rgs_url) = get_rgs_url(
+                self.network,
+                self.user_rgs_url.as_deref(),
+                last_rgs_sync_timestamp,
+            ) {
                 log_info!(self.logger, "RGS URL: {rgs_url}");
 
                 let now = utils::now().as_secs();

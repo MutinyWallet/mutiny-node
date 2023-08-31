@@ -512,7 +512,7 @@ impl<S: MutinyStorage> Node<S> {
                     reconnection_fee,
                     &reconnection_logger,
                     reconnection_uuid,
-                    &reconnection_lsp_client,
+                    reconnection_lsp_client.as_ref(),
                     reconnection_stop,
                     reconnection_stopped_comp,
                     network == Network::Regtest,
@@ -1521,7 +1521,7 @@ async fn start_reconnection_handling<S: MutinyStorage>(
     fee_estimator: Arc<MutinyFeeEstimator<S>>,
     logger: &Arc<MutinyLogger>,
     uuid: String,
-    lsp_client: &Option<LspClient>,
+    lsp_client: Option<&LspClient>,
     stop: Arc<AtomicBool>,
     stopped_components: Arc<RwLock<Vec<bool>>>,
     skip_fee_estimates: bool,
@@ -1552,13 +1552,13 @@ async fn start_reconnection_handling<S: MutinyStorage>(
     let proxy_logger = logger.clone();
     let peer_man_proxy = peer_man.clone();
     let proxy_fee_estimator = fee_estimator.clone();
-    let lsp_client_copy = lsp_client.clone();
+    let lsp_client_copy = lsp_client.cloned();
     let storage_copy = storage.clone();
     let uuid_copy = uuid.clone();
     let stop_copy = stop.clone();
     utils::spawn(async move {
         // Now try to connect to the client's LSP
-        if let Some(lsp) = lsp_client_copy.clone() {
+        if let Some(lsp) = lsp_client_copy {
             let node_id = NodeId::from_pubkey(&lsp.pubkey);
 
             let connect_res = connect_peer_if_necessary(

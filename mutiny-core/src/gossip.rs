@@ -290,7 +290,7 @@ impl LnPeerMetadata {
         }
     }
 
-    pub(crate) fn merge_opt(&self, other: &Option<LnPeerMetadata>) -> LnPeerMetadata {
+    pub(crate) fn merge_opt(&self, other: Option<&LnPeerMetadata>) -> LnPeerMetadata {
         match other {
             Some(other) => self.merge(other),
             None => self.clone(),
@@ -444,7 +444,7 @@ pub(crate) fn save_ln_peer_info(
 
     let current: Option<LnPeerMetadata> = storage.get_data(&key)?;
 
-    let new_info = info.merge_opt(&current);
+    let new_info = info.merge_opt(current.as_ref());
 
     // if the new info is different than the current info, we should to save it
     if !current.is_some_and(|c| c == new_info) {
@@ -456,11 +456,11 @@ pub(crate) fn save_ln_peer_info(
 
 pub(crate) fn get_rgs_url(
     network: Network,
-    user_provided_url: &Option<String>,
+    user_provided_url: Option<&str>,
     last_sync_time: Option<u32>,
 ) -> Option<String> {
     let last_sync_time = last_sync_time.unwrap_or(0);
-    if let Some(url) = user_provided_url.as_ref().filter(|url| !url.is_empty()) {
+    if let Some(url) = user_provided_url.filter(|url| !url.is_empty()) {
         let url = url.strip_suffix('/').unwrap_or(url);
         Some(format!("{url}/{last_sync_time}"))
     } else {
