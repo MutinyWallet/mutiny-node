@@ -627,12 +627,19 @@ impl MutinyWallet {
     /// Decodes a lightning invoice into useful information.
     /// Will return an error if the invoice is for a different network.
     #[wasm_bindgen]
-    pub async fn decode_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
+    pub async fn decode_invoice(
+        &self,
+        invoice: String,
+        network: Option<String>,
+    ) -> Result<MutinyInvoice, MutinyJsError> {
         let invoice = Bolt11Invoice::from_str(&invoice)?;
+        let network = network
+            .map(|n| Network::from_str(&n).map_err(|_| MutinyJsError::InvalidArgumentsError))
+            .transpose()?;
         Ok(self
             .inner
             .node_manager
-            .decode_invoice(invoice)
+            .decode_invoice(invoice, network)
             .await?
             .into())
     }
