@@ -2284,8 +2284,9 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     /// Gets the current bitcoin price in USD.
-    pub async fn get_bitcoin_price(&self, fiat: String) -> Result<f32, MutinyError> {
+    pub async fn get_bitcoin_price(&self, fiat: Option<String>) -> Result<f32, MutinyError> {
         let now = crate::utils::now();
+        let fiat = fiat.unwrap_or("usd".to_string());
 
         let mut bitcoin_price_cache = self.bitcoin_price_cache.lock().await;
 

@@ -1087,7 +1087,7 @@ impl MutinyWallet {
 
     /// Gets the current bitcoin price in chosen Fiat.
     #[wasm_bindgen]
-    pub async fn get_bitcoin_price(&self, fiat: String) -> Result<f32, MutinyJsError> {
+    pub async fn get_bitcoin_price(&self, fiat: Option<String>) -> Result<f32, MutinyJsError> {
         Ok(self.inner.node_manager.get_bitcoin_price(fiat).await?)
     }
 
