@@ -819,6 +819,11 @@ impl Contact {
     pub fn lnurl(&self) -> Option<String> {
         self.lnurl.clone().map(|a| a.to_string())
     }
+
+    #[wasm_bindgen(getter)]
+    pub fn image_url(&self) -> Option<String> {
+        self.image_url.clone().map(|a| a.to_string())
+    }
 }
 
 impl From<Contact> for MutinyContact {
