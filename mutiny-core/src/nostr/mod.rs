@@ -16,10 +16,9 @@ use lightning::log_warn;
 use lightning::util::logger::Logger;
 use nostr::key::SecretKey;
 use nostr::nips::nip47::*;
-use nostr::prelude::{decrypt, encrypt, XOnlyPublicKey};
-use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Metadata, Tag};
+use nostr::prelude::{decrypt, encrypt};
+use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
 use nostr_sdk::{Client, RelayPoolNotification};
-use std::collections::HashMap;
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
@@ -238,10 +237,10 @@ impl<S: MutinyStorage> NostrManager<S> {
             let client = Client::new(&self.primary_key);
 
             #[cfg(target_arch = "wasm32")]
-            let add_relay_res = client.add_relay(&profile.relay).await;
+            let add_relay_res = client.add_relay(profile.relay.as_str()).await;
 
             #[cfg(not(target_arch = "wasm32"))]
-            let add_relay_res = client.add_relay(&profile.relay, None).await;
+            let add_relay_res = client.add_relay(profile.relay.as_str(), None).await;
 
             add_relay_res.expect("Failed to add relays");
             client.connect().await;
@@ -314,10 +313,10 @@ impl<S: MutinyStorage> NostrManager<S> {
         let client = Client::new(&self.primary_key);
 
         #[cfg(target_arch = "wasm32")]
-        let add_relay_res = client.add_relay(&nwc.profile.relay).await;
+        let add_relay_res = client.add_relay(nwc.profile.relay.as_str()).await;
 
         #[cfg(not(target_arch = "wasm32"))]
-        let add_relay_res = client.add_relay(&nwc.profile.relay, None).await;
+        let add_relay_res = client.add_relay(nwc.profile.relay.as_str(), None).await;
 
         add_relay_res.expect("Failed to add relays");
         client.connect().await;
@@ -511,9 +510,9 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let req = Request {
             method: Method::PayInvoice,
-            params: RequestParams {
+            params: RequestParams::PayInvoice(PayInvoiceRequestParams {
                 invoice: bolt11.to_string(),
-            },
+            }),
         };
         let encrypted = encrypt(&nwc.secret, &nwc.public_key, req.as_json())?;
         let p_tag = Tag::PubKey(nwc.public_key, None);
@@ -578,19 +577,21 @@ impl<S: MutinyStorage> NostrManager<S> {
                                     client.disconnect().await?;
 
                                     match resp.result {
-                                        Some(result) => {
-                                            let preimage: Vec<u8> = FromHex::from_hex(&result.preimage)?;
+                                        Some(ResponseResult::PayInvoice(params)) => {
+                                            let preimage: Vec<u8> = FromHex::from_hex(&params.preimage)?;
                                             if sha256::Hash::hash(&preimage) != invoice.payment_hash {
                                                 log_warn!(node_manager.logger, "Received payment preimage that does not represent the invoice hash");
                                             }
                                             return Ok(None);
                                         },
+                                        Some(_) => unreachable!("Should not receive any other response type"),
                                         None => return Ok(resp.error),
                                     }
                                 }
                             }
                         },
                         Ok(RelayPoolNotification::Message(_, _)) => {}, // ignore messages
+                        Ok(RelayPoolNotification::Stop) => {}, // ignore stops
                         Ok(RelayPoolNotification::Shutdown) =>
                             return Err(MutinyError::ConnectionFailed),
                         Err(_) => return Err(MutinyError::ConnectionFailed),
@@ -684,40 +685,6 @@ impl<S: MutinyStorage> NostrManager<S> {
             pending_nwc_lock: Arc::new(Mutex::new(())),
         })
     }
-}
-
-// ported from nostr-sdk but with bug fix
-pub(crate) async fn get_contact_list_metadata(
-    client: &Client,
-    timeout: Option<Duration>,
-) -> Result<HashMap<XOnlyPublicKey, Metadata>, nostr_sdk::client::Error> {
-    let public_keys = client.get_contact_list_public_keys(timeout).await?;
-    let mut contacts: HashMap<XOnlyPublicKey, Metadata> =
-        public_keys.iter().map(|p| (*p, Metadata::new())).collect();
-
-    let chunk_size: usize = 10;
-    for chunk in public_keys.chunks(chunk_size) {
-        let mut filters: Vec<Filter> = Vec::new();
-        for public_key in chunk.iter() {
-            filters.push(
-                Filter::new()
-                    .author(public_key.to_string())
-                    .kind(Kind::Metadata)
-                    .limit(1),
-            );
-        }
-        let events: Vec<Event> = client.get_events_of(filters, timeout).await?;
-        for event in events.into_iter() {
-            // skip metadata we can't parse
-            if let Ok(metadata) = Metadata::from_json(&event.content) {
-                if let Some(m) = contacts.get_mut(&event.pubkey) {
-                    *m = metadata
-                };
-            }
-        }
-    }
-
-    Ok(contacts)
 }
 
 #[cfg(test)]

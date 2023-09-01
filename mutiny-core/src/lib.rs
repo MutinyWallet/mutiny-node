@@ -63,7 +63,7 @@ use futures::{pin_mut, select, FutureExt};
 use lightning::{log_debug, util::logger::Logger};
 use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
-use nostr_sdk::{Client, RelayPoolNotification};
+use nostr_sdk::{Client, Options, RelayPoolNotification};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -282,6 +282,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                 },
                                 Ok(RelayPoolNotification::Message(_, _)) => {}, // ignore messages
                                 Ok(RelayPoolNotification::Shutdown) => break, // if we disconnect, we restart to reconnect
+                                Ok(RelayPoolNotification::Stop) => {}, // Currently unused
                                 Err(_) => break, // if we are erroring we should reconnect
                             }
                         }
@@ -407,7 +408,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         timeout: Option<Duration>,
     ) -> Result<(), MutinyError> {
         let keys = Keys::from_public_key(npub);
-        let client = Client::new(&keys);
+        let options = Options::new().req_filters_chunk_size(30);
+        let client = Client::with_opts(&keys, options);
 
         #[cfg(target_arch = "wasm32")]
         client.add_relay("wss://relay.damus.io").await?;
@@ -417,7 +419,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         client.connect().await;
 
-        let mut metadata = nostr::get_contact_list_metadata(&client, timeout).await?;
+        let mut metadata = client.get_contact_list_metadata(timeout).await?;
 
         let contacts = self.storage.get_contacts()?;
 
