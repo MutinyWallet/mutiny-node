@@ -174,7 +174,9 @@ impl NostrWalletConnect {
                 Ok(Response {
                     result_type: Method::PayInvoice,
                     error: None,
-                    result: Some(ResponseResult { preimage }),
+                    result: Some(ResponseResult::PayInvoice(PayInvoiceResponseResult {
+                        preimage,
+                    })),
                 })
             }
             Err(e) => {
@@ -210,8 +212,11 @@ impl NostrWalletConnect {
                 return Ok((None, needs_save));
             }
 
-            let invoice = Bolt11Invoice::from_str(&req.params.invoice)
-                .map_err(|_| anyhow!("Failed to parse invoice"))?;
+            let invoice = match req.params {
+                RequestParams::PayInvoice(params) => Bolt11Invoice::from_str(&params.invoice)
+                    .map_err(|_| anyhow!("Failed to parse invoice"))?,
+                _ => return Err(anyhow!("Invalid request params for pay invoice")),
+            };
 
             // if the invoice has expired, skip it
             if invoice.would_expire(utils::now()) {
@@ -276,7 +281,7 @@ impl NostrWalletConnect {
                                 Response {
                                     result_type: Method::PayInvoice,
                                     error: Some(NIP47Error {
-                                        code: ErrorCode::InsufficantBalance,
+                                        code: ErrorCode::InsufficientBalance,
                                         message: format!("Failed to pay invoice: {e}"),
                                     }),
                                     result: None,
