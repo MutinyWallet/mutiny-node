@@ -1085,10 +1085,10 @@ impl MutinyWallet {
         Ok(JsValue::from_serde(&tags)?)
     }
 
-    /// Gets the current bitcoin price in USD.
+    /// Gets the current bitcoin price in chosen Fiat.
     #[wasm_bindgen]
-    pub async fn get_bitcoin_price(&self) -> Result<f32, MutinyJsError> {
-        Ok(self.inner.node_manager.get_bitcoin_price().await?)
+    pub async fn get_bitcoin_price(&self, fiat: String) -> Result<f32, MutinyJsError> {
+        Ok(self.inner.node_manager.get_bitcoin_price(fiat).await?)
     }
 
     /// Exports the current state of the node manager to a json object.

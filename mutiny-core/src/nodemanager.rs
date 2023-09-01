@@ -2284,7 +2284,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     /// Gets the current bitcoin price in USD.
-    pub async fn get_bitcoin_price(&self) -> Result<f32, MutinyError> {
+    pub async fn get_bitcoin_price(&self, fiat: String) -> Result<f32, MutinyError> {
         let now = crate::utils::now();
 
         let mut bitcoin_price_cache = self.bitcoin_price_cache.lock().await;
@@ -2298,7 +2298,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             }
             _ => {
                 // Cache is either expired or empty, fetch new price
-                match self.fetch_bitcoin_price().await {
+                match self.fetch_bitcoin_price(&fiat).await {
                     Ok(new_price) => (new_price, now),
                     Err(e) => {
                         // If fetching price fails, return the cached price (if any)
@@ -2307,7 +2307,11 @@ impl<S: MutinyStorage> NodeManager<S> {
                             (*price, *timestamp)
                         } else {
                             // If there is no cached price, return the error
-                            log_error!(self.logger, "no cached price and price api failed");
+                            log_error!(
+                                self.logger,
+                                "no cached price and price api failed for {}",
+                                fiat
+                            );
                             return Err(e);
                         }
                     }
@@ -2319,19 +2323,24 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(price)
     }
 
-    async fn fetch_bitcoin_price(&self) -> Result<f32, MutinyError> {
-        log_debug!(self.logger, "fetching new bitcoin price");
+    async fn fetch_bitcoin_price(&self, fiat: &str) -> Result<f32, MutinyError> {
+        log_debug!(self.logger, "fetching new bitcoin price against {}", fiat);
+        let api_url = format!(
+            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies={}",
+            fiat
+        );
 
         let client = Client::builder()
             .build()
             .map_err(|_| MutinyError::BitcoinPriceError)?;
 
         let request = client
-            .get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd")
+            .get(api_url)
             .build()
             .map_err(|_| MutinyError::BitcoinPriceError)?;
 
         let resp: reqwest::Response = utils::fetch_with_timeout(&client, request).await?;
+
         let response: CoingeckoResponse = resp
             .error_for_status()
             .map_err(|_| MutinyError::BitcoinPriceError)?
@@ -2339,7 +2348,11 @@ impl<S: MutinyStorage> NodeManager<S> {
             .await
             .map_err(|_| MutinyError::BitcoinPriceError)?;
 
-        Ok(response.bitcoin.usd)
+        if let Some(price) = response.bitcoin.get(fiat) {
+            Ok(*price)
+        } else {
+            Err(MutinyError::BitcoinPriceError)
+        }
     }
 
     /// Retrieves the logs from storage.
@@ -2420,14 +2433,9 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 }
 
-#[derive(Deserialize, Clone, Copy, Debug)]
+#[derive(Deserialize, Clone, Debug)]
 struct CoingeckoResponse {
-    pub bitcoin: CoingeckoPrice,
-}
-
-#[derive(Deserialize, Clone, Copy, Debug)]
-struct CoingeckoPrice {
-    pub usd: f32,
+    pub bitcoin: HashMap<String, f32>,
 }
 
 // This will create a new node with a node manager and return the PublicKey of the node created.
