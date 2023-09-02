@@ -174,11 +174,17 @@ pub struct MutinyInvoice {
     pub payee_pubkey: Option<PublicKey>,
     pub amount_sats: Option<u64>,
     pub expire: u64,
-    pub paid: bool,
+    pub status: HTLCStatus,
     pub fees_paid: Option<u64>,
     pub inbound: bool,
     pub labels: Vec<String>,
     pub last_updated: u64,
+}
+
+impl MutinyInvoice {
+    pub fn paid(&self) -> bool {
+        self.status == HTLCStatus::Succeeded
+    }
 }
 
 impl From<Bolt11Invoice> for MutinyInvoice {
@@ -209,7 +215,7 @@ impl From<Bolt11Invoice> for MutinyInvoice {
             payee_pubkey,
             amount_sats,
             expire: expiry,
-            paid: false,
+            status: HTLCStatus::Pending,
             fees_paid: None,
             inbound: true,
             labels: vec![],
@@ -240,7 +246,7 @@ impl MutinyInvoice {
                 Ok(MutinyInvoice {
                     inbound,
                     last_updated: i.last_update,
-                    paid: i.status == HTLCStatus::Succeeded,
+                    status: i.status,
                     labels,
                     amount_sats,
                     payee_pubkey: i.payee_pubkey,
@@ -250,7 +256,6 @@ impl MutinyInvoice {
                 })
             }
             None => {
-                let paid = i.status == HTLCStatus::Succeeded;
                 let amount_sats: Option<u64> = i.amt_msat.0.map(|s| s / 1_000);
                 let fees_paid = i.fee_paid_msat.map(|f| f / 1_000);
                 let preimage = i.preimage.map(|p| p.to_hex());
@@ -263,7 +268,7 @@ impl MutinyInvoice {
                     payee_pubkey: i.payee_pubkey,
                     amount_sats,
                     expire: i.last_update,
-                    paid,
+                    status: i.status,
                     fees_paid,
                     inbound,
                     labels,
@@ -1212,7 +1217,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         let mut activity = Vec::with_capacity(lightning.len() + onchain.len());
         for ln in lightning {
             // Only show paid invoices
-            if ln.paid {
+            if ln.paid() {
                 activity.push(ActivityItem::Lightning(Box::new(ln)));
             }
         }
@@ -2790,7 +2795,7 @@ mod tests {
             payee_pubkey: None,
             amount_sats: Some(100_000),
             expire: 1681781649 + 86400,
-            paid: true,
+            status: HTLCStatus::Succeeded,
             fees_paid: None,
             inbound: true,
             labels: labels.clone(),
@@ -2843,7 +2848,7 @@ mod tests {
             payee_pubkey: Some(pubkey),
             amount_sats: Some(100),
             expire: 1681781585,
-            paid: true,
+            status: HTLCStatus::Succeeded,
             fees_paid: Some(1),
             inbound: false,
             labels: vec![],
@@ -2916,7 +2921,7 @@ mod tests {
             payee_pubkey: Some(pubkey),
             amount_sats: Some(100),
             expire: 1681781585,
-            paid: true,
+            status: HTLCStatus::Succeeded,
             fees_paid: Some(1),
             inbound: false,
             labels: vec![],
@@ -2931,7 +2936,7 @@ mod tests {
             payee_pubkey: Some(pubkey),
             amount_sats: Some(100),
             expire: 1681781585,
-            paid: true,
+            status: HTLCStatus::Succeeded,
             fees_paid: Some(1),
             inbound: false,
             labels: vec![],

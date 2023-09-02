@@ -368,7 +368,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
                 .await
             {
                 Ok(i) => {
-                    if i.paid {
+                    if i.paid() {
                         let amount_sent = i.amount_sats.expect("invoice must have amount");
                         log_debug!(
                             &self.logger,
