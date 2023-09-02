@@ -449,7 +449,11 @@ impl ActivityItem {
                 ConfirmationTime::Confirmed { time, .. } => Some(time),
                 ConfirmationTime::Unconfirmed { .. } => None,
             },
-            ActivityItem::Lightning(i) => Some(i.last_updated),
+            ActivityItem::Lightning(i) => match i.status {
+                HTLCStatus::Succeeded => Some(i.last_updated),
+                HTLCStatus::Failed => Some(i.last_updated),
+                HTLCStatus::Pending | HTLCStatus::InFlight => None,
+            },
             ActivityItem::ChannelClosed(c) => Some(c.timestamp),
         }
     }
@@ -487,7 +491,26 @@ impl Ord for ActivityItem {
             (Some(self_time), Some(other_time)) => self_time.cmp(&other_time),
             (Some(_), None) => core::cmp::Ordering::Less,
             (None, Some(_)) => core::cmp::Ordering::Greater,
-            (None, None) => core::cmp::Ordering::Equal,
+            (None, None) => {
+                // if both are none, do lightning first
+                match (self, other) {
+                    (ActivityItem::Lightning(_), ActivityItem::OnChain(_)) => {
+                        core::cmp::Ordering::Greater
+                    }
+                    (ActivityItem::OnChain(_), ActivityItem::Lightning(_)) => {
+                        core::cmp::Ordering::Less
+                    }
+                    (ActivityItem::Lightning(l1), ActivityItem::Lightning(l2)) => {
+                        // compare lightning by expire time
+                        l1.expire.cmp(&l2.expire)
+                    }
+                    (ActivityItem::OnChain(o1), ActivityItem::OnChain(o2)) => {
+                        // compare onchain by confirmation time (which will be last seen for unconfirmed)
+                        o1.confirmation_time.cmp(&o2.confirmation_time)
+                    }
+                    _ => core::cmp::Ordering::Equal,
+                }
+            }
         }
     }
 }
@@ -1216,9 +1239,12 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let mut activity = Vec::with_capacity(lightning.len() + onchain.len());
         for ln in lightning {
-            // Only show paid invoices
-            if ln.paid() {
-                activity.push(ActivityItem::Lightning(Box::new(ln)));
+            // Only show paid and in-flight invoices
+            match ln.status {
+                HTLCStatus::Succeeded | HTLCStatus::InFlight => {
+                    activity.push(ActivityItem::Lightning(Box::new(ln)));
+                }
+                HTLCStatus::Pending | HTLCStatus::Failed => {}
             }
         }
         for on in onchain {
@@ -2943,11 +2969,27 @@ mod tests {
             last_updated: 1781781585,
         };
 
+        let invoice3: MutinyInvoice = MutinyInvoice {
+            bolt11: None,
+            description: None,
+            payment_hash,
+            preimage: None,
+            payee_pubkey: Some(pubkey),
+            amount_sats: Some(101),
+            expire: 1581781585,
+            status: HTLCStatus::InFlight,
+            fees_paid: None,
+            inbound: false,
+            labels: vec![],
+            last_updated: 1581781585,
+        };
+
         let mut vec = vec![
             ActivityItem::OnChain(tx1.clone()),
             ActivityItem::OnChain(tx2.clone()),
             ActivityItem::Lightning(Box::new(invoice1.clone())),
             ActivityItem::Lightning(Box::new(invoice2.clone())),
+            ActivityItem::Lightning(Box::new(invoice3.clone())),
             ActivityItem::ChannelClosed(closure.clone()),
         ];
         vec.sort();
@@ -2960,6 +3002,7 @@ mod tests {
                 ActivityItem::ChannelClosed(closure),
                 ActivityItem::Lightning(Box::new(invoice2)),
                 ActivityItem::OnChain(tx1),
+                ActivityItem::Lightning(Box::new(invoice3)),
             ]
         );
     }
