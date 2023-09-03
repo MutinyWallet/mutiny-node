@@ -69,7 +69,7 @@ jobs:
       - name: Build wasm
         env:
           RUSTUP_TOOLCHAIN: nightly
-        run: wasm-pack build ./mutiny-wasm --release --target web --scope mutinywallet
+        run: wasm-pack build ./mutiny-wasm --release --weak-refs --target web --scope mutinywallet
 
       - name: Publish wasm
         run: wasm-pack publish --access public -t web
