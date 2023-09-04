@@ -234,7 +234,7 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub fn get_new_address(
         &self,
-        labels: JsValue, /* Vec<String> */
+        labels: &JsValue, /* Vec<String> */
     ) -> Result<MutinyBip21RawMaterials, MutinyJsError> {
         let labels: Vec<String> = labels
             .into_serde()
@@ -285,7 +285,7 @@ impl MutinyWallet {
     pub async fn create_bip21(
         &self,
         amount: Option<u64>,
-        labels: JsValue, /* Vec<String> */
+        labels: &JsValue, /* Vec<String> */
     ) -> Result<MutinyBip21RawMaterials, MutinyJsError> {
         let labels: Vec<String> = labels
             .into_serde()
@@ -307,7 +307,7 @@ impl MutinyWallet {
         &self,
         destination_address: String,
         amount: u64,
-        labels: JsValue, /* Vec<String> */
+        labels: &JsValue, /* Vec<String> */
         fee_rate: Option<f32>,
     ) -> Result<String, MutinyJsError> {
         let send_to = Address::from_str(&destination_address)?;
@@ -330,7 +330,7 @@ impl MutinyWallet {
     pub async fn sweep_wallet(
         &self,
         destination_address: String,
-        labels: JsValue, /* Vec<String> */
+        labels: &JsValue, /* Vec<String> */
         fee_rate: Option<f32>,
     ) -> Result<String, MutinyJsError> {
         let send_to = Address::from_str(&destination_address)?;
@@ -548,7 +548,7 @@ impl MutinyWallet {
     pub async fn create_invoice(
         &self,
         amount: Option<u64>,
-        labels: JsValue, /* Vec<String> */
+        labels: &JsValue, /* Vec<String> */
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let labels: Vec<String> = labels
             .into_serde()
@@ -570,7 +570,7 @@ impl MutinyWallet {
         from_node: String,
         invoice_str: String,
         amt_sats: Option<u64>,
-        labels: JsValue, /* Vec<String> */
+        labels: &JsValue, /* Vec<String> */
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let from_node = PublicKey::from_str(&from_node)?;
         let invoice = Bolt11Invoice::from_str(&invoice_str)?;
@@ -593,7 +593,7 @@ impl MutinyWallet {
         from_node: String,
         to_node: String,
         amt_sats: u64,
-        labels: JsValue, /* Vec<String> */
+        labels: &JsValue, /* Vec<String> */
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let from_node = PublicKey::from_str(&from_node)?;
         let to_node = PublicKey::from_str(&to_node)?;
@@ -645,7 +645,7 @@ impl MutinyWallet {
         lnurl: String,
         amount_sats: u64,
         zap_npub: Option<String>,
-        labels: JsValue, /* Vec<String> */
+        labels: &JsValue, /* Vec<String> */
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let from_node = PublicKey::from_str(&from_node)?;
         let lnurl = LnUrl::from_str(&lnurl)?;
@@ -959,7 +959,7 @@ impl MutinyWallet {
     pub fn set_address_labels(
         &self,
         address: String,
-        labels: JsValue, /* Vec<String> */
+        labels: &JsValue, /* Vec<String> */
     ) -> Result<(), MutinyJsError> {
         let address = Address::from_str(&address)?;
         let labels: Vec<String> = labels
@@ -985,7 +985,7 @@ impl MutinyWallet {
     pub fn set_invoice_labels(
         &self,
         invoice: String,
-        labels: JsValue, /* Vec<String> */
+        labels: &JsValue, /* Vec<String> */
     ) -> Result<(), MutinyJsError> {
         let invoice = Bolt11Invoice::from_str(&invoice)?;
         let labels: Vec<String> = labels
@@ -1121,7 +1121,7 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn edit_nwc_profile(
         &self,
-        profile: JsValue,
+        profile: &JsValue,
     ) -> Result<models::NwcProfile, MutinyJsError> {
         let profile: NwcProfile = profile
             .into_serde()

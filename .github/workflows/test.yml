@@ -62,7 +62,7 @@ jobs:
       - name: Build wasm package
         env:
           RUSTUP_TOOLCHAIN: nightly
-        run: wasm-pack build ./mutiny-wasm --release --target web
+        run: wasm-pack build ./mutiny-wasm --release --weak-refs --target web
 
   browser_tests:
     name: Browser Tests
