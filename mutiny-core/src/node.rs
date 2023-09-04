@@ -939,7 +939,7 @@ impl<S: MutinyStorage> Node<S> {
         invoice: &Bolt11Invoice,
         amt_sats: Option<u64>,
         labels: Vec<String>,
-    ) -> Result<PaymentHash, MutinyError> {
+    ) -> Result<(PaymentId, PaymentHash), MutinyError> {
         let payment_hash = PaymentHash(invoice.payment_hash().into_inner());
 
         if self
@@ -1028,7 +1028,7 @@ impl<S: MutinyStorage> Node<S> {
             .persist_payment_info(&payment_hash, &payment_info, false)?;
 
         match pay_result {
-            Ok(_) => Ok(payment_hash),
+            Ok(id) => Ok((id, payment_hash)),
             Err(e) => {
                 log_error!(self.logger, "failed to make payment: {:?}", e);
                 // call list channels to see what our channels are
@@ -1070,6 +1070,7 @@ impl<S: MutinyStorage> Node<S> {
 
     async fn await_payment(
         &self,
+        payment_id: PaymentId,
         payment_hash: PaymentHash,
         timeout: u64,
         labels: Vec<String>,
@@ -1078,6 +1079,9 @@ impl<S: MutinyStorage> Node<S> {
         loop {
             let now = utils::now().as_secs();
             if now - start > timeout {
+                // stop retrying after timeout, this should help prevent
+                // payments completing unexpectedly after the timeout
+                self.channel_manager.abandon_payment(payment_id);
                 return Err(MutinyError::PaymentTimeout);
             }
 
@@ -1109,12 +1113,13 @@ impl<S: MutinyStorage> Node<S> {
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         // initiate payment
-        let payment_hash = self
+        let (payment_id, payment_hash) = self
             .init_invoice_payment(invoice, amt_sats, labels.clone())
             .await?;
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
 
-        self.await_payment(payment_hash, timeout, labels).await
+        self.await_payment(payment_id, payment_hash, timeout, labels)
+            .await
     }
 
     /// init_keysend_payment sends off the payment but does not wait for results
@@ -1124,11 +1129,8 @@ impl<S: MutinyStorage> Node<S> {
         to_node: PublicKey,
         amt_sats: u64,
         labels: Vec<String>,
+        payment_id: PaymentId,
     ) -> Result<MutinyInvoice, MutinyError> {
-        let mut entropy = [0u8; 32];
-        getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
-        let payment_id = PaymentId(entropy);
-
         let mut entropy = [0u8; 32];
         getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
         let payment_secret = PaymentSecret(entropy);
@@ -1195,13 +1197,18 @@ impl<S: MutinyStorage> Node<S> {
         labels: Vec<String>,
         timeout_secs: Option<u64>,
     ) -> Result<MutinyInvoice, MutinyError> {
+        let mut entropy = [0u8; 32];
+        getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
+        let payment_id = PaymentId(entropy);
+
         // initiate payment
-        let pay = self.init_keysend_payment(to_node, amt_sats, labels.clone())?;
+        let pay = self.init_keysend_payment(to_node, amt_sats, labels.clone(), payment_id)?;
 
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
         let payment_hash = PaymentHash(pay.payment_hash.into_inner());
 
-        self.await_payment(payment_hash, timeout, labels).await
+        self.await_payment(payment_id, payment_hash, timeout, labels)
+            .await
     }
 
     async fn await_chan_funding_tx(
