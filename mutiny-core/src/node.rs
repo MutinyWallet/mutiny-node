@@ -1055,9 +1055,10 @@ impl<S: MutinyStorage> Node<S> {
                     // If the amount was within our balance but we couldn't pay because of
                     // the channel reserve, return a ReserveAmountError
                     let reserved_amt: u64 = current_channels
-                        .iter()
+                        .into_iter()
                         .flat_map(|c| c.unspendable_punishment_reserve)
-                        .sum();
+                        .sum::<u64>()
+                        * 1_000; // multiply by 1k to convert to msat
                     if ln_balance - reserved_amt < amt_msat {
                         return Err(MutinyError::ReserveAmountError);
                     }
