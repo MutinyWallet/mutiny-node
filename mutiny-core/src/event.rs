@@ -11,6 +11,7 @@ use anyhow::anyhow;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
+use core::fmt;
 use lightning::events::{Event, PaymentPurpose};
 use lightning::sign::SpendableOutputDescriptor;
 use lightning::{
@@ -51,11 +52,26 @@ impl MillisatAmount {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum HTLCStatus {
+pub enum HTLCStatus {
+    /// Our invoice has not been paid yet
     Pending,
+    /// We are currently trying to pay an invoice
     InFlight,
+    /// An invoice has been paid
     Succeeded,
+    /// We failed to pay an invoice
     Failed,
+}
+
+impl fmt::Display for HTLCStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HTLCStatus::Pending => write!(f, "Pending"),
+            HTLCStatus::InFlight => write!(f, "InFlight"),
+            HTLCStatus::Succeeded => write!(f, "Succeeded"),
+            HTLCStatus::Failed => write!(f, "Failed"),
+        }
+    }
 }
 
 #[derive(Clone)]

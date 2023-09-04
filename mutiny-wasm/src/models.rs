@@ -120,7 +120,7 @@ pub struct MutinyInvoice {
     payee_pubkey: Option<String>,
     pub amount_sats: Option<u64>,
     pub expire: u64,
-    pub paid: bool,
+    status: String,
     pub fees_paid: Option<u64>,
     pub inbound: bool,
     pub last_updated: u64,
@@ -160,6 +160,16 @@ impl MutinyInvoice {
     }
 
     #[wasm_bindgen(getter)]
+    pub fn status(&self) -> String {
+        self.status.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn paid(&self) -> bool {
+        self.status == HTLCStatus::Succeeded.to_string()
+    }
+
+    #[wasm_bindgen(getter)]
     pub fn labels(&self) -> JsValue /* Vec<String> */ {
         JsValue::from_serde(&self.labels).unwrap()
     }
@@ -175,7 +185,7 @@ impl From<nodemanager::MutinyInvoice> for MutinyInvoice {
             payee_pubkey: m.payee_pubkey.map(|p| p.to_hex()),
             amount_sats: m.amount_sats,
             expire: m.expire,
-            paid: m.paid,
+            status: m.status.to_string(),
             fees_paid: m.fees_paid,
             inbound: m.inbound,
             last_updated: m.last_updated,

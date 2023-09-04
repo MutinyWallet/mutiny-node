@@ -240,7 +240,7 @@ impl NostrWalletConnect {
 
             // if we have already paid this invoice, skip it
             let node = node_manager.get_node(from_node).await?;
-            if node.get_invoice(&invoice).is_ok_and(|i| i.paid) {
+            if node.get_invoice(&invoice).is_ok_and(|i| i.paid()) {
                 return Ok((None, needs_save));
             }
             drop(node);
