@@ -36,7 +36,7 @@ use mutiny_core::redshift::RedshiftRecipient;
 use mutiny_core::scb::EncryptedSCB;
 use mutiny_core::storage::MutinyStorage;
 use mutiny_core::vss::MutinyVssClient;
-use mutiny_core::{encrypt::encryption_key_from_pass, generate_seed, nostr::nwc::NwcProfile};
+use mutiny_core::{generate_seed, nostr::nwc::NwcProfile};
 use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
 use nostr::key::XOnlyPublicKey;
@@ -89,18 +89,11 @@ impl MutinyWallet {
         let safe_mode = safe_mode.unwrap_or(false);
         let logger = Arc::new(MutinyLogger::default());
 
-        let cipher = password
-            .as_ref()
-            .filter(|p| !p.is_empty())
-            .map(|p| encryption_key_from_pass(p))
-            .transpose()?;
-
         let network: Network = network_str
             .map(|s| s.parse().expect("Invalid network"))
             .unwrap_or(Network::Bitcoin);
 
-        let storage =
-            IndexedDbStorage::new(password.clone(), cipher.clone(), None, logger.clone()).await?;
+        let storage = IndexedDbStorage::new(password.clone(), None, logger.clone()).await?;
 
         let mnemonic = match mnemonic_str {
             Some(m) => {
@@ -155,7 +148,7 @@ impl MutinyWallet {
             (None, None)
         };
 
-        let storage = IndexedDbStorage::new(password, cipher, vss_client, logger.clone()).await?;
+        let storage = IndexedDbStorage::new(password, vss_client, logger.clone()).await?;
 
         let mut config = mutiny_core::MutinyWalletConfig::new(
             xprivkey,
@@ -191,16 +184,7 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn has_node_manager(password: Option<String>) -> bool {
         let logger = Arc::new(MutinyLogger::default());
-        let cipher = match password
-            .as_ref()
-            .filter(|p| !p.is_empty())
-            .map(|p| encryption_key_from_pass(p))
-            .transpose()
-        {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
-        let storage = IndexedDbStorage::new(password, cipher, None, logger)
+        let storage = IndexedDbStorage::new(password, None, logger)
             .await
             .expect("Failed to init");
         NodeManager::has_node_manager(storage)
@@ -1096,7 +1080,7 @@ impl MutinyWallet {
     pub async fn get_logs() -> Result<JsValue /* Option<Vec<String>> */, MutinyJsError> {
         let logger = Arc::new(MutinyLogger::default());
         // Password should not be required for logs
-        let storage = IndexedDbStorage::new(None, None, None, logger.clone()).await?;
+        let storage = IndexedDbStorage::new(None, None, logger.clone()).await?;
         let stop = Arc::new(AtomicBool::new(false));
         let logger = Arc::new(MutinyLogger::with_writer(stop.clone(), storage.clone()));
         let res = JsValue::from_serde(&NodeManager::get_logs(storage, logger)?)?;
@@ -1294,13 +1278,8 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn export_json(password: Option<String>) -> Result<String, MutinyJsError> {
         let logger = Arc::new(MutinyLogger::default());
-        let cipher = password
-            .as_ref()
-            .filter(|p| !p.is_empty())
-            .map(|p| encryption_key_from_pass(p))
-            .transpose()?;
         // todo init vss
-        let storage = IndexedDbStorage::new(password, cipher, None, logger).await?;
+        let storage = IndexedDbStorage::new(password, None, logger).await?;
         if storage.get_mnemonic().is_err() {
             // if we get an error, then we have the wrong password
             return Err(MutinyJsError::IncorrectPassword);
@@ -1336,12 +1315,7 @@ impl MutinyWallet {
         password: Option<String>,
     ) -> Result<(), MutinyJsError> {
         let logger = Arc::new(MutinyLogger::default());
-        let cipher = password
-            .as_ref()
-            .filter(|p| !p.is_empty())
-            .map(|p| encryption_key_from_pass(p))
-            .transpose()?;
-        let storage = IndexedDbStorage::new(password, cipher, None, logger).await?;
+        let storage = IndexedDbStorage::new(password, None, logger).await?;
         mutiny_core::MutinyWallet::<IndexedDbStorage>::restore_mnemonic(
             storage,
             Mnemonic::from_str(&m).map_err(|_| MutinyJsError::InvalidMnemonic)?,

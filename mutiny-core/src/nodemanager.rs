@@ -2536,11 +2536,8 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        encrypt::encryption_key_from_pass,
-        nodemanager::{
-            ActivityItem, ChannelClosure, MutinyInvoice, NodeManager, TransactionDetails,
-        },
+    use crate::nodemanager::{
+        ActivityItem, ChannelClosure, MutinyInvoice, NodeManager, TransactionDetails,
     };
     use crate::{keymanager::generate_seed, MutinyWalletConfig};
     use bdk::chain::ConfirmationTime;
@@ -2571,8 +2568,7 @@ mod tests {
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
-        let cipher = encryption_key_from_pass(&pass).unwrap();
-        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
+        let storage = MemoryStorage::new(Some(pass), None).unwrap();
 
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let c = MutinyWalletConfig::new(
@@ -2601,8 +2597,7 @@ mod tests {
         log!("{}", test_name);
 
         let pass = uuid::Uuid::new_v4().to_string();
-        let cipher = encryption_key_from_pass(&pass).unwrap();
-        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
+        let storage = MemoryStorage::new(Some(pass), None).unwrap();
         let seed = generate_seed(12).expect("Failed to gen seed");
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
         let c = MutinyWalletConfig::new(
@@ -2652,8 +2647,7 @@ mod tests {
         log!("{}", test_name);
 
         let pass = uuid::Uuid::new_v4().to_string();
-        let cipher = encryption_key_from_pass(&pass).unwrap();
-        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
+        let storage = MemoryStorage::new(Some(pass), None).unwrap();
         let seed = generate_seed(12).expect("Failed to gen seed");
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
         let c = MutinyWalletConfig::new(
@@ -2688,8 +2682,7 @@ mod tests {
         log!("{}", test_name);
 
         let pass = uuid::Uuid::new_v4().to_string();
-        let cipher = encryption_key_from_pass(&pass).unwrap();
-        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
+        let storage = MemoryStorage::new(Some(pass), None).unwrap();
         let seed = generate_seed(12).expect("Failed to gen seed");
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
         let c = MutinyWalletConfig::new(
