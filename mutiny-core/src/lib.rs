@@ -57,19 +57,20 @@ use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
-use ::nostr::{Keys, Kind};
+use ::nostr::{Event, Kind, Metadata};
 use bip39::Mnemonic;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::Network;
 use futures::{pin_mut, select, FutureExt};
+use hashbrown::HashMap;
 use lightning::{log_debug, util::logger::Logger};
 use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
-use nostr_sdk::{Client, Options, RelayPoolNotification};
+use nostr_sdk::{Client, RelayPoolNotification};
+use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
 
 #[derive(Clone)]
 pub struct MutinyWalletConfig {
@@ -407,22 +408,31 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Get contacts from the given npub and sync them to the wallet
     pub async fn sync_nostr_contacts(
         &self,
+        primal_url: Option<&str>,
         npub: XOnlyPublicKey,
-        timeout: Option<Duration>,
     ) -> Result<(), MutinyError> {
-        let keys = Keys::from_public_key(npub);
-        let options = Options::new().req_filters_chunk_size(30);
-        let client = Client::with_opts(&keys, options);
+        let body = json!(["contact_list", { "pubkey": npub } ]);
 
-        #[cfg(target_arch = "wasm32")]
-        client.add_relay("wss://relay.damus.io").await?;
+        let url = primal_url.unwrap_or("https://primal-cache.mutinywallet.com/api");
+        let data: Vec<Value> = reqwest::Client::new()
+            .post(url)
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .map_err(|_| MutinyError::NostrError)?
+            .json()
+            .await
+            .map_err(|_| MutinyError::NostrError)?;
 
-        #[cfg(not(target_arch = "wasm32"))]
-        client.add_relay("wss://relay.damus.io", None).await?;
-
-        client.connect().await;
-
-        let mut metadata = client.get_contact_list_metadata(timeout).await?;
+        let mut metadata = data
+            .into_iter()
+            .filter_map(|v| {
+                Event::from_value(v)
+                    .ok()
+                    .and_then(|e| Metadata::from_json(e.content).ok().map(|m| (e.pubkey, m)))
+            })
+            .collect::<HashMap<_, _>>();
 
         let contacts = self.storage.get_contacts()?;
 
@@ -450,7 +460,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             self.storage.create_new_contact(contact)?;
         }
 
-        client.disconnect().await?;
         Ok(())
     }
 

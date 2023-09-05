@@ -1251,9 +1251,15 @@ impl MutinyWallet {
     }
 
     /// Get contacts from the given npub and sync them to the wallet
-    pub async fn sync_nostr_contacts(&self, npub_str: String) -> Result<(), MutinyJsError> {
+    pub async fn sync_nostr_contacts(
+        &self,
+        primal_url: Option<String>,
+        npub_str: String,
+    ) -> Result<(), MutinyJsError> {
         let npub = XOnlyPublicKey::from_bech32(&npub_str)?;
-        self.inner.sync_nostr_contacts(npub, None).await?;
+        self.inner
+            .sync_nostr_contacts(primal_url.as_deref(), npub)
+            .await?;
         Ok(())
     }
 
