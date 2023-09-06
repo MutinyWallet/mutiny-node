@@ -52,7 +52,14 @@ impl IndexedDbStorage {
             .map(|p| encryption_key_from_pass(p))
             .transpose()?;
 
-        let map = Self::read_all(&indexed_db, password.clone(), vss.as_deref(), &logger).await?;
+        let map = Self::read_all(
+            &indexed_db,
+            password.clone(),
+            cipher.clone(),
+            vss.as_deref(),
+            &logger,
+        )
+        .await?;
         let memory = Arc::new(RwLock::new(map));
 
         Ok(IndexedDbStorage {
@@ -153,6 +160,7 @@ impl IndexedDbStorage {
     pub(crate) async fn read_all(
         indexed_db: &Arc<RwLock<Option<Rexie>>>,
         password: Option<String>,
+        cipher: Option<Cipher>,
         vss: Option<&MutinyVssClient>,
         logger: &MutinyLogger,
     ) -> Result<HashMap<String, Value>, MutinyError> {
@@ -179,7 +187,7 @@ impl IndexedDbStorage {
         };
 
         // use a memory storage to handle encryption and decryption
-        let map = MemoryStorage::new(password, None)?;
+        let map = MemoryStorage::new(password, cipher, None)?;
 
         let all_json = store.get_all(None, None, None, None).await.map_err(|e| {
             MutinyError::read_err(anyhow!("Failed to get all from store: {e}").into())
@@ -431,6 +439,7 @@ impl IndexedDbStorage {
         let map = Self::read_all(
             &self.indexed_db,
             self.password.clone(),
+            self.cipher.clone(),
             self.vss.as_deref(),
             &self.logger,
         )
@@ -596,6 +605,7 @@ impl MutinyStorage for IndexedDbStorage {
         let map = Self::read_all(
             &indexed_db,
             self.password.clone(),
+            self.cipher.clone(),
             self.vss.as_deref(),
             &self.logger,
         )

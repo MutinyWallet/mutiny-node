@@ -93,6 +93,7 @@ impl MutinyWallet {
             .map(|s| s.parse().expect("Invalid network"))
             .unwrap_or(Network::Bitcoin);
 
+        // TODO do not do a complete read from storage twice just to get mnemonic
         let storage = IndexedDbStorage::new(password.clone(), None, logger.clone()).await?;
 
         let mnemonic = match mnemonic_str {
