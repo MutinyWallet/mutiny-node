@@ -1093,10 +1093,17 @@ impl MutinyWallet {
 
     /// Exports the current state of the node manager to a json object.
     #[wasm_bindgen]
-    pub async fn get_logs() -> Result<JsValue /* Option<Vec<String>> */, MutinyJsError> {
+    pub async fn get_logs(
+        password: Option<String>,
+    ) -> Result<JsValue /* Option<Vec<String>> */, MutinyJsError> {
         let logger = Arc::new(MutinyLogger::default());
-        // Password should not be required for logs
-        let storage = IndexedDbStorage::new(None, None, None, logger.clone()).await?;
+        // TODO Password should not be required for logs
+        let cipher = password
+            .as_ref()
+            .filter(|p| !p.is_empty())
+            .map(|p| encryption_key_from_pass(p))
+            .transpose()?;
+        let storage = IndexedDbStorage::new(password, cipher, None, logger.clone()).await?;
         let stop = Arc::new(AtomicBool::new(false));
         let logger = Arc::new(MutinyLogger::with_writer(stop.clone(), storage.clone()));
         let res = JsValue::from_serde(&NodeManager::get_logs(storage, logger)?)?;
@@ -1396,7 +1403,10 @@ mod tests {
     use crate::MutinyWallet;
 
     use crate::indexed_db::IndexedDbStorage;
+    use js_sys::Array;
     use mutiny_core::storage::MutinyStorage;
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::JsValue;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -1508,6 +1518,135 @@ mod tests {
 
         assert_ne!("", node_identity.uuid());
         assert_ne!("", node_identity.pubkey());
+
+        IndexedDbStorage::clear()
+            .await
+            .expect("failed to clear storage");
+    }
+
+    fn js_to_option_vec_string(js_val: JsValue) -> Result<Option<Vec<String>>, JsValue> {
+        if js_val.is_undefined() || js_val.is_null() {
+            return Ok(None);
+        }
+
+        let js_array: Array = js_val
+            .dyn_into()
+            .map_err(|_| JsValue::from_str("Expected an array"))?;
+
+        let vec_string: Result<Vec<String>, _> = (0..js_array.length())
+            .map(|index| {
+                js_array
+                    .get(index)
+                    .as_string()
+                    .ok_or_else(|| JsValue::from_str("Expected an array of strings"))
+            })
+            .collect();
+
+        vec_string.map(Some)
+    }
+
+    #[test]
+    async fn test_get_logs_no_password() {
+        log!("getting logs with no password");
+
+        let mut entropy = [0u8; 32];
+        getrandom::getrandom(&mut entropy).unwrap();
+        let seed = bip39::Mnemonic::from_entropy(&entropy).unwrap();
+
+        let nm = MutinyWallet::new(
+            None,
+            Some(seed.to_string()),
+            None,
+            Some("regtest".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("mutiny wallet should initialize");
+
+        // create the nodes so we have some extra data
+        let node_identity = nm.new_node().await.expect("should create new node");
+        assert_ne!("", node_identity.uuid());
+        assert_ne!("", node_identity.pubkey());
+
+        let node_identity = nm
+            .new_node()
+            .await
+            .expect("mutiny wallet should initialize");
+
+        assert_ne!("", node_identity.uuid());
+        assert_ne!("", node_identity.pubkey());
+
+        // sleep to make sure logs save
+        super::utils::sleep(6_000).await;
+        let logs = MutinyWallet::get_logs(None).await.expect("should get logs");
+        let parsed_logs = js_to_option_vec_string(logs).expect("should parse logs");
+        assert!(parsed_logs.is_some());
+        assert!(!parsed_logs.clone().unwrap().is_empty());
+        assert_ne!("", parsed_logs.unwrap()[0]);
+
+        IndexedDbStorage::clear()
+            .await
+            .expect("failed to clear storage");
+    }
+
+    #[test]
+    async fn test_get_logs_with_password() {
+        log!("getting logs with password");
+
+        let mut entropy = [0u8; 32];
+        getrandom::getrandom(&mut entropy).unwrap();
+        let seed = bip39::Mnemonic::from_entropy(&entropy).unwrap();
+        let password = Some("password".to_string());
+        let nm = MutinyWallet::new(
+            password.clone(),
+            Some(seed.to_string()),
+            None,
+            Some("regtest".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("mutiny wallet should initialize");
+
+        // create the nodes so we have some extra data
+        let node_identity = nm.new_node().await.expect("should create new node");
+        assert_ne!("", node_identity.uuid());
+        assert_ne!("", node_identity.pubkey());
+
+        let node_identity = nm
+            .new_node()
+            .await
+            .expect("mutiny wallet should initialize");
+
+        assert_ne!("", node_identity.uuid());
+        assert_ne!("", node_identity.pubkey());
+
+        // sleep to make sure logs save
+        super::utils::sleep(6_000).await;
+        let logs = MutinyWallet::get_logs(password)
+            .await
+            .expect("should get logs");
+        let parsed_logs = js_to_option_vec_string(logs).expect("should parse logs");
+        assert!(parsed_logs.is_some());
+        assert!(!parsed_logs.clone().unwrap().is_empty());
+        assert_ne!("", parsed_logs.unwrap()[0]);
 
         IndexedDbStorage::clear()
             .await
