@@ -542,7 +542,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{generate_seed, nodemanager::NodeManager, MutinyWallet, MutinyWalletConfig};
+    use crate::{
+        encrypt::encryption_key_from_pass, generate_seed, nodemanager::NodeManager, MutinyWallet,
+        MutinyWalletConfig,
+    };
     use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Network;
 
@@ -562,7 +565,8 @@ mod tests {
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &mnemonic.to_seed("")).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
-        let storage = MemoryStorage::new(Some(pass), None).unwrap();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let config = MutinyWalletConfig::new(
             xpriv,
@@ -591,7 +595,8 @@ mod tests {
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &[0; 32]).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
-        let storage = MemoryStorage::new(Some(pass), None).unwrap();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let config = MutinyWalletConfig::new(
             xpriv,
@@ -625,7 +630,8 @@ mod tests {
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &[0; 32]).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
-        let storage = MemoryStorage::new(Some(pass), None).unwrap();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
 
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let config = MutinyWalletConfig::new(
@@ -662,7 +668,8 @@ mod tests {
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &mnemonic.to_seed("")).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
-        let storage = MemoryStorage::new(Some(pass), None).unwrap();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
         assert!(!NodeManager::has_node_manager(storage.clone()));
         let config = MutinyWalletConfig::new(
             xpriv,
@@ -685,7 +692,8 @@ mod tests {
 
         // create a second mw and make sure it has a different seed
         let pass = uuid::Uuid::new_v4().to_string();
-        let storage2 = MemoryStorage::new(Some(pass), None).unwrap();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage2 = MemoryStorage::new(Some(pass), Some(cipher), None);
         assert!(!NodeManager::has_node_manager(storage2.clone()));
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &[0; 32]).unwrap();
         let mut config2 = MutinyWalletConfig::new(
@@ -712,7 +720,8 @@ mod tests {
         drop(mw2);
 
         let pass = uuid::Uuid::new_v4().to_string();
-        let storage3 = MemoryStorage::new(Some(pass), None).unwrap();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage3 = MemoryStorage::new(Some(pass), Some(cipher), None);
         MutinyWallet::restore_mnemonic(storage3.clone(), mnemonic.clone())
             .await
             .expect("mutiny wallet should restore");

@@ -632,8 +632,8 @@ pub(crate) fn get_esplora_url(network: Network, user_provided_url: Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::MemoryStorage;
     use crate::test_utils::*;
+    use crate::{encrypt::encryption_key_from_pass, storage::MemoryStorage};
     use bip39::Mnemonic;
     use bitcoin::Address;
     use esplora_client::Builder;
@@ -650,7 +650,8 @@ mod tests {
         );
         let esplora = Arc::new(MultiEsploraClient::new(vec![esplora]));
         let pass = uuid::Uuid::new_v4().to_string();
-        let db = MemoryStorage::new(Some(pass), None).unwrap();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let db = MemoryStorage::new(Some(pass), Some(cipher), None);
         let logger = Arc::new(MutinyLogger::default());
         let fees = Arc::new(MutinyFeeEstimator::new(
             db.clone(),

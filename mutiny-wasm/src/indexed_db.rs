@@ -41,16 +41,12 @@ pub struct IndexedDbStorage {
 impl IndexedDbStorage {
     pub async fn new(
         password: Option<String>,
+        cipher: Option<Cipher>,
         vss: Option<Arc<MutinyVssClient>>,
         logger: Arc<MutinyLogger>,
     ) -> Result<IndexedDbStorage, MutinyError> {
         let indexed_db = Arc::new(RwLock::new(Some(Self::build_indexed_db_database().await?)));
         let password = password.filter(|p| !p.is_empty());
-        let cipher = password
-            .as_ref()
-            .filter(|p| !p.is_empty())
-            .map(|p| encryption_key_from_pass(p))
-            .transpose()?;
 
         let map = Self::read_all(&indexed_db, password.clone(), vss.as_deref(), &logger).await?;
         let memory = Arc::new(RwLock::new(map));
@@ -178,8 +174,14 @@ impl IndexedDbStorage {
             })?
         };
 
+        let cipher = password
+            .as_ref()
+            .filter(|p| !p.is_empty())
+            .map(|p| encryption_key_from_pass(p))
+            .transpose()?;
+
         // use a memory storage to handle encryption and decryption
-        let map = MemoryStorage::new(password, None)?;
+        let map = MemoryStorage::new(password, cipher, None);
 
         let all_json = store.get_all(None, None, None, None).await.map_err(|e| {
             MutinyError::read_err(anyhow!("Failed to get all from store: {e}").into())
@@ -713,8 +715,8 @@ mod tests {
     use bip39::Mnemonic;
     use bitcoin::hashes::hex::ToHex;
     use gloo_storage::{LocalStorage, Storage};
-    use mutiny_core::logging::MutinyLogger;
     use mutiny_core::storage::MutinyStorage;
+    use mutiny_core::{encrypt::encryption_key_from_pass, logging::MutinyLogger};
     use rexie::TransactionMode;
     use serde_json::json;
     use std::str::FromStr;
@@ -730,7 +732,7 @@ mod tests {
         log!("{test_name}");
 
         let logger = Arc::new(MutinyLogger::default());
-        let storage = IndexedDbStorage::new(Some("".to_string()), None, logger)
+        let storage = IndexedDbStorage::new(Some("".to_string()), None, None, logger)
             .await
             .unwrap();
 
@@ -747,7 +749,8 @@ mod tests {
 
         let logger = Arc::new(MutinyLogger::default());
         let password = "password".to_string();
-        let storage = IndexedDbStorage::new(Some(password), None, logger)
+        let cipher = encryption_key_from_pass(&password).unwrap();
+        let storage = IndexedDbStorage::new(Some(password), Some(cipher), None, logger)
             .await
             .unwrap();
 
@@ -798,7 +801,8 @@ mod tests {
 
         let logger = Arc::new(MutinyLogger::default());
         let password = "password".to_string();
-        let storage = IndexedDbStorage::new(Some(password), None, logger)
+        let cipher = encryption_key_from_pass(&password).unwrap();
+        let storage = IndexedDbStorage::new(Some(password), Some(cipher), None, logger)
             .await
             .unwrap();
 
@@ -822,7 +826,8 @@ mod tests {
 
         let logger = Arc::new(MutinyLogger::default());
         let password = "password".to_string();
-        let storage = IndexedDbStorage::new(Some(password), None, logger)
+        let cipher = encryption_key_from_pass(&password).unwrap();
+        let storage = IndexedDbStorage::new(Some(password), Some(cipher), None, logger)
             .await
             .unwrap();
 
@@ -847,7 +852,9 @@ mod tests {
         let seed = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
 
         let logger = Arc::new(MutinyLogger::default());
-        let storage = IndexedDbStorage::new(None, None, logger).await.unwrap();
+        let storage = IndexedDbStorage::new(None, None, None, logger)
+            .await
+            .unwrap();
         let mnemonic = storage.insert_mnemonic(seed).unwrap();
 
         let stored_mnemonic = storage.get_mnemonic().unwrap();
@@ -866,7 +873,8 @@ mod tests {
 
         let logger = Arc::new(MutinyLogger::default());
         let password = "password".to_string();
-        let storage = IndexedDbStorage::new(Some(password), None, logger)
+        let cipher = encryption_key_from_pass(&password).unwrap();
+        let storage = IndexedDbStorage::new(Some(password), Some(cipher), None, logger)
             .await
             .unwrap();
 
@@ -908,7 +916,9 @@ mod tests {
         tx.done().await.unwrap();
 
         let logger = Arc::new(MutinyLogger::default());
-        let storage = IndexedDbStorage::new(None, None, logger).await.unwrap();
+        let storage = IndexedDbStorage::new(None, None, None, logger)
+            .await
+            .unwrap();
 
         let bytes: [u8; 11] = storage.get(&key).unwrap().unwrap();
 
@@ -961,7 +971,7 @@ mod tests {
             // just use this as dummy data
             value: Value::String(MONITOR_VERSION_MAX.to_hex()),
         };
-        let storage = IndexedDbStorage::new(None, None, logger.clone())
+        let storage = IndexedDbStorage::new(None, None, None, logger.clone())
             .await
             .unwrap();
 
@@ -970,8 +980,14 @@ mod tests {
         utils::sleep(1_000).await;
 
         let password = Some("password".to_string());
+        let cipher = password
+            .as_ref()
+            .filter(|p| !p.is_empty())
+            .map(|p| encryption_key_from_pass(p))
+            .transpose()
+            .unwrap();
 
-        let result = IndexedDbStorage::new(password, None, logger).await;
+        let result = IndexedDbStorage::new(password, cipher, None, logger).await;
 
         match result {
             Err(MutinyError::IncorrectPassword) => (),

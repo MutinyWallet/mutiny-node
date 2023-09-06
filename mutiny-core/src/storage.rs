@@ -346,20 +346,15 @@ pub struct MemoryStorage {
 impl MemoryStorage {
     pub fn new(
         password: Option<String>,
+        cipher: Option<Cipher>,
         vss_client: Option<Arc<MutinyVssClient>>,
-    ) -> Result<Self, MutinyError> {
-        let cipher = password
-            .as_ref()
-            .filter(|p| !p.is_empty())
-            .map(|p| encryption_key_from_pass(p))
-            .transpose()?;
-
-        Ok(Self {
+    ) -> Self {
+        Self {
             cipher,
             password,
             memory: Arc::new(RwLock::new(HashMap::new())),
             vss_client,
-        })
+        }
     }
 
     pub async fn load_from_vss(&self) -> Result<(), MutinyError> {
@@ -383,7 +378,7 @@ impl MemoryStorage {
 
 impl Default for MemoryStorage {
     fn default() -> Self {
-        Self::new(None, None).expect("Failed to create MemoryStorage")
+        Self::new(None, None, None)
     }
 }
 
@@ -593,9 +588,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::MemoryStorage;
     use crate::test_utils::*;
     use crate::utils::sleep;
+    use crate::{encrypt::encryption_key_from_pass, storage::MemoryStorage};
     use crate::{keymanager, storage::MutinyStorage};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
@@ -623,7 +618,8 @@ mod tests {
         let seed = keymanager::generate_seed(12).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
-        let storage = MemoryStorage::new(Some(pass), None).unwrap();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
 
         let mnemonic = storage.insert_mnemonic(seed).unwrap();
 
@@ -637,7 +633,7 @@ mod tests {
         log!("{}", test_name);
 
         let vss = std::sync::Arc::new(create_vss_client().await);
-        let storage = MemoryStorage::new(None, Some(vss.clone())).unwrap();
+        let storage = MemoryStorage::new(None, None, Some(vss.clone()));
         storage.load_from_vss().await.unwrap();
 
         let id = storage.get_device_id().unwrap();
@@ -660,7 +656,7 @@ mod tests {
         sleep(1_000).await;
 
         // create new storage with new device id and make sure we can't set lock
-        let storage = MemoryStorage::new(None, Some(vss)).unwrap();
+        let storage = MemoryStorage::new(None, None, Some(vss));
         storage.load_from_vss().await.unwrap();
 
         let new_id = storage.get_device_id().unwrap();

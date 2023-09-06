@@ -238,7 +238,9 @@ mod tests {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
-    use crate::{keymanager::pubkey_from_keys_manager, test_utils::*};
+    use crate::{
+        encrypt::encryption_key_from_pass, keymanager::pubkey_from_keys_manager, test_utils::*,
+    };
 
     use super::create_keys_manager;
     use crate::fees::MutinyFeeEstimator;
@@ -267,7 +269,8 @@ mod tests {
         );
         let esplora = Arc::new(MultiEsploraClient::new(vec![esplora]));
         let pass = uuid::Uuid::new_v4().to_string();
-        let db = MemoryStorage::new(Some(pass), None).unwrap();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let db = MemoryStorage::new(Some(pass), Some(cipher), None);
         let logger = Arc::new(MutinyLogger::default());
         let fees = Arc::new(MutinyFeeEstimator::new(
             db.clone(),
