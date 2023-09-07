@@ -237,6 +237,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 payment_hash,
                 purpose,
                 amount_msat,
+                ..
             } => {
                 log_debug!(self.logger, "EVENT: PaymentClaimed claimed payment from payment hash {} of {} millisatoshis", payment_hash.0.to_hex(), amount_msat);
 
@@ -451,7 +452,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 sleep(min).await;
                 forwarding_channel_manager.process_pending_htlc_forwards();
             }
-            Event::SpendableOutputs { outputs } => {
+            Event::SpendableOutputs { outputs, .. } => {
                 if let Err(e) = self.handle_spendable_outputs(&outputs).await {
                     log_error!(self.logger, "Failed to handle spendable outputs: {e}");
                     // if we have an error we should persist the outputs so we can try again later
@@ -467,6 +468,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 channel_id,
                 reason,
                 user_channel_id,
+                ..
             } => {
                 // if we still have channel open params, then it was just a failed channel open
                 // we should not persist this as a closed channel and just delete the channel open params
@@ -492,7 +494,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                     }
                 });
 
-                let closure = ChannelClosure::new(user_channel_id, channel_id, node_id, reason);
+                let closure = ChannelClosure::new(user_channel_id, channel_id.0, node_id, reason);
                 if let Err(e) = self
                     .persister
                     .persist_channel_closure(user_channel_id, closure)

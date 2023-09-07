@@ -1333,7 +1333,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         let lightning_msats: u64 = nodes
             .iter()
             .flat_map(|(_, n)| n.channel_manager.list_channels())
-            .map(|c| c.balance_msat)
+            .map(|c| c.outbound_capacity_msat)
             .sum();
 
         // get the amount in limbo from force closes

@@ -1047,7 +1047,10 @@ impl<S: MutinyStorage> Node<S> {
                 // valid and return the correct error
                 if let PaymentError::Sending(RetryableSendFailure::RouteNotFound) = e {
                     // If the amount was greater than our balance, return an InsufficientBalance error
-                    let ln_balance: u64 = current_channels.iter().map(|c| c.balance_msat).sum();
+                    let ln_balance: u64 = current_channels
+                        .iter()
+                        .map(|c| c.outbound_capacity_msat)
+                        .sum();
                     if amt_msat > ln_balance {
                         return Err(MutinyError::InsufficientBalance);
                     }

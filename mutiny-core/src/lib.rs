@@ -47,6 +47,7 @@ pub use crate::event::HTLCStatus;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
+use std::collections::HashMap;
 
 use crate::auth::MutinyAuthClient;
 use crate::labels::{Contact, LabelStorage};
@@ -62,7 +63,6 @@ use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::Network;
 use futures::{pin_mut, select, FutureExt};
-use hashbrown::HashMap;
 use lightning::{log_debug, util::logger::Logger};
 use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;

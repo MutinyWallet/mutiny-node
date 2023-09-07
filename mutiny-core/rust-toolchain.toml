@@ -1,2 +1,2 @@
 [toolchain]
-default = "nightly"
+channel = "nightly"

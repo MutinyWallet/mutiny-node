@@ -29,7 +29,7 @@ use lightning::ln::channelmanager::ChannelManager;
 use lightning::ln::peer_handler::APeerManager;
 use lightning::routing::gossip::{NetworkGraph, P2PGossipSync};
 use lightning::routing::router::Router;
-use lightning::routing::scoring::{Score, WriteableScore};
+use lightning::routing::scoring::{ScoreUpdate, WriteableScore};
 use lightning::routing::utxo::UtxoLookup;
 use lightning::sign::{EntropySource, NodeSigner, SignerProvider};
 use lightning::util::logger::Logger;
@@ -213,13 +213,13 @@ fn update_scorer<'a, S: 'static + Deref<Target = SC>, SC: 'a + WriteableScore<'a
     scorer: &'a S,
     event: &Event,
 ) -> bool {
-    let mut score = scorer.lock();
     match event {
         Event::PaymentPathFailed {
             ref path,
             short_channel_id: Some(scid),
             ..
         } => {
+            let mut score = scorer.write_lock();
             score.payment_path_failed(path, *scid);
         }
         Event::PaymentPathFailed {
@@ -229,12 +229,15 @@ fn update_scorer<'a, S: 'static + Deref<Target = SC>, SC: 'a + WriteableScore<'a
         } => {
             // Reached if the destination explicitly failed it back. We treat this as a successful probe
             // because the payment made it all the way to the destination with sufficient liquidity.
+            let mut score = scorer.write_lock();
             score.probe_successful(path);
         }
         Event::PaymentPathSuccessful { path, .. } => {
+            let mut score = scorer.write_lock();
             score.payment_path_successful(path);
         }
         Event::ProbeSuccessful { path, .. } => {
+            let mut score = scorer.write_lock();
             score.probe_successful(path);
         }
         Event::ProbeFailed {
@@ -242,6 +245,7 @@ fn update_scorer<'a, S: 'static + Deref<Target = SC>, SC: 'a + WriteableScore<'a
             short_channel_id: Some(scid),
             ..
         } => {
+            let mut score = scorer.write_lock();
             score.probe_failed(path, *scid);
         }
         _ => return false,

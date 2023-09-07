@@ -12,23 +12,23 @@ homepage = "https://mutinywallet.com"
 repository = "https://github.com/mutinywallet/mutiny-node"
 
 [dependencies]
-lnurl-rs = { version = "0.2.6", default-features = false, features = ["async", "async-https"] }
+lnurl-rs = { git = "https://github.com/benthecarman/lnurl-rs", branch = "time-wasm", default-features = false, features = ["async", "async-https"] }
 
 cfg-if = "1.0.0"
 bip39 = { version = "2.0.0" }
-bitcoin = { version = "0.29.2", default-features = false, features = ["serde", "secp-recovery", "rand"] }
-bdk = { version = "1.0.0-alpha.1", default-features = false }
-bdk_esplora = { version = "0.3.0", default-features = false, features = ["async-https"] }
-bdk_chain = { version = "0.5.0", default-features = false, features = ["hashbrown"] }
+bitcoin = { version = "0.29.2", default-features = false, features = ["std", "serde", "secp-recovery", "rand"] }
+bdk = { version = "1.0.0-alpha.1" }
+bdk_esplora = { version = "0.3.0", default-features = false, features = ["std", "async-https"] }
+bdk_chain = { version = "0.5.0", features = ["std"] }
 bdk-macros = "0.6.0"
 getrandom = { version = "0.2" }
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
 uuid = { version = "1.1.2", features = ["v4"] }
 esplora-client = { version = "0.5", default-features = false }
-lightning = { version = "0.0.116", default-features = false, features = ["max_level_trace", "grind_signatures", "no-std"] }
-lightning-invoice = { version = "0.24.0", default-features = false, features = ["no-std"] }
-lightning-rapid-gossip-sync = { version = "0.0.116", default-features = false, features = ["no-std"] }
+lightning = { git = "https://github.com/benthecarman/rust-lightning", branch = "time-wasm", features = ["max_level_trace", "grind_signatures", "std"] }
+lightning-invoice = { git = "https://github.com/benthecarman/rust-lightning", branch = "time-wasm" }
+lightning-rapid-gossip-sync = { git = "https://github.com/benthecarman/rust-lightning", branch = "time-wasm" }
 chrono = "0.4.22"
 futures-util = { version = "0.3", default-features = false }
 reqwest = { version = "0.11", default-features = false, features = ["json"] }
@@ -40,7 +40,6 @@ cbc = { version = "0.1", features = ["alloc"] }
 aes = { version = "0.8" }
 jwt-compact = { version = "0.8.0-beta.1", features = ["es256k"] }
 argon2 = { version = "0.5.0", features = ["password-hash", "alloc"] }
-hashbrown = { version = "0.8" }
 
 base64 = "0.13.0"
 pbkdf2 = "0.11"
@@ -50,7 +49,7 @@ log = "=0.4.18"
 futures = "0.3.25"
 thiserror = "1.0"
 anyhow = "1.0"
-miniscript = { version = "9.0.2", default-features = false, features = ["no-std"] }
+#miniscript = { version = "9.0.2", default-features = false, features = ["no-std"] }
 
 # explict dep due to nightly - https://github.com/rust-lang/rust/issues/113152
 proc-macro2 = "1.0.64"
