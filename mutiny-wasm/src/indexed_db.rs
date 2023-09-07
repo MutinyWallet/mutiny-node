@@ -7,6 +7,7 @@ use log::error;
 use mutiny_core::encrypt::encryption_key_from_pass;
 use mutiny_core::logging::MutinyLogger;
 use mutiny_core::nodemanager::NodeStorage;
+use mutiny_core::nostr::NWC_STORAGE_KEY;
 use mutiny_core::storage::*;
 use mutiny_core::vss::*;
 use mutiny_core::*;
@@ -360,6 +361,19 @@ impl IndexedDbStorage {
                         let obj = vss.get_object(&kv.key).await?;
                         return Ok(Some((kv.key, obj.value)));
                     }
+                }
+            }
+            NWC_STORAGE_KEY => {
+                let obj = vss.get_object(&kv.key).await?;
+                match current.get_data::<VersionedValue>(&kv.key)? {
+                    Some(versioned) => {
+                        if versioned.version <= kv.version
+                            && serde_json::from_value::<VersionedValue>(obj.value.clone()).is_ok()
+                        {
+                            return Ok(Some((kv.key, obj.value)));
+                        }
+                    }
+                    None => return Ok(Some((kv.key, obj.value))),
                 }
             }
             key => {

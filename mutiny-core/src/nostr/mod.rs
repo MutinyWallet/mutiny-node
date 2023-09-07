@@ -21,7 +21,7 @@ use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
 use nostr_sdk::{Client, RelayPoolNotification};
 use std::ops::Deref;
 use std::str::FromStr;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -30,7 +30,7 @@ pub mod nwc;
 const NWC_ACCOUNT_INDEX: u32 = 1;
 const USER_NWC_PROFILE_START_INDEX: u32 = 1000;
 
-const NWC_STORAGE_KEY: &str = "nwc_profiles";
+pub const NWC_STORAGE_KEY: &str = "nwc_profiles";
 
 /// Reserved profiles that are used internally.
 /// Must not exceed `USER_NWC_PROFILE_START_INDEX`
@@ -55,6 +55,27 @@ pub enum ProfileType {
     Normal { name: String },
 }
 
+#[derive(Clone)]
+struct NwcProfileVersion {
+    version: Arc<AtomicU32>,
+}
+
+impl NwcProfileVersion {
+    fn new(version: Option<u32>) -> Self {
+        let stored_version = match version {
+            Some(version) => Arc::new(AtomicU32::new(version)),
+            None => Arc::new(AtomicU32::new(0)),
+        };
+        NwcProfileVersion {
+            version: stored_version,
+        }
+    }
+
+    fn nwc_profile_version(&self) -> u32 {
+        self.version.load(Ordering::Relaxed)
+    }
+}
+
 /// Manages Nostr keys and has different utilities for nostr specific things
 #[derive(Clone)]
 pub struct NostrManager<S: MutinyStorage> {
@@ -67,6 +88,8 @@ pub struct NostrManager<S: MutinyStorage> {
     pub storage: S,
     /// Lock for pending nwc invoices
     pending_nwc_lock: Arc<Mutex<()>>,
+    // Versioned nwc profiles for VSS. Option for backwards compatability.
+    nwc_profile_version: NwcProfileVersion,
 }
 
 impl<S: MutinyStorage> NostrManager<S> {
@@ -203,13 +226,21 @@ impl<S: MutinyStorage> NostrManager<S> {
         profiles.push(nwc.clone());
         profiles.sort_by_key(|nwc| nwc.profile.index);
 
-        // save to storage
+        // save to storage & vss
+        // If nwc_profile_version is none, initialize a new one for backwards compatibility
         {
             let profiles = profiles
                 .iter()
                 .map(|x| x.profile.clone())
                 .collect::<Vec<_>>();
-            self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+            
+            let old_version = self
+                .nwc_profile_version
+                .nwc_profile_version();
+
+            let version = old_version + 1;
+            self.storage
+                .set_data(NWC_STORAGE_KEY, profiles, Some(version))?;
         }
 
         Ok(nwc.nwc_profile())
@@ -668,8 +699,27 @@ impl<S: MutinyStorage> NostrManager<S> {
         // generate the default primary key
         let primary_key = Self::derive_nostr_key(&context, xprivkey, 0, None, None)?;
 
-        // get from storage
-        let profiles: Vec<Profile> = storage.get_data(NWC_STORAGE_KEY)?.unwrap_or_default();
+        // get version nwc from storage
+        let nwc_storage = match storage.get_data::<VersionedValue>(NWC_STORAGE_KEY) {
+            Ok(Some(versioned_value)) => versioned_value,
+            Ok(None) => {
+                let default_profile = serde_json::to_value(vec![Profile::default()]).unwrap();
+                VersionedValue {
+                    version: 0,
+                    value: default_profile,
+                }
+            }
+            Err(_) => {
+                let default_profile = serde_json::to_value(vec![Profile::default()]).unwrap();
+                VersionedValue {
+                    version: 0,
+                    value: default_profile,
+                }
+            }
+        };
+
+        let profiles: Vec<Profile> = serde_json::from_value(nwc_storage.value)?;
+        // let profiles: Vec<Profile> = storage.get_data(NWC_STORAGE_KEY)?.unwrap_or_default();
 
         // generate the wallet connect keys
         let nwc = profiles
@@ -677,12 +727,15 @@ impl<S: MutinyStorage> NostrManager<S> {
             .map(|profile| NostrWalletConnect::new(&context, xprivkey, profile).unwrap())
             .collect();
 
+        let nwc_profile_version = NwcProfileVersion::new(Some(nwc_storage.version));
+
         Ok(Self {
             xprivkey,
             primary_key,
             nwc: Arc::new(RwLock::new(nwc)),
             storage,
             pending_nwc_lock: Arc::new(Mutex::new(())),
+            nwc_profile_version: nwc_profile_version,
         })
     }
 }
@@ -691,6 +744,7 @@ impl<S: MutinyStorage> NostrManager<S> {
 mod test {
     use super::*;
     use crate::storage::MemoryStorage;
+    use crate::test_utils::create_vss_client;
     use bip39::Mnemonic;
     use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Network;
@@ -698,21 +752,52 @@ mod test {
     use lightning_invoice::Bolt11Invoice;
     use nostr::key::XOnlyPublicKey;
     use std::str::FromStr;
+    use std::sync::atomic::Ordering;
 
-    fn create_nostr_manager() -> NostrManager<MemoryStorage> {
+    async fn create_nostr_manager() -> NostrManager<MemoryStorage> {
         let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
 
         let xprivkey =
             ExtendedPrivKey::new_master(Network::Bitcoin, &mnemonic.to_seed("")).unwrap();
 
-        let storage = MemoryStorage::new(None, None, None);
-
+            
+        let vss = Arc::new(create_vss_client().await);
+        
+        let storage = MemoryStorage::new(None, None, Some(vss));
+            
         NostrManager::from_mnemonic(xprivkey, storage).unwrap()
     }
 
-    #[test]
-    fn test_create_profile() {
-        let nostr_manager = create_nostr_manager();
+    #[tokio::test]
+    async fn test_nwc_vss_storage_version() {
+        let nostr_manager = create_nostr_manager().await;
+        let version = nostr_manager
+            .nwc_profile_version
+            .version
+            .load(Ordering::Relaxed);
+
+        assert_eq!(version, 0);
+
+        let name = "test".to_string();
+
+        let profile = nostr_manager
+            .create_new_profile(
+                ProfileType::Normal { name: name.clone() },
+                SpendingConditions::default(),
+            )
+            .unwrap();
+
+        let version = nostr_manager
+            .nwc_profile_version
+            .version
+            .load(Ordering::Relaxed);
+        
+        assert_eq!(version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_create_profile() {
+        let nostr_manager = create_nostr_manager().await;
 
         let name = "test".to_string();
 
@@ -743,9 +828,9 @@ mod test {
         assert_eq!(profiles[0].index, 1000);
     }
 
-    #[test]
-    fn test_create_reserve_profile() {
-        let nostr_manager = create_nostr_manager();
+    #[tokio::test]
+    async fn test_create_reserve_profile() {
+        let nostr_manager = create_nostr_manager().await;
 
         let name = "Mutiny+ Subscription".to_string();
 
@@ -850,9 +935,9 @@ mod test {
         assert_ne!(original_nwc_uri, changed_nwc.get_nwc_uri().unwrap());
     }
 
-    #[test]
-    fn test_edit_profile() {
-        let nostr_manager = create_nostr_manager();
+    #[tokio::test]
+    async fn test_edit_profile() {
+        let nostr_manager = create_nostr_manager().await;
 
         let name = "test".to_string();
 
@@ -890,9 +975,9 @@ mod test {
         assert!(!profiles[0].enabled);
     }
 
-    #[test]
-    fn test_deny_invoice() {
-        let nostr_manager = create_nostr_manager();
+    #[tokio::test]
+    async fn test_deny_invoice() {
+        let nostr_manager = create_nostr_manager().await;
 
         let name = "test".to_string();
 
