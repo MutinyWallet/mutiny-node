@@ -74,6 +74,7 @@ js-sys = { version = "0.3.60" }
 gloo-net = { version = "0.2.4" }
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 getrandom = { version = "0.2", features = ["js"] }
+windowless_sleep = { git = "https://github.com/futurepaul/windowless_sleep", commit = "e924649" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["rt"] }
