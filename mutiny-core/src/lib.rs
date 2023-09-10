@@ -6,7 +6,6 @@
     clippy::arc_with_non_send_sync,
     type_alias_bounds
 )]
-#![feature(io_error_other)]
 #![feature(async_fn_in_trait)]
 extern crate core;
 
