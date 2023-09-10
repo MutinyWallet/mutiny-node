@@ -189,7 +189,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
                 )?;
 
                 self.manager_version
-                    .swap(versioned_value.version, Ordering::Relaxed);
+                    .swap(versioned_value.version, Ordering::SeqCst);
 
                 Ok(res)
             }
@@ -592,7 +592,7 @@ impl<S: MutinyStorage>
         &self,
         channel_manager: &PhantomChannelManager<S>,
     ) -> Result<(), lightning::io::Error> {
-        let old = self.manager_version.fetch_add(1, Ordering::Relaxed);
+        let old = self.manager_version.fetch_add(1, Ordering::SeqCst);
         let version = old + 1;
         let key = self.get_key(CHANNEL_MANAGER_KEY);
 
