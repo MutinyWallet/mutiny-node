@@ -567,7 +567,7 @@ pub struct NodeManager<S: MutinyStorage> {
     pub(crate) lsp_clients: Vec<LspClient>,
     pub(crate) subscription_client: Option<Arc<MutinySubscriptionClient>>,
     pub(crate) logger: Arc<MutinyLogger>,
-    bitcoin_price_cache: Arc<Mutex<Option<(f32, Duration)>>>,
+    bitcoin_price_cache: Arc<Mutex<HashMap<String, (f32, Duration)>>>,
     do_not_connect_peers: bool,
     pub safe_mode: bool,
 }
@@ -796,7 +796,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             lsp_clients,
             subscription_client,
             logger,
-            bitcoin_price_cache: Arc::new(Mutex::new(None)),
+            bitcoin_price_cache: Arc::new(Mutex::new(HashMap::new())),
             do_not_connect_peers: c.do_not_connect_peers,
             safe_mode: c.safe_mode,
         };
@@ -2321,22 +2321,26 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let mut bitcoin_price_cache = self.bitcoin_price_cache.lock().await;
 
-        let (price, timestamp) = match bitcoin_price_cache.as_ref() {
+        match bitcoin_price_cache.get(&fiat) {
             Some((price, timestamp))
                 if *timestamp + Duration::from_secs(BITCOIN_PRICE_CACHE_SEC) > now =>
             {
                 // Cache is not expired
-                (*price, *timestamp)
+                Ok(*price)
             }
             _ => {
-                // Cache is either expired or empty, fetch new price
+                // Cache is either expired, empty, or doesn't have the desired fiat value
                 match self.fetch_bitcoin_price(&fiat).await {
-                    Ok(new_price) => (new_price, now),
+                    Ok(new_price) => {
+                        let cache_entry = (new_price, now);
+                        bitcoin_price_cache.insert(fiat.clone(), cache_entry);
+                        Ok(new_price)
+                    }
                     Err(e) => {
                         // If fetching price fails, return the cached price (if any)
-                        if let Some((price, timestamp)) = bitcoin_price_cache.as_ref() {
+                        if let Some((price, _)) = bitcoin_price_cache.get(&fiat) {
                             log_warn!(self.logger, "price api failed, returning cached price");
-                            (*price, *timestamp)
+                            Ok(*price)
                         } else {
                             // If there is no cached price, return the error
                             log_error!(
@@ -2344,15 +2348,12 @@ impl<S: MutinyStorage> NodeManager<S> {
                                 "no cached price and price api failed for {}",
                                 fiat
                             );
-                            return Err(e);
+                            Err(e)
                         }
                     }
                 }
             }
-        };
-
-        *bitcoin_price_cache = Some((price, timestamp));
-        Ok(price)
+        }
     }
 
     async fn fetch_bitcoin_price(&self, fiat: &str) -> Result<f32, MutinyError> {
