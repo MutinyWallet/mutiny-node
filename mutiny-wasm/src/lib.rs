@@ -1194,6 +1194,17 @@ impl MutinyWallet {
             .into())
     }
 
+    /// Require approval for a NWC Profile
+    #[wasm_bindgen]
+    pub async fn set_nwc_profile_require_approval(
+        &self,
+        profile_index: u32,
+    ) -> Result<models::NwcProfile, MutinyJsError> {
+        let mut profile = self.inner.nostr.get_profile(profile_index)?;
+        profile.spending_conditions = SpendingConditions::RequireApproval;
+        Ok(self.inner.nostr.edit_profile(profile)?.into())
+    }
+
     /// Finds a nostr wallet connect profile by index
     #[wasm_bindgen]
     pub async fn get_nwc_profile(&self, index: u32) -> Result<models::NwcProfile, MutinyJsError> {
