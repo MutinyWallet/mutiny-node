@@ -1178,6 +1178,12 @@ impl MutinyWallet {
         Ok(self.inner.nostr.edit_profile(profile)?.into())
     }
 
+    /// Deletes a nostr wallet connect profile
+    #[wasm_bindgen]
+    pub async fn delete_nwc_profile(&self, profile_index: u32) -> Result<(), MutinyJsError> {
+        Ok(self.inner.nostr.delete_nwc_profile(profile_index)?)
+    }
+
     /// Set budget for a NWC Profile
     #[wasm_bindgen]
     pub async fn set_nwc_profile_budget(

@@ -879,8 +879,6 @@ pub struct NwcProfile {
     /// Maximum amount of sats that can be sent in a single payment
     pub max_single_amt_sats: u64,
     relay: String,
-    pub enabled: bool,
-    pub archived: bool,
     /// Require approval before sending a payment
     pub require_approval: bool,
     spending_conditions: SpendingConditions,
@@ -898,8 +896,6 @@ impl Serialize for NwcProfile {
             "index": self.index,
             "max_single_amt_sats": self.max_single_amt_sats,
             "relay": self.relay,
-            "enabled": self.enabled,
-            "archived": self.archived,
             "require_approval": self.require_approval,
             "spending_conditions": json!(self.spending_conditions),
             "nwc_uri": self.nwc_uri,
@@ -981,7 +977,7 @@ impl NwcProfile {
         match &self.spending_conditions {
             SpendingConditions::Budget(budget) => Some(budget.budget_remaining()),
             SpendingConditions::SingleUse(single) => {
-                if single.spent {
+                if single.payment_hash.is_some() {
                     Some(0)
                 } else {
                     Some(single.amount_sats)
@@ -1024,7 +1020,7 @@ impl From<nostr::nwc::NwcProfile> for NwcProfile {
     fn from(value: nostr::nwc::NwcProfile) -> Self {
         let (require_approval, max_single_amt_sats) = match value.spending_conditions.clone() {
             SpendingConditions::SingleUse(single) => {
-                if single.spent {
+                if single.payment_hash.is_some() {
                     (false, 0)
                 } else {
                     (false, single.amount_sats)
@@ -1039,8 +1035,6 @@ impl From<nostr::nwc::NwcProfile> for NwcProfile {
             index: value.index,
             relay: value.relay,
             max_single_amt_sats,
-            enabled: value.enabled,
-            archived: value.archived,
             require_approval,
             spending_conditions: value.spending_conditions,
             nwc_uri: value.nwc_uri,

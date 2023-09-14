@@ -25,7 +25,7 @@ pub(crate) const PENDING_NWC_EVENTS_KEY: &str = "pending_nwc_events";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SingleUseSpendingConditions {
-    pub spent: bool,
+    pub payment_hash: Option<String>,
     pub amount_sats: u64,
 }
 
@@ -166,10 +166,9 @@ pub(crate) struct Profile {
     pub name: String,
     pub index: u32,
     pub relay: String,
-    pub enabled: bool,
+    pub enabled: Option<bool>,
     /// Archived profiles will not be displayed
-    #[serde(default)]
-    pub archived: bool,
+    pub archived: Option<bool>,
     /// Require approval before sending a payment
     #[serde(default)]
     pub spending_conditions: SpendingConditions,
@@ -183,7 +182,12 @@ pub(crate) struct Profile {
 
 impl Profile {
     pub fn active(&self) -> bool {
-        self.enabled && !self.archived
+        match (self.enabled, self.archived) {
+            (Some(enabled), Some(archived)) => enabled && !archived,
+            (Some(enabled), None) => enabled,
+            (None, Some(archived)) => !archived,
+            (None, None) => true,
+        }
     }
 }
 
@@ -301,6 +305,7 @@ impl NostrWalletConnect {
     ) -> anyhow::Result<Option<Event>> {
         let client_pubkey = self.client_key.public_key();
         let mut needs_save = false;
+        let mut needs_delete = false;
         if self.profile.active()
             && event.kind == Kind::WalletConnectRequest
             && event.pubkey == client_pubkey
@@ -347,63 +352,104 @@ impl NostrWalletConnect {
                 SpendingConditions::SingleUse(mut single_use) => {
                     let msats = invoice.amount_milli_satoshis().unwrap();
 
-                    // check if we have already spent
-                    let content = if single_use.spent {
-                        Response {
-                            result_type: Method::PayInvoice,
-                            error: Some(NIP47Error {
-                                code: ErrorCode::QuotaExceeded,
-                                message: "Already Claimed".to_string(),
-                            }),
-                            result: None,
+                    // get the status of the previous payment attempt, if one exists
+                    let prev_status: Option<HTLCStatus> = match single_use.payment_hash {
+                        Some(payment_hash) => {
+                            let hash: [u8; 32] =
+                                FromHex::from_hex(&payment_hash).expect("invalid hash");
+                            let node = node_manager.get_node(from_node).await?;
+                            node.persister
+                                .read_payment_info(&hash, false, &nostr_manager.logger)
+                                .map(|p| p.status)
                         }
-                    } else if msats <= single_use.amount_sats * 1_000 {
-                        match self
-                            .pay_nwc_invoice(node_manager, from_node, &invoice)
-                            .await
-                        {
-                            Ok(resp) => {
-                                // mark as spent and disable profile
-                                single_use.spent = true;
-                                self.profile.spending_conditions =
-                                    SpendingConditions::SingleUse(single_use);
-                                self.profile.enabled = false;
-                                self.profile.archived = true;
-                                needs_save = true;
-                                resp
+                        None => None,
+                    };
+
+                    // check if we have already spent
+                    let content = match prev_status {
+                        Some(HTLCStatus::Succeeded) => {
+                            needs_delete = true;
+                            Response {
+                                result_type: Method::PayInvoice,
+                                error: Some(NIP47Error {
+                                    code: ErrorCode::QuotaExceeded,
+                                    message: "Already Claimed".to_string(),
+                                }),
+                                result: None,
                             }
-                            Err(e) => {
-                                if let MutinyError::PaymentTimeout = e {
-                                    needs_save = true;
-                                    log_error!(
-                                        node_manager.logger,
-                                        "Payment timeout, disabling nwc profile"
-                                    );
-                                    self.profile.enabled = false;
+                        }
+                        None | Some(HTLCStatus::Failed) => {
+                            if msats <= single_use.amount_sats * 1_000 {
+                                match self
+                                    .pay_nwc_invoice(node_manager, from_node, &invoice)
+                                    .await
+                                {
+                                    Ok(resp) => {
+                                        // after it is spent, delete the profile
+                                        // so that it cannot be used again
+                                        needs_delete = true;
+                                        resp
+                                    }
+                                    Err(e) => {
+                                        let mut code = ErrorCode::InsufficientBalance;
+                                        if let MutinyError::PaymentTimeout = e {
+                                            // if a payment times out, we should save the payment_hash
+                                            // and track if the payment settles or not. If it does not
+                                            // we can try again later.
+                                            single_use.payment_hash =
+                                                Some(invoice.payment_hash().to_hex());
+                                            self.profile.spending_conditions =
+                                                SpendingConditions::SingleUse(single_use);
+                                            needs_save = true;
+
+                                            log_error!(
+                                                nostr_manager.logger,
+                                                "Payment timeout, saving profile for later"
+                                            );
+                                            code = ErrorCode::Internal;
+                                        }
+                                        Response {
+                                            result_type: Method::PayInvoice,
+                                            error: Some(NIP47Error {
+                                                code,
+                                                message: format!("Failed to pay invoice: {e}"),
+                                            }),
+                                            result: None,
+                                        }
+                                    }
                                 }
+                            } else {
+                                log_warn!(
+                                    nostr_manager.logger,
+                                    "Invoice amount too high: {msats} msats"
+                                );
+
                                 Response {
                                     result_type: Method::PayInvoice,
                                     error: Some(NIP47Error {
-                                        code: ErrorCode::InsufficientBalance,
-                                        message: format!("Failed to pay invoice: {e}"),
+                                        code: ErrorCode::QuotaExceeded,
+                                        message: format!("Invoice amount too high: {msats} msats"),
                                     }),
                                     result: None,
                                 }
                             }
                         }
-                    } else {
-                        log_warn!(
-                            node_manager.logger,
-                            "Invoice amount too high: {msats} msats"
-                        );
+                        Some(HTLCStatus::Pending) | Some(HTLCStatus::InFlight) => {
+                            log_warn!(
+                                nostr_manager.logger,
+                                "Previous NWC payment still in flight, cannot pay: {invoice}"
+                            );
 
-                        Response {
-                            result_type: Method::PayInvoice,
-                            error: Some(NIP47Error {
-                                code: ErrorCode::QuotaExceeded,
-                                message: format!("Invoice amount too high: {msats} msats"),
-                            }),
-                            result: None,
+                            Response {
+                                result_type: Method::PayInvoice,
+                                error: Some(NIP47Error {
+                                    code: ErrorCode::RateLimited,
+                                    message: format!(
+                                        "Previous payment still in flight, cannot pay"
+                                    ),
+                                }),
+                                result: None,
+                            }
                         }
                     };
 
@@ -415,7 +461,9 @@ impl NostrWalletConnect {
                         EventBuilder::new(Kind::WalletConnectResponse, encrypted, &[p_tag, e_tag])
                             .to_event(&self.server_key)?;
 
-                    if needs_save {
+                    if needs_delete {
+                        nostr_manager.delete_nwc_profile(self.profile.index)?;
+                    } else if needs_save {
                         nostr_manager.save_nwc_profile(self.clone())?;
                     }
 
@@ -463,7 +511,7 @@ impl NostrWalletConnect {
                             match node.persister.read_payment_info(
                                 &hash,
                                 false,
-                                &node_manager.logger,
+                                &nostr_manager.logger,
                             ) {
                                 Some(info) => info.status != HTLCStatus::Failed, // remove failed payments from budget
                                 None => true, // if we can't find the payment, keep it to be safe
@@ -486,7 +534,7 @@ impl NostrWalletConnect {
 
                     let content = match budget_err {
                         Some(err) => {
-                            log_warn!(node_manager.logger, "Attempted to exceed budget: {err}");
+                            log_warn!(nostr_manager.logger, "Attempted to exceed budget: {err}");
                             Response {
                                 result_type: Method::PayInvoice,
                                 error: Some(NIP47Error {
@@ -515,13 +563,13 @@ impl NostrWalletConnect {
                                     match e {
                                         MutinyError::PaymentTimeout => {
                                             log_warn!(
-                                                node_manager.logger,
+                                                nostr_manager.logger,
                                                 "Payment timeout, not removing payment from budget"
                                             );
                                         }
                                         _ => {
                                             log_warn!(
-                                                node_manager.logger,
+                                                nostr_manager.logger,
                                                 "Failed to pay invoice: {e}, removing payment from budget"
                                             );
 
@@ -559,7 +607,9 @@ impl NostrWalletConnect {
             }
         }
 
-        if needs_save {
+        if needs_delete {
+            nostr_manager.delete_nwc_profile(self.profile.index)?;
+        } else if needs_save {
             nostr_manager.save_nwc_profile(self.clone())?;
         }
 
@@ -587,9 +637,8 @@ pub struct NwcProfile {
     pub name: String,
     pub index: u32,
     pub relay: String,
-    pub enabled: bool,
-    #[serde(default)]
-    pub archived: bool,
+    pub enabled: Option<bool>,
+    pub archived: Option<bool>,
     pub nwc_uri: String,
     #[serde(default)]
     pub spending_conditions: SpendingConditions,

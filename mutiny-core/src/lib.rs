@@ -154,6 +154,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let nostr = Arc::new(NostrManager::from_mnemonic(
             node_manager.xprivkey,
             storage.clone(),
+            node_manager.logger.clone(),
         )?);
 
         let mw = Self {
@@ -226,9 +227,25 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     continue;
                 }
 
+                // clear in-active profiles, we used to have disabled and archived profiles
+                // but now we just delete profiles
+                if let Err(e) = nostr.remove_inactive_profiles() {
+                    log_warn!(nm.logger, "Failed to clear in-active NWC profiles: {e}");
+                }
+
+                // if a single-use profile's payment was successful in the background,
+                // we can safely clear it now
+                let node = nm.get_node(&from_node).await.expect("failed to get node");
+                if let Err(e) = nostr.clear_successful_single_use_profiles(&node) {
+                    log_warn!(nm.logger, "Failed to clear in-active NWC profiles: {e}");
+                }
+                drop(node);
+
                 if let Err(e) = nostr.clear_expired_nwc_invoices().await {
                     log_warn!(nm.logger, "Failed to clear expired NWC invoices: {e}");
                 }
+
+                // clear successful single-use profiles
 
                 let client = Client::new(&nostr.primary_key);
 
