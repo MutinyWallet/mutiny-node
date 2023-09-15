@@ -1,11 +1,14 @@
+use crate::logging::MutinyLogger;
+use crate::node::Node;
 use crate::nodemanager::NodeManager;
 use crate::nostr::nwc::{
-    NostrWalletConnect, NwcProfile, NwcProfileTag, PendingNwcInvoice, Profile,
-    SingleUseSpendingConditions, SpendingConditions, PENDING_NWC_EVENTS_KEY,
+    BudgetPeriod, BudgetedSpendingConditions, NostrWalletConnect, NwcProfile, NwcProfileTag,
+    PendingNwcInvoice, Profile, SingleUseSpendingConditions, SpendingConditions,
+    PENDING_NWC_EVENTS_KEY,
 };
 use crate::storage::MutinyStorage;
-use crate::utils;
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
+use crate::{utils, HTLCStatus};
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{PublicKey, Secp256k1, Signing};
@@ -19,7 +22,6 @@ use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
 use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
 use nostr_sdk::{Client, RelayPoolNotification};
-use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
@@ -67,6 +69,8 @@ pub struct NostrManager<S: MutinyStorage> {
     pub storage: S,
     /// Lock for pending nwc invoices
     pending_nwc_lock: Arc<Mutex<()>>,
+    /// Logger
+    pub logger: Arc<MutinyLogger>,
 }
 
 impl<S: MutinyStorage> NostrManager<S> {
@@ -118,9 +122,61 @@ impl<S: MutinyStorage> NostrManager<S> {
             .read()
             .unwrap()
             .iter()
-            .filter(|x| !x.profile.archived)
+            .filter(|x| x.profile.active())
             .map(|x| x.nwc_profile())
             .collect()
+    }
+
+    pub(crate) fn remove_inactive_profiles(&self) -> Result<(), MutinyError> {
+        let mut profiles = self.nwc.write().unwrap();
+
+        profiles.retain(|x| x.profile.active());
+
+        // save to storage
+        {
+            let profiles = profiles
+                .iter()
+                .map(|x| x.profile.clone())
+                .collect::<Vec<_>>();
+            self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+        }
+
+        Ok(())
+    }
+
+    /// Goes through all single use profiles and removes the successfully paid ones
+    pub(crate) fn clear_successful_single_use_profiles(
+        &self,
+        node: &Node<S>,
+    ) -> Result<(), MutinyError> {
+        let mut profiles = self.nwc.write().unwrap();
+
+        profiles.retain(|x| {
+            if let SpendingConditions::SingleUse(single_use) = &x.profile.spending_conditions {
+                if let Some(payment_hash) = &single_use.payment_hash {
+                    let hash: [u8; 32] = FromHex::from_hex(payment_hash).expect("invalid hash");
+                    if let Some(payment) =
+                        node.persister.read_payment_info(&hash, false, &self.logger)
+                    {
+                        if payment.status == HTLCStatus::Succeeded {
+                            return false;
+                        }
+                    }
+                }
+            }
+            true
+        });
+
+        // save to storage
+        {
+            let profiles = profiles
+                .iter()
+                .map(|x| x.profile.clone())
+                .collect::<Vec<_>>();
+            self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+        }
+
+        Ok(())
     }
 
     pub fn edit_profile(&self, profile: NwcProfile) -> Result<NwcProfile, MutinyError> {
@@ -133,6 +189,48 @@ impl<S: MutinyStorage> NostrManager<S> {
             .ok_or(MutinyError::NotFound)?;
 
         nwc.profile = profile.profile();
+
+        let nwc_profile = nwc.nwc_profile();
+
+        // save to storage
+        {
+            let profiles = profiles
+                .iter()
+                .map(|x| x.profile.clone())
+                .collect::<Vec<_>>();
+            self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+        }
+
+        Ok(nwc_profile)
+    }
+
+    pub fn set_nwc_profile_budget(
+        &self,
+        profile_index: u32,
+        budget_sats: u64,
+        budget_period: BudgetPeriod,
+        single_max_sats: Option<u64>,
+    ) -> Result<NwcProfile, MutinyError> {
+        let mut profiles = self.nwc.write().unwrap();
+
+        let nwc = profiles
+            .iter_mut()
+            .find(|nwc| nwc.profile.index == profile_index)
+            .ok_or(MutinyError::NotFound)?;
+
+        let payments = if let SpendingConditions::Budget(budget) = &nwc.profile.spending_conditions
+        {
+            budget.payments.clone()
+        } else {
+            vec![]
+        };
+
+        nwc.profile.spending_conditions = SpendingConditions::Budget(BudgetedSpendingConditions {
+            budget: budget_sats,
+            single_max: single_max_sats,
+            payments,
+            period: budget_period,
+        });
 
         let nwc_profile = nwc.nwc_profile();
 
@@ -175,16 +273,16 @@ impl<S: MutinyStorage> NostrManager<S> {
             }
             // Ensure normal profiles start from 1000
             ProfileType::Normal { name } => {
-                let normal_profiles_count = profiles
+                let next_index = profiles
                     .iter()
                     .filter(|&nwc| nwc.profile.index >= USER_NWC_PROFILE_START_INDEX)
-                    .count() as u32;
+                    .max_by(|a, b| a.profile.index.cmp(&b.profile.index))
+                    .map(|nwc| nwc.profile.index + 1)
+                    .unwrap_or(USER_NWC_PROFILE_START_INDEX);
 
-                (
-                    name,
-                    normal_profiles_count + USER_NWC_PROFILE_START_INDEX,
-                    Some(get_random_bip32_child_index()),
-                )
+                debug_assert!(next_index >= USER_NWC_PROFILE_START_INDEX);
+
+                (name, next_index, Some(get_random_bip32_child_index()))
             }
         };
 
@@ -193,8 +291,8 @@ impl<S: MutinyStorage> NostrManager<S> {
             index,
             child_key_index,
             relay: "wss://nostr.mutinywallet.com".to_string(),
-            enabled: true,
-            archived: false,
+            enabled: None,
+            archived: None,
             spending_conditions,
             tag,
         };
@@ -264,7 +362,7 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let spending_conditions = SpendingConditions::SingleUse(SingleUseSpendingConditions {
             amount_sats,
-            spent: false,
+            payment_hash: None,
         });
         self.create_new_nwc_profile(profile, spending_conditions, NwcProfileTag::Gift)
             .await
@@ -449,37 +547,44 @@ impl<S: MutinyStorage> NostrManager<S> {
         };
 
         if let Some(mut nwc) = nwc {
-            let (event, needs_save) = nwc
-                .handle_nwc_request(
-                    event,
-                    node_manager,
-                    from_node,
-                    self.pending_nwc_lock.deref(),
-                )
+            let event = nwc
+                .handle_nwc_request(event, node_manager, from_node, self)
                 .await?;
-
-            // update the profile if needed
-            if needs_save {
-                let mut vec = self.nwc.write().unwrap();
-
-                // update the profile
-                for item in vec.iter_mut() {
-                    if item.profile.index == nwc.profile.index {
-                        item.profile = nwc.profile;
-                        break;
-                    }
-                }
-
-                let profiles = vec.iter().map(|x| x.profile.clone()).collect::<Vec<_>>();
-                drop(vec); // drop the lock, no longer needed
-
-                self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
-            }
-
             Ok(event)
         } else {
             Ok(None)
         }
+    }
+
+    pub(crate) fn save_nwc_profile(&self, nwc: NostrWalletConnect) -> Result<(), MutinyError> {
+        let mut vec = self.nwc.write().unwrap();
+
+        // update the profile
+        for item in vec.iter_mut() {
+            if item.profile.index == nwc.profile.index {
+                item.profile = nwc.profile;
+                break;
+            }
+        }
+
+        let profiles = vec.iter().map(|x| x.profile.clone()).collect::<Vec<_>>();
+
+        self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+
+        Ok(())
+    }
+
+    pub fn delete_nwc_profile(&self, index: u32) -> Result<(), MutinyError> {
+        let mut vec = self.nwc.write().unwrap();
+
+        // update the profile
+        vec.retain(|x| x.profile.index != index);
+
+        let profiles = vec.iter().map(|x| x.profile.clone()).collect::<Vec<_>>();
+
+        self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+
+        Ok(())
     }
 
     pub async fn claim_single_use_nwc(
@@ -580,7 +685,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                                         Some(ResponseResult::PayInvoice(params)) => {
                                             let preimage: Vec<u8> = FromHex::from_hex(&params.preimage)?;
                                             if sha256::Hash::hash(&preimage) != invoice.payment_hash {
-                                                log_warn!(node_manager.logger, "Received payment preimage that does not represent the invoice hash");
+                                                log_warn!(self.logger, "Received payment preimage that does not represent the invoice hash");
                                             }
                                             return Ok(None);
                                         },
@@ -662,7 +767,11 @@ impl<S: MutinyStorage> NostrManager<S> {
     }
 
     /// Creates a new NostrManager
-    pub fn from_mnemonic(xprivkey: ExtendedPrivKey, storage: S) -> Result<Self, MutinyError> {
+    pub fn from_mnemonic(
+        xprivkey: ExtendedPrivKey,
+        storage: S,
+        logger: Arc<MutinyLogger>,
+    ) -> Result<Self, MutinyError> {
         let context = Secp256k1::new();
 
         // generate the default primary key
@@ -683,6 +792,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             nwc: Arc::new(RwLock::new(nwc)),
             storage,
             pending_nwc_lock: Arc::new(Mutex::new(())),
+            logger,
         })
     }
 }
@@ -707,7 +817,9 @@ mod test {
 
         let storage = MemoryStorage::new(None, None, None);
 
-        NostrManager::from_mnemonic(xprivkey, storage).unwrap()
+        let logger = Arc::new(MutinyLogger::default());
+
+        NostrManager::from_mnemonic(xprivkey, storage, logger).unwrap()
     }
 
     #[test]
@@ -795,8 +907,8 @@ mod test {
             name,
             index: 1001,
             relay: "wss://nostr.mutinywallet.com".to_string(),
-            enabled: true,
-            archived: false,
+            enabled: None,
+            archived: None,
             child_key_index: None,
             spending_conditions: Default::default(),
             tag: Default::default(),
@@ -866,17 +978,19 @@ mod test {
 
         assert_eq!(profile.name, name);
         assert_eq!(profile.index, 1000);
-        assert!(profile.enabled);
+        assert_eq!(profile.relay.as_str(), "wss://nostr.mutinywallet.com");
 
-        profile.enabled = false;
+        profile.relay = "wss://relay.damus.io".to_string();
 
         nostr_manager.edit_profile(profile).unwrap();
 
         let profiles = nostr_manager.profiles();
         assert_eq!(profiles.len(), 1);
+        // check this stuff is the same
         assert_eq!(profiles[0].name, name);
         assert_eq!(profiles[0].index, 1000);
-        assert!(!profiles[0].enabled);
+        // check this is different
+        assert_eq!(profiles[0].relay.as_str(), "wss://relay.damus.io");
 
         let profiles: Vec<Profile> = nostr_manager
             .storage
@@ -887,7 +1001,38 @@ mod test {
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].name, name);
         assert_eq!(profiles[0].index, 1000);
-        assert!(!profiles[0].enabled);
+    }
+
+    #[test]
+    fn test_delete_profile() {
+        let nostr_manager = create_nostr_manager();
+
+        let name = "test".to_string();
+
+        let profile = nostr_manager
+            .create_new_profile(
+                ProfileType::Normal { name: name.clone() },
+                SpendingConditions::default(),
+                Default::default(),
+            )
+            .unwrap();
+
+        assert_eq!(profile.name, name);
+        assert_eq!(profile.index, 1000);
+        assert_eq!(profile.relay.as_str(), "wss://nostr.mutinywallet.com");
+
+        nostr_manager.delete_nwc_profile(profile.index).unwrap();
+
+        let profiles = nostr_manager.profiles();
+        assert_eq!(profiles.len(), 0);
+
+        let profiles: Vec<Profile> = nostr_manager
+            .storage
+            .get_data(NWC_STORAGE_KEY)
+            .unwrap()
+            .unwrap_or_default();
+
+        assert_eq!(profiles.len(), 0);
     }
 
     #[test]

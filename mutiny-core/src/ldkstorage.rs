@@ -322,7 +322,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
 
     pub(crate) fn persist_payment_info(
         &self,
-        payment_hash: &PaymentHash,
+        payment_hash: &[u8; 32],
         payment_info: &PaymentInfo,
         inbound: bool,
     ) -> io::Result<()> {
@@ -334,7 +334,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
 
     pub(crate) fn read_payment_info(
         &self,
-        payment_hash: &PaymentHash,
+        payment_hash: &[u8; 32],
         inbound: bool,
         logger: &MutinyLogger,
     ) -> Option<PaymentInfo> {
@@ -558,18 +558,18 @@ impl ChannelOpenParams {
     }
 }
 
-fn payment_key(inbound: bool, payment_hash: &PaymentHash) -> String {
+fn payment_key(inbound: bool, payment_hash: &[u8; 32]) -> String {
     if inbound {
         format!(
             "{}{}",
             PAYMENT_INBOUND_PREFIX_KEY,
-            payment_hash.0.to_hex().as_str()
+            payment_hash.to_hex().as_str()
         )
     } else {
         format!(
             "{}{}",
             PAYMENT_OUTBOUND_PREFIX_KEY,
-            payment_hash.0.to_hex().as_str()
+            payment_hash.to_hex().as_str()
         )
     }
 }
@@ -734,10 +734,10 @@ mod test {
             secret: None,
             last_update: utils::now().as_secs(),
         };
-        let result = persister.persist_payment_info(&payment_hash, &payment_info, true);
+        let result = persister.persist_payment_info(&payment_hash.0, &payment_info, true);
         assert!(result.is_ok());
 
-        let result = persister.read_payment_info(&payment_hash, true, &MutinyLogger::default());
+        let result = persister.read_payment_info(&payment_hash.0, true, &MutinyLogger::default());
 
         assert!(result.is_some());
         assert_eq!(result.clone().unwrap().preimage, Some(preimage));
@@ -748,7 +748,7 @@ mod test {
         assert_eq!(list[0].0, payment_hash);
         assert_eq!(list[0].1.preimage, Some(preimage));
 
-        let result = persister.read_payment_info(&payment_hash, true, &MutinyLogger::default());
+        let result = persister.read_payment_info(&payment_hash.0, true, &MutinyLogger::default());
 
         assert!(result.is_some());
         assert_eq!(result.clone().unwrap().preimage, Some(preimage));

@@ -810,7 +810,7 @@ impl<S: MutinyStorage> Node<S> {
             last_update,
         };
         self.persister
-            .persist_payment_info(&payment_hash, &payment_info, true)
+            .persist_payment_info(&payment_hash.0, &payment_info, true)
             .map_err(|e| {
                 log_error!(self.logger, "ERROR: could not persist payment info: {e}");
                 MutinyError::InvoiceCreationFailed
@@ -905,15 +905,14 @@ impl<S: MutinyStorage> Node<S> {
             .collect())
     }
 
-    fn get_payment_info_from_persisters(
+    pub fn get_payment_info_from_persisters(
         &self,
         payment_hash: &bitcoin::hashes::sha256::Hash,
     ) -> Result<(PaymentInfo, bool), MutinyError> {
         // try inbound first
-        let payment_hash = PaymentHash(payment_hash.into_inner());
         if let Some(payment_info) =
             self.persister
-                .read_payment_info(&payment_hash, true, &self.logger)
+                .read_payment_info(payment_hash.as_inner(), true, &self.logger)
         {
             return Ok((payment_info, true));
         }
@@ -921,7 +920,7 @@ impl<S: MutinyStorage> Node<S> {
         // if no inbound check outbound
         match self
             .persister
-            .read_payment_info(&payment_hash, false, &self.logger)
+            .read_payment_info(payment_hash.as_inner(), false, &self.logger)
         {
             Some(payment_info) => Ok((payment_info, false)),
             None => Err(MutinyError::InvoiceInvalid),
@@ -940,11 +939,11 @@ impl<S: MutinyStorage> Node<S> {
         amt_sats: Option<u64>,
         labels: Vec<String>,
     ) -> Result<(PaymentId, PaymentHash), MutinyError> {
-        let payment_hash = PaymentHash(invoice.payment_hash().into_inner());
+        let payment_hash = invoice.payment_hash().as_inner();
 
         if self
             .persister
-            .read_payment_info(&payment_hash, false, &self.logger)
+            .read_payment_info(payment_hash, false, &self.logger)
             .is_some_and(|p| p.status != HTLCStatus::Failed)
         {
             return Err(MutinyError::NonUniquePaymentHash);
@@ -952,7 +951,7 @@ impl<S: MutinyStorage> Node<S> {
 
         if self
             .persister
-            .read_payment_info(&payment_hash, true, &self.logger)
+            .read_payment_info(payment_hash, true, &self.logger)
             .is_some_and(|p| p.status != HTLCStatus::Failed)
         {
             return Err(MutinyError::NonUniquePaymentHash);
@@ -1025,10 +1024,10 @@ impl<S: MutinyStorage> Node<S> {
         };
 
         self.persister
-            .persist_payment_info(&payment_hash, &payment_info, false)?;
+            .persist_payment_info(payment_hash, &payment_info, false)?;
 
         match pay_result {
-            Ok(id) => Ok((id, payment_hash)),
+            Ok(id) => Ok((id, PaymentHash(payment_hash.to_owned()))),
             Err(e) => {
                 log_error!(self.logger, "failed to make payment: {:?}", e);
                 // call list channels to see what our channels are
@@ -1041,7 +1040,7 @@ impl<S: MutinyStorage> Node<S> {
 
                 payment_info.status = HTLCStatus::Failed;
                 self.persister
-                    .persist_payment_info(&payment_hash, &payment_info, false)?;
+                    .persist_payment_info(payment_hash, &payment_info, false)?;
 
                 // If the payment failed because of a route not found, check if the amount was
                 // valid and return the correct error
@@ -1086,9 +1085,9 @@ impl<S: MutinyStorage> Node<S> {
                 return Err(MutinyError::PaymentTimeout);
             }
 
-            let payment_info = self
-                .persister
-                .read_payment_info(&payment_hash, false, &self.logger);
+            let payment_info =
+                self.persister
+                    .read_payment_info(&payment_hash.0, false, &self.logger);
 
             if let Some(info) = payment_info {
                 match info.status {
@@ -1174,7 +1173,7 @@ impl<S: MutinyStorage> Node<S> {
         };
 
         self.persister
-            .persist_payment_info(&payment_hash, &payment_info, false)?;
+            .persist_payment_info(&payment_hash.0, &payment_info, false)?;
 
         match pay_result {
             Ok(_) => {
@@ -1185,7 +1184,7 @@ impl<S: MutinyStorage> Node<S> {
             Err(_) => {
                 payment_info.status = HTLCStatus::Failed;
                 self.persister
-                    .persist_payment_info(&payment_hash, &payment_info, false)?;
+                    .persist_payment_info(&payment_hash.0, &payment_info, false)?;
                 Err(MutinyError::RoutingFailed)
             }
         }
