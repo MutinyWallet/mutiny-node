@@ -407,6 +407,30 @@ impl NostrWalletConnect {
                                                 "Payment timeout, saving profile for later"
                                             );
                                             code = ErrorCode::Internal;
+                                        } else {
+                                            // for non-timeout errors, add to manual approval list
+                                            let pending = PendingNwcInvoice {
+                                                index: self.profile.index,
+                                                invoice,
+                                                event_id: event.id,
+                                                pubkey: event.pubkey,
+                                            };
+                                            nostr_manager.pending_nwc_lock.lock().await;
+
+                                            let mut current: Vec<PendingNwcInvoice> = node_manager
+                                                .storage
+                                                .get_data(PENDING_NWC_EVENTS_KEY)?
+                                                .unwrap_or_default();
+
+                                            if !current.contains(&pending) {
+                                                current.push(pending);
+
+                                                node_manager.storage.set_data(
+                                                    PENDING_NWC_EVENTS_KEY,
+                                                    current,
+                                                    None,
+                                                )?;
+                                            }
                                         }
                                         Response {
                                             result_type: Method::PayInvoice,
@@ -570,7 +594,7 @@ impl NostrWalletConnect {
                                         _ => {
                                             log_warn!(
                                                 nostr_manager.logger,
-                                                "Failed to pay invoice: {e}, removing payment from budget"
+                                                "Failed to pay invoice: {e}, removing payment from budget, adding to manual approval list"
                                             );
 
                                             budget.remove_payment(&invoice);
@@ -578,6 +602,30 @@ impl NostrWalletConnect {
                                                 SpendingConditions::Budget(budget.clone());
 
                                             nostr_manager.save_nwc_profile(self.clone())?;
+
+                                            // for non-timeout errors, add to manual approval list
+                                            let pending = PendingNwcInvoice {
+                                                index: self.profile.index,
+                                                invoice,
+                                                event_id: event.id,
+                                                pubkey: event.pubkey,
+                                            };
+                                            nostr_manager.pending_nwc_lock.lock().await;
+
+                                            let mut current: Vec<PendingNwcInvoice> = node_manager
+                                                .storage
+                                                .get_data(PENDING_NWC_EVENTS_KEY)?
+                                                .unwrap_or_default();
+
+                                            if !current.contains(&pending) {
+                                                current.push(pending);
+
+                                                node_manager.storage.set_data(
+                                                    PENDING_NWC_EVENTS_KEY,
+                                                    current,
+                                                    None,
+                                                )?;
+                                            }
                                         }
                                     }
 
