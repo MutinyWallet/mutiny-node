@@ -218,10 +218,17 @@ impl<S: MutinyStorage> NostrManager<S> {
             .find(|nwc| nwc.profile.index == profile_index)
             .ok_or(MutinyError::NotFound)?;
 
+        let payments = if let SpendingConditions::Budget(budget) = &nwc.profile.spending_conditions
+        {
+            budget.payments.clone()
+        } else {
+            vec![]
+        };
+
         nwc.profile.spending_conditions = SpendingConditions::Budget(BudgetedSpendingConditions {
             budget: budget_sats,
             single_max: single_max_sats,
-            payments: vec![],
+            payments,
             period: budget_period,
         });
 

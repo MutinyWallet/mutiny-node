@@ -36,7 +36,7 @@ use mutiny_core::redshift::RedshiftRecipient;
 use mutiny_core::scb::EncryptedSCB;
 use mutiny_core::storage::MutinyStorage;
 use mutiny_core::vss::MutinyVssClient;
-use mutiny_core::{encrypt::encryption_key_from_pass, generate_seed, nostr::nwc::NwcProfile};
+use mutiny_core::{encrypt::encryption_key_from_pass, generate_seed};
 use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
 use nostr::key::XOnlyPublicKey;
@@ -1163,19 +1163,6 @@ impl MutinyWallet {
             .create_new_nwc_profile(ProfileType::Normal { name }, sp, NwcProfileTag::General)
             .await?
             .into())
-    }
-
-    /// Edits a nostr wallet connect profile
-    #[wasm_bindgen]
-    pub async fn edit_nwc_profile(
-        &self,
-        profile: &JsValue,
-    ) -> Result<models::NwcProfile, MutinyJsError> {
-        let profile: NwcProfile = profile
-            .into_serde()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-
-        Ok(self.inner.nostr.edit_profile(profile)?.into())
     }
 
     /// Deletes a nostr wallet connect profile
