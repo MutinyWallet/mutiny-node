@@ -266,16 +266,16 @@ impl<S: MutinyStorage> NostrManager<S> {
             }
             // Ensure normal profiles start from 1000
             ProfileType::Normal { name } => {
-                let normal_profiles_count = profiles
+                let next_index = profiles
                     .iter()
                     .filter(|&nwc| nwc.profile.index >= USER_NWC_PROFILE_START_INDEX)
-                    .count() as u32;
+                    .max_by(|a, b| a.profile.index.cmp(&b.profile.index))
+                    .map(|nwc| nwc.profile.index + 1)
+                    .unwrap_or(USER_NWC_PROFILE_START_INDEX);
 
-                (
-                    name,
-                    normal_profiles_count + USER_NWC_PROFILE_START_INDEX,
-                    Some(get_random_bip32_child_index()),
-                )
+                debug_assert!(next_index >= USER_NWC_PROFILE_START_INDEX);
+
+                (name, next_index, Some(get_random_bip32_child_index()))
             }
         };
 
