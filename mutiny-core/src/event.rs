@@ -2,6 +2,7 @@ use crate::fees::MutinyFeeEstimator;
 use crate::keymanager::PhantomKeysManager;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::logging::MutinyLogger;
+use crate::node::BumpTxEventHandler;
 use crate::nodemanager::ChannelClosure;
 use crate::onchain::OnChainWallet;
 use crate::redshift::RedshiftStorage;
@@ -81,17 +82,20 @@ pub struct EventHandler<S: MutinyStorage> {
     wallet: Arc<OnChainWallet<S>>,
     keys_manager: Arc<PhantomKeysManager<S>>,
     persister: Arc<MutinyNodePersister<S>>,
+    bump_tx_event_handler: Arc<BumpTxEventHandler<S>>,
     lsp_client_pubkey: Option<PublicKey>,
     logger: Arc<MutinyLogger>,
 }
 
 impl<S: MutinyStorage> EventHandler<S> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         channel_manager: Arc<PhantomChannelManager<S>>,
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
         wallet: Arc<OnChainWallet<S>>,
         keys_manager: Arc<PhantomKeysManager<S>>,
         persister: Arc<MutinyNodePersister<S>>,
+        bump_tx_event_handler: Arc<BumpTxEventHandler<S>>,
         lsp_client_pubkey: Option<PublicKey>,
         logger: Arc<MutinyLogger>,
     ) -> Self {
@@ -102,6 +106,7 @@ impl<S: MutinyStorage> EventHandler<S> {
             keys_manager,
             lsp_client_pubkey,
             persister,
+            bump_tx_event_handler,
             logger,
         }
     }
@@ -563,7 +568,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 }
             }
             Event::HTLCIntercepted { .. } => {}
-            Event::BumpTransaction(_) => {} // we do not support anchors
+            Event::BumpTransaction(event) => self.bump_tx_event_handler.handle_event(&event),
         }
     }
 
