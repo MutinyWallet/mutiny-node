@@ -119,7 +119,7 @@ impl BudgetedSpendingConditions {
 
     pub fn budget_remaining(&self) -> u64 {
         let mut clone = self.clone();
-        self.budget - clone.sum_payments()
+        self.budget.saturating_sub(clone.sum_payments())
     }
 }
 
