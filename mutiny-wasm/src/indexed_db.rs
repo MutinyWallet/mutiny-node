@@ -252,13 +252,12 @@ impl IndexedDbStorage {
             match current.get::<Vec<u8>>(&key)? {
                 Some(bytes) => {
                     // check first byte is 1, then take u64 from next 8 bytes
-                    let current_version = u64::from_be_bytes(bytes[1..9].try_into().unwrap());
+                    let current_version = utils::get_monitor_version(bytes);
 
                     let obj: Value = LocalStorage::get(&key).unwrap();
                     let value = decrypt_value(&key, obj, current.password())?;
                     if let Ok(local_bytes) = serde_json::from_value::<Vec<u8>>(value.clone()) {
-                        let local_version =
-                            u64::from_be_bytes(local_bytes[1..9].try_into().unwrap());
+                        let local_version = utils::get_monitor_version(local_bytes);
 
                         // if the current version is less than the version from local storage
                         // then we want to use the local storage version
@@ -367,13 +366,20 @@ impl IndexedDbStorage {
                     // we can get versions from monitors, so we should compare
                     match current.get::<Vec<u8>>(&kv.key)? {
                         Some(bytes) => {
-                            // check first byte is 1, then take u64 from next 8 bytes
-                            let current_version =
-                                u64::from_be_bytes(bytes[1..9].try_into().unwrap());
+                            let current_version = utils::get_monitor_version(bytes);
+
                             // if the current version is less than the version from vss, then we want to use the vss version
                             if current_version < kv.version as u64 {
                                 let obj = vss.get_object(&kv.key).await?;
                                 return Ok(Some((kv.key, obj.value)));
+                            } else {
+                                log_debug!(
+                                    logger,
+                                    "Skipping vss key {} with version {}, current version is {current_version}",
+                                    kv.key,
+                                    kv.version
+                                );
+                                return Ok(None);
                             }
                         }
                         None => {
@@ -392,6 +398,15 @@ impl IndexedDbStorage {
                                 {
                                     return Ok(Some((kv.key, obj.value)));
                                 }
+                            } else {
+                                log_debug!(
+                                    logger,
+                                    "Skipping vss key {} with version {}, current version is {}",
+                                    kv.key,
+                                    kv.version,
+                                    local.version
+                                );
+                                return Ok(None);
                             }
                         }
                         None => {
@@ -716,6 +731,7 @@ mod tests {
     use bitcoin::hashes::hex::ToHex;
     use gloo_storage::{LocalStorage, Storage};
     use mutiny_core::storage::MutinyStorage;
+    use mutiny_core::test_utils::{MANAGER_BYTES, MONITOR_VERSION_HIGHER, MONITOR_VERSION_LOWER};
     use mutiny_core::{encrypt::encryption_key_from_pass, logging::MutinyLogger};
     use rexie::TransactionMode;
     use serde_json::json;
@@ -887,15 +903,11 @@ mod tests {
         IndexedDbStorage::clear().await.unwrap();
     }
 
-    // first byte must be 0, then the u64 in big endian, then 2 dummy bytes after
-    const MONITOR_VERSION_MAX: [u8; 11] = [0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1];
-    const MONITOR_VERSION_0: [u8; 11] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
-
     async fn compare_local_storage_versions(
         test_name: &str,
-        local_storage: [u8; 11],
-        indexed_db: [u8; 11],
-    ) -> [u8; 11] {
+        local_storage: Vec<u8>,
+        indexed_db: Vec<u8>,
+    ) -> Vec<u8> {
         let key = format!("{MONITORS_PREFIX_KEY}test_{test_name}");
         // set in local storage
         LocalStorage::set(&key, local_storage).unwrap();
@@ -920,7 +932,7 @@ mod tests {
             .await
             .unwrap();
 
-        let bytes: [u8; 11] = storage.get(&key).unwrap().unwrap();
+        let bytes: Vec<u8> = storage.get(&key).unwrap().unwrap();
 
         // clear the storage to clean up
         IndexedDbStorage::clear().await.unwrap();
@@ -933,9 +945,13 @@ mod tests {
         let test_name = "test_local_storage_version_0_indexed_db_version_max";
         log!("{test_name}");
 
-        let bytes =
-            compare_local_storage_versions(test_name, MONITOR_VERSION_0, MONITOR_VERSION_MAX).await;
-        assert_eq!(bytes, MONITOR_VERSION_MAX);
+        let bytes = compare_local_storage_versions(
+            test_name,
+            MONITOR_VERSION_LOWER.to_vec(),
+            MONITOR_VERSION_HIGHER.to_vec(),
+        )
+        .await;
+        assert_eq!(bytes, MONITOR_VERSION_HIGHER);
     }
 
     #[test]
@@ -943,9 +959,13 @@ mod tests {
         let test_name = "test_local_storage_version_max_indexed_db_version_0";
         log!("{test_name}");
 
-        let bytes =
-            compare_local_storage_versions(test_name, MONITOR_VERSION_MAX, MONITOR_VERSION_0).await;
-        assert_eq!(bytes, MONITOR_VERSION_MAX);
+        let bytes = compare_local_storage_versions(
+            test_name,
+            MONITOR_VERSION_HIGHER.to_vec(),
+            MONITOR_VERSION_LOWER.to_vec(),
+        )
+        .await;
+        assert_eq!(bytes, MONITOR_VERSION_HIGHER);
     }
 
     #[test]
@@ -953,10 +973,13 @@ mod tests {
         let test_name = "test_local_storage_version_max_indexed_db_version_max";
         log!("{test_name}");
 
-        let bytes =
-            compare_local_storage_versions(test_name, MONITOR_VERSION_MAX, MONITOR_VERSION_MAX)
-                .await;
-        assert_eq!(bytes, MONITOR_VERSION_MAX);
+        let bytes = compare_local_storage_versions(
+            test_name,
+            MONITOR_VERSION_HIGHER.to_vec(),
+            MONITOR_VERSION_HIGHER.to_vec(),
+        )
+        .await;
+        assert_eq!(bytes, MONITOR_VERSION_HIGHER);
     }
 
     #[test]
@@ -969,7 +992,7 @@ mod tests {
         let data = VersionedValue {
             version: 69,
             // just use this as dummy data
-            value: Value::String(MONITOR_VERSION_MAX.to_hex()),
+            value: Value::String(MANAGER_BYTES.to_hex()),
         };
         let storage = IndexedDbStorage::new(None, None, None, logger.clone())
             .await

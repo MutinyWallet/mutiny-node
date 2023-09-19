@@ -637,8 +637,10 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
             funding_txo.txid.to_hex(),
             funding_txo.index
         );
-        // safely convert u64 to u32
         let update_id = monitor.get_latest_update_id();
+        debug_assert!(update_id == utils::get_monitor_version(monitor.encode()));
+
+        // safely convert u64 to u32
         let version = if update_id >= u32::MAX as u64 {
             u32::MAX
         } else {
@@ -663,8 +665,10 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
             funding_txo.txid.to_hex(),
             funding_txo.index
         );
-        // safely convert u64 to u32
         let update_id = monitor.get_latest_update_id();
+        debug_assert!(update_id == utils::get_monitor_version(monitor.encode()));
+
+        // safely convert u64 to u32
         let version = if update_id >= u32::MAX as u64 {
             u32::MAX
         } else {
@@ -824,21 +828,6 @@ mod test {
         let result = persister.get_failed_spendable_outputs().unwrap();
         assert!(result.is_empty());
     }
-
-    const MANAGER_BYTES: [u8; 256] = [
-        1, 1, 246, 30, 238, 59, 99, 163, 128, 164, 119, 160, 99, 175, 50, 178, 187, 201, 124, 159,
-        249, 240, 31, 44, 66, 37, 233, 115, 152, 129, 8, 0, 0, 0, 0, 3, 123, 222, 76, 244, 143, 88,
-        178, 115, 155, 195, 17, 83, 168, 252, 26, 45, 231, 72, 39, 21, 96, 23, 203, 8, 101, 10,
-        238, 136, 77, 5, 250, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100,
-        172, 120, 225, 100, 172, 120, 225, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 113, 1,
-        2, 0, 0, 3, 2, 0, 0, 5, 33, 3, 49, 56, 184, 182, 87, 71, 249, 167, 155, 99, 242, 124, 162,
-        190, 245, 15, 63, 119, 66, 102, 88, 52, 223, 137, 219, 56, 27, 137, 175, 103, 200, 26, 7,
-        32, 23, 65, 121, 234, 117, 201, 12, 57, 255, 124, 147, 188, 210, 48, 53, 179, 20, 157, 122,
-        21, 212, 195, 166, 222, 214, 124, 167, 7, 217, 175, 93, 50, 9, 0, 11, 32, 124, 241, 131,
-        188, 131, 90, 195, 214, 250, 125, 197, 126, 163, 168, 131, 111, 78, 41, 166, 218, 20, 49,
-        233, 172, 19, 243, 93, 239, 33, 64, 36, 240,
-    ];
 
     #[test]
     async fn test_upgrade_channel_manager() {
