@@ -13,7 +13,7 @@ use crate::scb::{
     SCB_ENCRYPTION_KEY_DERIVATION_PATH,
 };
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY};
-use crate::utils::sleep;
+use crate::utils::{sleep, spawn};
 use crate::MutinyWalletConfig;
 use crate::{
     chain::MutinyChain,
@@ -775,6 +775,12 @@ impl<S: MutinyStorage> NodeManager<S> {
             (None, auth_manager)
         };
 
+        let price_cache = storage
+            .get_bitcoin_price_cache()?
+            .into_iter()
+            .map(|(k, v)| (k, (v, Duration::from_secs(0))))
+            .collect();
+
         let nm = NodeManager {
             stop,
             xprivkey: c.xprivkey,
@@ -796,7 +802,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             lsp_clients,
             subscription_client,
             logger,
-            bitcoin_price_cache: Arc::new(Mutex::new(HashMap::new())),
+            bitcoin_price_cache: Arc::new(Mutex::new(price_cache)),
             do_not_connect_peers: c.do_not_connect_peers,
             safe_mode: c.safe_mode,
         };
@@ -2319,45 +2325,90 @@ impl<S: MutinyStorage> NodeManager<S> {
         let now = crate::utils::now();
         let fiat = fiat.unwrap_or("usd".to_string());
 
-        let mut bitcoin_price_cache = self.bitcoin_price_cache.lock().await;
+        let cache_result = {
+            let cache = self.bitcoin_price_cache.lock().await;
+            cache.get(&fiat).cloned()
+        };
 
-        match bitcoin_price_cache.get(&fiat) {
+        match cache_result {
+            Some((price, timestamp)) if timestamp == Duration::from_secs(0) => {
+                // Cache is from previous run, return it but fetch a new price in the background
+                let cache = self.bitcoin_price_cache.clone();
+                let storage = self.storage.clone();
+                let logger = self.logger.clone();
+                spawn(async move {
+                    if let Err(e) =
+                        Self::fetch_and_cache_price(fiat, now, cache, storage, logger.clone()).await
+                    {
+                        log_warn!(logger, "failed to fetch bitcoin price: {e:?}");
+                    }
+                });
+                Ok(price)
+            }
             Some((price, timestamp))
-                if *timestamp + Duration::from_secs(BITCOIN_PRICE_CACHE_SEC) > now =>
+                if timestamp + Duration::from_secs(BITCOIN_PRICE_CACHE_SEC) > now =>
             {
                 // Cache is not expired
-                Ok(*price)
+                Ok(price)
             }
             _ => {
                 // Cache is either expired, empty, or doesn't have the desired fiat value
-                match self.fetch_bitcoin_price(&fiat).await {
-                    Ok(new_price) => {
-                        let cache_entry = (new_price, now);
-                        bitcoin_price_cache.insert(fiat.clone(), cache_entry);
-                        Ok(new_price)
+                Self::fetch_and_cache_price(
+                    fiat,
+                    now,
+                    self.bitcoin_price_cache.clone(),
+                    self.storage.clone(),
+                    self.logger.clone(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn fetch_and_cache_price(
+        fiat: String,
+        now: Duration,
+        bitcoin_price_cache: Arc<Mutex<HashMap<String, (f32, Duration)>>>,
+        storage: S,
+        logger: Arc<MutinyLogger>,
+    ) -> Result<f32, MutinyError> {
+        match Self::fetch_bitcoin_price(&fiat).await {
+            Ok(new_price) => {
+                let mut cache = bitcoin_price_cache.lock().await;
+                let cache_entry = (new_price, now);
+                cache.insert(fiat.clone(), cache_entry);
+
+                // save to storage in the background
+                let cache_clone = cache.clone();
+                spawn(async move {
+                    let cache = cache_clone
+                        .into_iter()
+                        .map(|(k, (price, _))| (k, price))
+                        .collect();
+
+                    if let Err(e) = storage.insert_bitcoin_price_cache(cache) {
+                        log_error!(logger, "failed to save bitcoin price cache: {e:?}");
                     }
-                    Err(e) => {
-                        // If fetching price fails, return the cached price (if any)
-                        if let Some((price, _)) = bitcoin_price_cache.get(&fiat) {
-                            log_warn!(self.logger, "price api failed, returning cached price");
-                            Ok(*price)
-                        } else {
-                            // If there is no cached price, return the error
-                            log_error!(
-                                self.logger,
-                                "no cached price and price api failed for {}",
-                                fiat
-                            );
-                            Err(e)
-                        }
-                    }
+                });
+
+                Ok(new_price)
+            }
+            Err(e) => {
+                // If fetching price fails, return the cached price (if any)
+                let cache = bitcoin_price_cache.lock().await;
+                if let Some((price, _)) = cache.get(&fiat) {
+                    log_warn!(logger, "price api failed, returning cached price");
+                    Ok(*price)
+                } else {
+                    // If there is no cached price, return the error
+                    log_error!(logger, "no cached price and price api failed for {fiat}");
+                    Err(e)
                 }
             }
         }
     }
 
-    async fn fetch_bitcoin_price(&self, fiat: &str) -> Result<f32, MutinyError> {
-        log_debug!(self.logger, "fetching new bitcoin price against {}", fiat);
+    async fn fetch_bitcoin_price(fiat: &str) -> Result<f32, MutinyError> {
         let api_url = format!(
             "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies={}",
             fiat

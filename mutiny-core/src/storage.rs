@@ -19,6 +19,7 @@ pub(crate) const MNEMONIC_KEY: &str = "mnemonic";
 pub(crate) const NEED_FULL_SYNC_KEY: &str = "needs_full_sync";
 pub const NODES_KEY: &str = "nodes";
 const FEE_ESTIMATES_KEY: &str = "fee_estimates";
+pub const BITCOIN_PRICE_CACHE_KEY: &str = "bitcoin_price_cache";
 const FIRST_SYNC_KEY: &str = "first_sync";
 pub(crate) const DEVICE_ID_KEY: &str = "device_id";
 pub const DEVICE_LOCK_KEY: &str = "device_lock";
@@ -295,6 +296,16 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     /// The key is block target, the value is the fee in satoshis per byte
     fn insert_fee_estimates(&self, fees: HashMap<String, f64>) -> Result<(), MutinyError> {
         self.set_data(FEE_ESTIMATES_KEY, fees, None)
+    }
+
+    /// Get the current bitcoin price cache from storage
+    fn get_bitcoin_price_cache(&self) -> Result<HashMap<String, f32>, MutinyError> {
+        Ok(self.get_data(BITCOIN_PRICE_CACHE_KEY)?.unwrap_or_default())
+    }
+
+    /// Inserts the bitcoin price cache into storage
+    fn insert_bitcoin_price_cache(&self, prices: HashMap<String, f32>) -> Result<(), MutinyError> {
+        self.set_data(BITCOIN_PRICE_CACHE_KEY, prices, None)
     }
 
     fn has_done_first_sync(&self) -> Result<bool, MutinyError> {
