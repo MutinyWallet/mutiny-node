@@ -467,7 +467,9 @@ impl IndexedDbStorage {
 /// We also need to skip writing them to the in memory storage on updates.
 fn used_once(key: &str) -> bool {
     match key {
-        NETWORK_GRAPH_KEY | PROB_SCORER_KEY | GOSSIP_SYNC_TIME_KEY => true,
+        NETWORK_GRAPH_KEY | PROB_SCORER_KEY | GOSSIP_SYNC_TIME_KEY | BITCOIN_PRICE_CACHE_KEY => {
+            true
+        }
         str if str.starts_with(MONITORS_PREFIX_KEY) => true,
         str if str.starts_with(CHANNEL_MANAGER_KEY) => true,
         _ => false,
