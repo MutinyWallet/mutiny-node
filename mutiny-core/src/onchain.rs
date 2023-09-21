@@ -478,7 +478,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
 
-        self.broadcast_transaction(raw_transaction.clone()).await?;
+        self.broadcast_transaction(raw_transaction).await?;
         log_debug!(self.logger, "Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }
@@ -530,7 +530,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
 
-        self.broadcast_transaction(raw_transaction.clone()).await?;
+        self.broadcast_transaction(raw_transaction).await?;
         log_debug!(self.logger, "Transaction broadcast! TXID: {txid}");
         Ok(txid)
     }
