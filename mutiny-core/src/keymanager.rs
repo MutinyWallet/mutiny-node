@@ -11,7 +11,7 @@ use bitcoin::secp256k1::ecdsa::RecoverableSignature;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, Signing};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
-use bitcoin::{Script, Transaction, TxOut};
+use bitcoin::{PackedLockTime, Script, Transaction, TxOut};
 use lightning::ln::msgs::{DecodeError, UnsignedGossipMessage};
 use lightning::ln::script::ShutdownScript;
 use lightning::log_warn;
@@ -57,6 +57,7 @@ impl<S: MutinyStorage> PhantomKeysManager<S> {
         descriptors: &[&SpendableOutputDescriptor],
         outputs: Vec<TxOut>,
         feerate_sat_per_1000_weight: u32,
+        locktime: Option<PackedLockTime>,
         secp_ctx: &Secp256k1<C>,
     ) -> Result<Transaction, ()> {
         let address = {
@@ -69,7 +70,7 @@ impl<S: MutinyStorage> PhantomKeysManager<S> {
             outputs,
             address.script_pubkey(),
             feerate_sat_per_1000_weight,
-            None, // tx locktime of 0
+            locktime,
             secp_ctx,
         );
 
