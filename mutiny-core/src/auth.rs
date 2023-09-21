@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+
 use crate::{
     error::MutinyError,
     lnurlauth::{make_lnurl_auth_connection, AuthManager},
@@ -6,18 +7,29 @@ use crate::{
     networking::websocket::{SimpleWebSocket, WebSocketImpl},
     utils,
 };
-use jwt_compact::UntrustedToken;
+use chrono::{DateTime, Utc};
+use jwt_compact::alg::Es256k;
+use jwt_compact::{AlgorithmExt, Token, UntrustedToken};
 use lightning::util::logger::*;
 use lightning::{log_error, log_info};
 use lnurl::{lnurl::LnUrl, AsyncClient as LnUrlClient};
+use nostr::secp256k1::Secp256k1;
+use nostr_sdk::secp256k1::PublicKey;
 use reqwest::Client;
 use reqwest::{Method, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::Sha256;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Clone)]
+struct SavedJwt {
+    jwt: String,
+    expiry: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 struct CustomClaims {
     sub: String,
 }
@@ -27,7 +39,7 @@ pub struct MutinyAuthClient {
     lnurl_client: Arc<LnUrlClient>,
     url: String,
     http_client: Client,
-    jwt: RwLock<Option<String>>,
+    jwt: RwLock<Option<SavedJwt>>,
     logger: Arc<MutinyLogger>,
 }
 
@@ -55,8 +67,15 @@ impl MutinyAuthClient {
     }
 
     pub fn is_authenticated(&self) -> Option<String> {
-        if let Some(ref jwt) = *self.jwt.try_read().unwrap() {
-            return Some(jwt.to_string()); // TODO parse and make sure still valid
+        if let Some(ref saved_jwt) = *self.jwt.try_read().unwrap() {
+            // If the JWT has an expiry, check if it has expired
+            // if it has, return None
+            if let Some(expiry) = saved_jwt.expiry {
+                if expiry < Utc::now() {
+                    return None;
+                }
+            }
+            return Some(saved_jwt.jwt.clone());
         }
         None
     }
@@ -152,11 +171,22 @@ impl MutinyAuthClient {
         let jwt = match ws.recv().await {
             Ok(jwt) => {
                 // basic validation to make sure it is a valid string
-                let _ = UntrustedToken::new(&jwt).map_err(|e| {
+                let untrusted_token = UntrustedToken::new(&jwt).map_err(|e| {
                     log_error!(self.logger, "Could not validate JWT {jwt}: {e}");
                     MutinyError::LnUrlFailure
                 })?;
-                jwt
+                let auth_key =
+                    PublicKey::from_str(untrusted_token.header().key_id.as_deref().unwrap())
+                        .unwrap();
+                let es256k1 = Es256k::<Sha256>::new(Secp256k1::new());
+
+                let token: Token<CustomClaims> =
+                    es256k1.validator(&auth_key).validate(&untrusted_token)?;
+
+                SavedJwt {
+                    jwt,
+                    expiry: token.claims().expiration,
+                }
             }
             Err(e) => {
                 log_error!(self.logger, "Error trying to retrieve JWT: {e}");
@@ -164,9 +194,13 @@ impl MutinyAuthClient {
             }
         };
 
-        log_info!(self.logger, "Retrieved new JWT token");
+        log_info!(
+            self.logger,
+            "Retrieved new JWT token, expiry: {:?}",
+            jwt.expiry
+        );
         *self.jwt.try_write()? = Some(jwt.clone());
-        Ok(jwt)
+        Ok(jwt.jwt)
     }
 }
 

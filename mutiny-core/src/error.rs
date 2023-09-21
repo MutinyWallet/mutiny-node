@@ -377,3 +377,9 @@ impl From<nostr::event::builder::Error> for MutinyError {
         Self::NostrError
     }
 }
+
+impl From<jwt_compact::ValidationError> for MutinyError {
+    fn from(_e: jwt_compact::ValidationError) -> Self {
+        Self::LnUrlFailure
+    }
+}
