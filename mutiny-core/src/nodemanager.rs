@@ -2068,11 +2068,17 @@ impl<S: MutinyStorage> NodeManager<S> {
                         None
                     };
 
+                    // ldk uses background fee rate for closing channels which can be very slow
+                    // so we use normal fee rate instead
+                    let fee_rate = self
+                        .fee_estimator
+                        .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+
                     node.channel_manager
                         .close_channel_with_feerate_and_script(
                             &channel.channel_id,
                             &channel.counterparty.node_id,
-                            None,
+                            Some(fee_rate),
                             shutdown_script,
                         )
                         .map_err(|e| {
