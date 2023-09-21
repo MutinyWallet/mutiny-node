@@ -37,7 +37,7 @@ impl VssKeyValueItem {
         // should we handle this unwrap better?
         let bytes = self.value.to_string().into_bytes();
 
-        let value = base64::encode(encrypt_with_key(encryption_key, &bytes));
+        let value = encrypt_with_key(encryption_key, &bytes);
 
         EncryptedVssKeyValueItem {
             key: self.key,
@@ -50,7 +50,7 @@ impl VssKeyValueItem {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EncryptedVssKeyValueItem {
     pub key: String,
-    pub value: String,
+    pub value: Vec<u8>,
     pub version: u32,
 }
 
@@ -59,8 +59,7 @@ impl EncryptedVssKeyValueItem {
         self,
         encryption_key: &SecretKey,
     ) -> Result<VssKeyValueItem, MutinyError> {
-        let bytes = base64::decode(&self.value)?;
-        let decrypted = decrypt_with_key(encryption_key, bytes)?;
+        let decrypted = decrypt_with_key(encryption_key, self.value)?;
         let decrypted_value = String::from_utf8(decrypted)?;
         let value = serde_json::from_str(&decrypted_value)?;
 
