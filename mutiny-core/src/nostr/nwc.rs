@@ -293,6 +293,37 @@ impl NostrWalletConnect {
         }
     }
 
+    async fn save_pending_nwc_invoice<S: MutinyStorage>(
+        &self,
+        nostr_manager: &NostrManager<S>,
+        event_id: EventId,
+        event_pk: XOnlyPublicKey,
+        invoice: Bolt11Invoice,
+    ) -> anyhow::Result<()> {
+        let pending = PendingNwcInvoice {
+            index: self.profile.index,
+            invoice,
+            event_id,
+            pubkey: event_pk,
+        };
+        nostr_manager.pending_nwc_lock.lock().await;
+
+        let mut current: Vec<PendingNwcInvoice> = nostr_manager
+            .storage
+            .get_data(PENDING_NWC_EVENTS_KEY)?
+            .unwrap_or_default();
+
+        if !current.contains(&pending) {
+            current.push(pending);
+
+            nostr_manager
+                .storage
+                .set_data(PENDING_NWC_EVENTS_KEY, current, None)?;
+        }
+
+        Ok(())
+    }
+
     /// Handle a Nostr Wallet Connect request
     ///
     /// Returns a response event if one is needed
@@ -409,28 +440,13 @@ impl NostrWalletConnect {
                                             code = ErrorCode::Internal;
                                         } else {
                                             // for non-timeout errors, add to manual approval list
-                                            let pending = PendingNwcInvoice {
-                                                index: self.profile.index,
+                                            self.save_pending_nwc_invoice(
+                                                nostr_manager,
+                                                event.id,
+                                                event.pubkey,
                                                 invoice,
-                                                event_id: event.id,
-                                                pubkey: event.pubkey,
-                                            };
-                                            nostr_manager.pending_nwc_lock.lock().await;
-
-                                            let mut current: Vec<PendingNwcInvoice> = node_manager
-                                                .storage
-                                                .get_data(PENDING_NWC_EVENTS_KEY)?
-                                                .unwrap_or_default();
-
-                                            if !current.contains(&pending) {
-                                                current.push(pending);
-
-                                                node_manager.storage.set_data(
-                                                    PENDING_NWC_EVENTS_KEY,
-                                                    current,
-                                                    None,
-                                                )?;
-                                            }
+                                            )
+                                            .await?
                                         }
                                         Response {
                                             result_type: Method::PayInvoice,
@@ -494,26 +510,8 @@ impl NostrWalletConnect {
                     return Ok(Some(response));
                 }
                 SpendingConditions::RequireApproval => {
-                    let pending = PendingNwcInvoice {
-                        index: self.profile.index,
-                        invoice,
-                        event_id: event.id,
-                        pubkey: event.pubkey,
-                    };
-                    nostr_manager.pending_nwc_lock.lock().await;
-
-                    let mut current: Vec<PendingNwcInvoice> = node_manager
-                        .storage
-                        .get_data(PENDING_NWC_EVENTS_KEY)?
-                        .unwrap_or_default();
-
-                    if !current.contains(&pending) {
-                        current.push(pending);
-
-                        node_manager
-                            .storage
-                            .set_data(PENDING_NWC_EVENTS_KEY, current, None)?;
-                    }
+                    self.save_pending_nwc_invoice(nostr_manager, event.id, event.pubkey, invoice)
+                        .await?;
 
                     if needs_save {
                         nostr_manager.save_nwc_profile(self.clone())?;
@@ -559,6 +557,14 @@ impl NostrWalletConnect {
                     let content = match budget_err {
                         Some(err) => {
                             log_warn!(nostr_manager.logger, "Attempted to exceed budget: {err}");
+                            // add to manual approval list
+                            self.save_pending_nwc_invoice(
+                                nostr_manager,
+                                event.id,
+                                event.pubkey,
+                                invoice,
+                            )
+                            .await?;
                             Response {
                                 result_type: Method::PayInvoice,
                                 error: Some(NIP47Error {
@@ -604,28 +610,13 @@ impl NostrWalletConnect {
                                             nostr_manager.save_nwc_profile(self.clone())?;
 
                                             // for non-timeout errors, add to manual approval list
-                                            let pending = PendingNwcInvoice {
-                                                index: self.profile.index,
+                                            self.save_pending_nwc_invoice(
+                                                nostr_manager,
+                                                event.id,
+                                                event.pubkey,
                                                 invoice,
-                                                event_id: event.id,
-                                                pubkey: event.pubkey,
-                                            };
-                                            nostr_manager.pending_nwc_lock.lock().await;
-
-                                            let mut current: Vec<PendingNwcInvoice> = node_manager
-                                                .storage
-                                                .get_data(PENDING_NWC_EVENTS_KEY)?
-                                                .unwrap_or_default();
-
-                                            if !current.contains(&pending) {
-                                                current.push(pending);
-
-                                                node_manager.storage.set_data(
-                                                    PENDING_NWC_EVENTS_KEY,
-                                                    current,
-                                                    None,
-                                                )?;
-                                            }
+                                            )
+                                            .await?
                                         }
                                     }
 
