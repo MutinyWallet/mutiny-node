@@ -300,7 +300,6 @@ impl NostrWalletConnect {
         event_pk: XOnlyPublicKey,
         invoice: Bolt11Invoice,
     ) -> anyhow::Result<()> {
-        // for non-timeout errors, add to manual approval list
         let pending = PendingNwcInvoice {
             index: self.profile.index,
             invoice,
@@ -440,6 +439,7 @@ impl NostrWalletConnect {
                                             );
                                             code = ErrorCode::Internal;
                                         } else {
+                                            // for non-timeout errors, add to manual approval list
                                             self.save_pending_nwc_invoice(
                                                 nostr_manager,
                                                 event.id,
@@ -557,6 +557,14 @@ impl NostrWalletConnect {
                     let content = match budget_err {
                         Some(err) => {
                             log_warn!(nostr_manager.logger, "Attempted to exceed budget: {err}");
+                            // add to manual approval list
+                            self.save_pending_nwc_invoice(
+                                nostr_manager,
+                                event.id,
+                                event.pubkey,
+                                invoice,
+                            )
+                            .await?;
                             Response {
                                 result_type: Method::PayInvoice,
                                 error: Some(NIP47Error {
