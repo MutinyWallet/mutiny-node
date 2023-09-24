@@ -529,9 +529,42 @@ impl MutinyStorage for IndexedDbStorage {
         // Some values we want to write to local storage as well as indexed db
         if write_to_local_storage(&key) {
             LocalStorage::set(&key, &data).map_err(|e| {
-                MutinyError::write_err(MutinyStorageError::Other(anyhow!(format!(
+                MutinyError::write_err(MutinyStorageError::Other(anyhow!(
                     "Failed to write to local storage: {e}"
-                ))))
+                )))
+            })?;
+        }
+
+        // some values only are read once, so we don't need to write them to memory,
+        // just need them in indexed db for next time
+        if !used_once(key.as_ref()) {
+            let mut map = self
+                .memory
+                .try_write()
+                .map_err(|e| MutinyError::write_err(e.into()))?;
+            map.insert(key, data);
+        }
+
+        Ok(())
+    }
+
+    async fn set_async<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
+    where
+        T: Serialize,
+    {
+        let key = key.as_ref().to_string();
+        let data = serde_json::to_value(value).map_err(|e| MutinyError::PersistenceFailed {
+            source: MutinyStorageError::SerdeError { source: e },
+        })?;
+
+        Self::save_to_indexed_db(&self.indexed_db, &key, &data).await?;
+
+        // Some values we want to write to local storage as well as indexed db
+        if write_to_local_storage(&key) {
+            LocalStorage::set(&key, &data).map_err(|e| {
+                MutinyError::write_err(MutinyStorageError::Other(anyhow!(
+                    "Failed to write to local storage: {e}"
+                )))
             })?;
         }
 

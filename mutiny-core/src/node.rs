@@ -215,6 +215,13 @@ impl<S: MutinyStorage> Node<S> {
             persister.clone(),
         ));
 
+        // set chain monitor for persister for async storage
+        persister
+            .chain_monitor
+            .lock()
+            .await
+            .replace(chain_monitor.clone());
+
         // read channelmonitor state from disk
         let channel_monitors = if empty_state {
             vec![]
@@ -385,8 +392,8 @@ impl<S: MutinyStorage> Node<S> {
                 let channel_monitor = item.1 .0;
                 let funding_outpoint = item.2;
                 chain_monitor
-                    .clone()
-                    .watch_channel(funding_outpoint, channel_monitor);
+                    .watch_channel(funding_outpoint, channel_monitor)
+                    .map_err(|_| MutinyError::ChainAccessFailed)?;
             }
         }
 
@@ -1141,6 +1148,7 @@ impl<S: MutinyStorage> Node<S> {
         &self,
         to_node: PublicKey,
         amt_sats: u64,
+        message: Option<String>,
         labels: Vec<String>,
         payment_id: PaymentId,
     ) -> Result<MutinyInvoice, MutinyError> {
@@ -1159,9 +1167,20 @@ impl<S: MutinyStorage> Node<S> {
         let route_params: RouteParameters = RouteParameters {
             final_value_msat: amt_msats,
             payment_params,
+            max_total_routing_fee_msat: None,
         };
 
-        let recipient_onion = RecipientOnionFields::secret_only(payment_secret);
+        let recipient_onion = if let Some(msg) = message {
+            // keysend messages are encoded as TLV type 34349334
+            RecipientOnionFields::secret_only(payment_secret)
+                .with_custom_tlvs(vec![(34349334, msg.encode())])
+                .map_err(|_| {
+                    log_error!(self.logger, "could not encode keysend message");
+                    MutinyError::InvoiceCreationFailed
+                })?
+        } else {
+            RecipientOnionFields::secret_only(payment_secret)
+        };
 
         let pay_result = self.channel_manager.send_spontaneous_payment_with_retry(
             Some(preimage),
@@ -1207,6 +1226,7 @@ impl<S: MutinyStorage> Node<S> {
         &self,
         to_node: PublicKey,
         amt_sats: u64,
+        message: Option<String>,
         labels: Vec<String>,
         timeout_secs: Option<u64>,
     ) -> Result<MutinyInvoice, MutinyError> {
@@ -1215,7 +1235,8 @@ impl<S: MutinyStorage> Node<S> {
         let payment_id = PaymentId(entropy);
 
         // initiate payment
-        let pay = self.init_keysend_payment(to_node, amt_sats, labels.clone(), payment_id)?;
+        let pay =
+            self.init_keysend_payment(to_node, amt_sats, message, labels.clone(), payment_id)?;
 
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
         let payment_hash = PaymentHash(pay.payment_hash.into_inner());
@@ -1501,7 +1522,9 @@ impl<S: MutinyStorage> Node<S> {
                 .expect("failed to get node id");
 
             // watch the channel in the case peer tries to cheat us
-            self.chain_monitor.watch_channel(ln_outpoint, monitor);
+            self.chain_monitor
+                .watch_channel(ln_outpoint, monitor)
+                .map_err(|_| MutinyError::ChainAccessFailed)?;
 
             // connect to peer if we have a connection string
             if let Some(connection_string) = peer_connections.get(&node_id) {

@@ -3,7 +3,10 @@ use lightning::{
     routing::{
         gossip::NodeId,
         router::Path,
-        scoring::{ChannelUsage, ProbabilisticScorer, ProbabilisticScoringFeeParameters, Score},
+        scoring::{
+            ChannelUsage, ProbabilisticScorer, ProbabilisticScoringFeeParameters, ScoreLookUp,
+            ScoreUpdate,
+        },
     },
     util::ser::{Writeable, Writer},
 };
@@ -292,7 +295,7 @@ impl HubPreferentialScorer {
     }
 }
 
-impl Score for HubPreferentialScorer {
+impl ScoreLookUp for HubPreferentialScorer {
     type ScoreParams = ProbabilisticScoringFeeParameters;
 
     fn channel_penalty_msat(
@@ -337,7 +340,9 @@ impl Score for HubPreferentialScorer {
 
         penalty
     }
+}
 
+impl ScoreUpdate for HubPreferentialScorer {
     fn payment_path_failed(&mut self, path: &Path, short_channel_id: u64) {
         self.inner.payment_path_failed(path, short_channel_id)
     }

@@ -10,16 +10,19 @@ use crate::node::{NetworkGraph, Router};
 use crate::nodemanager::ChannelClosure;
 use crate::storage::{MutinyStorage, VersionedValue};
 use crate::utils;
+use crate::utils::{sleep, spawn};
+use crate::vss::VssKeyValueItem;
 use crate::{chain::MutinyChain, scorer::HubPreferentialScorer};
 use anyhow::anyhow;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::Network;
 use bitcoin::{BlockHash, Transaction};
 use futures::{try_join, TryFutureExt};
+use futures_util::lock::Mutex;
 use lightning::chain::chainmonitor::{MonitorUpdateId, Persist};
 use lightning::chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate};
 use lightning::chain::transaction::OutPoint;
-use lightning::chain::BestBlock;
+use lightning::chain::{BestBlock, ChannelMonitorUpdateStatus};
 use lightning::io::Cursor;
 use lightning::ln::channelmanager::{
     self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
@@ -29,7 +32,7 @@ use lightning::sign::{InMemorySigner, SpendableOutputDescriptor, WriteableEcdsaC
 use lightning::util::logger::Logger;
 use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
-use lightning::{chain, log_debug, log_error, log_trace};
+use lightning::{log_debug, log_error, log_trace};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
@@ -60,6 +63,7 @@ pub struct MutinyNodePersister<S: MutinyStorage> {
     node_id: String,
     pub(crate) storage: S,
     manager_version: Arc<AtomicU32>,
+    pub(crate) chain_monitor: Arc<Mutex<Option<Arc<ChainMonitor<S>>>>>,
     logger: Arc<MutinyLogger>,
 }
 
@@ -75,6 +79,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             node_id,
             storage,
             manager_version: Arc::new(AtomicU32::new(0)),
+            chain_monitor: Arc::new(Mutex::new(None)),
             logger,
         }
     }
@@ -88,26 +93,70 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         format!("{}_{}", key, self.node_id)
     }
 
-    fn persist_local_storage<W: Writeable>(
+    fn init_persist_local_storage<W: Writeable>(
         &self,
-        key: &str,
+        key: String,
         object: &W,
-        version: Option<u32>,
-    ) -> Result<(), lightning::io::Error> {
-        let key_with_node = self.get_key(key);
-        self.storage
-            .set_data(key_with_node, object.encode(), version)
-            .map_err(|e| {
-                match e {
-                    MutinyError::PersistenceFailed { source } => {
-                        log_error!(self.logger, "Persistence failed on {key}: {source}");
+        version: u32,
+        update_id: MonitorUpdateIdentifier,
+    ) -> ChannelMonitorUpdateStatus {
+        let storage = self.storage.clone();
+        let chain_monitor = self.chain_monitor.clone();
+        let logger = self.logger.clone();
+        let object = object.encode();
+
+        // currently we only retry storage to VSS because we don't have a way to detect
+        // for local storage if a higher version has been persisted. Without handling this
+        // we could end up with a previous state being persisted over a newer one.
+        // VSS does not have this problem because it verifies the version before storing
+        // and will not overwrite a newer version, so it is safe to retry.
+        spawn(async move {
+            let mut is_retry = false;
+            // Sleep before persisting to give chance for the manager to be persisted
+            sleep(50).await;
+            loop {
+                match persist_local_storage(
+                    &storage,
+                    &key,
+                    &object,
+                    Some(version),
+                    is_retry,
+                    &logger,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        log_debug!(logger, "Persisted channel monitor: {update_id:?}");
+
+                        // unwrap is safe, we set it up immediately
+                        let chain_monitor = chain_monitor.lock().await;
+                        let chain_monitor = chain_monitor.as_ref().unwrap();
+
+                        // these errors are not fatal, so we don't return them just log
+                        if let Err(e) = chain_monitor.channel_monitor_updated(
+                            update_id.funding_txo,
+                            update_id.monitor_update_id,
+                        ) {
+                            log_error!(
+                                logger,
+                                "Error notifying chain monitor of channel monitor update: {e:?}"
+                            );
+                        } else {
+                            break; // successful storage, no more attempts
+                        }
                     }
-                    _ => {
-                        log_error!(self.logger, "Error storing {key}: {e}");
+                    Err(e) => {
+                        log_error!(logger, "Error persisting channel monitor: {e}");
                     }
-                };
-                lightning::io::ErrorKind::Other.into()
-            })
+                }
+
+                // if we get here, we failed to persist, so we retry
+                is_retry = true;
+                sleep(1_000).await;
+            }
+        });
+
+        ChannelMonitorUpdateStatus::InProgress
     }
 
     // name this param _key so it is not confused with the key
@@ -628,13 +677,15 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
         &self,
         funding_txo: OutPoint,
         monitor: &ChannelMonitor<ChannelSigner>,
-        _update_id: MonitorUpdateId,
-    ) -> chain::ChannelMonitorUpdateStatus {
+        monitor_update_id: MonitorUpdateId,
+    ) -> ChannelMonitorUpdateStatus {
         let key = format!(
             "{MONITORS_PREFIX_KEY}{}_{}",
             funding_txo.txid.to_hex(),
             funding_txo.index
         );
+        let key = self.get_key(&key);
+
         let update_id = monitor.get_latest_update_id();
         debug_assert!(update_id == utils::get_monitor_version(monitor.encode()));
 
@@ -645,10 +696,12 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
             update_id as u32
         };
 
-        match self.persist_local_storage(&key, monitor, Some(version)) {
-            Ok(()) => chain::ChannelMonitorUpdateStatus::Completed,
-            Err(_) => chain::ChannelMonitorUpdateStatus::PermanentFailure,
-        }
+        let update_id = MonitorUpdateIdentifier {
+            funding_txo,
+            monitor_update_id,
+        };
+
+        self.init_persist_local_storage(key, monitor, version, update_id)
     }
 
     fn update_persisted_channel(
@@ -656,13 +709,14 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
         funding_txo: OutPoint,
         _update: Option<&ChannelMonitorUpdate>,
         monitor: &ChannelMonitor<ChannelSigner>,
-        _update_id: MonitorUpdateId,
-    ) -> chain::ChannelMonitorUpdateStatus {
+        monitor_update_id: MonitorUpdateId,
+    ) -> ChannelMonitorUpdateStatus {
         let key = format!(
             "{MONITORS_PREFIX_KEY}{}_{}",
             funding_txo.txid.to_hex(),
             funding_txo.index
         );
+        let key = self.get_key(&key);
         let update_id = monitor.get_latest_update_id();
         debug_assert!(update_id == utils::get_monitor_version(monitor.encode()));
 
@@ -673,11 +727,60 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
             update_id as u32
         };
 
-        match self.persist_local_storage(&key, monitor, Some(version)) {
-            Ok(()) => chain::ChannelMonitorUpdateStatus::Completed,
-            Err(_) => chain::ChannelMonitorUpdateStatus::PermanentFailure,
-        }
+        let update_id = MonitorUpdateIdentifier {
+            funding_txo,
+            monitor_update_id,
+        };
+
+        self.init_persist_local_storage(key, monitor, version, update_id)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct MonitorUpdateIdentifier {
+    pub funding_txo: OutPoint,
+    pub monitor_update_id: MonitorUpdateId,
+}
+
+async fn persist_local_storage(
+    storage: &impl MutinyStorage,
+    key: &str,
+    object: &Vec<u8>,
+    version: Option<u32>,
+    vss_only: bool,
+    logger: &MutinyLogger,
+) -> Result<(), lightning::io::Error> {
+    let res = if vss_only {
+        // if we are only storing to VSS, we don't need to store to local storage
+        // just need to call put_objects on VSS
+        if let (Some(vss), Some(version)) = (storage.vss_client(), version) {
+            let value =
+                serde_json::to_value(object).map_err(|_| lightning::io::ErrorKind::Other)?;
+            let item = VssKeyValueItem {
+                key: key.to_string(),
+                value,
+                version,
+            };
+
+            vss.put_objects(vec![item]).await
+        } else {
+            Ok(())
+        }
+    } else {
+        storage.set_data_async(key, object, version).await
+    };
+
+    res.map_err(|e| {
+        match e {
+            MutinyError::PersistenceFailed { source } => {
+                log_error!(logger, "Persistence failed on {key}: {source}");
+            }
+            _ => {
+                log_error!(logger, "Error storing {key}: {e}");
+            }
+        };
+        lightning::io::ErrorKind::Other.into()
+    })
 }
 
 #[cfg(test)]

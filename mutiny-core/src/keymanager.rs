@@ -15,6 +15,8 @@ use bitcoin::{PackedLockTime, Script, Transaction, TxOut};
 use lightning::ln::msgs::{DecodeError, UnsignedGossipMessage};
 use lightning::ln::script::ShutdownScript;
 use lightning::log_warn;
+use lightning::offers::invoice::UnsignedBolt12Invoice;
+use lightning::offers::invoice_request::UnsignedInvoiceRequest;
 use lightning::sign::{
     EntropySource, InMemorySigner, KeyMaterial, NodeSigner,
     PhantomKeysManager as LdkPhantomKeysManager, Recipient, SignerProvider,
@@ -125,6 +127,20 @@ impl<S: MutinyStorage> NodeSigner for PhantomKeysManager<S> {
         recipient: Recipient,
     ) -> Result<RecoverableSignature, ()> {
         self.inner.sign_invoice(hrp_bytes, invoice_data, recipient)
+    }
+
+    fn sign_bolt12_invoice_request(
+        &self,
+        invoice_request: &UnsignedInvoiceRequest,
+    ) -> Result<bitcoin::secp256k1::schnorr::Signature, ()> {
+        self.inner.sign_bolt12_invoice_request(invoice_request)
+    }
+
+    fn sign_bolt12_invoice(
+        &self,
+        invoice: &UnsignedBolt12Invoice,
+    ) -> Result<bitcoin::secp256k1::schnorr::Signature, ()> {
+        self.inner.sign_bolt12_invoice(invoice)
     }
 
     fn sign_gossip_message(&self, msg: UnsignedGossipMessage) -> Result<Signature, ()> {

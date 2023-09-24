@@ -247,8 +247,10 @@ impl<S: MutinyStorage> EventHandler<S> {
                 payment_hash,
                 purpose,
                 amount_msat,
+                htlcs,
+                sender_intended_total_msat,
             } => {
-                log_debug!(self.logger, "EVENT: PaymentClaimed claimed payment from payment hash {} of {} millisatoshis", payment_hash.0.to_hex(), amount_msat);
+                log_debug!(self.logger, "EVENT: PaymentClaimed claimed payment from payment hash {} of {} millisatoshis ({sender_intended_total_msat:?} intended)  from {} htlcs", payment_hash.0.to_hex(), amount_msat, htlcs.len());
 
                 let (payment_preimage, payment_secret) = match purpose {
                     PaymentPurpose::InvoicePayment {
@@ -461,7 +463,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 sleep(min).await;
                 forwarding_channel_manager.process_pending_htlc_forwards();
             }
-            Event::SpendableOutputs { outputs } => {
+            Event::SpendableOutputs { outputs, .. } => {
                 if let Err(e) = self.handle_spendable_outputs(&outputs).await {
                     log_error!(self.logger, "Failed to handle spendable outputs: {e}");
                     // if we have an error we should persist the outputs so we can try again later
@@ -477,6 +479,8 @@ impl<S: MutinyStorage> EventHandler<S> {
                 channel_id,
                 reason,
                 user_channel_id,
+                counterparty_node_id: node_id,
+                channel_capacity_sats,
             } => {
                 // if we still have channel open params, then it was just a failed channel open
                 // we should not persist this as a closed channel and just delete the channel open params
@@ -487,20 +491,13 @@ impl<S: MutinyStorage> EventHandler<S> {
 
                 log_debug!(
                     self.logger,
-                    "EVENT: Channel {} closed due to: {:?}",
+                    "EVENT: Channel {} of size {} closed due to: {:?}",
                     channel_id.to_hex(),
+                    channel_capacity_sats
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "unknown".to_string()),
                     reason
                 );
-
-                // this doesn't really work, leaving here because maybe sometimes it'll get the node id
-                // can be fixed with https://github.com/lightningdevkit/rust-lightning/issues/2343
-                let node_id = self.channel_manager.list_channels().iter().find_map(|c| {
-                    if c.channel_id == channel_id {
-                        Some(c.counterparty.node_id)
-                    } else {
-                        None
-                    }
-                });
 
                 let closure = ChannelClosure::new(user_channel_id, channel_id, node_id, reason);
                 if let Err(e) = self

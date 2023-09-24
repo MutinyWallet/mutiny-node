@@ -5,6 +5,7 @@ use lightning::ln::wire::CustomMessageReader;
 use lightning::ln::{
     features::InitFeatures,
     msgs::{DecodeError, LightningError},
+    ChannelId,
 };
 use lightning::ln::{features::NodeFeatures, msgs::ChannelReestablish};
 use std::collections::VecDeque;
@@ -34,7 +35,7 @@ impl SCBMessageHandler {
     /// Send a message to the peer with given node id. Note that the message is not
     /// sent right away, but only when the LDK
     /// [`lightning::ln::peer_handler::PeerManager::process_events`] is next called.
-    pub fn request_channel_close(&self, node_id: PublicKey, channel_id: [u8; 32]) {
+    pub fn request_channel_close(&self, node_id: PublicKey, channel_id: ChannelId) {
         let mut pk = [2; 33];
         pk[1] = 0xff;
         let dummy_pubkey = PublicKey::from_slice(&pk).unwrap();

@@ -6,7 +6,7 @@ use crate::{gossip::read_peer_info, node::PubkeyConnectionInfo};
 use crate::{keymanager::PhantomKeysManager, node::ConnectionType};
 use bitcoin::secp256k1::PublicKey;
 use lightning::{
-    ln::{msgs::NetAddress, peer_handler::SocketDescriptor as LdkSocketDescriptor},
+    ln::{msgs::SocketAddress, peer_handler::SocketDescriptor as LdkSocketDescriptor},
     log_debug, log_trace,
 };
 use std::{net::SocketAddr, sync::atomic::AtomicBool};
@@ -51,13 +51,13 @@ pub trait PeerManager {
         &self,
         their_node_id: PublicKey,
         descriptor: MutinySocketDescriptor,
-        remote_network_address: Option<NetAddress>,
+        remote_network_address: Option<SocketAddress>,
     ) -> Result<Vec<u8>, PeerHandleError>;
 
     fn new_inbound_connection(
         &self,
         descriptor: MutinySocketDescriptor,
-        remote_network_address: Option<NetAddress>,
+        remote_network_address: Option<SocketAddress>,
     ) -> Result<(), PeerHandleError>;
 
     fn write_buffer_space_avail(
@@ -85,7 +85,7 @@ pub trait PeerManager {
         &self,
         rgb: [u8; 3],
         alias: [u8; 32],
-        addresses: Vec<NetAddress>,
+        addresses: Vec<SocketAddress>,
     );
 }
 
@@ -108,7 +108,7 @@ impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
         &self,
         their_node_id: PublicKey,
         descriptor: MutinySocketDescriptor,
-        remote_network_address: Option<NetAddress>,
+        remote_network_address: Option<SocketAddress>,
     ) -> Result<Vec<u8>, PeerHandleError> {
         self.new_outbound_connection(their_node_id, descriptor, remote_network_address)
     }
@@ -116,7 +116,7 @@ impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
     fn new_inbound_connection(
         &self,
         descriptor: MutinySocketDescriptor,
-        remote_network_address: Option<NetAddress>,
+        remote_network_address: Option<SocketAddress>,
     ) -> Result<(), PeerHandleError> {
         self.new_inbound_connection(descriptor, remote_network_address)
     }
@@ -160,7 +160,7 @@ impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
         &self,
         rgb: [u8; 3],
         alias: [u8; 32],
-        addresses: Vec<NetAddress>,
+        addresses: Vec<SocketAddress>,
     ) {
         self.broadcast_node_announcement(rgb, alias, addresses)
     }
@@ -409,14 +409,14 @@ async fn connect_peer(
     Ok(())
 }
 
-fn try_parse_addr_string(addr: &str) -> (Option<SocketAddr>, Option<NetAddress>) {
+fn try_parse_addr_string(addr: &str) -> (Option<SocketAddr>, Option<SocketAddress>) {
     let socket_addr = addr.parse::<SocketAddr>().ok();
     let net_addr = socket_addr.map(|socket_addr| match socket_addr {
-        SocketAddr::V4(sockaddr) => NetAddress::IPv4 {
+        SocketAddr::V4(sockaddr) => SocketAddress::TcpIpV4 {
             addr: sockaddr.ip().octets(),
             port: sockaddr.port(),
         },
-        SocketAddr::V6(sockaddr) => NetAddress::IPv6 {
+        SocketAddr::V6(sockaddr) => SocketAddress::TcpIpV6 {
             addr: sockaddr.ip().octets(),
             port: sockaddr.port(),
         },
