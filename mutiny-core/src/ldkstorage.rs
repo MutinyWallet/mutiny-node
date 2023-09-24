@@ -2,7 +2,7 @@ use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyStorageError};
 use crate::event::PaymentInfo;
 use crate::fees::MutinyFeeEstimator;
-use crate::gossip::{NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
+use crate::gossip::PROB_SCORER_KEY;
 use crate::keymanager::PhantomKeysManager;
 use crate::logging::MutinyLogger;
 use crate::multiesplora::MultiEsploraClient;
@@ -606,10 +606,8 @@ impl<S: MutinyStorage>
             .map_err(|_| lightning::io::ErrorKind::Other.into())
     }
 
-    fn persist_graph(&self, network_graph: &NetworkGraph) -> Result<(), lightning::io::Error> {
-        self.storage
-            .set_data(NETWORK_GRAPH_KEY, network_graph.encode().to_hex(), None)
-            .map_err(|_| lightning::io::ErrorKind::Other.into())
+    fn persist_graph(&self, _network_graph: &NetworkGraph) -> Result<(), lightning::io::Error> {
+        Ok(())
     }
 
     fn persist_scorer(
