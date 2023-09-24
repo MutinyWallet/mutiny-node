@@ -11,6 +11,7 @@ use anyhow::anyhow;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
+use bitcoin::{LockTime, PackedLockTime};
 use core::fmt;
 use lightning::events::{Event, PaymentPurpose};
 use lightning::sign::SpendableOutputDescriptor;
@@ -600,12 +601,33 @@ impl<S: MutinyStorage> EventHandler<S> {
         let tx_feerate = self
             .fee_estimator
             .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+
+        // We set nLockTime to the current height to discourage fee sniping.
+        // Occasionally randomly pick a nLockTime even further back, so
+        // that transactions that are delayed after signing for whatever reason,
+        // e.g. high-latency mix networks and some CoinJoin implementations, have
+        // better privacy.
+        // Logic copied from core: https://github.com/bitcoin/bitcoin/blob/1d4846a8443be901b8a5deb0e357481af22838d0/src/wallet/spend.cpp#L936
+        let mut height = self.channel_manager.current_best_block().height();
+
+        let mut rand = [0u8; 4];
+        getrandom::getrandom(&mut rand).unwrap();
+        // 10% of the time
+        if (u32::from_be_bytes(rand) % 10) == 0 {
+            // subtract random number between 0 and 100
+            getrandom::getrandom(&mut rand).unwrap();
+            height -= u32::from_be_bytes(rand) % 100;
+        }
+
+        let locktime = LockTime::from_height(height).map(PackedLockTime::from).ok();
+
         let spending_tx = self
             .keys_manager
             .spend_spendable_outputs(
                 &output_descriptors,
                 Vec::new(),
                 tx_feerate,
+                locktime,
                 &Secp256k1::new(),
             )
             .map_err(|_| anyhow!("Failed to spend spendable outputs"))?;
