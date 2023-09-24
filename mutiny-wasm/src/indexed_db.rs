@@ -194,6 +194,12 @@ impl IndexedDbStorage {
                     "key from indexedDB is not a string"
                 ))))?;
 
+            // we no longer need to read this key,
+            // so we can remove it from memory
+            if key == NETWORK_GRAPH_KEY {
+                continue;
+            }
+
             let json: Value = value.into_serde()?;
             map.set(key, json)?;
         }
