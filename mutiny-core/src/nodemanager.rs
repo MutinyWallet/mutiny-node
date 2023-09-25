@@ -1783,8 +1783,9 @@ impl<S: MutinyStorage> NodeManager<S> {
                     .get_invoice(&pay, msats, zap_request)
                     .await?;
 
-                self.pay_invoice(from_node, &invoice.invoice(), None, labels)
-                    .await
+                let invoice = Bolt11Invoice::from_str(&invoice.invoice())?;
+
+                self.pay_invoice(from_node, &invoice, None, labels).await
             }
             LnUrlResponse::LnUrlWithdrawResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
             LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
