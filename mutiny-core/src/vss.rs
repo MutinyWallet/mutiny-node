@@ -134,7 +134,7 @@ impl MutinyVssClient {
     pub async fn put_objects(&self, items: Vec<VssKeyValueItem>) -> Result<(), MutinyError> {
         let url = Url::parse(&format!("{}/putObjects", self.url)).map_err(|e| {
             log_error!(self.logger, "Error parsing put objects url: {e}");
-            MutinyError::Other(anyhow!("Error parsing put objects url: {e}"))
+            MutinyError::InvalidArgumentsError
         })?;
 
         let items = items
@@ -153,7 +153,7 @@ impl MutinyVssClient {
     pub async fn get_object(&self, key: &str) -> Result<VssKeyValueItem, MutinyError> {
         let url = Url::parse(&format!("{}/getObject", self.url)).map_err(|e| {
             log_error!(self.logger, "Error parsing get objects url: {e}");
-            MutinyError::Other(anyhow!("Error parsing get objects url: {e}"))
+            MutinyError::InvalidArgumentsError
         })?;
 
         let body = json!({ "store_id": self.store_id, "key": key });
@@ -177,7 +177,7 @@ impl MutinyVssClient {
     ) -> Result<Vec<KeyVersion>, MutinyError> {
         let url = Url::parse(&format!("{}/listKeyVersions", self.url)).map_err(|e| {
             log_error!(self.logger, "Error parsing list key versions url: {e}");
-            MutinyError::Other(anyhow!("Error parsing list key versions url: {e}"))
+            MutinyError::InvalidArgumentsError
         })?;
 
         let body = json!({ "store_id": self.store_id, "key_prefix": key_prefix });
