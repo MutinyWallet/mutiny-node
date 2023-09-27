@@ -1,7 +1,4 @@
-use std::collections::HashMap;
-use std::str::FromStr;
-use std::sync::Arc;
-
+use crate::scorer::{HubPreferentialScorer, ProbScorer};
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::Network;
 use lightning::routing::gossip::NodeId;
@@ -14,9 +11,12 @@ use lightning::{log_debug, log_error, log_info, log_warn};
 use reqwest::Client;
 use reqwest::{Method, Url};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::logging::MutinyLogger;
-use crate::node::{NetworkGraph, ProbScorer, RapidGossipSync};
+use crate::node::{NetworkGraph, RapidGossipSync};
 use crate::storage::MutinyStorage;
 use crate::utils;
 use crate::{auth::MutinyAuthClient, error::MutinyError};
@@ -29,7 +29,7 @@ pub const PROB_SCORER_KEY: &str = "prob_scorer";
 struct Gossip {
     pub last_sync_timestamp: u32,
     pub network_graph: Arc<NetworkGraph>,
-    pub scorer: Option<ProbScorer>,
+    pub scorer: Option<HubPreferentialScorer>,
 }
 
 impl Gossip {
@@ -47,13 +47,14 @@ async fn get_scorer(
     storage: &impl MutinyStorage,
     network_graph: Arc<NetworkGraph>,
     logger: Arc<MutinyLogger>,
-) -> Result<Option<ProbScorer>, MutinyError> {
+) -> Result<Option<HubPreferentialScorer>, MutinyError> {
     if let Some(prob_scorer_str) = storage.get_data::<String>(PROB_SCORER_KEY)? {
         let prob_scorer_bytes: Vec<u8> = Vec::from_hex(&prob_scorer_str)?;
         let mut readable_bytes = lightning::io::Cursor::new(prob_scorer_bytes);
         let params = ProbabilisticScoringDecayParameters::default();
         let args = (params, Arc::clone(&network_graph), Arc::clone(&logger));
-        Ok(ProbScorer::read(&mut readable_bytes, args).ok())
+        let scorer = ProbScorer::read(&mut readable_bytes, args)?;
+        Ok(Some(HubPreferentialScorer::new(scorer)))
     } else {
         Ok(None)
     }
@@ -144,7 +145,7 @@ pub async fn get_gossip_sync(
     auth_client: Option<Arc<MutinyAuthClient>>,
     network: Network,
     logger: Arc<MutinyLogger>,
-) -> Result<(RapidGossipSync, ProbScorer), MutinyError> {
+) -> Result<(RapidGossipSync, HubPreferentialScorer), MutinyError> {
     // Always get default gossip until fixed:
     // https://github.com/lightningdevkit/rapid-gossip-sync-server/issues/45
     let mut gossip_data = Gossip::new(network, logger.clone());
@@ -171,6 +172,7 @@ pub async fn get_gossip_sync(
                 );
                 if let Ok(remote_scorer) = ProbScorer::read(&mut readable_bytes, args) {
                     log_debug!(logger, "retrieved remote scorer");
+                    let remote_scorer = HubPreferentialScorer::new(remote_scorer);
                     gossip_data.scorer = Some(remote_scorer);
                 } else {
                     log_error!(
@@ -192,7 +194,8 @@ pub async fn get_gossip_sync(
         Some(scorer) => scorer,
         None => {
             let params = ProbabilisticScoringDecayParameters::default();
-            ProbScorer::new(params, gossip_data.network_graph.clone(), logger.clone())
+            let scorer = ProbScorer::new(params, gossip_data.network_graph.clone(), logger.clone());
+            HubPreferentialScorer::new(scorer)
         }
     };
 

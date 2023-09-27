@@ -1,4 +1,3 @@
-use crate::keymanager::PhantomKeysManager;
 use crate::labels::LabelStorage;
 use crate::ldkstorage::ChannelOpenParams;
 use crate::nodemanager::ChannelClosure;
@@ -19,6 +18,7 @@ use crate::{
     peermanager::{GossipMessageHandler, PeerManager, PeerManagerImpl},
     utils::{self, sleep},
 };
+use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
 
 use crate::scb::message_handler::SCBMessageHandler;
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
@@ -56,7 +56,6 @@ use lightning::{
         gossip,
         gossip::NodeId,
         router::{DefaultRouter, PaymentParameters, RouteParameters},
-        scoring::ProbabilisticScorer,
     },
     util::{
         config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig},
@@ -113,12 +112,10 @@ pub(crate) type ChainMonitor<S: MutinyStorage> = chainmonitor::ChainMonitor<
 pub(crate) type Router = DefaultRouter<
     Arc<NetworkGraph>,
     Arc<MutinyLogger>,
-    Arc<utils::Mutex<ProbScorer>>,
+    Arc<utils::Mutex<HubPreferentialScorer>>,
     ProbabilisticScoringFeeParameters,
-    ProbScorer,
+    HubPreferentialScorer,
 >;
-
-pub(crate) type ProbScorer = ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConnectionType {
@@ -177,7 +174,7 @@ impl<S: MutinyStorage> Node<S> {
         xprivkey: ExtendedPrivKey,
         storage: S,
         gossip_sync: Arc<RapidGossipSync>,
-        scorer: Arc<utils::Mutex<ProbScorer>>,
+        scorer: Arc<utils::Mutex<HubPreferentialScorer>>,
         chain: Arc<MutinyChain<S>>,
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
         wallet: Arc<OnChainWallet<S>>,
@@ -1529,8 +1526,8 @@ impl<S: MutinyStorage> Node<S> {
 
 pub(crate) fn scoring_params() -> ProbabilisticScoringFeeParameters {
     ProbabilisticScoringFeeParameters {
-        base_penalty_amount_multiplier_msat: 8192 * 5, // default * 5
-        base_penalty_msat: 500 * 4,                    // default * 4
+        base_penalty_amount_multiplier_msat: 8192 * 100, // default * 100
+        base_penalty_msat: 100_000,                      // 100 sat for each hop
         ..Default::default()
     }
 }
