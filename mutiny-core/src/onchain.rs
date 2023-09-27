@@ -7,6 +7,7 @@ use std::sync::{Arc, RwLock};
 use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::psbt::PsbtUtils;
 use bdk::template::DescriptorTemplateOut;
+use bdk::wallet::AddressIndex;
 use bdk::{FeeRate, LocalUtxo, SignOptions, TransactionDetails, Wallet};
 use bdk_esplora::EsploraAsyncExt;
 use bitcoin::consensus::serialize;
@@ -15,6 +16,7 @@ use bitcoin::psbt::PartiallySignedTransaction;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, OutPoint, Script, Transaction, Txid};
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
+use lightning::events::bump_transaction::{Utxo, WalletSource};
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info, log_warn};
 
@@ -626,6 +628,39 @@ pub(crate) fn get_esplora_url(network: Network, user_provided_url: Option<String
             Network::Regtest => "http://localhost:3003",
         }
         .to_string()
+    }
+}
+
+impl<S: MutinyStorage> WalletSource for OnChainWallet<S> {
+    fn list_confirmed_utxos(&self) -> Result<Vec<Utxo>, ()> {
+        let wallet = self.wallet.try_read().map_err(|_| ())?;
+        let utxos = wallet
+            .list_unspent()
+            .map(|u| Utxo {
+                outpoint: u.outpoint,
+                output: u.txout,
+                satisfaction_weight: 4 + 2 + 64,
+            })
+            .collect();
+
+        Ok(utxos)
+    }
+
+    fn get_change_script(&self) -> Result<Script, ()> {
+        let mut wallet = self.wallet.try_write().map_err(|_| ())?;
+        let addr = wallet.get_internal_address(AddressIndex::New).address;
+        Ok(addr.script_pubkey())
+    }
+
+    fn sign_tx(&self, tx: Transaction) -> Result<Transaction, ()> {
+        let wallet = self.wallet.try_read().map_err(|_| ())?;
+        // fixme will this work?
+        let mut psbt = PartiallySignedTransaction::from_unsigned_tx(tx).map_err(|_| ())?;
+        wallet
+            .sign(&mut psbt, SignOptions::default())
+            .map_err(|_| ())?;
+
+        Ok(psbt.extract_tx())
     }
 }
 

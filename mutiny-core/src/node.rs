@@ -40,6 +40,7 @@ use lightning::{
 
 use crate::multiesplora::MultiEsploraClient;
 use bitcoin::util::bip32::ExtendedPrivKey;
+use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
 use lightning::ln::PaymentSecret;
 use lightning::sign::{EntropySource, InMemorySigner, NodeSigner, Recipient};
 use lightning::util::config::MaxDustHTLCExposure;
@@ -80,6 +81,13 @@ use std::{
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 const INITIAL_RECONNECTION_DELAY: u64 = 5;
 const MAX_RECONNECTION_DELAY: u64 = 60;
+
+pub(crate) type BumpTxEventHandler<S: MutinyStorage> = BumpTransactionEventHandler<
+    Arc<MutinyChain<S>>,
+    Arc<Wallet<Arc<OnChainWallet<S>>, Arc<MutinyLogger>>>,
+    Arc<PhantomKeysManager<S>>,
+    Arc<MutinyLogger>,
+>;
 
 pub(crate) type RapidGossipSync =
     lightning_rapid_gossip_sync::RapidGossipSync<Arc<NetworkGraph>, Arc<MutinyLogger>>;
@@ -328,6 +336,13 @@ impl<S: MutinyStorage> Node<S> {
             Some(ref lsp) => lsp_clients.iter().find(|c| &c.url == lsp).cloned(),
         };
 
+        let bump_tx_event_handler = Arc::new(BumpTransactionEventHandler::new(
+            Arc::clone(&chain),
+            Arc::new(Wallet::new(Arc::clone(&wallet), Arc::clone(&logger))),
+            Arc::clone(&keys_manager),
+            Arc::clone(&logger),
+        ));
+
         let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.pubkey);
 
         // init event handler
@@ -337,6 +352,7 @@ impl<S: MutinyStorage> Node<S> {
             wallet.clone(),
             keys_manager.clone(),
             persister.clone(),
+            bump_tx_event_handler,
             lsp_client_pubkey,
             logger.clone(),
         );
@@ -1764,6 +1780,7 @@ pub(crate) fn default_user_config() -> UserConfig {
             announced_channel: false,
             negotiate_scid_privacy: true,
             commit_upfront_shutdown_pubkey: false,
+            negotiate_anchors_zero_fee_htlc_tx: true,
             max_inbound_htlc_value_in_flight_percent_of_channel: 100,
             ..Default::default()
         },

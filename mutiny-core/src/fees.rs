@@ -174,8 +174,8 @@ impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
 
 fn num_blocks_from_conf_target(confirmation_target: ConfirmationTarget) -> usize {
     match confirmation_target {
-        // MempoolMinimum is only used for anchor channels which we don't support.
-        // Just setting it to the max confirmation target for now.
+        // MempoolMinimum is only used for anchor channels, we just set the target to 1008
+        // as that is esplora's highest block target available
         ConfirmationTarget::MempoolMinimum => 1008,
         // Background is VERY lax and may never confirm if used directly
         // it is only meant for lower ranges of transaction to enter mempool
