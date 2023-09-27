@@ -405,7 +405,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
                     .trim_start_matches(CHANNEL_CLOSURE_PREFIX)
                     .trim_end_matches(&suffix);
                 let user_channel_id: [u8; 16] = FromHex::from_hex(user_channel_id_str)
-                    .expect(&format!("key should be a u128 got {user_channel_id_str}"));
+                    .unwrap_or_else(|_| panic!("key should be a u128 got {user_channel_id_str}"));
 
                 let user_channel_id = u128::from_be_bytes(user_channel_id);
                 (user_channel_id, value)
@@ -468,7 +468,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
 
         // get the currently stored descriptors encoded as hex
         // if there are none, use an empty vector
-        let strings: Vec<String> = self.storage.get_data(&key)?.unwrap_or_default();
+        let strings: Vec<String> = self.storage.get_data(key)?.unwrap_or_default();
 
         // convert the hex strings to descriptors
         let mut descriptors = vec![];
