@@ -29,7 +29,7 @@ pub async fn create_vss_client() -> MutinyVssClient {
 
     MutinyVssClient::new_authenticated(
         Arc::new(auth_client),
-        "https://vss-staging.fly.dev".to_string(),
+        "https://vss-staging.fly.dev/v2".to_string(),
         encryption_key,
         logger,
     )
