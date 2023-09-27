@@ -484,9 +484,8 @@ impl NostrWalletConnect {
                                 result_type: Method::PayInvoice,
                                 error: Some(NIP47Error {
                                     code: ErrorCode::RateLimited,
-                                    message: format!(
-                                        "Previous payment still in flight, cannot pay"
-                                    ),
+                                    message: "Previous payment still in flight, cannot pay"
+                                        .to_string(),
                                 }),
                                 result: None,
                             }

@@ -107,9 +107,7 @@ impl LspClient {
             .map(|address| {
                 format!(
                     "{}@{}:{}",
-                    get_info_response.pubkey.to_string(),
-                    address.address,
-                    address.port
+                    get_info_response.pubkey, address.address, address.port
                 )
             })
             .ok_or_else(|| anyhow::anyhow!("No suitable connection method found"))?;
