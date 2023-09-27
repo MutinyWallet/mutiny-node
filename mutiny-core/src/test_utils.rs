@@ -27,7 +27,7 @@ pub async fn create_vss_client() -> MutinyVssClient {
 
     let encryption_key = SecretKey::from_slice(&[2; 32]).unwrap();
 
-    MutinyVssClient::new(
+    MutinyVssClient::new_authenticated(
         Arc::new(auth_client),
         "https://vss-staging.fly.dev".to_string(),
         encryption_key,
