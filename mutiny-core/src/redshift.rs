@@ -1,10 +1,10 @@
 use crate::error::MutinyError;
 use crate::nodemanager::NodeManager;
 use crate::storage::MutinyStorage;
-use crate::utils;
 use crate::utils::sleep;
+use crate::{utils, HTLCStatus};
 use anyhow::anyhow;
-use bitcoin::hashes::hex::ToHex;
+use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, OutPoint};
 use lightning::{log_debug, log_error, log_info};
@@ -84,6 +84,8 @@ pub struct Redshift {
     pub sats_sent: u64,
     pub change_amt: Option<u64>,
     pub fees_paid: u64,
+    /// Payment hash of pending payment.
+    pub pending_payment: Option<String>,
 }
 
 impl Redshift {
@@ -232,6 +234,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
             sats_sent: 0,
             change_amt: None,
             fees_paid: fees,
+            pending_payment: None,
         };
         self.storage.persist_redshift(redshift.clone())?;
 
@@ -298,6 +301,58 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
             // stop looping if ordered to stop
             if self.stop.load(Ordering::Relaxed) {
                 break;
+            }
+
+            if let Some(hex) = &rs.pending_payment {
+                log_debug!(
+                    self.logger,
+                    "Waiting for pending payment to complete for redshift {}: {hex}",
+                    rs.id.to_hex(),
+                );
+                let payment_hash: [u8; 32] = FromHex::from_hex(hex).expect("invalid hex");
+
+                // check if the payment is still pending
+                if let Some(info) =
+                    sending_node
+                        .persister
+                        .read_payment_info(&payment_hash, false, &self.logger)
+                {
+                    match info.status {
+                        HTLCStatus::Pending | HTLCStatus::InFlight => {
+                            // payment is still pending, wait for it to complete
+                            sleep(1000).await;
+                            continue;
+                        }
+                        HTLCStatus::Succeeded => {
+                            let amount_sent = info.amt_msat.amount_sats();
+                            let fees_paid = info.fee_paid_msat.unwrap_or(0) / 1_000;
+                            log_debug!(
+                                self.logger,
+                                "successfully paid the redshift invoice {amount_sent} sats"
+                            );
+                            // update the redshift with the payment
+                            rs.payment_successful(amount_sent, fees_paid);
+
+                            // check if the max amount was sent on all tries
+                            if rs.sats_sent >= max_sats {
+                                rs.status = RedshiftStatus::ClosingChannels;
+                                break;
+                            }
+
+                            // save to db, to update the frontend
+                            // do it after the if statement so we don't save the redshift twice
+                            self.storage.persist_redshift(rs.clone())?;
+
+                            // keep trying with the remaining amount
+                            local_max_sats = max_sats.saturating_sub(rs.sats_sent);
+                        }
+                        HTLCStatus::Failed => {
+                            // Keep trying to pay but go down 5% of the channel amount
+                            let decrement = (max_sats as f64 * 0.05) as u64;
+                            local_max_sats = local_max_sats.saturating_sub(decrement);
+                        }
+                    }
+                }
             }
 
             log_debug!(
@@ -368,37 +423,39 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
                 .await
             {
                 Ok(i) => {
-                    if i.paid() {
-                        let amount_sent = i.amount_sats.expect("invoice must have amount");
-                        log_debug!(
-                            &self.logger,
-                            "successfully paid the redshift invoice {amount_sent} sats"
-                        );
-                        // update the redshift with the payment
-                        rs.payment_successful(amount_sent, i.fees_paid.unwrap_or(0));
+                    let amount_sent = i.amount_sats.expect("invoice must have amount");
+                    log_debug!(
+                        &self.logger,
+                        "successfully paid the redshift invoice {amount_sent} sats"
+                    );
+                    // update the redshift with the payment
+                    rs.payment_successful(amount_sent, i.fees_paid.unwrap_or(0));
 
-                        // check if the max amount was sent on all tries
-                        if rs.sats_sent >= max_sats {
-                            rs.status = RedshiftStatus::ClosingChannels;
-                            break;
-                        }
-
-                        // save to db, to update the frontend
-                        // do it after the if statement so we don't save the redshift twice
-                        self.storage.persist_redshift(rs.clone())?;
-
-                        // keep trying with the remaining amount
-                        local_max_sats = max_sats.saturating_sub(rs.sats_sent);
-                    } else {
-                        // TODO need to handle payments still pending
-                        log_debug!(&self.logger, "payment still pending...");
+                    // check if the max amount was sent on all tries
+                    if rs.sats_sent >= max_sats {
+                        rs.status = RedshiftStatus::ClosingChannels;
+                        break;
                     }
+
+                    // save to db, to update the frontend
+                    // do it after the if statement so we don't save the redshift twice
+                    self.storage.persist_redshift(rs.clone())?;
+
+                    // keep trying with the remaining amount
+                    local_max_sats = max_sats.saturating_sub(rs.sats_sent);
                 }
                 Err(e) => {
-                    log_error!(&self.logger, "could not pay: {e}");
-                    // Keep trying to pay but go down 5% of the channel amount
-                    let decrement = (max_sats as f64 * 0.05) as u64;
-                    local_max_sats = local_max_sats.saturating_sub(decrement);
+                    // if the payment timed out, save the pending payment hash
+                    // and wait for it to finish
+                    if matches!(e, MutinyError::PaymentTimeout) {
+                        rs.pending_payment = Some(invoice.payment_hash().to_hex());
+                        self.storage.persist_redshift(rs.clone())?;
+                    } else {
+                        log_error!(&self.logger, "could not pay: {e}");
+                        // Keep trying to pay but go down 5% of the channel amount
+                        let decrement = (max_sats as f64 * 0.05) as u64;
+                        local_max_sats = local_max_sats.saturating_sub(decrement);
+                    }
                 }
             }
         }
@@ -423,7 +480,10 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
         // close introduction channel
         match rs.introduction_channel.as_ref() {
             Some(chan) => {
-                self.close_channel(chan, None, false, false).await?
+                let address = self
+                    .get_new_address(vec!["Redshift Change".to_string()])
+                    .ok();
+                self.close_channel(chan, address, false, false).await?
                 // todo need to set change amount to on the amount we get back
             }
             None => log_debug!(&self.logger, "no introduction channel to close"),
@@ -516,6 +576,7 @@ mod test {
             sats_sent: 0,
             change_amt: None,
             fees_paid: 123,
+            pending_payment: None,
         }
     }
 

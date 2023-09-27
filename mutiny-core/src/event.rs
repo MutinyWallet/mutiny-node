@@ -50,6 +50,10 @@ impl MillisatAmount {
     pub fn is_none(&self) -> bool {
         self.0.is_none()
     }
+
+    pub fn amount_sats(&self) -> u64 {
+        self.0.unwrap_or(0) / 1_000
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
