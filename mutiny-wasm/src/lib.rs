@@ -142,7 +142,7 @@ impl MutinyWallet {
             ));
 
             let vss = storage_url.map(|url| {
-                Arc::new(MutinyVssClient::new(
+                Arc::new(MutinyVssClient::new_authenticated(
                     auth_client.clone(),
                     url,
                     xprivkey.private_key,
@@ -152,7 +152,15 @@ impl MutinyWallet {
 
             (Some(auth_client), vss)
         } else {
-            (None, None)
+            let vss = storage_url.map(|url| {
+                Arc::new(MutinyVssClient::new_unauthenticated(
+                    url,
+                    xprivkey.private_key,
+                    logger.clone(),
+                ))
+            });
+
+            (None, vss)
         };
 
         let storage = IndexedDbStorage::new(password, cipher, vss_client, logger.clone()).await?;
