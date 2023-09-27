@@ -1,4 +1,3 @@
-use crate::chain::MutinyChain;
 use crate::error::{MutinyError, MutinyStorageError};
 use crate::event::PaymentInfo;
 use crate::fees::MutinyFeeEstimator;
@@ -6,11 +5,12 @@ use crate::gossip::PROB_SCORER_KEY;
 use crate::keymanager::PhantomKeysManager;
 use crate::logging::MutinyLogger;
 use crate::multiesplora::MultiEsploraClient;
-use crate::node::{default_user_config, ChainMonitor, ProbScorer};
+use crate::node::{default_user_config, ChainMonitor};
 use crate::node::{NetworkGraph, Router};
 use crate::nodemanager::ChannelClosure;
 use crate::storage::{MutinyStorage, VersionedValue};
 use crate::utils;
+use crate::{chain::MutinyChain, scorer::HubPreferentialScorer};
 use anyhow::anyhow;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::Network;
@@ -585,7 +585,7 @@ impl<S: MutinyStorage>
         Arc<MutinyFeeEstimator<S>>,
         Arc<Router>,
         Arc<MutinyLogger>,
-        utils::Mutex<ProbScorer>,
+        utils::Mutex<HubPreferentialScorer>,
     > for MutinyNodePersister<S>
 {
     fn persist_manager(
@@ -612,7 +612,7 @@ impl<S: MutinyStorage>
 
     fn persist_scorer(
         &self,
-        scorer: &utils::Mutex<ProbScorer>,
+        scorer: &utils::Mutex<HubPreferentialScorer>,
     ) -> Result<(), lightning::io::Error> {
         let scorer_str = scorer.encode().to_hex();
         self.storage
@@ -682,11 +682,14 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
 
 #[cfg(test)]
 mod test {
-    use crate::event::{HTLCStatus, MillisatAmount};
-    use crate::keymanager::create_keys_manager;
     use crate::onchain::OnChainWallet;
     use crate::storage::MemoryStorage;
     use crate::{esplora::EsploraSyncClient, node::scoring_params};
+    use crate::{
+        event::{HTLCStatus, MillisatAmount},
+        scorer::HubPreferentialScorer,
+    };
+    use crate::{keymanager::create_keys_manager, scorer::ProbScorer};
     use bip39::Mnemonic;
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::PublicKey;
@@ -890,6 +893,7 @@ mod test {
             network_graph.clone(),
             logger.clone(),
         );
+        let scorer = HubPreferentialScorer::new(scorer);
 
         // init chain monitor
         let chain_monitor: Arc<ChainMonitor<MemoryStorage>> = Arc::new(ChainMonitor::new(

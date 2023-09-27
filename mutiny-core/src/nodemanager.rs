@@ -1,9 +1,3 @@
-use anyhow::anyhow;
-use lightning::sign::{NodeSigner, Recipient};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::{collections::HashMap, ops::Deref, sync::Arc};
-
-use crate::gossip::*;
 use crate::lnurlauth::AuthManager;
 use crate::logging::LOGGING_KEY;
 use crate::multiesplora::MultiEsploraClient;
@@ -24,7 +18,7 @@ use crate::{
     gossip::{fetch_updated_gossip, get_rgs_url},
     logging::MutinyLogger,
     lspclient::LspClient,
-    node::{Node, ProbScorer, PubkeyConnectionInfo, RapidGossipSync},
+    node::{Node, PubkeyConnectionInfo, RapidGossipSync},
     onchain::get_esplora_url,
     onchain::OnChainWallet,
     utils,
@@ -33,7 +27,9 @@ use crate::{
     event::{HTLCStatus, PaymentInfo},
     lnurlauth::make_lnurl_auth_connection,
 };
+use crate::{gossip::*, scorer::HubPreferentialScorer};
 use crate::{labels::LabelStorage, subscription::MutinySubscriptionClient};
+use anyhow::anyhow;
 use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::{wallet::AddressIndex, LocalUtxo};
 use bitcoin::blockdata::script;
@@ -54,6 +50,7 @@ use lightning::ln::msgs::DecodeError;
 use lightning::ln::script::ShutdownScript;
 use lightning::ln::PaymentHash;
 use lightning::routing::gossip::NodeId;
+use lightning::sign::{NodeSigner, Recipient};
 use lightning::util::logger::*;
 use lightning::util::ser::{Readable, Writeable, Writer};
 use lightning::{log_debug, log_error, log_info, log_warn};
@@ -66,6 +63,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 use uuid::Uuid;
 
 const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
@@ -556,7 +555,7 @@ pub struct NodeManager<S: MutinyStorage> {
     esplora: Arc<MultiEsploraClient>,
     pub(crate) wallet: Arc<OnChainWallet<S>>,
     gossip_sync: Arc<RapidGossipSync>,
-    scorer: Arc<utils::Mutex<ProbScorer>>,
+    scorer: Arc<utils::Mutex<HubPreferentialScorer>>,
     chain: Arc<MutinyChain<S>>,
     fee_estimator: Arc<MutinyFeeEstimator<S>>,
     pub(crate) storage: S,
