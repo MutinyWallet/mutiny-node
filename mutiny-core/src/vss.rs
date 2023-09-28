@@ -14,7 +14,7 @@ use std::sync::Arc;
 pub struct MutinyVssClient {
     auth_client: Option<Arc<MutinyAuthClient>>,
     client: Option<reqwest::Client>,
-    url: String,
+    pub url: String,
     store_id: Option<String>,
     encryption_key: SecretKey,
     pub logger: Arc<MutinyLogger>,

@@ -8,6 +8,7 @@ use crate::scb::{
 };
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY};
 use crate::utils::{sleep, spawn};
+use crate::vss::MutinyVssClient;
 use crate::MutinyWalletConfig;
 use crate::{
     chain::MutinyChain,
@@ -41,6 +42,7 @@ use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use core::time::Duration;
 use esplora_client::Builder;
 use futures::{future::join_all, lock::Mutex};
+use futures_util::future::try_join_all;
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::chain::Confirm;
 use lightning::events::ClosureReason;
@@ -2530,6 +2532,55 @@ impl<S: MutinyStorage> NodeManager<S> {
         }
 
         Ok(Value::Object(serde_map))
+    }
+
+    /// Downloads the current state from VSS and imports into the new VSS server at the given url.
+    /// This will stop the node manager if it is running and not restart it.
+    /// It is expected that the user will restart the node manager after migration
+    /// with the new VSS server configured.
+    pub async fn migrate_vss(&self, new_storage_url: String) -> Result<(), MutinyError> {
+        // If we aren't stopped, stop the node manager
+        // we don't want to be writing new state while we're migrating.
+        // We also do not restart the node manager after migration so new state
+        // isn't written to the old storage.
+        // It is expected that the user will restart the node manager after migration
+        // with the new VSS server configured.
+        let stopped = self.stop.load(Ordering::SeqCst);
+        if !stopped {
+            self.stop().await?;
+        }
+
+        if let Some(vss) = self.storage.vss_client().as_ref() {
+            // make sure we're not migrating to the same url
+            if vss.url == new_storage_url {
+                return Err(MutinyError::InvalidArgumentsError);
+            }
+
+            let new_vss = Arc::new(MutinyVssClient::new_unauthenticated(
+                new_storage_url,
+                self.xprivkey.private_key,
+                self.logger.clone(),
+            ));
+
+            let keys = vss.list_key_versions(None).await?;
+
+            let mut futures = vec![];
+            for kv in keys {
+                let new_vss = new_vss.clone();
+                let fut = async move {
+                    let key = vss.get_object(&kv.key).await?;
+                    new_vss.put_objects(vec![key]).await?;
+                    Ok::<(), MutinyError>(())
+                };
+                futures.push(fut);
+            }
+
+            try_join_all(futures).await?;
+        } else {
+            return Err(MutinyError::InvalidArgumentsError);
+        }
+
+        Ok(())
     }
 }
 

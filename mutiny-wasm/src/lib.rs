@@ -1392,6 +1392,12 @@ impl MutinyWallet {
         Ok(())
     }
 
+    /// Exports the current state of the node manager to a json object.
+    #[wasm_bindgen]
+    pub async fn migrate_vss(&self, new_storage_url: String) -> Result<(), MutinyJsError> {
+        Ok(self.inner.node_manager.migrate_vss(new_storage_url).await?)
+    }
+
     /// Restore's the mnemonic after deleting the previous state.
     ///
     /// Backup the state beforehand. Does not restore lightning data.
