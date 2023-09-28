@@ -165,7 +165,7 @@ impl<S: MutinyStorage> LabelStorage for S {
         let now = crate::utils::now().as_secs();
         for label in labels {
             let key = get_label_item_key(&label);
-            match self.get_label(label)? {
+            match self.get_label(&label)? {
                 Some(mut label_item) => {
                     // Add the address to the label item
                     // and sort so we can dedup the addresses
@@ -175,6 +175,13 @@ impl<S: MutinyStorage> LabelStorage for S {
 
                     // Update the last used timestamp
                     label_item.last_used_time = now;
+
+                    // if it is a contact, update last used
+                    if let Some(contact) = self.get_contact(&label)? {
+                        let mut contact = contact;
+                        contact.last_used = now;
+                        self.edit_contact(&label, contact)?;
+                    }
 
                     self.set_data(key, label_item, None)?;
                 }
@@ -207,7 +214,7 @@ impl<S: MutinyStorage> LabelStorage for S {
         let now = crate::utils::now().as_secs();
         for label in labels {
             let key = get_label_item_key(&label);
-            match self.get_label(label)? {
+            match self.get_label(&label)? {
                 Some(mut label_item) => {
                     // Add the invoice to the label item
                     // and sort so we can dedup the invoices
@@ -217,6 +224,13 @@ impl<S: MutinyStorage> LabelStorage for S {
 
                     // Update the last used timestamp
                     label_item.last_used_time = now;
+
+                    // if it is a contact, update last used
+                    if let Some(contact) = self.get_contact(&label)? {
+                        let mut contact = contact;
+                        contact.last_used = now;
+                        self.edit_contact(&label, contact)?;
+                    }
 
                     self.set_data(key, label_item, None)?;
                 }
@@ -446,6 +460,9 @@ mod tests {
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
     wasm_bindgen_test_configure!(run_in_browser);
 
+    const ADDRESS: &str = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
+    const INVOICE: &str = "lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm";
+
     fn create_test_address_labels_map() -> HashMap<String, Vec<String>> {
         let mut labels = HashMap::new();
         labels.insert(
@@ -631,7 +648,7 @@ mod tests {
 
         let storage = MemoryStorage::default();
 
-        let address = Address::from_str("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa").unwrap();
+        let address = Address::from_str(ADDRESS).unwrap();
         let labels = vec!["label1".to_string(), "label2".to_string()];
 
         let result = storage.set_address_labels(address.clone(), labels.clone());
@@ -648,7 +665,7 @@ mod tests {
 
         let storage = MemoryStorage::default();
 
-        let invoice = Bolt11Invoice::from_str("lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm").unwrap();
+        let invoice = Bolt11Invoice::from_str(INVOICE).unwrap();
         let labels = vec!["label1".to_string(), "label2".to_string()];
 
         let result = storage.set_invoice_labels(invoice.clone(), labels.clone());
@@ -767,8 +784,8 @@ mod tests {
 
         let storage = MemoryStorage::default();
 
-        let address = Address::from_str("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa").unwrap();
-        let invoice = Bolt11Invoice::from_str("lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm").unwrap();
+        let address = Address::from_str(ADDRESS).unwrap();
+        let invoice = Bolt11Invoice::from_str(INVOICE).unwrap();
         let label = "test_label".to_string();
         let other_label = "other_label".to_string();
         let contact = create_test_contacts().iter().next().unwrap().1.to_owned();
@@ -859,5 +876,51 @@ mod tests {
         expected_tag_items.sort();
 
         assert_eq!(result, expected_tag_items);
+    }
+
+    #[test]
+    async fn test_labeling_contact_with_address() {
+        let test_name = "test_labeling_contact_with_address";
+        log!("{test_name}");
+
+        let storage = MemoryStorage::default();
+
+        let contacts = create_test_contacts();
+        let contact = contacts.iter().next().unwrap().1.to_owned();
+        assert_eq!(contact.last_used, 0);
+        let id = storage.create_new_contact(contact.clone()).unwrap();
+
+        let address = Address::from_str(ADDRESS).unwrap();
+
+        storage
+            .set_address_labels(address, vec![id.clone()])
+            .unwrap();
+
+        // check that the contact was updated
+        let contact = storage.get_contact(&id).unwrap().unwrap();
+        assert_ne!(contact.last_used, 0)
+    }
+
+    #[test]
+    async fn test_labeling_contact_with_invoice() {
+        let test_name = "test_labeling_contact_with_invoice";
+        log!("{test_name}");
+
+        let storage = MemoryStorage::default();
+
+        let contacts = create_test_contacts();
+        let contact = contacts.iter().next().unwrap().1.to_owned();
+        assert_eq!(contact.last_used, 0);
+        let id = storage.create_new_contact(contact.clone()).unwrap();
+
+        let invoice = Bolt11Invoice::from_str(INVOICE).unwrap();
+
+        storage
+            .set_invoice_labels(invoice, vec![id.clone()])
+            .unwrap();
+
+        // check that the contact was updated
+        let contact = storage.get_contact(&id).unwrap().unwrap();
+        assert_ne!(contact.last_used, 0)
     }
 }
