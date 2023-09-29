@@ -1784,7 +1784,15 @@ impl<S: MutinyStorage> NodeManager<S> {
 
                 let invoice = Bolt11Invoice::from_str(&invoice.invoice())?;
 
-                self.pay_invoice(from_node, &invoice, None, labels).await
+                if invoice
+                    .amount_milli_satoshis()
+                    .is_some_and(|amt| msats == amt)
+                {
+                    self.pay_invoice(from_node, &invoice, None, labels).await
+                } else {
+                    log_error!(self.logger, "LNURL return invoice with incorrect amount");
+                    Err(MutinyError::LnUrlFailure)
+                }
             }
             LnUrlResponse::LnUrlWithdrawResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
             LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
