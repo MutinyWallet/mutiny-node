@@ -40,6 +40,7 @@ cbc = { version = "0.1", features = ["alloc"] }
 aes = { version = "0.8" }
 jwt-compact = { version = "0.8.0-beta.1", features = ["es256k"] }
 argon2 = { version = "0.5.0", features = ["password-hash", "alloc"] }
+payjoin = { version = "0.10.0", features = ["send", "base64"] }
 
 base64 = "0.13.0"
 pbkdf2 = "0.11"

@@ -141,6 +141,15 @@ pub enum MutinyError {
     /// Cannot change password to the same password
     #[error("Cannot change password to the same password.")]
     SamePassword,
+    /// Payjoin request creation failed.
+    #[error("Failed to create payjoin request.")]
+    PayjoinCreateRequest,
+    /// Payjoin response validation failed.
+    #[error("Failed to validate payjoin response.")]
+    PayjoinValidateResponse(payjoin::send::ValidationError),
+    /// Payjoin configuration error
+    #[error("Payjoin configuration failed.")]
+    PayjoinConfigError,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -444,5 +453,17 @@ impl From<nostr::nips::nip04::Error> for MutinyError {
 impl From<nostr::event::builder::Error> for MutinyError {
     fn from(_e: nostr::event::builder::Error) -> Self {
         Self::NostrError
+    }
+}
+
+impl From<payjoin::send::CreateRequestError> for MutinyError {
+    fn from(_e: payjoin::send::CreateRequestError) -> Self {
+        Self::PayjoinCreateRequest
+    }
+}
+
+impl From<payjoin::send::ValidationError> for MutinyError {
+    fn from(e: payjoin::send::ValidationError) -> Self {
+        Self::PayjoinValidateResponse(e)
     }
 }

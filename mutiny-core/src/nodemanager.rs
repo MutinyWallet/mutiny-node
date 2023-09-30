@@ -27,10 +27,11 @@ use crate::{gossip::*, scorer::HubPreferentialScorer};
 use crate::{labels::LabelStorage, subscription::MutinySubscriptionClient};
 use anyhow::anyhow;
 use bdk::chain::{BlockId, ConfirmationTime};
-use bdk::{wallet::AddressIndex, LocalUtxo};
+use bdk::{wallet::AddressIndex, FeeRate, LocalUtxo};
 use bitcoin::blockdata::script;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::hashes::{sha256, Hash};
+use bitcoin::psbt::PartiallySignedTransaction;
 use bitcoin::secp256k1::{rand, PublicKey};
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
@@ -51,9 +52,11 @@ use lnurl::lnurl::LnUrl;
 use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use nostr::key::XOnlyPublicKey;
 use nostr::{EventBuilder, Keys, Kind, Tag, TagKind};
+use payjoin::{PjUri, PjUriExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, ops::Deref, sync::Arc};
@@ -1016,6 +1019,77 @@ impl<S: MutinyStorage> NodeManager<S> {
             btc_amount: amount.map(|amount| bitcoin::Amount::from_sat(amount).to_btc().to_string()),
             labels,
         })
+    }
+
+    pub async fn send_payjoin(
+        &self,
+        uri: PjUri<'_>,
+        amount: u64,
+        labels: Vec<String>,
+        fee_rate: Option<f32>,
+    ) -> Result<Txid, MutinyError> {
+        let address = Address::from_str(&uri.address.to_string())
+            .map_err(|_| MutinyError::PayjoinConfigError)?;
+        let original_psbt = self.wallet.create_signed_psbt(address, amount, fee_rate)?;
+
+        let payout_scripts = std::iter::once(uri.address.script_pubkey());
+        let fee_rate = if let Some(rate) = fee_rate {
+            FeeRate::from_sat_per_vb(rate)
+        } else {
+            let sat_per_kwu = self.fee_estimator.get_normal_fee_rate();
+            FeeRate::from_sat_per_kwu(sat_per_kwu as f32)
+        };
+        let fee_rate = payjoin::bitcoin::FeeRate::from_sat_per_kwu(fee_rate.sat_per_kwu() as u64);
+        let original_psbt = payjoin::bitcoin::psbt::PartiallySignedTransaction::from_str(
+            &original_psbt.to_string(),
+        )
+        .map_err(|_| MutinyError::PayjoinConfigError)?;
+        let pj_params =
+            payjoin::send::Configuration::recommended(&original_psbt, payout_scripts, fee_rate)
+                .map_err(|_| MutinyError::PayjoinConfigError)?;
+
+        log_debug!(self.logger, "Creating payjoin request");
+        let (req, ctx) = uri.create_pj_request(original_psbt.clone(), pj_params)?;
+
+        let client = Client::builder()
+            .build()
+            .map_err(|_| MutinyError::PayjoinConfigError)?;
+
+        log_debug!(self.logger, "Sending payjoin request");
+        let res = client
+            .post(req.url)
+            .body(req.body)
+            .header("Content-Type", "text/plain")
+            .send()
+            .await
+            .map_err(|_| MutinyError::PayjoinCreateRequest)?
+            .bytes()
+            .await
+            .map_err(|_| MutinyError::PayjoinCreateRequest)?;
+
+        let mut cursor = Cursor::new(res.to_vec());
+
+        log_debug!(self.logger, "Processing payjoin response");
+        let proposal_psbt = ctx.process_response(&mut cursor).map_err(|e| {
+            log_error!(self.logger, "Error processing payjoin response: {e}");
+            e
+        })?;
+
+        // convert to pdk types
+        let original_psbt = PartiallySignedTransaction::from_str(&original_psbt.to_string())
+            .map_err(|_| MutinyError::PayjoinConfigError)?;
+        let proposal_psbt = PartiallySignedTransaction::from_str(&proposal_psbt.to_string())
+            .map_err(|_| MutinyError::PayjoinConfigError)?;
+
+        log_debug!(self.logger, "Sending payjoin..");
+        let tx = self
+            .wallet
+            .send_payjoin(original_psbt, proposal_psbt, labels)
+            .await?;
+        let txid = tx.txid();
+        self.broadcast_transaction(tx).await?;
+        log_debug!(self.logger, "Payjoin broadcast! TXID: {txid}");
+        Ok(txid)
     }
 
     /// Sends an on-chain transaction to the given address.

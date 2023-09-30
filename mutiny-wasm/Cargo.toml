@@ -40,6 +40,7 @@ getrandom = { version = "0.2", features = ["js"] }
 futures = "0.3.25"
 urlencoding = "2.1.2"
 once_cell = "1.18.0"
+payjoin = { version = "0.10.0", features = ["send", "base64"] }
 
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires
