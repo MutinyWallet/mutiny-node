@@ -765,21 +765,10 @@ impl<S: MutinyStorage> NodeManager<S> {
                 .expect("failed to make lnurl client"),
         );
 
-        let (subscription_client, auth) = if let Some(auth_client) = c.auth_client {
-            if let Some(subscription_url) = c.subscription_url {
-                let auth = auth_client.auth.clone();
-                let s = Arc::new(MutinySubscriptionClient::new(
-                    auth_client,
-                    subscription_url,
-                    logger.clone(),
-                ));
-                (Some(s), auth)
-            } else {
-                (None, auth_client.auth.clone())
-            }
+        let auth = if let Some(auth) = c.auth_client {
+            auth.auth.clone()
         } else {
-            let auth_manager = AuthManager::new(c.xprivkey)?;
-            (None, auth_manager)
+            AuthManager::new(c.xprivkey)?
         };
 
         let price_cache = storage
@@ -807,7 +796,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             auth,
             lnurl_client,
             lsp_clients,
-            subscription_client,
+            subscription_client: c.subscription_client,
             logger,
             bitcoin_price_cache: Arc::new(Mutex::new(price_cache)),
             do_not_connect_peers: c.do_not_connect_peers,

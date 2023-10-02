@@ -37,7 +37,7 @@ pub mod redshift;
 pub mod scb;
 pub mod scorer;
 pub mod storage;
-mod subscription;
+pub mod subscription;
 pub mod vss;
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -55,6 +55,7 @@ use crate::nostr::nwc::{
     BudgetPeriod, BudgetedSpendingConditions, NwcProfileTag, SpendingConditions,
 };
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY};
+use crate::subscription::MutinySubscriptionClient;
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{nostr::NostrManager, utils::sleep};
@@ -84,7 +85,7 @@ pub struct MutinyWalletConfig {
     user_rgs_url: Option<String>,
     lsp_url: Option<String>,
     auth_client: Option<Arc<MutinyAuthClient>>,
-    subscription_url: Option<String>,
+    subscription_client: Option<Arc<MutinySubscriptionClient>>,
     scorer_url: Option<String>,
     do_not_connect_peers: bool,
     skip_device_lock: bool,
@@ -101,7 +102,7 @@ impl MutinyWalletConfig {
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
         auth_client: Option<Arc<MutinyAuthClient>>,
-        subscription_url: Option<String>,
+        subscription_client: Option<Arc<MutinySubscriptionClient>>,
         scorer_url: Option<String>,
         skip_device_lock: bool,
     ) -> Self {
@@ -115,7 +116,7 @@ impl MutinyWalletConfig {
             scorer_url,
             lsp_url,
             auth_client,
-            subscription_url,
+            subscription_client,
             do_not_connect_peers: false,
             skip_device_lock,
             safe_mode: false,
@@ -178,6 +179,13 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             node_manager,
             nostr,
         };
+
+        // if we have a subscription, ensure we have the mutiny subscription profile
+        if mw.storage.premium() {
+            if let Some(ref sub) = mw.node_manager.subscription_client {
+                mw.ensure_mutiny_nwc_profile(sub, false).await?;
+            }
+        }
 
         #[cfg(not(test))]
         {
@@ -362,7 +370,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 // account for 3 day grace period
                 if expired_time + 86_400 * 3 > crate::utils::now().as_secs() {
                     // now submit the NWC string if never created before
-                    self.ensure_mutiny_nwc_profile(subscription_client, false)
+                    self.ensure_mutiny_nwc_profile(subscription_client.as_ref(), false)
                         .await?;
                 }
             }
@@ -398,7 +406,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 .await?;
 
             // now submit the NWC string if never created before
-            self.ensure_mutiny_nwc_profile(subscription_client, autopay)
+            self.ensure_mutiny_nwc_profile(subscription_client.as_ref(), autopay)
                 .await?;
 
             Ok(())
@@ -407,9 +415,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
     }
 
-    async fn ensure_mutiny_nwc_profile(
+    pub(crate) async fn ensure_mutiny_nwc_profile(
         &self,
-        subscription_client: Arc<subscription::MutinySubscriptionClient>,
+        subscription_client: &MutinySubscriptionClient,
         autopay: bool,
     ) -> Result<(), MutinyError> {
         let nwc_profiles = self.nostr.profiles();
