@@ -52,7 +52,7 @@ pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 use crate::auth::MutinyAuthClient;
 use crate::labels::{Contact, LabelStorage};
 use crate::nostr::nwc::{NwcProfileTag, SpendingConditions};
-use crate::storage::{MutinyStorage, DEVICE_ID_KEY, NEED_FULL_SYNC_KEY};
+use crate::storage::{MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY};
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{nostr::NostrManager, utils::sleep};
@@ -147,6 +147,16 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         storage: S,
         config: MutinyWalletConfig,
     ) -> Result<MutinyWallet<S>, MutinyError> {
+        let expected_network = storage.get::<Network>(EXPECTED_NETWORK_KEY)?;
+        match expected_network {
+            Some(network) => {
+                if network != config.network {
+                    return Err(MutinyError::NetworkMismatch);
+                }
+            }
+            None => storage.set_data(EXPECTED_NETWORK_KEY, config.network, None)?,
+        }
+
         let node_manager = Arc::new(NodeManager::new(config.clone(), storage.clone()).await?);
 
         NodeManager::start_sync(node_manager.clone());

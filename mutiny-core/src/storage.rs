@@ -23,6 +23,7 @@ pub const BITCOIN_PRICE_CACHE_KEY: &str = "bitcoin_price_cache";
 const FIRST_SYNC_KEY: &str = "first_sync";
 pub(crate) const DEVICE_ID_KEY: &str = "device_id";
 pub const DEVICE_LOCK_KEY: &str = "device_lock";
+pub(crate) const EXPECTED_NETWORK_KEY: &str = "network";
 
 fn needs_encryption(key: &str) -> bool {
     match key {

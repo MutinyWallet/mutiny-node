@@ -19,7 +19,11 @@ pub enum MutinyError {
     /// Returned when trying to stop Mutiny while it is not running.
     #[error("Mutiny is not running.")]
     NotRunning,
-    // Returned on any resource that is not found.
+    /// Returned when Mutiny tries to startup with a different network than the one it was
+    /// previously running on.
+    #[error("Incorrect expected network.")]
+    NetworkMismatch,
+    /// Returned on any resource that is not found.
     #[error("Resource Not found.")]
     NotFound,
     /// The funding transaction could not be created.
