@@ -1231,9 +1231,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     pub async fn get_activity(&self) -> Result<Vec<ActivityItem>, MutinyError> {
         // todo add contacts to the activity
         let (lightning, closures) =
-            futures_util::join!(self.list_invoices(), self.list_channel_closures());
-        let lightning = lightning?;
-        let closures = closures?;
+            futures_util::try_join!(self.list_invoices(), self.list_channel_closures())?;
         let onchain = self
             .list_onchain()
             .map_err(|e| {
@@ -1242,7 +1240,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             })
             .unwrap_or_default();
 
-        let mut activity = Vec::with_capacity(lightning.len() + onchain.len());
+        let mut activity = Vec::with_capacity(lightning.len() + onchain.len() + closures.len());
         for ln in lightning {
             // Only show paid and in-flight invoices
             match ln.status {
