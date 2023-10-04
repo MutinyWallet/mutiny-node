@@ -181,7 +181,7 @@ fn num_blocks_from_conf_target(confirmation_target: ConfirmationTarget) -> usize
         // it is only meant for lower ranges of transaction to enter mempool
         ConfirmationTarget::Background => 1008,
         ConfirmationTarget::Normal => 6,
-        ConfirmationTarget::HighPriority => 3,
+        ConfirmationTarget::HighPriority => 1,
     }
 }
 
@@ -229,7 +229,7 @@ mod test {
         assert_eq!(num_blocks_from_conf_target(ConfirmationTarget::Normal), 6);
         assert_eq!(
             num_blocks_from_conf_target(ConfirmationTarget::HighPriority),
-            3
+            1
         );
     }
 
