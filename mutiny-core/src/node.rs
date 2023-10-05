@@ -391,6 +391,7 @@ impl<S: MutinyStorage> Node<S> {
             for item in chain_listener_channel_monitors.drain(..) {
                 let channel_monitor = item.1 .0;
                 let funding_outpoint = item.2;
+
                 chain_monitor
                     .watch_channel(funding_outpoint, channel_monitor)
                     .map_err(|_| MutinyError::ChainAccessFailed)?;
@@ -1522,9 +1523,17 @@ impl<S: MutinyStorage> Node<S> {
                 .expect("failed to get node id");
 
             // watch the channel in the case peer tries to cheat us
-            self.chain_monitor
-                .watch_channel(ln_outpoint, monitor)
-                .map_err(|_| MutinyError::ChainAccessFailed)?;
+            // if there are no claimable balances, we don't need to watch the channel
+            if !monitor.get_claimable_balances().is_empty() {
+                self.chain_monitor
+                    .watch_channel(ln_outpoint, monitor)
+                    .map_err(|_| MutinyError::ChainAccessFailed)?;
+            } else {
+                log_debug!(
+                    self.logger,
+                    "no claimable balances for channel {ln_outpoint:?}, skipping watch"
+                );
+            }
 
             // connect to peer if we have a connection string
             if let Some(connection_string) = peer_connections.get(&node_id) {
