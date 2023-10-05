@@ -106,6 +106,16 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     where
         T: Serialize;
 
+    /// Set a value in the storage, the value will already be encrypted if needed
+    /// This is an async version of set, it is not required to implement this
+    /// If this is not implemented, the default implementation will just call set
+    async fn set_async<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
+    where
+        T: Serialize,
+    {
+        self.set(key, value)
+    }
+
     /// Set a value in the storage, the function will encrypt the value if needed
     fn set_data<T>(
         &self,
@@ -136,6 +146,48 @@ pub trait MutinyStorage: Clone + Sized + 'static {
         let json: Value = encrypt_value(key.as_ref(), data, self.cipher())?;
 
         self.set(key, json)
+    }
+
+    /// Set a value in the storage, the function will encrypt the value if needed
+    async fn set_data_async<T>(
+        &self,
+        key: impl AsRef<str>,
+        value: T,
+        version: Option<u32>,
+    ) -> Result<(), MutinyError>
+    where
+        T: Serialize,
+    {
+        let data = serde_json::to_value(value).map_err(|e| MutinyError::PersistenceFailed {
+            source: MutinyStorageError::SerdeError { source: e },
+        })?;
+
+        // encrypt value in async block so it can be done in parallel
+        // with the VSS call
+        let local_data = data.clone();
+        let local_fut = async {
+            let json: Value = encrypt_value(key.as_ref(), local_data, self.cipher())?;
+            self.set_async(key.as_ref(), json).await
+        };
+
+        // save to VSS if it is enabled
+        let vss_fut = async {
+            if let (Some(vss), Some(version)) = (self.vss_client(), version) {
+                let item = VssKeyValueItem {
+                    key: key.as_ref().to_string(),
+                    value: data,
+                    version,
+                };
+
+                vss.put_objects(vec![item]).await
+            } else {
+                Ok(())
+            }
+        };
+
+        futures::try_join!(local_fut, vss_fut)?;
+
+        Ok(())
     }
 
     /// Get a value from the storage, use get_data if you want the value to be decrypted

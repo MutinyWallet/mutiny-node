@@ -48,7 +48,7 @@ use lightning::io::Read;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning::ln::msgs::DecodeError;
 use lightning::ln::script::ShutdownScript;
-use lightning::ln::PaymentHash;
+use lightning::ln::{ChannelId, PaymentHash};
 use lightning::routing::gossip::NodeId;
 use lightning::sign::{NodeSigner, Recipient};
 use lightning::util::logger::*;
@@ -408,13 +408,13 @@ pub struct ChannelClosure {
 impl ChannelClosure {
     pub fn new(
         user_channel_id: u128,
-        channel_id: [u8; 32],
+        channel_id: ChannelId,
         node_id: Option<PublicKey>,
         reason: ClosureReason,
     ) -> Self {
         Self {
             user_channel_id: Some(user_channel_id.to_be_bytes()),
-            channel_id: Some(channel_id),
+            channel_id: Some(channel_id.0),
             node_id,
             reason: reason.to_string(),
             timestamp: utils::now().as_secs(),
@@ -1685,11 +1685,12 @@ impl<S: MutinyStorage> NodeManager<S> {
         from_node: &PublicKey,
         to_node: PublicKey,
         amt_sats: u64,
+        message: Option<String>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let node = self.get_node(from_node).await?;
         log_debug!(self.logger, "Keysending to {to_node}");
-        node.keysend_with_timeout(to_node, amt_sats, labels, None)
+        node.keysend_with_timeout(to_node, amt_sats, message, labels, None)
             .await
     }
 

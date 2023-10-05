@@ -617,6 +617,7 @@ impl MutinyWallet {
         from_node: String,
         to_node: String,
         amt_sats: u64,
+        message: Option<String>,
         labels: &JsValue, /* Vec<String> */
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let from_node = PublicKey::from_str(&from_node)?;
@@ -627,7 +628,7 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .keysend(&from_node, to_node, amt_sats, labels)
+            .keysend(&from_node, to_node, amt_sats, message, labels)
             .await?
             .into())
     }

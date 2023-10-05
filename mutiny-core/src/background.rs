@@ -18,9 +18,6 @@ use lightning::{log_error, log_trace};
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
-extern crate lightning;
-extern crate lightning_rapid_gossip_sync;
-
 use lightning::chain;
 use lightning::chain::chaininterface::{BroadcasterInterface, FeeEstimator};
 use lightning::chain::chainmonitor::{ChainMonitor, Persist};
@@ -29,7 +26,7 @@ use lightning::ln::channelmanager::ChannelManager;
 use lightning::ln::peer_handler::APeerManager;
 use lightning::routing::gossip::{NetworkGraph, P2PGossipSync};
 use lightning::routing::router::Router;
-use lightning::routing::scoring::{Score, WriteableScore};
+use lightning::routing::scoring::{ScoreUpdate, WriteableScore};
 use lightning::routing::utxo::UtxoLookup;
 use lightning::sign::{EntropySource, NodeSigner, SignerProvider};
 use lightning::util::logger::Logger;
@@ -213,13 +210,13 @@ fn update_scorer<'a, S: 'static + Deref<Target = SC>, SC: 'a + WriteableScore<'a
     scorer: &'a S,
     event: &Event,
 ) -> bool {
-    let mut score = scorer.lock();
     match event {
         Event::PaymentPathFailed {
             ref path,
             short_channel_id: Some(scid),
             ..
         } => {
+            let mut score = scorer.write_lock();
             score.payment_path_failed(path, *scid);
         }
         Event::PaymentPathFailed {
@@ -229,12 +226,15 @@ fn update_scorer<'a, S: 'static + Deref<Target = SC>, SC: 'a + WriteableScore<'a
         } => {
             // Reached if the destination explicitly failed it back. We treat this as a successful probe
             // because the payment made it all the way to the destination with sufficient liquidity.
+            let mut score = scorer.write_lock();
             score.probe_successful(path);
         }
         Event::PaymentPathSuccessful { path, .. } => {
+            let mut score = scorer.write_lock();
             score.payment_path_successful(path);
         }
         Event::ProbeSuccessful { path, .. } => {
+            let mut score = scorer.write_lock();
             score.probe_successful(path);
         }
         Event::ProbeFailed {
@@ -242,6 +242,7 @@ fn update_scorer<'a, S: 'static + Deref<Target = SC>, SC: 'a + WriteableScore<'a
             short_channel_id: Some(scid),
             ..
         } => {
+            let mut score = scorer.write_lock();
             score.probe_failed(path, *scid);
         }
         _ => return false,
@@ -295,7 +296,7 @@ macro_rules! define_run_body {
 			// see `await_start`'s use below.
 			let mut await_start = None;
 			if $check_slow_await { await_start = Some($get_timer(1)); }
-			let updates_available = $await;
+			$await;
 			let await_slow = if $check_slow_await { $timer_elapsed(&mut await_start.unwrap(), 1) } else { false };
 
 			// Exit the loop if the background processor was requested to stop.
@@ -304,7 +305,7 @@ macro_rules! define_run_body {
 				break;
 			}
 
-			if updates_available {
+			if $channel_manager.get_and_clear_needs_persistence() {
 				log_trace!($logger, "Persisting ChannelManager...");
 				$persister.persist_manager(&*$channel_manager)?;
 				log_trace!($logger, "Done persisting ChannelManager.");
@@ -471,8 +472,8 @@ pub(crate) mod futures_util {
         unsafe { Waker::from_raw(RawWaker::new(core::ptr::null(), &DUMMY_WAKER_VTABLE)) }
     }
 }
-use crate::background::futures_util::{dummy_waker, Selector, SelectorOutput};
 use core::task;
+use futures_util::{dummy_waker, Selector, SelectorOutput};
 
 pub async fn process_events_async<
     'a,
@@ -570,7 +571,7 @@ where
         should_break,
         {
             let fut = Selector {
-                a: channel_manager.get_persistable_update_future(),
+                a: channel_manager.get_event_or_persistence_needed_future(),
                 b: chain_monitor.get_update_future(),
                 c: sleeper(if mobile_interruptable_platform {
                     Duration::from_millis(100)
@@ -579,11 +580,9 @@ where
                 }),
             };
             match fut.await {
-                SelectorOutput::A => true,
-                SelectorOutput::B => false,
+                SelectorOutput::A | SelectorOutput::B => {}
                 SelectorOutput::C(exit) => {
                     should_break = exit;
-                    false
                 }
             }
         },

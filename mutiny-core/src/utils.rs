@@ -7,8 +7,7 @@ use futures::{
     future::{self, Either},
     pin_mut,
 };
-use lightning::routing::scoring::LockableScore;
-use lightning::routing::scoring::Score;
+use lightning::routing::scoring::{LockableScore, ScoreLookUp, ScoreUpdate};
 use lightning::util::ser::Writeable;
 use lightning::util::ser::Writer;
 use reqwest::Client;
@@ -133,14 +132,20 @@ impl<T> Mutex<T> {
     }
 }
 
-impl<'a, T: 'a + Score> LockableScore<'a> for Mutex<T> {
-    type Locked = MutexGuard<'a, T>;
+impl<'a, T: 'a + ScoreLookUp + ScoreUpdate> LockableScore<'a> for Mutex<T> {
+    type ScoreUpdate = T;
+    type ScoreLookUp = T;
 
-    fn lock(&'a self) -> MutexGuard<'a, T> {
+    type WriteLocked = MutexGuard<'a, Self::ScoreUpdate>;
+    type ReadLocked = MutexGuard<'a, Self::ScoreLookUp>;
+
+    fn read_lock(&'a self) -> Self::ReadLocked {
         Mutex::lock(self).expect("Failed to lock mutex")
     }
 
-    type Score = T;
+    fn write_lock(&'a self) -> Self::WriteLocked {
+        Mutex::lock(self).expect("Failed to lock mutex")
+    }
 }
 
 impl<S: Writeable> Writeable for Mutex<S> {
