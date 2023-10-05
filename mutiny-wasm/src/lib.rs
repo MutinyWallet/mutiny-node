@@ -920,6 +920,35 @@ impl MutinyWallet {
         Ok(JsValue::from_serde(&activity)?)
     }
 
+    /// Returns all the on-chain and lightning activity for a given label
+    #[wasm_bindgen]
+    pub async fn get_label_activity(
+        &self,
+        label: String,
+    ) -> Result<JsValue /* Vec<ActivityItem> */, MutinyJsError> {
+        // get activity from the node manager
+        let activity = self.inner.node_manager.get_label_activity(&label).await?;
+        let mut activity: Vec<ActivityItem> = activity.into_iter().map(|a| a.into()).collect();
+
+        // add contact to the activity item if it is one
+        let Some(contact) = self.inner.node_manager.get_contact(&label)? else {
+            return Ok(JsValue::from_serde(&activity)?);
+        };
+
+        for a in activity.iter_mut() {
+            // find labels that have a contact and add them to the item
+            for a_label in a.labels.iter() {
+                if label == *a_label {
+                    a.contacts.push(Contact::from(contact.clone()));
+                }
+            }
+            // remove labels that have the contact to prevent duplicates
+            a.labels.retain(|l| l != &label);
+        }
+
+        Ok(JsValue::from_serde(&activity)?)
+    }
+
     /// Initiates a redshift
     #[wasm_bindgen]
     pub async fn init_redshift(
