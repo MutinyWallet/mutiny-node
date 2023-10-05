@@ -93,7 +93,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         format!("{}_{}", key, self.node_id)
     }
 
-    fn init_persist_local_storage<W: Writeable>(
+    fn init_persist_monitor<W: Writeable>(
         &self,
         key: String,
         object: &W,
@@ -115,15 +115,8 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             // Sleep before persisting to give chance for the manager to be persisted
             sleep(50).await;
             loop {
-                match persist_local_storage(
-                    &storage,
-                    &key,
-                    &object,
-                    Some(version),
-                    is_retry,
-                    &logger,
-                )
-                .await
+                match persist_monitor(&storage, &key, &object, Some(version), is_retry, &logger)
+                    .await
                 {
                     Ok(()) => {
                         log_debug!(logger, "Persisted channel monitor: {update_id:?}");
@@ -704,7 +697,7 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
             monitor_update_id,
         };
 
-        self.init_persist_local_storage(key, monitor, version, update_id)
+        self.init_persist_monitor(key, monitor, version, update_id)
     }
 
     fn update_persisted_channel(
@@ -735,7 +728,7 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
             monitor_update_id,
         };
 
-        self.init_persist_local_storage(key, monitor, version, update_id)
+        self.init_persist_monitor(key, monitor, version, update_id)
     }
 }
 
@@ -745,7 +738,7 @@ pub struct MonitorUpdateIdentifier {
     pub monitor_update_id: MonitorUpdateId,
 }
 
-async fn persist_local_storage(
+async fn persist_monitor(
     storage: &impl MutinyStorage,
     key: &str,
     object: &Vec<u8>,
