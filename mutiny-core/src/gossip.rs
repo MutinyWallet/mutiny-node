@@ -3,7 +3,7 @@ use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::Network;
 use lightning::routing::gossip::NodeId;
 use lightning::util::logger::Logger;
-use lightning::util::ser::{ReadableArgs, Writeable};
+use lightning::util::ser::ReadableArgs;
 use lightning::{
     ln::msgs::NodeAnnouncement, routing::scoring::ProbabilisticScoringDecayParameters,
 };
@@ -128,13 +128,14 @@ pub async fn get_remote_scorer_bytes(
 fn write_gossip_data(
     storage: &impl MutinyStorage,
     last_sync_timestamp: u32,
-    network_graph: &NetworkGraph,
+    _network_graph: &NetworkGraph,
 ) -> Result<(), MutinyError> {
     // Save the last sync timestamp
     storage.set_data(GOSSIP_SYNC_TIME_KEY, last_sync_timestamp, None)?;
 
     // Save the network graph
-    storage.set_data(NETWORK_GRAPH_KEY, network_graph.encode().to_hex(), None)?;
+    // skip for now, we don't read it currently
+    // storage.set_data(NETWORK_GRAPH_KEY, network_graph.encode().to_hex(), None)?;
 
     Ok(())
 }
