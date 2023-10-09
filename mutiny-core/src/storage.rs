@@ -42,7 +42,7 @@ pub fn encrypt_value(
     let res = match cipher {
         Some(c) if needs_encryption(key.as_ref()) => {
             let str = serde_json::to_string(&value)?;
-            let ciphertext = encrypt(&str, c)?;
+            let ciphertext = encrypt(&str, &c)?;
             Value::String(ciphertext)
         }
         _ => value,

@@ -19,19 +19,20 @@ use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::events::bump_transaction::{Utxo, WalletSource};
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info, log_warn};
+use surrealdb::Connection;
 
 use crate::error::MutinyError;
 use crate::fees::MutinyFeeEstimator;
 use crate::labels::*;
 use crate::logging::MutinyLogger;
 use crate::multiesplora::MultiEsploraClient;
-use crate::storage::{MutinyStorage, OnChainStorage};
+use crate::surreal::SurrealDb;
 use crate::utils::{now, sleep};
 
 #[derive(Clone)]
-pub struct OnChainWallet<S: MutinyStorage> {
-    pub wallet: Arc<RwLock<Wallet<OnChainStorage<S>>>>,
-    pub(crate) storage: S,
+pub struct OnChainWallet<S: Connection + Clone> {
+    pub wallet: Arc<RwLock<Wallet<SurrealDb<S>>>>,
+    pub(crate) storage: SurrealDb<S>,
     pub network: Network,
     pub blockchain: Arc<MultiEsploraClient>,
     pub fees: Arc<MutinyFeeEstimator<S>>,
@@ -39,10 +40,10 @@ pub struct OnChainWallet<S: MutinyStorage> {
     logger: Arc<MutinyLogger>,
 }
 
-impl<S: MutinyStorage> OnChainWallet<S> {
+impl<S: Connection + Clone> OnChainWallet<S> {
     pub fn new(
         xprivkey: ExtendedPrivKey,
-        db: S,
+        db: SurrealDb<S>,
         network: Network,
         esplora: Arc<MultiEsploraClient>,
         fees: Arc<MutinyFeeEstimator<S>>,
@@ -56,7 +57,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let wallet = Wallet::new(
             receive_descriptor_template,
             Some(change_descriptor_template),
-            OnChainStorage(db.clone()),
+            db.clone(),
             network,
         )?;
 
@@ -355,12 +356,12 @@ impl<S: MutinyStorage> OnChainWallet<S> {
     }
 
     #[allow(dead_code)]
-    fn get_psbt_previous_labels(
+    async fn get_psbt_previous_labels(
         &self,
         psbt: &PartiallySignedTransaction,
     ) -> Result<Vec<String>, MutinyError> {
         // first get previous labels
-        let address_labels = self.storage.get_address_labels()?;
+        let address_labels = self.storage.get_address_labels().await?;
 
         // get previous addresses
         let prev_addresses = psbt
@@ -389,7 +390,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn label_psbt(
+    pub(crate) async fn label_psbt(
         &self,
         psbt: &PartiallySignedTransaction,
         labels: Vec<String>,
@@ -417,7 +418,9 @@ impl<S: MutinyStorage> OnChainWallet<S> {
 
         // set label for send to address
         for addr in addresses {
-            self.storage.set_address_labels(addr, agg_labels.clone())?;
+            self.storage
+                .set_address_labels(addr, agg_labels.clone())
+                .await?;
         }
 
         Ok(())
@@ -475,7 +478,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
         let psbt = self.create_signed_psbt(destination_address, amount, fee_rate)?;
-        self.label_psbt(&psbt, labels)?;
+        self.label_psbt(&psbt, labels).await?;
 
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
@@ -527,7 +530,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         }
 
         let psbt = self.create_sweep_psbt(destination_address.script_pubkey(), fee_rate)?;
-        self.label_psbt(&psbt, labels)?;
+        self.label_psbt(&psbt, labels).await?;
 
         let raw_transaction = psbt.extract_tx();
         let txid = raw_transaction.txid();
@@ -631,7 +634,7 @@ pub(crate) fn get_esplora_url(network: Network, user_provided_url: Option<String
     }
 }
 
-impl<S: MutinyStorage> WalletSource for OnChainWallet<S> {
+impl<S: Connection + Clone> WalletSource for OnChainWallet<S> {
     fn list_confirmed_utxos(&self) -> Result<Vec<Utxo>, ()> {
         let wallet = self.wallet.try_read().map_err(|_| ())?;
         let utxos = wallet
@@ -726,7 +729,7 @@ mod tests {
         let change_addr = Address::from_str("mqfKJuj2Ea4RtXsKawQWrqosGeHFTrp6iZ").unwrap();
         let label = "test".to_string();
 
-        let result = wallet.label_psbt(&psbt, vec![label.clone()]);
+        let result = wallet.label_psbt(&psbt, vec![label.clone()]).await;
         assert!(result.is_ok());
 
         let expected_labels = vec![label.clone()];

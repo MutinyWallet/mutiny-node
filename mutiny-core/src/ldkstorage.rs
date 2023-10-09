@@ -8,7 +8,8 @@ use crate::multiesplora::MultiEsploraClient;
 use crate::node::{default_user_config, ChainMonitor};
 use crate::node::{NetworkGraph, Router};
 use crate::nodemanager::ChannelClosure;
-use crate::storage::{MutinyStorage, VersionedValue};
+use crate::storage::VersionedValue;
+use crate::surreal::SurrealDb;
 use crate::utils;
 use crate::utils::{sleep, spawn};
 use crate::vss::VssKeyValueItem;
@@ -38,6 +39,7 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use surrealdb::Connection;
 
 pub const CHANNEL_MANAGER_KEY: &str = "manager";
 pub const MONITORS_PREFIX_KEY: &str = "monitors/";
@@ -47,7 +49,7 @@ const CHANNEL_OPENING_PARAMS_PREFIX: &str = "chan_open_params/";
 const CHANNEL_CLOSURE_PREFIX: &str = "channel_closure/";
 const FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY: &str = "failed_spendable_outputs";
 
-pub(crate) type PhantomChannelManager<S: MutinyStorage> = LdkChannelManager<
+pub(crate) type PhantomChannelManager<S: Connection + Clone> = LdkChannelManager<
     Arc<ChainMonitor<S>>,
     Arc<MutinyChain<S>>,
     Arc<PhantomKeysManager<S>>,
@@ -59,22 +61,22 @@ pub(crate) type PhantomChannelManager<S: MutinyStorage> = LdkChannelManager<
 >;
 
 #[derive(Clone)]
-pub struct MutinyNodePersister<S: MutinyStorage> {
+pub struct MutinyNodePersister<S: Connection + Clone> {
     node_id: String,
-    pub(crate) storage: S,
+    pub(crate) storage: SurrealDb<S>,
     manager_version: Arc<AtomicU32>,
     pub(crate) chain_monitor: Arc<Mutex<Option<Arc<ChainMonitor<S>>>>>,
     logger: Arc<MutinyLogger>,
 }
 
-pub(crate) struct ReadChannelManager<S: MutinyStorage> {
+pub(crate) struct ReadChannelManager<S: Connection + Clone> {
     pub channel_manager: PhantomChannelManager<S>,
     pub is_restarting: bool,
     pub channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
 }
 
-impl<S: MutinyStorage> MutinyNodePersister<S> {
-    pub fn new(node_id: String, storage: S, logger: Arc<MutinyLogger>) -> Self {
+impl<S: Connection + Clone> MutinyNodePersister<S> {
+    pub fn new(node_id: String, storage: SurrealDb<S>, logger: Arc<MutinyLogger>) -> Self {
         MutinyNodePersister {
             node_id,
             storage,
@@ -154,9 +156,9 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
 
     // name this param _key so it is not confused with the key
     // that has the concatenated node_id
-    fn read_value(&self, _key: &str) -> Result<Vec<u8>, MutinyError> {
+    async fn read_value(&self, _key: &str) -> Result<Vec<u8>, MutinyError> {
         let key = self.get_key(_key);
-        match self.storage.get_data(&key) {
+        match self.storage.get_data(&key).await {
             Ok(Some(value)) => Ok(value),
             Ok(None) => Err(MutinyError::read_err(MutinyStorageError::Other(anyhow!(
                 "No value found for key: {key}"
@@ -165,7 +167,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         }
     }
 
-    pub fn read_channel_monitors(
+    pub async fn read_channel_monitors(
         &self,
         keys_manager: Arc<PhantomKeysManager<S>>,
     ) -> Result<Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>, io::Error> {
@@ -174,6 +176,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         let channel_monitor_list: HashMap<String, Vec<u8>> = self
             .storage
             .scan(MONITORS_PREFIX_KEY, Some(suffix))
+            .await
             .map_err(|_| io::ErrorKind::Other)?;
 
         let res =
@@ -217,7 +220,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
     ) -> Result<ReadChannelManager<S>, MutinyError> {
         log_debug!(mutiny_logger, "Reading channel manager from storage");
         let key = self.get_key(CHANNEL_MANAGER_KEY);
-        match self.storage.get_data::<VersionedValue>(&key) {
+        match self.storage.get_data::<VersionedValue>(&key).await {
             Ok(Some(versioned_value)) => {
                 // new encoding is in hex
                 let hex: String = serde_json::from_value(versioned_value.value.clone())?;
@@ -256,7 +259,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             }
             Err(_) => {
                 // old encoding with no version number and as an array of numbers
-                let bytes = self.read_value(CHANNEL_MANAGER_KEY)?;
+                let bytes = self.read_value(CHANNEL_MANAGER_KEY).await?;
                 Self::parse_channel_manager(
                     bytes,
                     chain_monitor,
@@ -377,7 +380,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             .map_err(io::Error::other)
     }
 
-    pub(crate) fn read_payment_info(
+    pub(crate) async fn read_payment_info(
         &self,
         payment_hash: &[u8; 32],
         inbound: bool,
@@ -386,11 +389,11 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         let key = self.get_key(payment_key(inbound, payment_hash).as_str());
         log_trace!(logger, "Trace: checking payment key: {key}");
         let deserialized_value: Result<Option<PaymentInfo>, MutinyError> =
-            self.storage.get_data(key);
+            self.storage.get_data(key).await;
         deserialized_value.ok().flatten()
     }
 
-    pub(crate) fn list_payment_info(
+    pub(crate) async fn list_payment_info(
         &self,
         inbound: bool,
     ) -> Result<Vec<(PaymentHash, PaymentInfo)>, MutinyError> {
@@ -399,7 +402,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             false => PAYMENT_OUTBOUND_PREFIX_KEY,
         };
         let suffix = format!("_{}", self.node_id);
-        let map: HashMap<String, PaymentInfo> = self.storage.scan(prefix, Some(&suffix))?;
+        let map: HashMap<String, PaymentInfo> = self.storage.scan(prefix, Some(&suffix)).await?;
 
         // convert keys to PaymentHash
         Ok(map
@@ -426,7 +429,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         Ok(())
     }
 
-    pub(crate) fn get_channel_closure(
+    pub(crate) async fn get_channel_closure(
         &self,
         user_channel_id: u128,
     ) -> Result<Option<ChannelClosure>, MutinyError> {
@@ -434,13 +437,17 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             "{CHANNEL_CLOSURE_PREFIX}{}",
             user_channel_id.to_be_bytes().to_hex()
         ));
-        self.storage.get_data(key)
+        self.storage.get_data(key).await
     }
 
-    pub(crate) fn list_channel_closures(&self) -> Result<Vec<(u128, ChannelClosure)>, MutinyError> {
+    pub(crate) async fn list_channel_closures(
+        &self,
+    ) -> Result<Vec<(u128, ChannelClosure)>, MutinyError> {
         let suffix = format!("_{}", self.node_id);
-        let map: HashMap<String, ChannelClosure> =
-            self.storage.scan(CHANNEL_CLOSURE_PREFIX, Some(&suffix))?;
+        let map: HashMap<String, ChannelClosure> = self
+            .storage
+            .scan(CHANNEL_CLOSURE_PREFIX, Some(&suffix))
+            .await?;
 
         Ok(map
             .into_iter()
@@ -462,7 +469,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
     /// Previously failed spendable outputs are not overwritten.
     ///
     /// This is used to retry spending them later.
-    pub fn persist_failed_spendable_outputs(
+    pub async fn persist_failed_spendable_outputs(
         &self,
         failed: Vec<SpendableOutputDescriptor>,
     ) -> anyhow::Result<()> {
@@ -470,7 +477,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
 
         // get the currently stored descriptors encoded as hex
         // if there are none, use an empty vector
-        let mut descriptors: Vec<String> = self.storage.get_data(&key)?.unwrap_or_default();
+        let mut descriptors: Vec<String> = self.storage.get_data(&key).await?.unwrap_or_default();
 
         // convert the failed descriptors to hex
         let failed_hex: Vec<String> = failed
@@ -508,12 +515,14 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
     }
 
     /// Retrieves the failed spendable outputs from storage
-    pub fn get_failed_spendable_outputs(&self) -> anyhow::Result<Vec<SpendableOutputDescriptor>> {
+    pub async fn get_failed_spendable_outputs(
+        &self,
+    ) -> anyhow::Result<Vec<SpendableOutputDescriptor>> {
         let key = self.get_key(FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY);
 
         // get the currently stored descriptors encoded as hex
         // if there are none, use an empty vector
-        let strings: Vec<String> = self.storage.get_data(key)?.unwrap_or_default();
+        let strings: Vec<String> = self.storage.get_data(key).await?.unwrap_or_default();
 
         // convert the hex strings to descriptors
         let mut descriptors = vec![];
@@ -530,9 +539,9 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
 
     /// Clears the failed spendable outputs from storage
     /// This is used when the failed spendable outputs have been successfully spent
-    pub fn clear_failed_spendable_outputs(&self) -> anyhow::Result<()> {
+    pub async fn clear_failed_spendable_outputs(&self) -> anyhow::Result<()> {
         let key = self.get_key(FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY);
-        self.storage.delete(&[key])?;
+        self.storage.delete(&[key]).await?;
 
         Ok(())
     }
@@ -546,17 +555,17 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         self.storage.set_data(key, params, None)
     }
 
-    pub(crate) fn get_channel_open_params(
+    pub(crate) async fn get_channel_open_params(
         &self,
         id: u128,
     ) -> Result<Option<ChannelOpenParams>, MutinyError> {
         let key = self.get_key(&channel_open_params_key(id));
-        self.storage.get_data(key)
+        self.storage.get_data(key).await
     }
 
-    pub(crate) fn delete_channel_open_params(&self, id: u128) -> Result<(), MutinyError> {
+    pub(crate) async fn delete_channel_open_params(&self, id: u128) -> Result<(), MutinyError> {
         let key = self.get_key(&channel_open_params_key(id));
-        self.storage.delete(&[key])
+        self.storage.delete(&[key]).await
     }
 }
 
@@ -619,7 +628,7 @@ fn payment_key(inbound: bool, payment_hash: &[u8; 32]) -> String {
     }
 }
 
-impl<S: MutinyStorage>
+impl<S: Connection + Clone>
     Persister<
         '_,
         Arc<ChainMonitor<S>>,
@@ -666,7 +675,7 @@ impl<S: MutinyStorage>
     }
 }
 
-impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<ChannelSigner>
+impl<ChannelSigner: WriteableEcdsaChannelSigner, S: Connection + Clone> Persist<ChannelSigner>
     for MutinyNodePersister<S>
 {
     fn persist_new_channel(
@@ -738,8 +747,8 @@ pub struct MonitorUpdateIdentifier {
     pub monitor_update_id: MonitorUpdateId,
 }
 
-async fn persist_monitor(
-    storage: &impl MutinyStorage,
+async fn persist_monitor<C: Connection + Clone>(
+    storage: &SurrealDb<C>,
     key: &str,
     object: &Vec<u8>,
     version: Option<u32>,

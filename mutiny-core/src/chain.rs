@@ -6,19 +6,19 @@ use lightning::chain::chaininterface::BroadcasterInterface;
 use lightning::chain::{Filter, WatchedOutput};
 use lightning::log_warn;
 use lightning::util::logger::Logger;
+use surrealdb::Connection;
 
 use crate::logging::MutinyLogger;
 use crate::onchain::OnChainWallet;
-use crate::storage::MutinyStorage;
 use crate::utils;
 
-pub struct MutinyChain<S: MutinyStorage> {
+pub struct MutinyChain<S: Connection + Clone> {
     pub tx_sync: Arc<EsploraSyncClient<Arc<MutinyLogger>>>,
     pub wallet: Arc<OnChainWallet<S>>,
     logger: Arc<MutinyLogger>,
 }
 
-impl<S: MutinyStorage> MutinyChain<S> {
+impl<S: Connection + Clone> MutinyChain<S> {
     pub(crate) fn new(
         tx_sync: Arc<EsploraSyncClient<Arc<MutinyLogger>>>,
         wallet: Arc<OnChainWallet<S>>,
@@ -32,7 +32,7 @@ impl<S: MutinyStorage> MutinyChain<S> {
     }
 }
 
-impl<S: MutinyStorage> Filter for MutinyChain<S> {
+impl<S: Connection + Clone> Filter for MutinyChain<S> {
     fn register_tx(&self, txid: &Txid, script_pubkey: &Script) {
         self.tx_sync.register_tx(txid, script_pubkey);
     }
@@ -42,7 +42,7 @@ impl<S: MutinyStorage> Filter for MutinyChain<S> {
     }
 }
 
-impl<S: MutinyStorage> BroadcasterInterface for MutinyChain<S> {
+impl<S: Connection + Clone> BroadcasterInterface for MutinyChain<S> {
     fn broadcast_transactions(&self, txs: &[&Transaction]) {
         let txs_clone = txs
             .iter()

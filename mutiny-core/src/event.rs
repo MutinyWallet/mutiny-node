@@ -6,7 +6,6 @@ use crate::node::BumpTxEventHandler;
 use crate::nodemanager::ChannelClosure;
 use crate::onchain::OnChainWallet;
 use crate::redshift::RedshiftStorage;
-use crate::storage::MutinyStorage;
 use crate::utils::sleep;
 use anyhow::anyhow;
 use bitcoin::hashes::hex::ToHex;
@@ -25,6 +24,7 @@ use lightning::{
 use lightning_invoice::Bolt11Invoice;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use surrealdb::Connection;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct PaymentInfo {
@@ -81,7 +81,7 @@ impl fmt::Display for HTLCStatus {
 }
 
 #[derive(Clone)]
-pub struct EventHandler<S: MutinyStorage> {
+pub struct EventHandler<S: Connection + Clone> {
     channel_manager: Arc<PhantomChannelManager<S>>,
     fee_estimator: Arc<MutinyFeeEstimator<S>>,
     wallet: Arc<OnChainWallet<S>>,
@@ -92,7 +92,7 @@ pub struct EventHandler<S: MutinyStorage> {
     logger: Arc<MutinyLogger>,
 }
 
-impl<S: MutinyStorage> EventHandler<S> {
+impl<S: Connection + Clone> EventHandler<S> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         channel_manager: Arc<PhantomChannelManager<S>>,
@@ -128,7 +128,11 @@ impl<S: MutinyStorage> EventHandler<S> {
                 log_debug!(self.logger, "EVENT: FundingGenerationReady processing");
 
                 // Get the open parameters for this channel
-                let params_opt = match self.persister.get_channel_open_params(user_channel_id) {
+                let params_opt = match self
+                    .persister
+                    .get_channel_open_params(user_channel_id)
+                    .await
+                {
                     Ok(params) => params,
                     Err(e) => {
                         log_error!(self.logger, "ERROR: Could not get channel open params: {e}");
@@ -175,7 +179,7 @@ impl<S: MutinyStorage> EventHandler<S> {
 
                 let psbt = match psbt_result {
                     Ok(psbt) => {
-                        if let Err(e) = self.wallet.label_psbt(&psbt, labels) {
+                        if let Err(e) = self.wallet.label_psbt(&psbt, labels).await {
                             log_warn!(
                                 self.logger,
                                 "ERROR: Could not label PSBT, but continuing: {e}"
@@ -263,6 +267,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 match self
                     .persister
                     .read_payment_info(&payment_hash.0, true, &self.logger)
+                    .await
                 {
                     Some(mut saved_payment_info) => {
                         let payment_preimage = payment_preimage.map(|p| p.0);
@@ -328,6 +333,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 match self
                     .persister
                     .read_payment_info(&payment_hash.0, false, &self.logger)
+                    .await
                 {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Succeeded;
@@ -421,6 +427,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 match self
                     .persister
                     .read_payment_info(&payment_hash.0, false, &self.logger)
+                    .await
                 {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Failed;
@@ -467,7 +474,11 @@ impl<S: MutinyStorage> EventHandler<S> {
                 if let Err(e) = self.handle_spendable_outputs(&outputs).await {
                     log_error!(self.logger, "Failed to handle spendable outputs: {e}");
                     // if we have an error we should persist the outputs so we can try again later
-                    if let Err(e) = self.persister.persist_failed_spendable_outputs(outputs) {
+                    if let Err(e) = self
+                        .persister
+                        .persist_failed_spendable_outputs(outputs)
+                        .await
+                    {
                         log_error!(
                             self.logger,
                             "Failed to persist failed spendable outputs: {e}"
@@ -484,7 +495,11 @@ impl<S: MutinyStorage> EventHandler<S> {
             } => {
                 // if we still have channel open params, then it was just a failed channel open
                 // we should not persist this as a closed channel and just delete the channel open params
-                if let Ok(Some(_)) = self.persister.get_channel_open_params(user_channel_id) {
+                if let Ok(Some(_)) = self
+                    .persister
+                    .get_channel_open_params(user_channel_id)
+                    .await
+                {
                     let _ = self.persister.delete_channel_open_params(user_channel_id);
                     return;
                 };
@@ -531,6 +546,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                     .persister
                     .storage
                     .get_redshift(&user_channel_id.to_be_bytes())
+                    .await
                 {
                     // get channel
                     if let Some(chan) = self
@@ -562,7 +578,11 @@ impl<S: MutinyStorage> EventHandler<S> {
                     user_channel_id,
                     counterparty_node_id.to_hex());
 
-                if let Err(e) = self.persister.delete_channel_open_params(user_channel_id) {
+                if let Err(e) = self
+                    .persister
+                    .delete_channel_open_params(user_channel_id)
+                    .await
+                {
                     log_warn!(
                         self.logger,
                         "ERROR: Could not delete channel open params, but continuing: {e}"
@@ -636,6 +656,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 locktime,
                 &Secp256k1::new(),
             )
+            .await
             .map_err(|_| anyhow!("Failed to spend spendable outputs"))?;
 
         self.wallet.broadcast_transaction(spending_tx).await?;

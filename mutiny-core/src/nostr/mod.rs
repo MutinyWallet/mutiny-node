@@ -6,7 +6,7 @@ use crate::nostr::nwc::{
     PendingNwcInvoice, Profile, SingleUseSpendingConditions, SpendingConditions,
     PENDING_NWC_EVENTS_KEY,
 };
-use crate::storage::MutinyStorage;
+use crate::surreal::SurrealDb;
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
 use crate::{utils, HTLCStatus};
 use bitcoin::hashes::hex::{FromHex, ToHex};
@@ -26,6 +26,7 @@ use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use surrealdb::Connection;
 
 pub mod nwc;
 
@@ -59,21 +60,21 @@ pub enum ProfileType {
 
 /// Manages Nostr keys and has different utilities for nostr specific things
 #[derive(Clone)]
-pub struct NostrManager<S: MutinyStorage> {
+pub struct NostrManager<S: Connection + Clone> {
     /// Extended private key that is the root seed of the wallet
     xprivkey: ExtendedPrivKey,
     /// Primary key used for nostr, this will be used for signing events
     pub primary_key: Keys,
     /// Separate profiles for each nostr wallet connect string
     pub(crate) nwc: Arc<RwLock<Vec<NostrWalletConnect>>>,
-    pub storage: S,
+    pub storage: SurrealDb<S>,
     /// Lock for pending nwc invoices
     pending_nwc_lock: Arc<Mutex<()>>,
     /// Logger
     pub logger: Arc<MutinyLogger>,
 }
 
-impl<S: MutinyStorage> NostrManager<S> {
+impl<S: Connection + Clone> NostrManager<S> {
     pub fn get_relays(&self) -> Vec<String> {
         let mut relays: Vec<String> = self
             .nwc
@@ -145,27 +146,32 @@ impl<S: MutinyStorage> NostrManager<S> {
     }
 
     /// Goes through all single use profiles and removes the successfully paid ones
-    pub(crate) fn clear_successful_single_use_profiles(
+    pub(crate) async fn clear_successful_single_use_profiles(
         &self,
         node: &Node<S>,
     ) -> Result<(), MutinyError> {
         let mut profiles = self.nwc.write().unwrap();
 
-        profiles.retain(|x| {
+        let mut new_profiles = vec![];
+        for x in profiles.iter() {
             if let SpendingConditions::SingleUse(single_use) = &x.profile.spending_conditions {
                 if let Some(payment_hash) = &single_use.payment_hash {
                     let hash: [u8; 32] = FromHex::from_hex(payment_hash).expect("invalid hash");
-                    if let Some(payment) =
-                        node.persister.read_payment_info(&hash, false, &self.logger)
+                    if let Some(payment) = node
+                        .persister
+                        .read_payment_info(&hash, false, &self.logger)
+                        .await
                     {
                         if payment.status == HTLCStatus::Succeeded {
-                            return false;
+                            continue;
                         }
                     }
                 }
             }
-            true
-        });
+            new_profiles.push(x.clone());
+        }
+
+        *profiles = new_profiles;
 
         // save to storage
         {
@@ -369,20 +375,22 @@ impl<S: MutinyStorage> NostrManager<S> {
     }
 
     /// Lists all pending NWC invoices
-    pub fn get_pending_nwc_invoices(&self) -> Result<Vec<PendingNwcInvoice>, MutinyError> {
+    pub async fn get_pending_nwc_invoices(&self) -> Result<Vec<PendingNwcInvoice>, MutinyError> {
         Ok(self
             .storage
-            .get_data(PENDING_NWC_EVENTS_KEY)?
+            .get_data(PENDING_NWC_EVENTS_KEY)
+            .await?
             .unwrap_or_default())
     }
 
-    fn find_nwc_data(
+    async fn find_nwc_data(
         &self,
         hash: sha256::Hash,
     ) -> Result<(NostrWalletConnect, PendingNwcInvoice), MutinyError> {
         let pending: Vec<PendingNwcInvoice> = self
             .storage
-            .get_data(PENDING_NWC_EVENTS_KEY)?
+            .get_data(PENDING_NWC_EVENTS_KEY)
+            .await?
             .unwrap_or_default();
 
         let inv = pending
@@ -449,7 +457,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         node_manager: &NodeManager<S>,
         from_node: &PublicKey,
     ) -> Result<EventId, MutinyError> {
-        let (nwc, inv) = self.find_nwc_data(hash)?;
+        let (nwc, inv) = self.find_nwc_data(hash).await?;
 
         let resp = nwc
             .pay_nwc_invoice(node_manager, from_node, &inv.invoice)
@@ -463,7 +471,8 @@ impl<S: MutinyStorage> NostrManager<S> {
         // get from storage again, in case it was updated
         let mut pending: Vec<PendingNwcInvoice> = self
             .storage
-            .get_data(PENDING_NWC_EVENTS_KEY)?
+            .get_data(PENDING_NWC_EVENTS_KEY)
+            .await?
             .unwrap_or_default();
 
         // remove from storage
@@ -488,7 +497,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                 }),
                 result: None,
             };
-            let (nwc, inv) = self.find_nwc_data(hash)?;
+            let (nwc, inv) = self.find_nwc_data(hash).await?;
             self.broadcast_nwc_response(resp, nwc, inv).await?;
         }
 
@@ -497,7 +506,8 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let mut invoices: Vec<PendingNwcInvoice> = self
             .storage
-            .get_data(PENDING_NWC_EVENTS_KEY)?
+            .get_data(PENDING_NWC_EVENTS_KEY)
+            .await?
             .unwrap_or_default();
 
         // remove expired invoices
@@ -517,7 +527,8 @@ impl<S: MutinyStorage> NostrManager<S> {
         self.pending_nwc_lock.lock().await;
         let mut invoices: Vec<PendingNwcInvoice> = self
             .storage
-            .get_data(PENDING_NWC_EVENTS_KEY)?
+            .get_data(PENDING_NWC_EVENTS_KEY)
+            .await?
             .unwrap_or_default();
 
         // remove expired invoices
@@ -716,69 +727,19 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(None)
     }
 
-    /// Derives the client and server keys for Nostr Wallet Connect given a profile index
-    /// The left key is the client key and the right key is the server key
-    pub(crate) fn derive_nwc_keys<C: Signing>(
-        context: &Secp256k1<C>,
-        xprivkey: ExtendedPrivKey,
-        profile_index: u32,
-    ) -> Result<(Keys, Keys), MutinyError> {
-        let client_key = Self::derive_nostr_key(
-            context,
-            xprivkey,
-            NWC_ACCOUNT_INDEX,
-            Some(profile_index),
-            Some(0),
-        )?;
-        let server_key = Self::derive_nostr_key(
-            context,
-            xprivkey,
-            NWC_ACCOUNT_INDEX,
-            Some(profile_index),
-            Some(1),
-        )?;
-
-        Ok((client_key, server_key))
-    }
-
-    fn derive_nostr_key<C: Signing>(
-        context: &Secp256k1<C>,
-        xprivkey: ExtendedPrivKey,
-        account: u32,
-        chain: Option<u32>,
-        index: Option<u32>,
-    ) -> Result<Keys, MutinyError> {
-        let chain = match chain {
-            Some(chain) => ChildNumber::from_hardened_idx(chain)?,
-            None => ChildNumber::from_normal_idx(0)?,
-        };
-
-        let index = match index {
-            Some(index) => ChildNumber::from_hardened_idx(index)?,
-            None => ChildNumber::from_normal_idx(0)?,
-        };
-
-        let path = DerivationPath::from_str(&format!("m/44'/1237'/{account}'/{chain}/{index}"))?;
-        let key = xprivkey.derive_priv(context, &path)?;
-
-        // just converting to nostr secret key, unwrap is safe
-        let secret_key = SecretKey::from_slice(&key.private_key.secret_bytes()).unwrap();
-        Ok(Keys::new(secret_key))
-    }
-
     /// Creates a new NostrManager
-    pub fn from_mnemonic(
+    pub async fn from_mnemonic(
         xprivkey: ExtendedPrivKey,
-        storage: S,
+        storage: SurrealDb<S>,
         logger: Arc<MutinyLogger>,
     ) -> Result<Self, MutinyError> {
         let context = Secp256k1::new();
 
         // generate the default primary key
-        let primary_key = Self::derive_nostr_key(&context, xprivkey, 0, None, None)?;
+        let primary_key = derive_nostr_key(&context, xprivkey, 0, None, None)?;
 
         // get from storage
-        let profiles: Vec<Profile> = storage.get_data(NWC_STORAGE_KEY)?.unwrap_or_default();
+        let profiles: Vec<Profile> = storage.get_data(NWC_STORAGE_KEY).await?.unwrap_or_default();
 
         // generate the wallet connect keys
         let nwc = profiles
@@ -795,6 +756,56 @@ impl<S: MutinyStorage> NostrManager<S> {
             logger,
         })
     }
+}
+
+fn derive_nostr_key<C: Signing>(
+    context: &Secp256k1<C>,
+    xprivkey: ExtendedPrivKey,
+    account: u32,
+    chain: Option<u32>,
+    index: Option<u32>,
+) -> Result<Keys, MutinyError> {
+    let chain = match chain {
+        Some(chain) => ChildNumber::from_hardened_idx(chain)?,
+        None => ChildNumber::from_normal_idx(0)?,
+    };
+
+    let index = match index {
+        Some(index) => ChildNumber::from_hardened_idx(index)?,
+        None => ChildNumber::from_normal_idx(0)?,
+    };
+
+    let path = DerivationPath::from_str(&format!("m/44'/1237'/{account}'/{chain}/{index}"))?;
+    let key = xprivkey.derive_priv(context, &path)?;
+
+    // just converting to nostr secret key, unwrap is safe
+    let secret_key = SecretKey::from_slice(&key.private_key.secret_bytes()).unwrap();
+    Ok(Keys::new(secret_key))
+}
+
+/// Derives the client and server keys for Nostr Wallet Connect given a profile index
+/// The left key is the client key and the right key is the server key
+pub(crate) fn derive_nwc_keys<C: Signing>(
+    context: &Secp256k1<C>,
+    xprivkey: ExtendedPrivKey,
+    profile_index: u32,
+) -> Result<(Keys, Keys), MutinyError> {
+    let client_key = derive_nostr_key(
+        context,
+        xprivkey,
+        NWC_ACCOUNT_INDEX,
+        Some(profile_index),
+        Some(0),
+    )?;
+    let server_key = derive_nostr_key(
+        context,
+        xprivkey,
+        NWC_ACCOUNT_INDEX,
+        Some(profile_index),
+        Some(1),
+    )?;
+
+    Ok((client_key, server_key))
 }
 
 #[cfg(test)]

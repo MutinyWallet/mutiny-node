@@ -156,6 +156,11 @@ pub enum MutinyStorageError {
     LockError,
     #[error("Failed to use indexeddb storage")]
     IndexedDBError,
+    #[error("Failed to use indexeddb storage")]
+    SurrealDbError {
+        #[from]
+        source: surrealdb::Error,
+    },
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

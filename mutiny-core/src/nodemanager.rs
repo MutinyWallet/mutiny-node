@@ -6,7 +6,8 @@ use crate::scb::{
     EncryptedSCB, StaticChannelBackup, StaticChannelBackupStorage,
     SCB_ENCRYPTION_KEY_DERIVATION_PATH,
 };
-use crate::storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY};
+use crate::storage::{DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY};
+use crate::surreal::SurrealDb;
 use crate::utils::{sleep, spawn};
 use crate::MutinyWalletConfig;
 use crate::{
@@ -14,7 +15,6 @@ use crate::{
     error::MutinyError,
     esplora::EsploraSyncClient,
     fees::MutinyFeeEstimator,
-    gossip,
     gossip::{fetch_updated_gossip, get_rgs_url},
     logging::MutinyLogger,
     lspclient::LspClient,
@@ -65,6 +65,7 @@ use serde_json::Value;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, ops::Deref, sync::Arc};
+use surrealdb::Connection;
 use uuid::Uuid;
 
 const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
@@ -545,7 +546,7 @@ pub struct Plan {
 ///
 /// It can be configured to use all different custom backend services, or to use the default
 /// services provided by Mutiny.
-pub struct NodeManager<S: MutinyStorage> {
+pub struct NodeManager<S: Connection + Clone> {
     pub(crate) stop: Arc<AtomicBool>,
     pub(crate) xprivkey: ExtendedPrivKey,
     network: Network,
@@ -558,7 +559,7 @@ pub struct NodeManager<S: MutinyStorage> {
     scorer: Arc<utils::Mutex<HubPreferentialScorer>>,
     chain: Arc<MutinyChain<S>>,
     fee_estimator: Arc<MutinyFeeEstimator<S>>,
-    pub(crate) storage: S,
+    pub(crate) storage: SurrealDb<S>,
     pub(crate) node_storage: Mutex<NodeStorage>,
     pub(crate) nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node<S>>>>>,
     auth: AuthManager,
@@ -571,17 +572,20 @@ pub struct NodeManager<S: MutinyStorage> {
     pub safe_mode: bool,
 }
 
-impl<S: MutinyStorage> NodeManager<S> {
+impl<S: Connection + Clone> NodeManager<S> {
     /// Returns if there is a saved wallet in storage.
     /// This is checked by seeing if a mnemonic seed exists in storage.
-    pub fn has_node_manager(storage: S) -> bool {
-        storage.get_mnemonic().is_ok_and(|x| x.is_some())
+    pub async fn has_node_manager(storage: SurrealDb<S>) -> bool {
+        storage.get_mnemonic().await.is_ok_and(|x| x.is_some())
     }
 
     /// Creates a new [NodeManager] with the given parameters.
     /// The mnemonic seed is read from storage, unless one is provided.
     /// If no mnemonic is provided, a new one is generated and stored.
-    pub async fn new(c: MutinyWalletConfig, storage: S) -> Result<NodeManager<S>, MutinyError> {
+    pub async fn new(
+        c: MutinyWalletConfig,
+        storage: SurrealDb<S>,
+    ) -> Result<NodeManager<S>, MutinyError> {
         let stop = Arc::new(AtomicBool::new(false));
 
         #[cfg(target_arch = "wasm32")]
@@ -593,7 +597,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         // Need to prevent other devices from running at the same time
         if !c.skip_device_lock {
-            storage.set_device_lock()?;
+            storage.set_device_lock().await?;
         }
 
         let storage_clone = storage.clone();
@@ -605,7 +609,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                     break;
                 }
                 sleep((DEVICE_LOCK_INTERVAL_SECS * 1_000) as i32).await;
-                if let Err(e) = storage_clone.set_device_lock() {
+                if let Err(e) = storage_clone.set_device_lock().await {
                     log_error!(logger_clone, "Error setting device lock: {e}");
                 }
             }
@@ -629,11 +633,9 @@ impl<S: MutinyStorage> NodeManager<S> {
         ));
 
         let esplora = Arc::new(esplora);
-        let fee_estimator = Arc::new(MutinyFeeEstimator::new(
-            storage.clone(),
-            esplora.clone(),
-            logger.clone(),
-        ));
+        let fee_estimator = Arc::new(
+            MutinyFeeEstimator::new(storage.clone(), esplora.clone(), logger.clone()).await?,
+        );
 
         let wallet = Arc::new(OnChainWallet::new(
             c.xprivkey,
@@ -685,7 +687,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             _ => Vec::new(),
         };
 
-        let node_storage = storage.get_nodes()?;
+        let node_storage = storage.get_nodes().await?;
 
         let nodes = if c.safe_mode {
             // If safe mode is enabled, we don't start any nodes
@@ -775,7 +777,8 @@ impl<S: MutinyStorage> NodeManager<S> {
         };
 
         let price_cache = storage
-            .get_bitcoin_price_cache()?
+            .get_bitcoin_price_cache()
+            .await?
             .into_iter()
             .map(|(k, v)| (k, (v, Duration::from_secs(0))))
             .collect();
@@ -855,11 +858,11 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// This function will first find redshifts that are in the [RedshiftStatus::AttemptingPayments] state and start attempting payments
     /// and redshifts that are in the [RedshiftStatus::ClosingChannels] state and finish closing channels.
     /// This is done in case the node manager was shutdown while attempting payments or closing channels.
-    pub(crate) fn start_redshifts(nm: Arc<NodeManager<S>>) {
+    pub(crate) async fn start_redshifts(nm: Arc<NodeManager<S>>) {
         // find AttemptingPayments redshifts and restart attempting payments
         // find ClosingChannels redshifts and restart closing channels
         // use unwrap_or_default() to handle errors
-        let all = nm.storage.get_redshifts().unwrap_or_default();
+        let all = nm.storage.get_redshifts().await.unwrap_or_default();
         for redshift in all {
             match redshift.status {
                 RedshiftStatus::AttemptingPayments => {
@@ -891,7 +894,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                 }
                 // find redshifts with channels ready
                 // use unwrap_or_default() to handle errors
-                let all = nm.storage.get_redshifts().unwrap_or_default();
+                let all = nm.storage.get_redshifts().await.unwrap_or_default();
                 for mut redshift in all {
                     if redshift.status == RedshiftStatus::ChannelOpened {
                         // update status
@@ -985,10 +988,10 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Will generate a new address on every call.
     ///
     /// It is recommended to create a new address for every transaction.
-    pub fn get_new_address(&self, labels: Vec<String>) -> Result<Address, MutinyError> {
+    pub async fn get_new_address(&self, labels: Vec<String>) -> Result<Address, MutinyError> {
         if let Ok(mut wallet) = self.wallet.wallet.try_write() {
             let address = wallet.get_address(AddressIndex::New).address;
-            self.set_address_labels(address.clone(), labels)?;
+            self.set_address_labels(address.clone(), labels).await?;
             return Ok(address);
         }
 
@@ -1048,7 +1051,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             Some(inv.bolt11.ok_or(MutinyError::WalletOperationFailed)?)
         };
 
-        let Ok(address) = self.get_new_address(labels.clone()) else {
+        let Ok(address) = self.get_new_address(labels.clone()).await else {
             return Err(MutinyError::WalletOperationFailed);
         };
 
@@ -1164,7 +1167,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         let script = address.payload.script_pubkey();
         let txs = self.esplora.scripthash_txs(&script, None).await?;
 
-        let details_opt = txs.first().map(|tx| {
+        let details_opt = txs.first().map(|tx| async {
             let received: u64 = tx
                 .vout
                 .iter()
@@ -1182,7 +1185,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                     last_seen: utils::now().as_secs(),
                 });
 
-            let address_labels = self.get_address_labels().unwrap_or_default();
+            let address_labels = self.get_address_labels().await.unwrap_or_default();
             let labels = address_labels
                 .get(&address.to_string())
                 .cloned()
@@ -1212,6 +1215,11 @@ impl<S: MutinyStorage> NodeManager<S> {
             (details, block_id)
         });
 
+        let details_opt = match details_opt {
+            Some(fut) => Some(fut.await),
+            None => None,
+        };
+
         // if we found a tx we should try to import it into the wallet
         if let Some((details, block_id)) = details_opt.clone() {
             let wallet = self.wallet.clone();
@@ -1230,15 +1238,11 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Returns all the on-chain and lightning activity from the wallet.
     pub async fn get_activity(&self) -> Result<Vec<ActivityItem>, MutinyError> {
         // todo add contacts to the activity
-        let (lightning, closures) =
-            futures_util::try_join!(self.list_invoices(), self.list_channel_closures())?;
-        let onchain = self
-            .list_onchain()
-            .map_err(|e| {
-                log_warn!(self.logger, "Failed to get bdk history: {e}");
-                e
-            })
-            .unwrap_or_default();
+        let (lightning, closures, onchain) = futures_util::try_join!(
+            self.list_invoices(),
+            self.list_channel_closures(),
+            self.list_onchain()
+        )?;
 
         let mut activity = Vec::with_capacity(lightning.len() + onchain.len() + closures.len());
         for ln in lightning {
@@ -1296,10 +1300,10 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Lists all the on-chain transactions in the wallet.
     /// These are sorted by confirmation time.
-    pub fn list_onchain(&self) -> Result<Vec<TransactionDetails>, MutinyError> {
+    pub async fn list_onchain(&self) -> Result<Vec<TransactionDetails>, MutinyError> {
         let mut txs = self.wallet.list_transactions(true)?;
         txs.sort();
-        let address_labels = self.get_address_labels()?;
+        let address_labels = self.get_address_labels().await?;
         let txs = txs
             .into_iter()
             .map(|tx| self.add_onchain_labels(&address_labels, tx))
@@ -1309,10 +1313,13 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     /// Gets the details of a specific on-chain transaction.
-    pub fn get_transaction(&self, txid: Txid) -> Result<Option<TransactionDetails>, MutinyError> {
+    pub async fn get_transaction(
+        &self,
+        txid: Txid,
+    ) -> Result<Option<TransactionDetails>, MutinyError> {
         match self.wallet.get_transaction(txid, true)? {
             Some(tx) => {
-                let address_labels = self.get_address_labels()?;
+                let address_labels = self.get_address_labels().await?;
                 let tx_details = self.add_onchain_labels(&address_labels, tx);
                 Ok(Some(tx_details))
             }
@@ -1598,7 +1605,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         peer: &NodeId,
     ) -> Result<(), MutinyError> {
         if let Some(node) = self.nodes.lock().await.get(self_node_pubkey) {
-            gossip::delete_peer_info(&self.storage, &node._uuid, peer)?;
+            delete_peer_info(&self.storage, &node._uuid, peer).await?;
             Ok(())
         } else {
             log_error!(
@@ -1610,8 +1617,12 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     /// Sets the label of a peer from the selected node.
-    pub fn label_peer(&self, node_id: &NodeId, label: Option<String>) -> Result<(), MutinyError> {
-        gossip::set_peer_label(&self.storage, node_id, label)?;
+    pub async fn label_peer(
+        &self,
+        node_id: &NodeId,
+        label: Option<String>,
+    ) -> Result<(), MutinyError> {
+        set_peer_label(&self.storage, node_id, label).await?;
         Ok(())
     }
 
@@ -1843,13 +1854,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Gets an invoice from the node manager.
     /// This includes sent and received invoices.
     pub async fn get_invoice(&self, invoice: &Bolt11Invoice) -> Result<MutinyInvoice, MutinyError> {
-        let nodes = self.nodes.lock().await;
-        let inv_opt: Option<MutinyInvoice> =
-            nodes.iter().find_map(|(_, n)| n.get_invoice(invoice).ok());
-        match inv_opt {
-            Some(i) => Ok(i),
-            None => Err(MutinyError::NotFound),
-        }
+        self.get_invoice_by_hash(&invoice.payment_hash()).await
     }
 
     /// Gets an invoice from the node manager.
@@ -1859,13 +1864,18 @@ impl<S: MutinyStorage> NodeManager<S> {
         hash: &sha256::Hash,
     ) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
-        for (_, node) in nodes.iter() {
-            if let Ok(inv) = node.get_invoice_by_hash(hash) {
-                return Ok(inv);
+
+        let mut inv_opt = None;
+        for (_, n) in nodes.iter() {
+            if let Ok(inv) = n.get_invoice_by_hash(hash).await {
+                inv_opt = Some(inv);
+                break;
             }
         }
-
-        Err(MutinyError::NotFound)
+        match inv_opt {
+            Some(i) => Ok(i),
+            None => Err(MutinyError::NotFound),
+        }
     }
 
     /// Gets an invoice from the node manager.
@@ -1874,7 +1884,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         let mut invoices: Vec<MutinyInvoice> = vec![];
         let nodes = self.nodes.lock().await;
         for (_, node) in nodes.iter() {
-            if let Ok(mut invs) = node.list_invoices() {
+            if let Ok(mut invs) = node.list_invoices().await {
                 invoices.append(&mut invs)
             }
         }
@@ -1887,7 +1897,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     ) -> Result<ChannelClosure, MutinyError> {
         let nodes = self.nodes.lock().await;
         for (_, node) in nodes.iter() {
-            if let Ok(Some(closure)) = node.get_channel_closure(user_channel_id) {
+            if let Ok(Some(closure)) = node.get_channel_closure(user_channel_id).await {
                 return Ok(closure);
             }
         }
@@ -1899,7 +1909,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         let mut channels: Vec<ChannelClosure> = vec![];
         let nodes = self.nodes.lock().await;
         for (_, node) in nodes.iter() {
-            if let Ok(mut invs) = node.get_channel_closures() {
+            if let Ok(mut invs) = node.get_channel_closures().await {
                 channels.append(&mut invs)
             }
         }
@@ -2145,7 +2155,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             backups.insert(node.pubkey, (node.node_index(), scb));
         }
 
-        let peers = get_all_peers(&self.storage).unwrap_or_default();
+        let peers = get_all_peers(&self.storage).await.unwrap_or_default();
 
         let peer_connections = peers
             .into_iter()
@@ -2196,7 +2206,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                 match current {
                     Some(uuid) => uuid,
                     None => {
-                        let mut existing_nodes = self.storage.get_nodes()?;
+                        let mut existing_nodes = self.storage.get_nodes().await?;
                         let new_uuid = Uuid::new_v4().to_string();
                         existing_nodes
                             .nodes
@@ -2256,7 +2266,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Lists all the peers for all the nodes in the node manager.
     pub async fn list_peers(&self) -> Result<Vec<MutinyPeer>, MutinyError> {
-        let peer_data = gossip::get_all_peers(&self.storage)?;
+        let peer_data = get_all_peers(&self.storage).await?;
 
         // get peers saved in storage
         let mut storage_peers: Vec<MutinyPeer> = peer_data
@@ -2392,7 +2402,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         fiat: String,
         now: Duration,
         bitcoin_price_cache: Arc<Mutex<HashMap<String, (f32, Duration)>>>,
-        storage: S,
+        storage: SurrealDb<S>,
         logger: Arc<MutinyLogger>,
     ) -> Result<f32, MutinyError> {
         match Self::fetch_bitcoin_price(&fiat).await {
@@ -2463,11 +2473,11 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     /// Retrieves the logs from storage.
-    pub fn get_logs(
-        storage: S,
+    pub async fn get_logs(
+        storage: SurrealDb<S>,
         logger: Arc<MutinyLogger>,
     ) -> Result<Option<Vec<String>>, MutinyError> {
-        logger.get_logs(&storage)
+        logger.get_logs(&storage).await
     }
 
     /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.
@@ -2480,7 +2490,8 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         // delete all the keys we use to store routing data
         self.storage
-            .delete(&[GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY])?;
+            .delete(&[GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY])
+            .await?;
 
         // shut back down after reading if it was already closed
         if needs_db_connection {
@@ -2501,8 +2512,10 @@ impl<S: MutinyStorage> NodeManager<S> {
         }
 
         // delete the bdk keychain store
-        self.storage.delete(&[KEYCHAIN_STORE_KEY])?;
-        self.storage.set_data(NEED_FULL_SYNC_KEY, true, None)?;
+        self.storage.delete(&[KEYCHAIN_STORE_KEY]).await?;
+        self.storage
+            .set_data_async(NEED_FULL_SYNC_KEY, true, None)
+            .await?;
 
         // shut back down after reading if it was already closed
         if needs_db_connection {
@@ -2513,14 +2526,14 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     /// Exports the current state of the node manager to a json object.
-    pub async fn export_json(storage: S) -> Result<Value, MutinyError> {
+    pub async fn export_json(storage: SurrealDb<S>) -> Result<Value, MutinyError> {
         let needs_db_connection = !storage.clone().connected().unwrap_or(true);
         if needs_db_connection {
             storage.clone().start().await?;
         }
 
         // get all the data from storage, scanning with prefix "" will get all keys
-        let map = storage.scan("", None)?;
+        let map = storage.scan("", None).await?;
         let serde_map = serde_json::map::Map::from_iter(map.into_iter().filter(|(k, _)| {
             // filter out logs and network graph
             // these are really big and not needed for export
@@ -2546,7 +2559,7 @@ struct CoingeckoResponse {
 }
 
 // This will create a new node with a node manager and return the PublicKey of the node created.
-pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
+pub(crate) async fn create_new_node_from_node_manager<S: Connection + Clone>(
     node_manager: &NodeManager<S>,
 ) -> Result<NodeIdentity, MutinyError> {
     // Begin with a mutex lock so that nothing else can
@@ -2558,7 +2571,7 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
     // so that we can create another node with the next.
     // Always get it from our storage, the node_mutex is
     // mostly for read only and locking.
-    let mut existing_nodes = node_manager.storage.get_nodes()?;
+    let mut existing_nodes = node_manager.storage.get_nodes().await?;
     let next_node_index = match existing_nodes
         .nodes
         .iter()

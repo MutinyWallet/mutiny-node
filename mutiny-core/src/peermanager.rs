@@ -1,5 +1,4 @@
 use crate::node::NetworkGraph;
-use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, fees::MutinyFeeEstimator};
 use crate::{gossip, ldkstorage::PhantomChannelManager, logging::MutinyLogger};
 use crate::{gossip::read_peer_info, node::PubkeyConnectionInfo};
@@ -37,12 +36,15 @@ use tokio::time;
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
+use surrealdb::Connection;
 
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::net::TcpStream;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::networking::tcp_socket::TcpSocketDescriptor;
+use crate::surreal::SurrealDb;
+use crate::utils::spawn;
 
 pub trait PeerManager {
     fn get_peer_node_ids(&self) -> Vec<PublicKey>;
@@ -89,7 +91,7 @@ pub trait PeerManager {
     );
 }
 
-pub(crate) type PeerManagerImpl<S: MutinyStorage> = LdkPeerManager<
+pub(crate) type PeerManagerImpl<S: Connection + Clone> = LdkPeerManager<
     MutinySocketDescriptor,
     Arc<PhantomChannelManager<S>>,
     Arc<GossipMessageHandler<S>>,
@@ -99,7 +101,7 @@ pub(crate) type PeerManagerImpl<S: MutinyStorage> = LdkPeerManager<
     Arc<PhantomKeysManager<S>>,
 >;
 
-impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
+impl<S: Connection + Clone> PeerManager for PeerManagerImpl<S> {
     fn get_peer_node_ids(&self) -> Vec<PublicKey> {
         self.get_peer_node_ids().into_iter().map(|x| x.0).collect()
     }
@@ -167,13 +169,13 @@ impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
 }
 
 #[derive(Clone)]
-pub struct GossipMessageHandler<S: MutinyStorage> {
-    pub(crate) storage: S,
+pub struct GossipMessageHandler<S: Connection + Clone> {
+    pub(crate) storage: SurrealDb<S>,
     pub(crate) network_graph: Arc<NetworkGraph>,
     pub(crate) logger: Arc<MutinyLogger>,
 }
 
-impl<S: MutinyStorage> MessageSendEventsProvider for GossipMessageHandler<S> {
+impl<S: Connection + Clone> MessageSendEventsProvider for GossipMessageHandler<S> {
     fn get_and_clear_pending_msg_events(&self) -> Vec<MessageSendEvent> {
         Vec::new()
     }
@@ -189,27 +191,34 @@ impl UtxoLookup for ErroringUtxoLookup {
     }
 }
 
-impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
+impl<S: Connection + Clone> RoutingMessageHandler for GossipMessageHandler<S> {
     fn handle_node_announcement(
         &self,
         msg: &msgs::NodeAnnouncement,
     ) -> Result<bool, LightningError> {
         // We use RGS to sync gossip, but we can save the node's metadata (alias and color)
         // we should only save it for relevant peers however (i.e. peers we have a channel with)
+        let storage = self.storage.clone();
         let node_id = msg.contents.node_id;
-        if read_peer_info(&self.storage, &node_id)
-            .ok()
-            .flatten()
-            .is_some()
-        {
-            if let Err(e) = gossip::save_ln_peer_info(&self.storage, &node_id, &msg.clone().into())
+        let node_announcement = msg.clone();
+        let logger = self.logger.clone();
+        spawn(async move {
+            if read_peer_info(&storage, &node_id)
+                .await
+                .ok()
+                .flatten()
+                .is_some()
             {
-                log_warn!(
-                    self.logger,
-                    "Failed to save node announcement for {node_id}: {e}"
-                );
+                if let Err(e) =
+                    gossip::save_ln_peer_info(&storage, &node_id, &node_announcement.into()).await
+                {
+                    log_warn!(
+                        logger,
+                        "Failed to save node announcement for {node_id}: {e}"
+                    );
+                }
             }
-        }
+        });
 
         // because we got the announcement, may as well update our network graph
         self.network_graph
@@ -306,7 +315,7 @@ impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
     }
 }
 
-pub(crate) async fn connect_peer_if_necessary<S: MutinyStorage>(
+pub(crate) async fn connect_peer_if_necessary<S: Connection + Clone>(
     #[cfg(target_arch = "wasm32")] websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
     logger: Arc<MutinyLogger>,

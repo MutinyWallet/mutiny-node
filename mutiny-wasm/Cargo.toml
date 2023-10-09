@@ -42,6 +42,7 @@ getrandom = { version = "0.2", features = ["js"] }
 futures = "0.3.25"
 urlencoding = "2.1.2"
 
+surrealdb = { version = "1.0.0", features = ["kv-indxdb"] }
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires
 # all the `std::fmt` and `std::panicking` infrastructure, so isn't great for

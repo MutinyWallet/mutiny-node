@@ -252,6 +252,12 @@ impl From<serde_json::error::Error> for MutinyJsError {
     }
 }
 
+impl From<surrealdb::Error> for MutinyJsError {
+    fn from(_e: surrealdb::Error) -> Self {
+        Self::PersistenceFailed
+    }
+}
+
 impl From<MutinyJsError> for JsValue {
     fn from(e: MutinyJsError) -> Self {
         JsValue::from(e.to_string())

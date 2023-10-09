@@ -1,6 +1,6 @@
 use crate::error::MutinyError;
 use crate::nodemanager::NodeManager;
-use crate::storage::MutinyStorage;
+use crate::surreal::SurrealDb;
 use crate::utils::sleep;
 use crate::{utils, HTLCStatus};
 use anyhow::anyhow;
@@ -12,6 +12,7 @@ use lightning::{log_warn, util::logger::Logger};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
+use surrealdb::Connection;
 
 // When creating a new node sleep for 5 seconds to give it time to start up.
 const NEW_NODE_SLEEP_DURATION: i32 = 5_000;
@@ -105,8 +106,8 @@ impl Redshift {
 }
 
 pub trait RedshiftStorage {
-    fn get_redshift(&self, utxo: &[u8; 16]) -> Result<Option<Redshift>, MutinyError>;
-    fn get_redshifts(&self) -> Result<Vec<Redshift>, MutinyError>;
+    async fn get_redshift(&self, utxo: &[u8; 16]) -> Result<Option<Redshift>, MutinyError>;
+    async fn get_redshifts(&self) -> Result<Vec<Redshift>, MutinyError>;
     fn persist_redshift(&self, redshift: Redshift) -> Result<(), MutinyError>;
 }
 
@@ -116,14 +117,14 @@ fn get_redshift_key(id: &[u8; 16]) -> String {
     format!("{REDSHIFT_KEY_PREFIX}{}", id.to_hex())
 }
 
-impl<S: MutinyStorage> RedshiftStorage for S {
-    fn get_redshift(&self, id: &[u8; 16]) -> Result<Option<Redshift>, MutinyError> {
-        let redshifts = self.get_data(get_redshift_key(id))?;
+impl<S: Connection + Clone> RedshiftStorage for SurrealDb<S> {
+    async fn get_redshift(&self, id: &[u8; 16]) -> Result<Option<Redshift>, MutinyError> {
+        let redshifts = self.get_data(get_redshift_key(id)).await?;
         Ok(redshifts)
     }
 
-    fn get_redshifts(&self) -> Result<Vec<Redshift>, MutinyError> {
-        let map: HashMap<String, Redshift> = self.scan(REDSHIFT_KEY_PREFIX, None)?;
+    async fn get_redshifts(&self) -> Result<Vec<Redshift>, MutinyError> {
+        let map: HashMap<String, Redshift> = self.scan(REDSHIFT_KEY_PREFIX, None).await?;
         Ok(map.values().map(|v| v.to_owned()).collect())
     }
 
@@ -143,14 +144,14 @@ pub trait RedshiftManager {
         connection_string: Option<&str>,
     ) -> Result<Redshift, MutinyError>;
 
-    fn get_redshift(&self, id: &[u8; 16]) -> Result<Option<Redshift>, MutinyError>;
+    async fn get_redshift(&self, id: &[u8; 16]) -> Result<Option<Redshift>, MutinyError>;
 
     async fn attempt_payments(&self, rs: Redshift) -> Result<(), MutinyError>;
 
     async fn close_channels(&self, rs: Redshift) -> Result<(), MutinyError>;
 }
 
-impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
+impl<S: Connection + Clone> RedshiftManager for NodeManager<S> {
     async fn init_redshift(
         &self,
         utxo: OutPoint,
@@ -241,8 +242,8 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
         Ok(redshift)
     }
 
-    fn get_redshift(&self, id: &[u8; 16]) -> Result<Option<Redshift>, MutinyError> {
-        self.storage.get_redshift(id)
+    async fn get_redshift(&self, id: &[u8; 16]) -> Result<Option<Redshift>, MutinyError> {
+        self.storage.get_redshift(id).await
     }
 
     async fn attempt_payments(&self, mut rs: Redshift) -> Result<(), MutinyError> {
@@ -312,10 +313,10 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
                 let payment_hash: [u8; 32] = FromHex::from_hex(hex).expect("invalid hex");
 
                 // check if the payment is still pending
-                if let Some(info) =
-                    sending_node
-                        .persister
-                        .read_payment_info(&payment_hash, false, &self.logger)
+                if let Some(info) = sending_node
+                    .persister
+                    .read_payment_info(&payment_hash, false, &self.logger)
+                    .await
                 {
                     match info.status {
                         HTLCStatus::Pending | HTLCStatus::InFlight => {
@@ -482,6 +483,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
             Some(chan) => {
                 let address = self
                     .get_new_address(vec!["Redshift Change".to_string()])
+                    .await
                     .ok();
                 self.close_channel(chan, address, false, false).await?
                 // todo need to set change amount to on the amount we get back

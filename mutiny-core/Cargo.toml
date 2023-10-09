@@ -42,6 +42,8 @@ jwt-compact = { version = "0.8.0-beta.1", features = ["es256k"] }
 argon2 = { version = "0.5.0", features = ["password-hash", "alloc"] }
 hashbrown = { version = "0.8" }
 
+surrealdb = { version = "1.0.0", default-features = false, features = ["kv-indxdb"] }
+
 base64 = "0.13.0"
 pbkdf2 = "0.11"
 aes-gcm = "0.10.1"
@@ -58,6 +60,7 @@ proc-macro2 = "1.0.64"
 [dev-dependencies]
 wasm-bindgen-test = "0.3.33"
 mockall = "0.11.2"
+surrealdb = { version = "1.0.0", default-features = false, features = ["kv-mem"] }
 
 [features]
 default = ["async-interface"]

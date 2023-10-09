@@ -1,6 +1,6 @@
 use crate::logging::MutinyLogger;
 use crate::multiesplora::MultiEsploraClient;
-use crate::storage::MutinyStorage;
+use crate::surreal::SurrealDb;
 use crate::{error::MutinyError, utils};
 use bdk::FeeRate;
 use futures::lock::Mutex;
@@ -12,6 +12,7 @@ use lightning::util::logger::Logger;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
+use surrealdb::Connection;
 
 // Constants for overhead, input, and output sizes
 pub(crate) const TX_OVERHEAD: usize = 10;
@@ -22,25 +23,29 @@ pub(crate) const P2WSH_OUTPUT_SIZE: usize = 43;
 pub(crate) const TAPROOT_OUTPUT_SIZE: usize = 43;
 
 #[derive(Clone)]
-pub struct MutinyFeeEstimator<S: MutinyStorage> {
-    storage: S,
+pub struct MutinyFeeEstimator<S: Connection + Clone> {
+    storage: SurrealDb<S>,
+    cache: Arc<utils::Mutex<HashMap<String, f64>>>,
     esplora: Arc<MultiEsploraClient>,
     logger: Arc<MutinyLogger>,
     last_fee_update_time_secs: Arc<Mutex<Option<u64>>>,
 }
 
-impl<S: MutinyStorage> MutinyFeeEstimator<S> {
-    pub fn new(
-        storage: S,
+impl<S: Connection + Clone> MutinyFeeEstimator<S> {
+    pub async fn new(
+        storage: SurrealDb<S>,
         esplora: Arc<MultiEsploraClient>,
         logger: Arc<MutinyLogger>,
-    ) -> MutinyFeeEstimator<S> {
-        MutinyFeeEstimator {
+    ) -> Result<MutinyFeeEstimator<S>, MutinyError> {
+        let fees = storage.get_fee_estimates().await?.unwrap_or_default();
+
+        Ok(MutinyFeeEstimator {
             storage,
+            cache: Arc::new(utils::Mutex::new(fees)),
             esplora,
             logger,
             last_fee_update_time_secs: Arc::new(Mutex::new(None)),
-        }
+        })
     }
 
     /// Calculate the estimated fee in satoshis for a transaction.
@@ -85,7 +90,7 @@ struct MempoolFees {
     minimum_fee: f64,
 }
 
-impl<S: MutinyStorage> MutinyFeeEstimator<S> {
+impl<S: Connection + Clone> MutinyFeeEstimator<S> {
     async fn get_mempool_recommended_fees(&self) -> anyhow::Result<HashMap<String, f64>> {
         let client = self.esplora.client();
         let request = client
@@ -138,22 +143,24 @@ impl<S: MutinyStorage> MutinyFeeEstimator<S> {
             }
         };
 
-        self.storage.insert_fee_estimates(fee_estimates)?;
+        self.storage.insert_fee_estimates(fee_estimates.clone())?;
         let mut update_time_lock = self.last_fee_update_time_secs.lock().await;
         *update_time_lock = Some(utils::now().as_secs());
+        let mut cache_lock = self.cache.lock().unwrap();
+        *cache_lock = fee_estimates;
 
         Ok(())
     }
 }
 
-impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
+impl<S: Connection + Clone> FeeEstimator for MutinyFeeEstimator<S> {
     fn get_est_sat_per_1000_weight(&self, confirmation_target: ConfirmationTarget) -> u32 {
         let num_blocks = num_blocks_from_conf_target(confirmation_target);
         let fallback_fee = fallback_fee_from_conf_target(confirmation_target);
 
-        match self.storage.get_fee_estimates() {
-            Err(_) | Ok(None) => fallback_fee,
-            Ok(Some(estimates)) => {
+        match self.cache.lock() {
+            Err(_) => fallback_fee,
+            Ok(estimates) => {
                 let found = estimates.get(&num_blocks.to_string());
                 match found {
                     Some(num) => {

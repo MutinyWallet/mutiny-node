@@ -38,7 +38,7 @@ pub fn encryption_key_from_pass(password: &str) -> Result<Cipher, MutinyError> {
     })
 }
 
-pub fn encrypt(content: &str, c: Cipher) -> Result<String, MutinyError> {
+pub fn encrypt(content: &str, c: &Cipher) -> Result<String, MutinyError> {
     // convert key and nonce to proper format for aes_gcm
     let mut nonce = [0u8; 12];
     getrandom(&mut nonce).unwrap();

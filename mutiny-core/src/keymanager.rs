@@ -2,7 +2,6 @@ use crate::error::MutinyError;
 use crate::labels::LabelStorage;
 use crate::logging::MutinyLogger;
 use crate::onchain::OnChainWallet;
-use crate::storage::MutinyStorage;
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
 use bitcoin::bech32::u5;
@@ -24,14 +23,15 @@ use lightning::sign::{
 };
 use lightning::util::logger::Logger;
 use std::sync::Arc;
+use surrealdb::Connection;
 
-pub struct PhantomKeysManager<S: MutinyStorage> {
+pub struct PhantomKeysManager<S: Connection + Clone> {
     inner: LdkPhantomKeysManager,
     wallet: Arc<OnChainWallet<S>>,
     logger: Arc<MutinyLogger>,
 }
 
-impl<S: MutinyStorage> PhantomKeysManager<S> {
+impl<S: Connection + Clone> PhantomKeysManager<S> {
     pub fn new(
         wallet: Arc<OnChainWallet<S>>,
         seed: &[u8; 32],
@@ -54,7 +54,7 @@ impl<S: MutinyStorage> PhantomKeysManager<S> {
     }
 
     /// See [`KeysManager::spend_spendable_outputs`] for documentation on this method.
-    pub fn spend_spendable_outputs<C: Signing>(
+    pub async fn spend_spendable_outputs<C: Signing>(
         &self,
         descriptors: &[&SpendableOutputDescriptor],
         outputs: Vec<TxOut>,
@@ -83,6 +83,7 @@ impl<S: MutinyStorage> PhantomKeysManager<S> {
                     .wallet
                     .storage
                     .set_address_labels(address, vec!["Swept Force Close".to_string()])
+                    .await
                 {
                     log_warn!(
                         self.logger,
@@ -96,13 +97,13 @@ impl<S: MutinyStorage> PhantomKeysManager<S> {
     }
 }
 
-impl<S: MutinyStorage> EntropySource for PhantomKeysManager<S> {
+impl<S: Connection + Clone> EntropySource for PhantomKeysManager<S> {
     fn get_secure_random_bytes(&self) -> [u8; 32] {
         self.inner.get_secure_random_bytes()
     }
 }
 
-impl<S: MutinyStorage> NodeSigner for PhantomKeysManager<S> {
+impl<S: Connection + Clone> NodeSigner for PhantomKeysManager<S> {
     fn get_inbound_payment_key_material(&self) -> KeyMaterial {
         self.inner.get_inbound_payment_key_material()
     }
@@ -148,7 +149,7 @@ impl<S: MutinyStorage> NodeSigner for PhantomKeysManager<S> {
     }
 }
 
-impl<S: MutinyStorage> SignerProvider for PhantomKeysManager<S> {
+impl<S: Connection + Clone> SignerProvider for PhantomKeysManager<S> {
     type Signer = InMemorySigner;
 
     fn generate_channel_keys_id(
@@ -211,7 +212,7 @@ pub fn generate_seed(num_words: u8) -> Result<Mnemonic, MutinyError> {
 // A node private key will be derived from `m/0'/X'`, where its node pubkey will
 // be derived from the LDK default being `m/0'/X'/0'`. The PhantomKeysManager shared
 // key secret will be derived from `m/0'`.
-pub(crate) fn create_keys_manager<S: MutinyStorage>(
+pub(crate) fn create_keys_manager<S: Connection + Clone>(
     wallet: Arc<OnChainWallet<S>>,
     xprivkey: ExtendedPrivKey,
     child_index: u32,
@@ -241,7 +242,7 @@ pub(crate) fn create_keys_manager<S: MutinyStorage>(
     ))
 }
 
-pub(crate) fn pubkey_from_keys_manager<S: MutinyStorage>(
+pub(crate) fn pubkey_from_keys_manager<S: Connection + Clone>(
     keys_manager: &PhantomKeysManager<S>,
 ) -> PublicKey {
     keys_manager

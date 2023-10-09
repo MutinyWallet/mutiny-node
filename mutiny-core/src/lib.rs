@@ -1,6 +1,7 @@
 #![crate_name = "mutiny_core"]
 // wasm is considered "extra_unused_type_parameters"
 #![allow(
+    async_fn_in_trait,
     incomplete_features,
     clippy::extra_unused_type_parameters,
     clippy::arc_with_non_send_sync,
@@ -38,6 +39,7 @@ pub mod scb;
 pub mod scorer;
 pub mod storage;
 mod subscription;
+pub mod surreal;
 pub mod vss;
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -52,7 +54,8 @@ pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 use crate::auth::MutinyAuthClient;
 use crate::labels::{Contact, LabelStorage};
 use crate::nostr::nwc::{NwcProfileTag, SpendingConditions};
-use crate::storage::{MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY};
+use crate::storage::{DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY};
+use crate::surreal::SurrealDb;
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{nostr::NostrManager, utils::sleep};
@@ -68,9 +71,11 @@ use lightning::{log_debug, util::logger::Logger};
 use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use nostr_sdk::{Client, RelayPoolNotification};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use surrealdb::Connection;
 
 #[derive(Clone)]
 pub struct MutinyWalletConfig {
@@ -135,26 +140,36 @@ impl MutinyWalletConfig {
 /// MutinyWallet is the main entry point for the library.
 /// It contains the NodeManager, which is the main interface to manage the
 /// bitcoin and the lightning functionality.
-pub struct MutinyWallet<S: MutinyStorage> {
+pub struct MutinyWallet<S: Connection + Clone> {
     pub config: MutinyWalletConfig,
-    pub storage: S,
+    pub storage: SurrealDb<S>,
     pub node_manager: Arc<NodeManager<S>>,
     pub nostr: Arc<NostrManager<S>>,
 }
 
-impl<S: MutinyStorage> MutinyWallet<S> {
+#[derive(Clone, Serialize, Deserialize)]
+struct ExpectedNetwork {
+    network: Network,
+}
+
+impl<S: Connection + Clone> MutinyWallet<S> {
     pub async fn new(
-        storage: S,
+        storage: SurrealDb<S>,
         config: MutinyWalletConfig,
     ) -> Result<MutinyWallet<S>, MutinyError> {
-        let expected_network = storage.get::<Network>(EXPECTED_NETWORK_KEY)?;
+        let expected_network = storage.get::<ExpectedNetwork>(EXPECTED_NETWORK_KEY).await?;
         match expected_network {
             Some(network) => {
-                if network != config.network {
+                if network.network != config.network {
                     return Err(MutinyError::NetworkMismatch);
                 }
             }
-            None => storage.set_data(EXPECTED_NETWORK_KEY, config.network, None)?,
+            None => {
+                let value = ExpectedNetwork {
+                    network: config.network,
+                };
+                storage.set_data(EXPECTED_NETWORK_KEY, value, None)?
+            }
         }
 
         let node_manager = Arc::new(NodeManager::new(config.clone(), storage.clone()).await?);
@@ -162,11 +177,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         NodeManager::start_sync(node_manager.clone());
 
         // create nostr manager
-        let nostr = Arc::new(NostrManager::from_mnemonic(
-            node_manager.xprivkey,
-            storage.clone(),
-            node_manager.logger.clone(),
-        )?);
+        let nostr = Arc::new(
+            NostrManager::from_mnemonic(
+                node_manager.xprivkey,
+                storage.clone(),
+                node_manager.logger.clone(),
+            )
+            .await?,
+        );
 
         let mw = Self {
             config,
@@ -178,9 +196,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         #[cfg(not(test))]
         {
             // if we need a full sync from a restore
-            if mw.storage.get(NEED_FULL_SYNC_KEY)?.unwrap_or_default() {
+            if mw
+                .storage
+                .get_data(NEED_FULL_SYNC_KEY)
+                .await?
+                .unwrap_or_default()
+            {
                 mw.node_manager.wallet.full_sync().await?;
-                mw.storage.delete(&[NEED_FULL_SYNC_KEY])?;
+                mw.storage.delete(&[NEED_FULL_SYNC_KEY]).await?;
             }
         }
 
@@ -214,7 +237,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         // Redshifts disabled in safe mode
         if !self.config.safe_mode {
-            NodeManager::start_redshifts(self.node_manager.clone());
+            NodeManager::start_redshifts(self.node_manager.clone()).await;
         }
 
         Ok(())
@@ -247,7 +270,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 // if a single-use profile's payment was successful in the background,
                 // we can safely clear it now
                 let node = nm.get_node(&from_node).await.expect("failed to get node");
-                if let Err(e) = nostr.clear_successful_single_use_profiles(&node) {
+                if let Err(e) = nostr.clear_successful_single_use_profiles(&node).await {
                     log_warn!(nm.logger, "Failed to clear in-active NWC profiles: {e}");
                 }
                 drop(node);
@@ -461,7 +484,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             })
             .collect::<HashMap<_, _>>();
 
-        let contacts = self.storage.get_contacts()?;
+        let contacts = self.storage.get_contacts().await?;
 
         for (id, contact) in contacts {
             if let Some(npub) = contact.npub {
@@ -469,7 +492,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 let npub = XOnlyPublicKey::from_slice(&npub.serialize()).unwrap();
                 if let Some(meta) = metadata.get(&npub) {
                     let updated = contact.update_with_metadata(meta.clone());
-                    self.storage.edit_contact(id, updated)?;
+                    self.storage.edit_contact(id, updated).await?;
                     metadata.remove(&npub);
                 }
             }
@@ -484,7 +507,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 continue;
             }
 
-            self.storage.create_new_contact(contact)?;
+            self.storage.create_new_contact(contact).await?;
         }
 
         Ok(())
@@ -517,10 +540,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         self.storage.start().await?;
 
-        self.storage.change_password_and_rewrite_storage(
-            old.filter(|s| !s.is_empty()),
-            new.filter(|s| !s.is_empty()),
-        )?;
+        self.storage
+            .change_password_and_rewrite_storage(
+                old.filter(|s| !s.is_empty()),
+                new.filter(|s| !s.is_empty()),
+            )
+            .await?;
 
         // There's not a good way to check that all the indexeddb
         // data is saved in the background. This should get better
@@ -555,14 +580,21 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     ///
     /// Backup the state beforehand. Does not restore lightning data.
     /// Should refresh or restart afterwards. Wallet should be stopped.
-    pub async fn restore_mnemonic(mut storage: S, m: Mnemonic) -> Result<(), MutinyError> {
-        let device_id = storage.get_device_id()?;
+    pub async fn restore_mnemonic(
+        mut storage: SurrealDb<S>,
+        m: Mnemonic,
+    ) -> Result<(), MutinyError> {
+        let device_id = storage.get_device_id().await?;
         storage.stop();
-        S::clear().await?;
+        SurrealDb::<S>::clear().await?;
         storage.start().await?;
-        storage.insert_mnemonic(m)?;
-        storage.set_data(NEED_FULL_SYNC_KEY, true, None)?;
-        storage.set_data(DEVICE_ID_KEY, device_id, None)?;
+        storage.insert_mnemonic(m).await?;
+        storage
+            .set_data_async(NEED_FULL_SYNC_KEY, true, None)
+            .await?;
+        storage
+            .set_data_async(DEVICE_ID_KEY, device_id, None)
+            .await?;
         Ok(())
     }
 }

@@ -25,7 +25,9 @@ use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use gloo_utils::format::JsValueSerdeExt;
+use lightning::log_error;
 use lightning::routing::gossip::NodeId;
+use lightning::util::logger::Logger;
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::auth::MutinyAuthClient;
@@ -35,6 +37,7 @@ use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::redshift::RedshiftRecipient;
 use mutiny_core::scb::EncryptedSCB;
 use mutiny_core::storage::MutinyStorage;
+use mutiny_core::surreal::SurrealDb;
 use mutiny_core::vss::MutinyVssClient;
 use mutiny_core::{encrypt::encryption_key_from_pass, generate_seed};
 use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
@@ -47,12 +50,14 @@ use std::{
     collections::HashMap,
     sync::atomic::{AtomicBool, Ordering},
 };
+use surrealdb::engine::local::{Db, IndxDb};
+use surrealdb::Surreal;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct MutinyWallet {
     mnemonic: Mnemonic,
-    inner: mutiny_core::MutinyWallet<IndexedDbStorage>,
+    inner: mutiny_core::MutinyWallet<Db>,
 }
 
 /// The [MutinyWallet] is the main entry point for interacting with the Mutiny Wallet.
@@ -99,21 +104,30 @@ impl MutinyWallet {
             .map(|s| s.parse().expect("Invalid network"))
             .unwrap_or(Network::Bitcoin);
 
-        let storage =
-            IndexedDbStorage::new(password.clone(), cipher.clone(), None, logger.clone()).await?;
+        let db = Surreal::new::<IndxDb>("indxdb://MyDatabase").await?;
+        db.use_ns("mutiny").use_db("wallet").await?;
+
+        let storage = SurrealDb::new(
+            db.clone(),
+            password.clone(),
+            cipher.clone(),
+            None,
+            logger.clone(),
+        );
 
         let mnemonic = match mnemonic_str {
             Some(m) => {
                 let seed = Mnemonic::from_str(&m).map_err(|_| MutinyJsError::InvalidMnemonic)?;
-                storage.insert_mnemonic(seed)?
+                storage.insert_mnemonic(seed).await?
             }
-            None => match storage.get_mnemonic() {
+            None => match storage.get_mnemonic().await {
                 Ok(Some(mnemonic)) => mnemonic,
                 Ok(None) => {
                     let seed = generate_seed(12)?;
-                    storage.insert_mnemonic(seed)?
+                    storage.insert_mnemonic(seed).await?
                 }
-                Err(_) => {
+                Err(e) => {
+                    log_error!(logger, "Failed to get mnemonic from storage {e}");
                     // if we get an error, then we have the wrong password
                     return Err(MutinyJsError::IncorrectPassword);
                 }
@@ -163,7 +177,7 @@ impl MutinyWallet {
             (None, vss)
         };
 
-        let storage = IndexedDbStorage::new(password, cipher, vss_client, logger.clone()).await?;
+        let storage = SurrealDb::new(db, password, cipher, vss_client, logger.clone());
 
         let mut config = mutiny_core::MutinyWalletConfig::new(
             xprivkey,
@@ -208,10 +222,16 @@ impl MutinyWallet {
             Ok(c) => c,
             Err(_) => return false,
         };
-        let storage = IndexedDbStorage::new(password, cipher, None, logger)
-            .await
-            .expect("Failed to init");
-        NodeManager::has_node_manager(storage)
+        let db = Surreal::new::<IndxDb>("indxdb://MyDatabase").await.unwrap();
+        db.use_ns("mutiny").use_db("wallet").await.unwrap();
+        let storage = SurrealDb::new(
+            db.clone(),
+            password.clone(),
+            cipher.clone(),
+            None,
+            logger.clone(),
+        );
+        NodeManager::has_node_manager(storage).await
     }
 
     /// Starts up all the nodes again.
@@ -256,14 +276,18 @@ impl MutinyWallet {
     ///
     /// It is recommended to create a new address for every transaction.
     #[wasm_bindgen]
-    pub fn get_new_address(
+    pub async fn get_new_address(
         &self,
         labels: &JsValue, /* Vec<String> */
     ) -> Result<MutinyBip21RawMaterials, MutinyJsError> {
         let labels: Vec<String> = labels
             .into_serde()
             .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        let address = self.inner.node_manager.get_new_address(labels.clone())?;
+        let address = self
+            .inner
+            .node_manager
+            .get_new_address(labels.clone())
+            .await?;
         Ok(MutinyBip21RawMaterials {
             address: address.to_string(),
             invoice: None,
@@ -443,21 +467,23 @@ impl MutinyWallet {
     /// Lists all the on-chain transactions in the wallet.
     /// These are sorted by confirmation time.
     #[wasm_bindgen]
-    pub fn list_onchain(&self) -> Result<JsValue /* Vec<TransactionDetails> */, MutinyJsError> {
+    pub async fn list_onchain(
+        &self,
+    ) -> Result<JsValue /* Vec<TransactionDetails> */, MutinyJsError> {
         Ok(JsValue::from_serde(
-            &self.inner.node_manager.list_onchain()?,
+            &self.inner.node_manager.list_onchain().await?,
         )?)
     }
 
     /// Gets the details of a specific on-chain transaction.
     #[wasm_bindgen]
-    pub fn get_transaction(
+    pub async fn get_transaction(
         &self,
         txid: String,
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
         let txid = Txid::from_str(&txid)?;
         Ok(JsValue::from_serde(
-            &self.inner.node_manager.get_transaction(txid)?,
+            &self.inner.node_manager.get_transaction(txid).await?,
         )?)
     }
 
@@ -556,9 +582,13 @@ impl MutinyWallet {
 
     /// Sets the label of a peer from the selected node.
     #[wasm_bindgen]
-    pub fn label_peer(&self, node_id: String, label: Option<String>) -> Result<(), MutinyJsError> {
+    pub async fn label_peer(
+        &self,
+        node_id: String,
+        label: Option<String>,
+    ) -> Result<(), MutinyJsError> {
         let node_id = NodeId::from_str(&node_id)?;
-        self.inner.node_manager.label_peer(&node_id, label)?;
+        self.inner.node_manager.label_peer(&node_id, label).await?;
         Ok(())
     }
 
@@ -905,7 +935,7 @@ impl MutinyWallet {
         let mut activity: Vec<ActivityItem> = activity.into_iter().map(|a| a.into()).collect();
 
         // add contacts to the activity
-        let contacts = self.inner.node_manager.get_contacts()?;
+        let contacts = self.inner.node_manager.get_contacts().await?;
         for a in activity.iter_mut() {
             // find labels that have a contact and add them to the item
             for label in a.labels.iter() {
@@ -964,24 +994,29 @@ impl MutinyWallet {
 
     /// Get all redshift attempts for a given utxo
     #[wasm_bindgen]
-    pub fn get_redshift(&self, id: String) -> Result<Option<Redshift>, MutinyJsError> {
+    pub async fn get_redshift(&self, id: String) -> Result<Option<Redshift>, MutinyJsError> {
         let id: [u8; 16] =
             FromHex::from_hex(&id).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        Ok(self.inner.node_manager.get_redshift(&id)?.map(|r| r.into()))
+        Ok(self
+            .inner
+            .node_manager
+            .get_redshift(&id)
+            .await?
+            .map(|r| r.into()))
     }
 
-    pub fn get_address_labels(
+    pub async fn get_address_labels(
         &self,
     ) -> Result<JsValue /* Map<Address, Vec<String>> */, MutinyJsError> {
         Ok(JsValue::from_serde(
-            &self.inner.node_manager.get_address_labels()?,
+            &self.inner.node_manager.get_address_labels().await?,
         )?)
     }
 
     /// Set the labels for an address, replacing any existing labels
     /// If you want to do not want to replace any existing labels, use `get_address_labels` to get the existing labels,
     /// add the new labels, and then use `set_address_labels` to set the new labels
-    pub fn set_address_labels(
+    pub async fn set_address_labels(
         &self,
         address: String,
         labels: &JsValue, /* Vec<String> */
@@ -993,21 +1028,22 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .set_address_labels(address, labels)?)
+            .set_address_labels(address, labels)
+            .await?)
     }
 
-    pub fn get_invoice_labels(
+    pub async fn get_invoice_labels(
         &self,
     ) -> Result<JsValue /* Map<Invoice, Vec<String>> */, MutinyJsError> {
         Ok(JsValue::from_serde(
-            &self.inner.node_manager.get_invoice_labels()?,
+            &self.inner.node_manager.get_invoice_labels().await?,
         )?)
     }
 
     /// Set the labels for an invoice, replacing any existing labels
     /// If you want to do not want to replace any existing labels, use `get_invoice_labels` to get the existing labels,
     /// add the new labels, and then use `set_invoice_labels` to set the new labels
-    pub fn set_invoice_labels(
+    pub async fn set_invoice_labels(
         &self,
         invoice: String,
         labels: &JsValue, /* Vec<String> */
@@ -1019,26 +1055,31 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .set_invoice_labels(invoice, labels)?)
+            .set_invoice_labels(invoice, labels)
+            .await?)
     }
 
-    pub fn get_contacts(&self) -> Result<JsValue /* Map<String, Contact>*/, MutinyJsError> {
+    pub async fn get_contacts(&self) -> Result<JsValue /* Map<String, Contact>*/, MutinyJsError> {
         Ok(JsValue::from_serde(
             &self
                 .inner
                 .node_manager
-                .get_contacts()?
+                .get_contacts()
+                .await?
                 .into_iter()
                 .map(|(k, v)| (k, v.into()))
                 .collect::<HashMap<String, Contact>>(),
         )?)
     }
 
-    pub fn get_contacts_sorted(&self) -> Result<JsValue /* Map<String, Contact>*/, MutinyJsError> {
+    pub async fn get_contacts_sorted(
+        &self,
+    ) -> Result<JsValue /* Map<String, Contact>*/, MutinyJsError> {
         let mut contacts: Vec<Contact> = self
             .inner
             .node_manager
-            .get_contacts()?
+            .get_contacts()
+            .await?
             .into_values()
             .map(|v| v.into())
             .collect();
@@ -1048,16 +1089,17 @@ impl MutinyWallet {
         Ok(JsValue::from_serde(&contacts)?)
     }
 
-    pub fn get_contact(&self, label: String) -> Result<Option<TagItem>, MutinyJsError> {
+    pub async fn get_contact(&self, label: String) -> Result<Option<TagItem>, MutinyJsError> {
         Ok(self
             .inner
             .node_manager
-            .get_contact(&label)?
+            .get_contact(&label)
+            .await?
             .map(|c| (label, c).into()))
     }
 
     /// Create a new contact from an existing label and returns the new identifying label
-    pub fn create_contact_from_label(
+    pub async fn create_contact_from_label(
         &self,
         label: String,
         contact: Contact,
@@ -1065,26 +1107,36 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .create_contact_from_label(label, contact.into())?)
+            .create_contact_from_label(label, contact.into())
+            .await?)
     }
 
-    pub fn create_new_contact(&self, contact: Contact) -> Result<String, MutinyJsError> {
-        Ok(self.inner.node_manager.create_new_contact(contact.into())?)
+    pub async fn create_new_contact(&self, contact: Contact) -> Result<String, MutinyJsError> {
+        Ok(self
+            .inner
+            .node_manager
+            .create_new_contact(contact.into())
+            .await?)
     }
 
-    pub fn archive_contact(&self, id: String) -> Result<(), MutinyJsError> {
-        Ok(self.inner.node_manager.archive_contact(id)?)
+    pub async fn archive_contact(&self, id: String) -> Result<(), MutinyJsError> {
+        Ok(self.inner.node_manager.archive_contact(id).await?)
     }
 
-    pub fn edit_contact(&self, id: String, contact: Contact) -> Result<(), MutinyJsError> {
-        Ok(self.inner.node_manager.edit_contact(id, contact.into())?)
+    pub async fn edit_contact(&self, id: String, contact: Contact) -> Result<(), MutinyJsError> {
+        Ok(self
+            .inner
+            .node_manager
+            .edit_contact(id, contact.into())
+            .await?)
     }
 
-    pub fn get_tag_items(&self) -> Result<JsValue /* Vec<TagItem> */, MutinyJsError> {
+    pub async fn get_tag_items(&self) -> Result<JsValue /* Vec<TagItem> */, MutinyJsError> {
         let mut tags: Vec<TagItem> = self
             .inner
             .node_manager
-            .get_tag_items()?
+            .get_tag_items()
+            .await?
             .into_iter()
             .map(|t| t.into())
             .collect();
@@ -1112,10 +1164,20 @@ impl MutinyWallet {
             .filter(|p| !p.is_empty())
             .map(|p| encryption_key_from_pass(p))
             .transpose()?;
-        let storage = IndexedDbStorage::new(password, cipher, None, logger.clone()).await?;
+
+        let db = Surreal::new::<IndxDb>("indxdb://MyDatabase").await?;
+        db.use_ns("mutiny").use_db("wallet").await?;
+        let storage = SurrealDb::new(
+            db.clone(),
+            password.clone(),
+            cipher.clone(),
+            None,
+            logger.clone(),
+        );
+
         let stop = Arc::new(AtomicBool::new(false));
         let logger = Arc::new(MutinyLogger::with_writer(stop.clone(), storage.clone()));
-        let res = JsValue::from_serde(&NodeManager::get_logs(storage, logger)?)?;
+        let res = JsValue::from_serde(&NodeManager::get_logs(storage, logger).await?)?;
         stop.swap(true, Ordering::Relaxed);
         Ok(res)
     }
@@ -1253,13 +1315,14 @@ impl MutinyWallet {
     }
 
     /// Lists all pending NWC invoices
-    pub fn get_pending_nwc_invoices(
+    pub async fn get_pending_nwc_invoices(
         &self,
     ) -> Result<JsValue /* Vec<PendingNwcInvoice> */, MutinyJsError> {
         let pending: Vec<PendingNwcInvoice> = self
             .inner
             .nostr
-            .get_pending_nwc_invoices()?
+            .get_pending_nwc_invoices()
+            .await?
             .into_iter()
             .map(|i| i.into())
             .collect();
@@ -1367,8 +1430,17 @@ impl MutinyWallet {
             .map(|p| encryption_key_from_pass(p))
             .transpose()?;
         // todo init vss
-        let storage = IndexedDbStorage::new(password, cipher, None, logger).await?;
-        if storage.get_mnemonic().is_err() {
+        let db = Surreal::new::<IndxDb>("indxdb://MyDatabase").await?;
+        db.use_ns("mutiny").use_db("wallet").await?;
+        let storage = SurrealDb::new(
+            db.clone(),
+            password.clone(),
+            cipher.clone(),
+            None,
+            logger.clone(),
+        );
+
+        if storage.get_mnemonic().await.is_err() {
             // if we get an error, then we have the wrong password
             return Err(MutinyJsError::IncorrectPassword);
         }
@@ -1408,8 +1480,18 @@ impl MutinyWallet {
             .filter(|p| !p.is_empty())
             .map(|p| encryption_key_from_pass(p))
             .transpose()?;
-        let storage = IndexedDbStorage::new(password, cipher, None, logger).await?;
-        mutiny_core::MutinyWallet::<IndexedDbStorage>::restore_mnemonic(
+
+        let db = Surreal::new::<IndxDb>("indxdb://MyDatabase").await?;
+        db.use_ns("mutiny").use_db("wallet").await?;
+        let storage = SurrealDb::new(
+            db.clone(),
+            password.clone(),
+            cipher.clone(),
+            None,
+            logger.clone(),
+        );
+
+        mutiny_core::MutinyWallet::<Db>::restore_mnemonic(
             storage,
             Mnemonic::from_str(&m).map_err(|_| MutinyJsError::InvalidMnemonic)?,
         )

@@ -1,6 +1,6 @@
 use crate::error::MutinyError;
 use crate::nodemanager::NodeManager;
-use crate::storage::MutinyStorage;
+use crate::surreal::SurrealDb;
 use bitcoin::{Address, XOnlyPublicKey};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
@@ -9,6 +9,7 @@ use nostr::Metadata;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
+use surrealdb::Connection;
 use uuid::Uuid;
 
 const ADDRESS_LABELS_MAP_KEY: &str = "address_labels";
@@ -87,59 +88,64 @@ fn get_contact_key(label: impl AsRef<str>) -> String {
 
 pub trait LabelStorage {
     /// Get a map of addresses to labels. This can be used to get all the labels for an address
-    fn get_address_labels(&self) -> Result<HashMap<String, Vec<String>>, MutinyError>;
+    async fn get_address_labels(&self) -> Result<HashMap<String, Vec<String>>, MutinyError>;
     /// Get a map of invoices to labels. This can be used to get all the labels for an invoice
-    fn get_invoice_labels(&self) -> Result<HashMap<Bolt11Invoice, Vec<String>>, MutinyError>;
+    async fn get_invoice_labels(&self) -> Result<HashMap<Bolt11Invoice, Vec<String>>, MutinyError>;
     /// Get all the existing labels
-    fn get_labels(&self) -> Result<HashMap<String, LabelItem>, MutinyError>;
+    async fn get_labels(&self) -> Result<HashMap<String, LabelItem>, MutinyError>;
     /// Get information about a label
-    fn get_label(&self, label: impl AsRef<str>) -> Result<Option<LabelItem>, MutinyError>;
+    async fn get_label(&self, label: impl AsRef<str>) -> Result<Option<LabelItem>, MutinyError>;
     /// Set the labels for an address, replacing any existing labels
     /// If you do not want to replace any existing labels, use `get_address_labels` to get the existing labels,
     /// add the new labels, and then use `set_address_labels` to set the new labels
-    fn set_address_labels(&self, address: Address, labels: Vec<String>) -> Result<(), MutinyError>;
+    async fn set_address_labels(
+        &self,
+        address: Address,
+        labels: Vec<String>,
+    ) -> Result<(), MutinyError>;
     /// Set the labels for an invoice, replacing any existing labels
     /// If you do not want to replace any existing labels, use `get_invoice_labels` to get the existing labels,
     /// add the new labels, and then use `set_invoice_labels` to set the new labels
-    fn set_invoice_labels(
+    async fn set_invoice_labels(
         &self,
         invoice: Bolt11Invoice,
         labels: Vec<String>,
     ) -> Result<(), MutinyError>;
     /// Get all the existing contacts
-    fn get_contacts(&self) -> Result<HashMap<String, Contact>, MutinyError>;
+    async fn get_contacts(&self) -> Result<HashMap<String, Contact>, MutinyError>;
     /// Get a contact by label, the label should be a uuid
-    fn get_contact(&self, label: impl AsRef<str>) -> Result<Option<Contact>, MutinyError>;
+    async fn get_contact(&self, label: impl AsRef<str>) -> Result<Option<Contact>, MutinyError>;
     /// Create a new contact from an existing label and returns the new identifying label
-    fn create_contact_from_label(
+    async fn create_contact_from_label(
         &self,
         label: impl AsRef<str>,
         contact: Contact,
     ) -> Result<String, MutinyError>;
     /// Create a new contact and return the identifying label
-    fn create_new_contact(&self, contact: Contact) -> Result<String, MutinyError>;
+    async fn create_new_contact(&self, contact: Contact) -> Result<String, MutinyError>;
     /// Marks a contact as archived
-    fn archive_contact(&self, id: impl AsRef<str>) -> Result<(), MutinyError>;
+    async fn archive_contact(&self, id: impl AsRef<str>) -> Result<(), MutinyError>;
     /// Edits an existing contact and replaces the existing contact
-    fn edit_contact(&self, id: impl AsRef<str>, contact: Contact) -> Result<(), MutinyError>;
+    async fn edit_contact(&self, id: impl AsRef<str>, contact: Contact) -> Result<(), MutinyError>;
     /// Gets all the existing tags (labels and contacts)
-    fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyError>;
+    async fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyError>;
 }
 
-impl<S: MutinyStorage> LabelStorage for S {
-    fn get_address_labels(&self) -> Result<HashMap<String, Vec<String>>, MutinyError> {
-        let res: Option<HashMap<String, Vec<String>>> = self.get_data(ADDRESS_LABELS_MAP_KEY)?;
+impl<S: Connection + Clone> LabelStorage for SurrealDb<S> {
+    async fn get_address_labels(&self) -> Result<HashMap<String, Vec<String>>, MutinyError> {
+        let res: Option<HashMap<String, Vec<String>>> =
+            self.get_data(ADDRESS_LABELS_MAP_KEY).await?;
         Ok(res.unwrap_or_default()) // if no labels exist, return an empty map
     }
 
-    fn get_invoice_labels(&self) -> Result<HashMap<Bolt11Invoice, Vec<String>>, MutinyError> {
+    async fn get_invoice_labels(&self) -> Result<HashMap<Bolt11Invoice, Vec<String>>, MutinyError> {
         let res: Option<HashMap<Bolt11Invoice, Vec<String>>> =
-            self.get_data(INVOICE_LABELS_MAP_KEY)?;
+            self.get_data(INVOICE_LABELS_MAP_KEY).await?;
         Ok(res.unwrap_or_default()) // if no labels exist, return an empty map
     }
 
-    fn get_labels(&self) -> Result<HashMap<String, LabelItem>, MutinyError> {
-        let all = self.scan(LABEL_PREFIX, None)?;
+    async fn get_labels(&self) -> Result<HashMap<String, LabelItem>, MutinyError> {
+        let all = self.scan(LABEL_PREFIX, None).await?;
         // remove the prefix from the keys
         let mut labels = HashMap::new();
         for (key, label_item) in all {
@@ -150,14 +156,18 @@ impl<S: MutinyStorage> LabelStorage for S {
         Ok(labels)
     }
 
-    fn get_label(&self, label: impl AsRef<str>) -> Result<Option<LabelItem>, MutinyError> {
+    async fn get_label(&self, label: impl AsRef<str>) -> Result<Option<LabelItem>, MutinyError> {
         let key = get_label_item_key(label);
-        self.get_data(key)
+        self.get_data(key).await
     }
 
-    fn set_address_labels(&self, address: Address, labels: Vec<String>) -> Result<(), MutinyError> {
+    async fn set_address_labels(
+        &self,
+        address: Address,
+        labels: Vec<String>,
+    ) -> Result<(), MutinyError> {
         // update the labels map
-        let mut address_labels = self.get_address_labels()?;
+        let mut address_labels = self.get_address_labels().await?;
         address_labels.insert(address.to_string(), labels.clone());
         self.set_data(ADDRESS_LABELS_MAP_KEY, address_labels, None)?;
 
@@ -165,7 +175,7 @@ impl<S: MutinyStorage> LabelStorage for S {
         let now = crate::utils::now().as_secs();
         for label in labels {
             let key = get_label_item_key(&label);
-            match self.get_label(&label)? {
+            match self.get_label(&label).await? {
                 Some(mut label_item) => {
                     // Add the address to the label item
                     // and sort so we can dedup the addresses
@@ -177,10 +187,10 @@ impl<S: MutinyStorage> LabelStorage for S {
                     label_item.last_used_time = now;
 
                     // if it is a contact, update last used
-                    if let Some(contact) = self.get_contact(&label)? {
+                    if let Some(contact) = self.get_contact(&label).await? {
                         let mut contact = contact;
                         contact.last_used = now;
-                        self.edit_contact(&label, contact)?;
+                        self.edit_contact(&label, contact).await?;
                     }
 
                     self.set_data(key, label_item, None)?;
@@ -200,13 +210,13 @@ impl<S: MutinyStorage> LabelStorage for S {
         Ok(())
     }
 
-    fn set_invoice_labels(
+    async fn set_invoice_labels(
         &self,
         invoice: Bolt11Invoice,
         labels: Vec<String>,
     ) -> Result<(), MutinyError> {
         // update the labels map
-        let mut invoice_labels = self.get_invoice_labels()?;
+        let mut invoice_labels = self.get_invoice_labels().await?;
         invoice_labels.insert(invoice.clone(), labels.clone());
         self.set_data(INVOICE_LABELS_MAP_KEY, invoice_labels, None)?;
 
@@ -214,7 +224,7 @@ impl<S: MutinyStorage> LabelStorage for S {
         let now = crate::utils::now().as_secs();
         for label in labels {
             let key = get_label_item_key(&label);
-            match self.get_label(&label)? {
+            match self.get_label(&label).await? {
                 Some(mut label_item) => {
                     // Add the invoice to the label item
                     // and sort so we can dedup the invoices
@@ -226,10 +236,10 @@ impl<S: MutinyStorage> LabelStorage for S {
                     label_item.last_used_time = now;
 
                     // if it is a contact, update last used
-                    if let Some(contact) = self.get_contact(&label)? {
+                    if let Some(contact) = self.get_contact(&label).await? {
                         let mut contact = contact;
                         contact.last_used = now;
-                        self.edit_contact(&label, contact)?;
+                        self.edit_contact(&label, contact).await?;
                     }
 
                     self.set_data(key, label_item, None)?;
@@ -249,8 +259,8 @@ impl<S: MutinyStorage> LabelStorage for S {
         Ok(())
     }
 
-    fn get_contacts(&self) -> Result<HashMap<String, Contact>, MutinyError> {
-        let all = self.scan::<Contact>(CONTACT_PREFIX, None)?;
+    async fn get_contacts(&self) -> Result<HashMap<String, Contact>, MutinyError> {
+        let all = self.scan::<Contact>(CONTACT_PREFIX, None).await?;
         // remove the prefix from the keys
         let mut contacts = HashMap::new();
         for (key, contact) in all {
@@ -265,16 +275,16 @@ impl<S: MutinyStorage> LabelStorage for S {
         Ok(contacts)
     }
 
-    fn get_contact(&self, label: impl AsRef<str>) -> Result<Option<Contact>, MutinyError> {
-        self.get_data(get_contact_key(label))
+    async fn get_contact(&self, label: impl AsRef<str>) -> Result<Option<Contact>, MutinyError> {
+        self.get_data(get_contact_key(label)).await
     }
 
-    fn create_contact_from_label(
+    async fn create_contact_from_label(
         &self,
         label: impl AsRef<str>,
         contact: Contact,
     ) -> Result<String, MutinyError> {
-        match self.get_label(&label)? {
+        match self.get_label(&label).await? {
             None => Err(MutinyError::NotFound),
             Some(current) => {
                 // convert label into a uuid for uniqueness
@@ -283,7 +293,7 @@ impl<S: MutinyStorage> LabelStorage for S {
                 self.set_data(get_label_item_key(&id), current, None)?;
 
                 // replace label in address_labels with new uuid
-                let addr_labels = self.get_address_labels()?;
+                let addr_labels = self.get_address_labels().await?;
                 let mut updated = HashMap::new();
                 let label_str = label.as_ref().to_string();
                 for (addr, labels) in addr_labels {
@@ -300,7 +310,7 @@ impl<S: MutinyStorage> LabelStorage for S {
                 self.set_data(ADDRESS_LABELS_MAP_KEY, updated, None)?;
 
                 // replace label in invoice_labels with new uuid
-                let invoice_labels = self.get_invoice_labels()?;
+                let invoice_labels = self.get_invoice_labels().await?;
                 let mut updated = HashMap::new();
                 let label_str = label.as_ref().to_string();
                 for (inv, labels) in invoice_labels {
@@ -321,14 +331,14 @@ impl<S: MutinyStorage> LabelStorage for S {
                 self.set_data(key, contact, None)?;
 
                 // delete old label item
-                self.delete(&[get_label_item_key(&label)])?;
+                self.delete(&[get_label_item_key(&label)]).await?;
                 Ok(id)
             }
         }
     }
 
     /// Create a new contact and return the identifying label
-    fn create_new_contact(&self, contact: Contact) -> Result<String, MutinyError> {
+    async fn create_new_contact(&self, contact: Contact) -> Result<String, MutinyError> {
         // generate a uuid, this will be the "label" that we use to store the contact
         let id = Uuid::new_v4().to_string();
         let key = get_contact_key(&id);
@@ -343,8 +353,8 @@ impl<S: MutinyStorage> LabelStorage for S {
         Ok(id)
     }
 
-    fn archive_contact(&self, id: impl AsRef<str>) -> Result<(), MutinyError> {
-        let contact = self.get_contact(&id)?;
+    async fn archive_contact(&self, id: impl AsRef<str>) -> Result<(), MutinyError> {
+        let contact = self.get_contact(&id).await?;
         if let Some(mut contact) = contact {
             contact.archived = Some(true);
             self.set_data(get_contact_key(&id), contact, None)?;
@@ -352,17 +362,17 @@ impl<S: MutinyStorage> LabelStorage for S {
         Ok(())
     }
 
-    fn edit_contact(&self, id: impl AsRef<str>, contact: Contact) -> Result<(), MutinyError> {
+    async fn edit_contact(&self, id: impl AsRef<str>, contact: Contact) -> Result<(), MutinyError> {
         self.set_data(get_contact_key(&id), contact, None)
     }
 
-    fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyError> {
+    async fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyError> {
         let mut tag_items = vec![];
 
         // Get all the contacts
-        let contacts = self.get_contacts()?;
+        let contacts = self.get_contacts().await?;
         // Get all the labels
-        let mut labels = self.get_labels()?;
+        let mut labels = self.get_labels().await?;
 
         // filter out labels that have a contact
         labels.retain(|label, _| contacts.get(label).is_none());
@@ -385,65 +395,69 @@ impl<S: MutinyStorage> LabelStorage for S {
     }
 }
 
-impl<S: MutinyStorage> LabelStorage for NodeManager<S> {
-    fn get_address_labels(&self) -> Result<HashMap<String, Vec<String>>, MutinyError> {
-        self.storage.get_address_labels()
+impl<S: Connection + Clone> LabelStorage for NodeManager<S> {
+    async fn get_address_labels(&self) -> Result<HashMap<String, Vec<String>>, MutinyError> {
+        self.storage.get_address_labels().await
     }
 
-    fn get_invoice_labels(&self) -> Result<HashMap<Bolt11Invoice, Vec<String>>, MutinyError> {
-        self.storage.get_invoice_labels()
+    async fn get_invoice_labels(&self) -> Result<HashMap<Bolt11Invoice, Vec<String>>, MutinyError> {
+        self.storage.get_invoice_labels().await
     }
 
-    fn get_labels(&self) -> Result<HashMap<String, LabelItem>, MutinyError> {
-        self.storage.get_labels()
+    async fn get_labels(&self) -> Result<HashMap<String, LabelItem>, MutinyError> {
+        self.storage.get_labels().await
     }
 
-    fn get_label(&self, label: impl AsRef<str>) -> Result<Option<LabelItem>, MutinyError> {
-        self.storage.get_label(label)
+    async fn get_label(&self, label: impl AsRef<str>) -> Result<Option<LabelItem>, MutinyError> {
+        self.storage.get_label(label).await
     }
 
-    fn set_address_labels(&self, address: Address, labels: Vec<String>) -> Result<(), MutinyError> {
-        self.storage.set_address_labels(address, labels)
+    async fn set_address_labels(
+        &self,
+        address: Address,
+        labels: Vec<String>,
+    ) -> Result<(), MutinyError> {
+        self.storage.set_address_labels(address, labels).await
     }
 
-    fn set_invoice_labels(
+    async fn set_invoice_labels(
         &self,
         invoice: Bolt11Invoice,
         labels: Vec<String>,
     ) -> Result<(), MutinyError> {
-        self.storage.set_invoice_labels(invoice, labels)
+        self.storage.set_invoice_labels(invoice, labels).await
     }
 
-    fn get_contacts(&self) -> Result<HashMap<String, Contact>, MutinyError> {
-        self.storage.get_contacts()
+    async fn get_contacts(&self) -> Result<HashMap<String, Contact>, MutinyError> {
+        self.storage.get_contacts().await
     }
 
-    fn get_contact(&self, label: impl AsRef<str>) -> Result<Option<Contact>, MutinyError> {
-        self.storage.get_contact(label)
+    async fn get_contact(&self, label: impl AsRef<str>) -> Result<Option<Contact>, MutinyError> {
+        self.storage.get_contact(label).await
     }
 
-    fn create_contact_from_label(
+    async fn create_contact_from_label(
         &self,
         label: impl AsRef<str>,
         contact: Contact,
     ) -> Result<String, MutinyError> {
-        self.storage.create_contact_from_label(label, contact)
+        self.storage.create_contact_from_label(label, contact).await
     }
 
-    fn create_new_contact(&self, contact: Contact) -> Result<String, MutinyError> {
-        self.storage.create_new_contact(contact)
+    async fn create_new_contact(&self, contact: Contact) -> Result<String, MutinyError> {
+        self.storage.create_new_contact(contact).await
     }
 
-    fn archive_contact(&self, id: impl AsRef<str>) -> Result<(), MutinyError> {
-        self.storage.archive_contact(id)
+    async fn archive_contact(&self, id: impl AsRef<str>) -> Result<(), MutinyError> {
+        self.storage.archive_contact(id).await
     }
 
-    fn edit_contact(&self, id: impl AsRef<str>, contact: Contact) -> Result<(), MutinyError> {
-        self.storage.edit_contact(id, contact)
+    async fn edit_contact(&self, id: impl AsRef<str>, contact: Contact) -> Result<(), MutinyError> {
+        self.storage.edit_contact(id, contact).await
     }
 
-    fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyError> {
-        self.storage.get_tag_items()
+    async fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyError> {
+        self.storage.get_tag_items().await
     }
 }
 

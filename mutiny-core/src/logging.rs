@@ -3,12 +3,13 @@ use std::sync::{
     Arc,
 };
 
-use crate::storage::MutinyStorage;
+use crate::surreal::SurrealDb;
 use crate::utils::Mutex;
 use crate::{error::MutinyError, utils, utils::sleep};
 use chrono::Utc;
 use lightning::util::logger::{Level, Logger, Record};
 use log::*;
+use surrealdb::Connection;
 
 pub(crate) const LOGGING_KEY: &str = "logs";
 
@@ -21,7 +22,10 @@ pub struct MutinyLogger {
 }
 
 impl MutinyLogger {
-    pub fn with_writer<S: MutinyStorage>(stop: Arc<AtomicBool>, logging_db: S) -> Self {
+    pub fn with_writer<S: Connection + Clone>(
+        stop: Arc<AtomicBool>,
+        logging_db: SurrealDb<S>,
+    ) -> Self {
         let l = MutinyLogger {
             should_write_to_storage: true,
             memory_logs: Arc::new(Mutex::new(vec![])),
@@ -68,14 +72,14 @@ impl MutinyLogger {
         l
     }
 
-    pub(crate) fn get_logs<S: MutinyStorage>(
+    pub(crate) async fn get_logs<S: Connection + Clone>(
         &self,
-        storage: &S,
+        storage: &SurrealDb<S>,
     ) -> Result<Option<Vec<String>>, MutinyError> {
         if !self.should_write_to_storage {
             return Ok(None);
         }
-        get_logging_data(storage)
+        get_logging_data(storage).await
     }
 }
 
@@ -122,26 +126,37 @@ impl Logger for MutinyLogger {
     }
 }
 
-fn get_logging_data<S: MutinyStorage>(storage: &S) -> Result<Option<Vec<String>>, MutinyError> {
-    storage.get_data(LOGGING_KEY)
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct Logs {
+    logs: Vec<String>,
 }
 
-async fn write_logging_data<S: MutinyStorage>(
-    storage: &S,
+async fn get_logging_data<S: Connection + Clone>(
+    storage: &SurrealDb<S>,
+) -> Result<Option<Vec<String>>, MutinyError> {
+    Ok(storage.get_data::<Logs>(LOGGING_KEY).await?.map(|l| l.logs))
+}
+
+async fn write_logging_data<S: Connection + Clone>(
+    storage: &SurrealDb<S>,
     mut recent_logs: Vec<String>,
 ) -> Result<(), MutinyError> {
     // get the existing data so we can append to it, trimming if needed
     // Note there is a potential race condition here if the logs are being written to
     // concurrently, but we don't care about that for now.
-    let mut existing_logs: Vec<String> = get_logging_data(storage)?.unwrap_or_default();
+    let mut existing_logs: Vec<String> = get_logging_data(storage).await?.unwrap_or_default();
     existing_logs.append(&mut recent_logs);
     if existing_logs.len() > MAX_LOG_ITEMS {
         let start_index = existing_logs.len() - MAX_LOG_ITEMS;
         existing_logs.drain(..start_index);
     }
 
+    let logs = Logs {
+        logs: existing_logs,
+    };
+
     // Save the logs
-    storage.set_data(LOGGING_KEY, &existing_logs, None)?;
+    storage.set_data_async(LOGGING_KEY, logs, None).await?;
 
     Ok(())
 }
@@ -181,6 +196,7 @@ mod tests {
     };
 
     use lightning::{log_debug, util::logger::Logger};
+    use surrealdb::Surreal;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -188,7 +204,10 @@ mod tests {
     use crate::{test_utils::*, utils::sleep};
 
     use crate::logging::MutinyLogger;
-    use crate::storage::MemoryStorage;
+    use crate::surreal::SurrealDb;
+    use surrealdb::engine::local::Mem;
+    use surrealdb::opt::Config;
+    use surrealdb::Surreal;
 
     #[test]
     async fn log_without_storage() {
@@ -196,14 +215,14 @@ mod tests {
         log!("{}", test_name);
 
         let logger = MutinyLogger::default();
-        assert_eq!(logger.get_logs(&()).unwrap(), None);
+        assert_eq!(logger.get_logs(&()).await.unwrap(), None);
 
         log_debug!(logger, "testing");
 
         // saves every 5s, so do one second later
         sleep(6_000).await;
 
-        assert_eq!(logger.get_logs(&()).unwrap(), None);
+        assert_eq!(logger.get_logs(&()).await.unwrap(), None);
     }
 
     #[test]
@@ -211,7 +230,9 @@ mod tests {
         let test_name = "log_with_storage";
         log!("{}", test_name);
 
-        let storage = MemoryStorage::default();
+        let config = Config::default().strict();
+        let db = Surreal::new::<Mem>(config).await?;
+        let storage = SurrealDb::new(db, None, None, None, Arc::new(MutinyLogger::default()));
 
         let stop = Arc::new(AtomicBool::new(false));
         let logger = MutinyLogger::with_writer(stop.clone(), storage.clone());
@@ -224,6 +245,7 @@ mod tests {
 
         assert!(logger
             .get_logs(&storage)
+            .await
             .unwrap()
             .unwrap()
             .first()

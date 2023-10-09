@@ -14,10 +14,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use surrealdb::Connection;
 
 use crate::logging::MutinyLogger;
 use crate::node::{NetworkGraph, RapidGossipSync};
 use crate::storage::MutinyStorage;
+use crate::surreal::SurrealDb;
 use crate::utils;
 use crate::{auth::MutinyAuthClient, error::MutinyError};
 
@@ -125,22 +127,22 @@ pub async fn get_remote_scorer_bytes(
     Ok(decoded)
 }
 
-fn write_gossip_data(
-    storage: &impl MutinyStorage,
-    last_sync_timestamp: u32,
-    network_graph: &NetworkGraph,
+fn write_gossip_data<C: Connection + Clone>(
+    _storage: &SurrealDb<C>,
+    _last_sync_timestamp: u32,
+    _network_graph: &NetworkGraph,
 ) -> Result<(), MutinyError> {
     // Save the last sync timestamp
-    storage.set_data(GOSSIP_SYNC_TIME_KEY, last_sync_timestamp, None)?;
+    // storage.set_data(GOSSIP_SYNC_TIME_KEY, last_sync_timestamp, None)?;
 
     // Save the network graph
-    storage.set_data(NETWORK_GRAPH_KEY, network_graph.encode().to_hex(), None)?;
+    // storage.set_data(NETWORK_GRAPH_KEY, network_graph.encode().to_hex(), None)?;
 
     Ok(())
 }
 
-pub async fn get_gossip_sync(
-    _storage: &impl MutinyStorage,
+pub async fn get_gossip_sync<C: Connection + Clone>(
+    _storage: &SurrealDb<C>,
     remote_scorer_url: Option<String>,
     auth_client: Option<Arc<MutinyAuthClient>>,
     network: Network,
@@ -202,12 +204,12 @@ pub async fn get_gossip_sync(
     Ok((gossip_sync, prob_scorer))
 }
 
-pub(crate) async fn fetch_updated_gossip(
+pub(crate) async fn fetch_updated_gossip<S: Connection + Clone>(
     rgs_url: String,
     now: u64,
     last_sync_timestamp: u32,
     gossip_sync: &RapidGossipSync,
-    storage: &impl MutinyStorage,
+    storage: &SurrealDb<S>,
     logger: &MutinyLogger,
 ) -> Result<(), MutinyError> {
     let http_client = Client::builder()
@@ -338,20 +340,21 @@ impl From<NodeAnnouncement> for LnPeerMetadata {
     }
 }
 
-pub(crate) fn read_peer_info(
-    storage: &impl MutinyStorage,
+pub(crate) async fn read_peer_info<S: Connection + Clone>(
+    storage: &SurrealDb<S>,
     node_id: &NodeId,
 ) -> Result<Option<LnPeerMetadata>, MutinyError> {
     let key = format!("{LN_PEER_METADATA_KEY_PREFIX}{node_id}");
-    storage.get_data(key)
+    storage.get_data(key).await
 }
 
-pub(crate) fn get_all_peers(
-    storage: &impl MutinyStorage,
+pub(crate) async fn get_all_peers<S: Connection + Clone>(
+    storage: &SurrealDb<S>,
 ) -> Result<HashMap<NodeId, LnPeerMetadata>, MutinyError> {
     let mut peers = HashMap::new();
 
-    let all: HashMap<String, LnPeerMetadata> = storage.scan(LN_PEER_METADATA_KEY_PREFIX, None)?;
+    let all: HashMap<String, LnPeerMetadata> =
+        storage.scan(LN_PEER_METADATA_KEY_PREFIX, None).await?;
     for (key, value) in all {
         // remove the prefix from the key
         let key = key.replace(LN_PEER_METADATA_KEY_PREFIX, "");
@@ -361,8 +364,8 @@ pub(crate) fn get_all_peers(
     Ok(peers)
 }
 
-pub(crate) fn save_peer_connection_info(
-    storage: &impl MutinyStorage,
+pub(crate) async fn save_peer_connection_info<S: Connection + Clone>(
+    storage: &SurrealDb<S>,
     our_node_id: &str,
     node_id: &NodeId,
     connection_string: &str,
@@ -370,7 +373,7 @@ pub(crate) fn save_peer_connection_info(
 ) -> Result<(), MutinyError> {
     let key = format!("{LN_PEER_METADATA_KEY_PREFIX}{node_id}");
 
-    let current: Option<LnPeerMetadata> = storage.get_data(&key)?;
+    let current: Option<LnPeerMetadata> = storage.get_data(&key).await?;
 
     // If there is already some metadata, we add the connection string to it
     // Otherwise we create a new metadata with the connection string
@@ -391,8 +394,8 @@ pub(crate) fn save_peer_connection_info(
     Ok(())
 }
 
-pub(crate) fn set_peer_label(
-    storage: &impl MutinyStorage,
+pub(crate) async fn set_peer_label<S: Connection + Clone>(
+    storage: &SurrealDb<S>,
     node_id: &NodeId,
     label: Option<String>,
 ) -> Result<(), MutinyError> {
@@ -400,7 +403,7 @@ pub(crate) fn set_peer_label(
     let label = label.filter(|l| !l.is_empty());
     let key = format!("{LN_PEER_METADATA_KEY_PREFIX}{node_id}");
 
-    let current: Option<LnPeerMetadata> = storage.get_data(&key)?;
+    let current: Option<LnPeerMetadata> = storage.get_data(&key).await?;
 
     // If there is already some metadata, we add the label to it
     // Otherwise we create a new metadata with the label
@@ -417,19 +420,19 @@ pub(crate) fn set_peer_label(
     Ok(())
 }
 
-pub(crate) fn delete_peer_info(
-    storage: &impl MutinyStorage,
+pub(crate) async fn delete_peer_info<S: Connection + Clone>(
+    storage: &SurrealDb<S>,
     uuid: &str,
     node_id: &NodeId,
 ) -> Result<(), MutinyError> {
     let key = format!("{LN_PEER_METADATA_KEY_PREFIX}{node_id}");
 
-    let current: Option<LnPeerMetadata> = storage.get_data(&key)?;
+    let current: Option<LnPeerMetadata> = storage.get_data(&key).await?;
 
     if let Some(mut current) = current {
         current.nodes.retain(|n| n != uuid);
         if current.nodes.is_empty() {
-            storage.delete(&[key])?;
+            storage.delete(&[key]).await?;
         } else {
             storage.set_data(key, current, None)?;
         }
@@ -438,14 +441,14 @@ pub(crate) fn delete_peer_info(
     Ok(())
 }
 
-pub(crate) fn save_ln_peer_info(
-    storage: &impl MutinyStorage,
+pub(crate) async fn save_ln_peer_info<S: Connection + Clone>(
+    storage: &SurrealDb<S>,
     node_id: &NodeId,
     info: &LnPeerMetadata,
 ) -> Result<(), MutinyError> {
     let key = format!("{LN_PEER_METADATA_KEY_PREFIX}{node_id}");
 
-    let current: Option<LnPeerMetadata> = storage.get_data(&key)?;
+    let current: Option<LnPeerMetadata> = storage.get_data(&key).await?;
 
     let new_info = info.merge_opt(current.as_ref());
 

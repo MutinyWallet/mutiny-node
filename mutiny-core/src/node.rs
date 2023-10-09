@@ -20,9 +20,9 @@ use crate::{
 };
 use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
 
+use crate::lspclient::FeeRequest;
 use crate::scb::message_handler::SCBMessageHandler;
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
-use crate::{lspclient::FeeRequest, storage::MutinyStorage};
 use anyhow::{anyhow, Context};
 use bdk::FeeRate;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
@@ -39,6 +39,7 @@ use lightning::{
 };
 
 use crate::multiesplora::MultiEsploraClient;
+use crate::surreal::SurrealDb;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
 use lightning::ln::PaymentSecret;
@@ -76,12 +77,13 @@ use std::{
         Arc, RwLock,
     },
 };
+use surrealdb::Connection;
 
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 const INITIAL_RECONNECTION_DELAY: u64 = 5;
 const MAX_RECONNECTION_DELAY: u64 = 60;
 
-pub(crate) type BumpTxEventHandler<S: MutinyStorage> = BumpTransactionEventHandler<
+pub(crate) type BumpTxEventHandler<S: Connection + Clone> = BumpTransactionEventHandler<
     Arc<MutinyChain<S>>,
     Arc<Wallet<Arc<OnChainWallet<S>>, Arc<MutinyLogger>>>,
     Arc<PhantomKeysManager<S>>,
@@ -93,14 +95,14 @@ pub(crate) type RapidGossipSync =
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
-pub(crate) type MessageHandler<S: MutinyStorage> = LdkMessageHandler<
+pub(crate) type MessageHandler<S: Connection + Clone> = LdkMessageHandler<
     Arc<PhantomChannelManager<S>>,
     Arc<GossipMessageHandler<S>>,
     Arc<IgnoringMessageHandler>,
     Arc<SCBMessageHandler>,
 >;
 
-pub(crate) type ChainMonitor<S: MutinyStorage> = chainmonitor::ChainMonitor<
+pub(crate) type ChainMonitor<S: Connection + Clone> = chainmonitor::ChainMonitor<
     InMemorySigner,
     Arc<dyn Filter + Send + Sync>,
     Arc<MutinyChain<S>>,
@@ -145,7 +147,7 @@ impl PubkeyConnectionInfo {
     }
 }
 
-pub(crate) struct Node<S: MutinyStorage> {
+pub(crate) struct Node<S: Connection + Clone> {
     pub _uuid: String,
     pub child_index: u32,
     stopped_components: Arc<RwLock<Vec<bool>>>,
@@ -166,13 +168,13 @@ pub(crate) struct Node<S: MutinyStorage> {
     websocket_proxy_addr: String,
 }
 
-impl<S: MutinyStorage> Node<S> {
+impl<S: Connection + Clone> Node<S> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
         uuid: String,
         node_index: &NodeIndex,
         xprivkey: ExtendedPrivKey,
-        storage: S,
+        storage: SurrealDb<S>,
         gossip_sync: Arc<RapidGossipSync>,
         scorer: Arc<utils::Mutex<HubPreferentialScorer>>,
         chain: Arc<MutinyChain<S>>,
@@ -228,6 +230,7 @@ impl<S: MutinyStorage> Node<S> {
         } else {
             persister
                 .read_channel_monitors(keys_manager.clone())
+                .await
                 .map_err(|e| MutinyError::ReadError {
                     source: MutinyStorageError::Other(anyhow!(
                         "failed to read channel monitors: {e}"
@@ -406,6 +409,7 @@ impl<S: MutinyStorage> Node<S> {
         if !empty_state {
             let retry_spendable_outputs = persister
                 .get_failed_spendable_outputs()
+                .await
                 .map_err(|e| MutinyError::ReadError {
                     source: MutinyStorageError::Other(anyhow!(
                         "failed to read retry spendable outputs: {e}"
@@ -429,7 +433,7 @@ impl<S: MutinyStorage> Node<S> {
                 {
                     Ok(_) => {
                         log_info!(logger, "Successfully retried spendable outputs");
-                        persister.clear_failed_spendable_outputs()?;
+                        persister.clear_failed_spendable_outputs().await?;
                     }
                     Err(_) => {
                         // retry them individually then only save failed ones
@@ -626,7 +630,8 @@ impl<S: MutinyStorage> Node<S> {
                 // if we have the connection info saved in storage, update it if we need to
                 // otherwise cache it in temp_peer_connection_map so we can later save it
                 // if we open a channel in the future.
-                if let Some(saved) = read_peer_info(&self.persister.storage, &node_id)?
+                if let Some(saved) = read_peer_info(&self.persister.storage, &node_id)
+                    .await?
                     .and_then(|p| p.connection_string)
                 {
                     if saved != peer_connection_info.original_connection_string {
@@ -636,7 +641,9 @@ impl<S: MutinyStorage> Node<S> {
                             &node_id,
                             &peer_connection_info.original_connection_string,
                             label,
-                        ) {
+                        )
+                        .await
+                        {
                             Ok(_) => (),
                             Err(_) => {
                                 log_warn!(self.logger, "WARN: could not store peer connection info")
@@ -651,7 +658,9 @@ impl<S: MutinyStorage> Node<S> {
                         &node_id,
                         &peer_connection_info.original_connection_string,
                         label,
-                    ) {
+                    )
+                    .await
+                    {
                         log_warn!(
                             self.logger,
                             "WARN: could not store peer connection info: {e}"
@@ -777,7 +786,7 @@ impl<S: MutinyStorage> Node<S> {
                 return Err(MutinyError::NotRunning);
             }
 
-            if let Ok(true) = self.persister.storage.has_done_first_sync() {
+            if let Ok(true) = self.persister.storage.has_done_first_sync().await {
                 break;
             }
 
@@ -839,20 +848,24 @@ impl<S: MutinyStorage> Node<S> {
 
         self.persister
             .storage
-            .set_invoice_labels(invoice.clone(), labels)?;
+            .set_invoice_labels(invoice.clone(), labels)
+            .await?;
 
         log_info!(self.logger, "SUCCESS: generated invoice: {invoice}");
 
         Ok(invoice)
     }
 
-    pub fn get_invoice(&self, invoice: &Bolt11Invoice) -> Result<MutinyInvoice, MutinyError> {
-        self.get_invoice_by_hash(invoice.payment_hash())
+    pub async fn get_invoice(&self, invoice: &Bolt11Invoice) -> Result<MutinyInvoice, MutinyError> {
+        self.get_invoice_by_hash(invoice.payment_hash()).await
     }
 
-    pub fn get_invoice_by_hash(&self, payment_hash: &Sha256) -> Result<MutinyInvoice, MutinyError> {
-        let (payment_info, inbound) = self.get_payment_info_from_persisters(payment_hash)?;
-        let labels_map = self.persister.storage.get_invoice_labels()?;
+    pub async fn get_invoice_by_hash(
+        &self,
+        payment_hash: &Sha256,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        let (payment_info, inbound) = self.get_payment_info_from_persisters(payment_hash).await?;
+        let labels_map = self.persister.storage.get_invoice_labels().await?;
         let labels = payment_info
             .bolt11
             .as_ref()
@@ -867,23 +880,24 @@ impl<S: MutinyStorage> Node<S> {
         )
     }
 
-    pub fn list_invoices(&self) -> Result<Vec<MutinyInvoice>, MutinyError> {
-        let mut inbound_invoices = self.list_payment_info_from_persisters(true)?;
-        let mut outbound_invoices = self.list_payment_info_from_persisters(false)?;
+    pub async fn list_invoices(&self) -> Result<Vec<MutinyInvoice>, MutinyError> {
+        let mut inbound_invoices = self.list_payment_info_from_persisters(true).await?;
+        let mut outbound_invoices = self.list_payment_info_from_persisters(false).await?;
         inbound_invoices.append(&mut outbound_invoices);
         Ok(inbound_invoices)
     }
 
-    fn list_payment_info_from_persisters(
+    async fn list_payment_info_from_persisters(
         &self,
         inbound: bool,
     ) -> Result<Vec<MutinyInvoice>, MutinyError> {
         let now = utils::now();
-        let labels_map = self.persister.storage.get_invoice_labels()?;
+        let labels_map = self.persister.storage.get_invoice_labels().await?;
 
         Ok(self
             .persister
-            .list_payment_info(inbound)?
+            .list_payment_info(inbound)
+            .await?
             .into_iter()
             .filter_map(|(h, i)| {
                 let labels = match i.bolt11.clone() {
@@ -902,18 +916,19 @@ impl<S: MutinyStorage> Node<S> {
     }
 
     /// Gets all the closed channels for this node
-    pub fn get_channel_closure(
+    pub async fn get_channel_closure(
         &self,
         user_channel_id: u128,
     ) -> Result<Option<ChannelClosure>, MutinyError> {
-        self.persister.get_channel_closure(user_channel_id)
+        self.persister.get_channel_closure(user_channel_id).await
     }
 
     /// Gets all the closed channels for this node
-    pub fn get_channel_closures(&self) -> Result<Vec<ChannelClosure>, MutinyError> {
+    pub async fn get_channel_closures(&self) -> Result<Vec<ChannelClosure>, MutinyError> {
         Ok(self
             .persister
-            .list_channel_closures()?
+            .list_channel_closures()
+            .await?
             .into_iter()
             .map(|(id, mut c)| {
                 // some old closures might not have the user_channel_id set
@@ -926,14 +941,15 @@ impl<S: MutinyStorage> Node<S> {
             .collect())
     }
 
-    pub fn get_payment_info_from_persisters(
+    pub async fn get_payment_info_from_persisters(
         &self,
         payment_hash: &bitcoin::hashes::sha256::Hash,
     ) -> Result<(PaymentInfo, bool), MutinyError> {
         // try inbound first
-        if let Some(payment_info) =
-            self.persister
-                .read_payment_info(payment_hash.as_inner(), true, &self.logger)
+        if let Some(payment_info) = self
+            .persister
+            .read_payment_info(payment_hash.as_inner(), true, &self.logger)
+            .await
         {
             return Ok((payment_info, true));
         }
@@ -942,6 +958,7 @@ impl<S: MutinyStorage> Node<S> {
         match self
             .persister
             .read_payment_info(payment_hash.as_inner(), false, &self.logger)
+            .await
         {
             Some(payment_info) => Ok((payment_info, false)),
             None => Err(MutinyError::InvoiceInvalid),
@@ -965,6 +982,7 @@ impl<S: MutinyStorage> Node<S> {
         if self
             .persister
             .read_payment_info(payment_hash, false, &self.logger)
+            .await
             .is_some_and(|p| p.status != HTLCStatus::Failed)
         {
             return Err(MutinyError::NonUniquePaymentHash);
@@ -973,6 +991,7 @@ impl<S: MutinyStorage> Node<S> {
         if self
             .persister
             .read_payment_info(payment_hash, true, &self.logger)
+            .await
             .is_some_and(|p| p.status != HTLCStatus::Failed)
         {
             return Err(MutinyError::NonUniquePaymentHash);
@@ -1028,6 +1047,7 @@ impl<S: MutinyStorage> Node<S> {
             .persister
             .storage
             .set_invoice_labels(invoice.clone(), labels)
+            .await
         {
             log_error!(self.logger, "could not set invoice label: {e}");
         }
@@ -1106,9 +1126,10 @@ impl<S: MutinyStorage> Node<S> {
                 return Err(MutinyError::PaymentTimeout);
             }
 
-            let payment_info =
-                self.persister
-                    .read_payment_info(&payment_hash.0, false, &self.logger);
+            let payment_info = self
+                .persister
+                .read_payment_info(&payment_hash.0, false, &self.logger)
+                .await;
 
             if let Some(info) = payment_info {
                 match info.status {
@@ -1260,7 +1281,7 @@ impl<S: MutinyStorage> Node<S> {
 
             // We will get a channel closure event if the peer rejects the channel
             // todo return closure reason to user
-            if let Ok(Some(_closure)) = self.persister.get_channel_closure(user_channel_id) {
+            if let Ok(Some(_closure)) = self.persister.get_channel_closure(user_channel_id).await {
                 return Err(MutinyError::ChannelCreationFailed);
             }
 
@@ -1280,6 +1301,7 @@ impl<S: MutinyStorage> Node<S> {
                     if self
                         .persister
                         .get_channel_open_params(user_channel_id)
+                        .await
                         .map(|p| p.is_none())
                         .unwrap_or(false)
                     {
@@ -1465,7 +1487,9 @@ impl<S: MutinyStorage> Node<S> {
                     "ERROR: failed to open channel to pubkey {pubkey:?}: {e:?}"
                 );
                 // delete params from db because channel failed
-                self.persister.delete_channel_open_params(user_channel_id)?;
+                self.persister
+                    .delete_channel_open_params(user_channel_id)
+                    .await?;
                 Err(MutinyError::ChannelCreationFailed)
             }
         }
@@ -1565,8 +1589,8 @@ pub(crate) fn scoring_params() -> ProbabilisticScoringFeeParameters {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn start_reconnection_handling<S: MutinyStorage>(
-    storage: &impl MutinyStorage,
+async fn start_reconnection_handling<S: Connection + Clone>(
+    storage: &SurrealDb<S>,
     node_pubkey: PublicKey,
     #[cfg(target_arch = "wasm32")] websocket_proxy_addr: String,
     peer_man: Arc<dyn PeerManager>,
@@ -1588,6 +1612,7 @@ async fn start_reconnection_handling<S: MutinyStorage>(
             // make sure we have fee estimates and they are not empty
             if storage
                 .get_fee_estimates()
+                .await
                 .map(|m| m.is_some_and(|m| !m.is_empty()))
                 .unwrap_or(false)
             {
@@ -1638,7 +1663,9 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                 &node_id,
                 &lsp.connection_string,
                 None,
-            ) {
+            )
+            .await
+            {
                 log_error!(proxy_logger, "could not save connection to lsp: {e}");
             }
         };
@@ -1673,7 +1700,7 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                 sleep(1_000).await;
             }
 
-            let peer_connections = get_all_peers(&connect_storage).unwrap_or_default();
+            let peer_connections = get_all_peers(&connect_storage).await.unwrap_or_default();
             let current_connections = connect_peer_man.get_peer_node_ids();
 
             let not_connected: Vec<(NodeId, String)> = peer_connections
@@ -1751,7 +1778,7 @@ fn stop_component(stopped_components: &Arc<RwLock<Vec<bool>>>) {
     }
 }
 
-pub(crate) fn create_peer_manager<S: MutinyStorage>(
+pub(crate) fn create_peer_manager<S: Connection + Clone>(
     km: Arc<PhantomKeysManager<S>>,
     lightning_msg_handler: MessageHandler<S>,
     logger: Arc<MutinyLogger>,

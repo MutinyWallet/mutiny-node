@@ -1,8 +1,7 @@
 use crate::error::MutinyError;
 use crate::event::HTLCStatus;
 use crate::nodemanager::NodeManager;
-use crate::nostr::NostrManager;
-use crate::storage::MutinyStorage;
+use crate::nostr::{derive_nwc_keys, NostrManager};
 use crate::utils;
 use anyhow::anyhow;
 use bitcoin::hashes::hex::{FromHex, ToHex};
@@ -20,6 +19,7 @@ use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::str::FromStr;
+use surrealdb::Connection;
 
 pub(crate) const PENDING_NWC_EVENTS_KEY: &str = "pending_nwc_events";
 
@@ -221,8 +221,7 @@ impl NostrWalletConnect {
         } else {
             profile.index
         };
-        let (client_key, server_key) =
-            NostrManager::<()>::derive_nwc_keys(context, xprivkey, key_derivation_index)?;
+        let (client_key, server_key) = derive_nwc_keys(context, xprivkey, key_derivation_index)?;
 
         Ok(Self {
             client_key,
@@ -264,7 +263,7 @@ impl NostrWalletConnect {
         Ok(info)
     }
 
-    pub(crate) async fn pay_nwc_invoice<S: MutinyStorage>(
+    pub(crate) async fn pay_nwc_invoice<S: Connection + Clone>(
         &self,
         node_manager: &NodeManager<S>,
         from_node: &PublicKey,
@@ -293,7 +292,7 @@ impl NostrWalletConnect {
         }
     }
 
-    async fn save_pending_nwc_invoice<S: MutinyStorage>(
+    async fn save_pending_nwc_invoice<S: Connection + Clone>(
         &self,
         nostr_manager: &NostrManager<S>,
         event_id: EventId,
@@ -310,7 +309,8 @@ impl NostrWalletConnect {
 
         let mut current: Vec<PendingNwcInvoice> = nostr_manager
             .storage
-            .get_data(PENDING_NWC_EVENTS_KEY)?
+            .get_data(PENDING_NWC_EVENTS_KEY)
+            .await?
             .unwrap_or_default();
 
         if !current.contains(&pending) {
@@ -327,7 +327,7 @@ impl NostrWalletConnect {
     /// Handle a Nostr Wallet Connect request
     ///
     /// Returns a response event if one is needed
-    pub async fn handle_nwc_request<S: MutinyStorage>(
+    pub async fn handle_nwc_request<S: Connection + Clone>(
         &mut self,
         event: Event,
         node_manager: &NodeManager<S>,
@@ -373,7 +373,7 @@ impl NostrWalletConnect {
 
             // if we have already paid this invoice, skip it
             let node = node_manager.get_node(from_node).await?;
-            if node.get_invoice(&invoice).is_ok_and(|i| i.paid()) {
+            if node.get_invoice(&invoice).await.is_ok_and(|i| i.paid()) {
                 return Ok(None);
             }
             drop(node);
@@ -391,6 +391,7 @@ impl NostrWalletConnect {
                             let node = node_manager.get_node(from_node).await?;
                             node.persister
                                 .read_payment_info(&hash, false, &nostr_manager.logger)
+                                .await
                                 .map(|p| p.status)
                         }
                         None => None,
@@ -527,17 +528,23 @@ impl NostrWalletConnect {
                         let node = node_manager.get_node(from_node).await?;
                         // budget might not actually be exceeded, we should verify that the payments
                         // all went through, and if not, remove them from the budget
-                        budget.payments.retain(|p| {
+                        let mut payments = vec![];
+                        for p in budget.payments.iter() {
                             let hash: [u8; 32] = FromHex::from_hex(&p.hash).unwrap();
-                            match node.persister.read_payment_info(
-                                &hash,
-                                false,
-                                &nostr_manager.logger,
-                            ) {
+                            let keep = match node
+                                .persister
+                                .read_payment_info(&hash, false, &nostr_manager.logger)
+                                .await
+                            {
                                 Some(info) => info.status != HTLCStatus::Failed, // remove failed payments from budget
                                 None => true, // if we can't find the payment, keep it to be safe
+                            };
+
+                            if keep {
+                                payments.push(p.clone());
                             }
-                        });
+                        }
+                        budget.payments = payments;
 
                         // update budget with removed payments
                         self.profile.spending_conditions =
