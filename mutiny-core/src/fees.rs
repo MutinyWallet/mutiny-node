@@ -160,7 +160,13 @@ impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
                         log_trace!(self.logger, "Got fee rate from saved cache!");
                         let sats_vbyte = num.to_owned();
                         // convert to sats per kw
-                        let fee_rate = sats_vbyte * 250.0;
+                        let mut fee_rate = sats_vbyte * 250.0;
+
+                        // if we're using the high priority target, multiply by 3
+                        // this should help prevent force closures from fee disputes
+                        if confirmation_target == ConfirmationTarget::HighPriority {
+                            fee_rate *= 3.0;
+                        }
 
                         // return the fee rate, but make sure it's not lower than the floor
                         (fee_rate as u32).max(FEERATE_FLOOR_SATS_PER_KW)
