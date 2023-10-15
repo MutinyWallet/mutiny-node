@@ -11,7 +11,6 @@ use crate::nodemanager::ChannelClosure;
 use crate::storage::{MutinyStorage, VersionedValue};
 use crate::utils;
 use crate::utils::{sleep, spawn};
-use crate::vss::VssKeyValueItem;
 use crate::{chain::MutinyChain, scorer::HubPreferentialScorer};
 use anyhow::anyhow;
 use bitcoin::hashes::hex::{FromHex, ToHex};
@@ -93,6 +92,15 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         format!("{}_{}", key, self.node_id)
     }
 
+    pub(crate) fn get_monitor_key(&self, funding_txo: &OutPoint) -> String {
+        let key = format!(
+            "{MONITORS_PREFIX_KEY}{}_{}",
+            funding_txo.txid.to_hex(),
+            funding_txo.index
+        );
+        self.get_key(&key)
+    }
+
     fn init_persist_monitor<W: Writeable>(
         &self,
         key: String,
@@ -105,47 +113,30 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         let logger = self.logger.clone();
         let object = object.encode();
 
-        // currently we only retry storage to VSS because we don't have a way to detect
-        // for local storage if a higher version has been persisted. Without handling this
-        // we could end up with a previous state being persisted over a newer one.
-        // VSS does not have this problem because it verifies the version before storing
-        // and will not overwrite a newer version, so it is safe to retry.
         spawn(async move {
-            let mut is_retry = false;
             // Sleep before persisting to give chance for the manager to be persisted
             sleep(50).await;
-            loop {
-                match persist_monitor(&storage, &key, &object, Some(version), is_retry, &logger)
-                    .await
-                {
-                    Ok(()) => {
-                        log_debug!(logger, "Persisted channel monitor: {update_id:?}");
+            match persist_monitor(&storage, &key, &object, Some(version), &logger).await {
+                Ok(()) => {
+                    log_debug!(logger, "Persisted channel monitor: {update_id:?}");
 
-                        // unwrap is safe, we set it up immediately
-                        let chain_monitor = chain_monitor.lock().await;
-                        let chain_monitor = chain_monitor.as_ref().unwrap();
+                    // unwrap is safe, we set it up immediately
+                    let chain_monitor = chain_monitor.lock().await;
+                    let chain_monitor = chain_monitor.as_ref().unwrap();
 
-                        // these errors are not fatal, so we don't return them just log
-                        if let Err(e) = chain_monitor.channel_monitor_updated(
-                            update_id.funding_txo,
-                            update_id.monitor_update_id,
-                        ) {
-                            log_error!(
-                                logger,
-                                "Error notifying chain monitor of channel monitor update: {e:?}"
-                            );
-                        } else {
-                            break; // successful storage, no more attempts
-                        }
-                    }
-                    Err(e) => {
-                        log_error!(logger, "Error persisting channel monitor: {e}");
+                    // these errors are not fatal, so we don't return them just log
+                    if let Err(e) = chain_monitor
+                        .channel_monitor_updated(update_id.funding_txo, update_id.monitor_update_id)
+                    {
+                        log_error!(
+                            logger,
+                            "Error notifying chain monitor of channel monitor update: {e:?}"
+                        );
                     }
                 }
-
-                // if we get here, we failed to persist, so we retry
-                is_retry = true;
-                sleep(1_000).await;
+                Err(e) => {
+                    log_error!(logger, "Error persisting channel monitor: {e}");
+                }
             }
         });
 
@@ -675,15 +666,10 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
         monitor: &ChannelMonitor<ChannelSigner>,
         monitor_update_id: MonitorUpdateId,
     ) -> ChannelMonitorUpdateStatus {
-        let key = format!(
-            "{MONITORS_PREFIX_KEY}{}_{}",
-            funding_txo.txid.to_hex(),
-            funding_txo.index
-        );
-        let key = self.get_key(&key);
+        let key = self.get_monitor_key(&funding_txo);
 
         let update_id = monitor.get_latest_update_id();
-        debug_assert!(update_id == utils::get_monitor_version(monitor.encode()));
+        debug_assert!(update_id == utils::get_monitor_version(&monitor.encode()));
 
         // safely convert u64 to u32
         let version = if update_id >= u32::MAX as u64 {
@@ -707,14 +693,9 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
         monitor: &ChannelMonitor<ChannelSigner>,
         monitor_update_id: MonitorUpdateId,
     ) -> ChannelMonitorUpdateStatus {
-        let key = format!(
-            "{MONITORS_PREFIX_KEY}{}_{}",
-            funding_txo.txid.to_hex(),
-            funding_txo.index
-        );
-        let key = self.get_key(&key);
+        let key = self.get_monitor_key(&funding_txo);
         let update_id = monitor.get_latest_update_id();
-        debug_assert!(update_id == utils::get_monitor_version(monitor.encode()));
+        debug_assert!(update_id == utils::get_monitor_version(&monitor.encode()));
 
         // safely convert u64 to u32
         let version = if update_id >= u32::MAX as u64 {
@@ -738,33 +719,14 @@ pub struct MonitorUpdateIdentifier {
     pub monitor_update_id: MonitorUpdateId,
 }
 
-async fn persist_monitor(
+pub(crate) async fn persist_monitor(
     storage: &impl MutinyStorage,
     key: &str,
     object: &Vec<u8>,
     version: Option<u32>,
-    vss_only: bool,
     logger: &MutinyLogger,
 ) -> Result<(), lightning::io::Error> {
-    let res = if vss_only {
-        // if we are only storing to VSS, we don't need to store to local storage
-        // just need to call put_objects on VSS
-        if let (Some(vss), Some(version)) = (storage.vss_client(), version) {
-            let value =
-                serde_json::to_value(object).map_err(|_| lightning::io::ErrorKind::Other)?;
-            let item = VssKeyValueItem {
-                key: key.to_string(),
-                value,
-                version,
-            };
-
-            vss.put_objects(vec![item]).await
-        } else {
-            Ok(())
-        }
-    } else {
-        storage.set_data_async(key, object, version).await
-    };
+    let res = storage.set_data_async(key, object, version).await;
 
     res.map_err(|e| {
         match e {
