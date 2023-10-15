@@ -7,7 +7,6 @@
     clippy::arc_with_non_send_sync,
     type_alias_bounds
 )]
-#![feature(async_fn_in_trait)]
 extern crate core;
 
 // background file is mostly an LDK copy paste
