@@ -1,6 +1,5 @@
 use anyhow::anyhow;
 use bip39::Mnemonic;
-use gloo_storage::{LocalStorage, Storage};
 use gloo_utils::format::JsValueSerdeExt;
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error};
@@ -265,26 +264,6 @@ impl IndexedDbStorage {
             map.set(key, json)?;
         }
 
-        // get the local storage data, this should take priority if it is being used
-        log_debug!(logger, "Reading from local storage");
-        let local_storage = LocalStorage::raw();
-        let length = LocalStorage::length();
-        for index in 0..length {
-            let key_opt: Option<String> = local_storage.key(index).unwrap();
-
-            if let Some(key) = key_opt {
-                // only add to the map if it is a key we expect
-                // this is to prevent any unexpected data from being added to the map
-                // from either malicious 3rd party or a previous version of the wallet
-                if write_to_local_storage(&key) {
-                    // compare versions between local storage and indexed db storage
-                    if let Some((key, value)) = Self::handle_local_storage_key(key, &map, logger)? {
-                        map.set_data(key, value, None)?;
-                    }
-                }
-            }
-        }
-
         match vss {
             None => {
                 let final_map = map.memory.read().unwrap();
@@ -307,76 +286,6 @@ impl IndexedDbStorage {
                 Ok(final_map.clone())
             }
         }
-    }
-
-    fn handle_local_storage_key(
-        key: String,
-        current: &MemoryStorage,
-        logger: &MutinyLogger,
-    ) -> Result<Option<(String, Value)>, MutinyError> {
-        if key.starts_with(MONITORS_PREFIX_KEY) {
-            // we can get versions from monitors, so we should compare
-            match current.get::<Vec<u8>>(&key)? {
-                Some(bytes) => {
-                    // check first byte is 1, then take u64 from next 8 bytes
-                    let current_version = utils::get_monitor_version(&bytes);
-
-                    let obj: Value = LocalStorage::get(&key).unwrap();
-                    let value = decrypt_value(&key, obj, current.password())?;
-                    if let Ok(local_bytes) = serde_json::from_value::<Vec<u8>>(value.clone()) {
-                        let local_version = utils::get_monitor_version(&local_bytes);
-
-                        // if the current version is less than the version from local storage
-                        // then we want to use the local storage version
-                        if current_version < local_version {
-                            log_debug!(
-                                logger,
-                                "Using local storage key {key} with version {}",
-                                local_version
-                            );
-                            return Ok(Some((key, value)));
-                        }
-                    }
-                }
-                None => {
-                    let value: Value = LocalStorage::get(&key).unwrap();
-                    return Ok(Some((key, value)));
-                }
-            }
-        } else if key.starts_with(CHANNEL_MANAGER_KEY) {
-            // we can get versions from channel manager, so we should compare
-            match current.get_data::<VersionedValue>(&key) {
-                Ok(Some(local)) => {
-                    let obj: Value = LocalStorage::get(&key).unwrap();
-                    let value = decrypt_value(&key, obj, current.password())?;
-
-                    // if the current version is less than the version from local storage
-                    // then we want to use the local storage version
-                    if let Ok(v) = serde_json::from_value::<VersionedValue>(value.clone()) {
-                        if v.version > local.version {
-                            log_debug!(
-                                logger,
-                                "Using local storage key {key} with version {}",
-                                v.version
-                            );
-                            return Ok(Some((key, value)));
-                        }
-                    }
-                }
-                Ok(None) => {
-                    let obj: Value = LocalStorage::get(&key).unwrap();
-                    let value = decrypt_value(&key, obj, current.password())?;
-                    if serde_json::from_value::<VersionedValue>(value.clone()).is_ok() {
-                        return Ok(Some((key, value)));
-                    }
-                }
-                Err(_) => return Err(MutinyError::IncorrectPassword),
-            }
-        }
-
-        log_debug!(logger, "Skipping local storage key {key}");
-
-        Ok(None)
     }
 
     async fn handle_vss_key(
@@ -544,18 +453,6 @@ fn used_once(key: &str) -> bool {
     }
 }
 
-/// To help prevent force closes we save to local storage as well as indexed db.
-/// This is because indexed db is not always reliable.
-///
-/// We need to do this for the channel manager and channel monitors.
-fn write_to_local_storage(key: &str) -> bool {
-    match key {
-        str if str.starts_with(CHANNEL_MANAGER_KEY) => true,
-        str if str.starts_with(MONITORS_PREFIX_KEY) => true,
-        _ => false,
-    }
-}
-
 impl MutinyStorage for IndexedDbStorage {
     fn password(&self) -> Option<&str> {
         self.password.as_deref()
@@ -588,15 +485,6 @@ impl MutinyStorage for IndexedDbStorage {
             };
         });
 
-        // Some values we want to write to local storage as well as indexed db
-        if write_to_local_storage(&key) {
-            LocalStorage::set(&key, &data).map_err(|e| {
-                MutinyError::write_err(MutinyStorageError::Other(anyhow!(
-                    "Failed to write to local storage: {e}"
-                )))
-            })?;
-        }
-
         // some values only are read once, so we don't need to write them to memory,
         // just need them in indexed db for next time
         if !used_once(key.as_ref()) {
@@ -620,15 +508,6 @@ impl MutinyStorage for IndexedDbStorage {
         })?;
 
         Self::save_to_indexed_db(&self.indexed_db, &key, &data).await?;
-
-        // Some values we want to write to local storage as well as indexed db
-        if write_to_local_storage(&key) {
-            LocalStorage::set(&key, &data).map_err(|e| {
-                MutinyError::write_err(MutinyStorageError::Other(anyhow!(
-                    "Failed to write to local storage: {e}"
-                )))
-            })?;
-        }
 
         // some values only are read once, so we don't need to write them to memory,
         // just need them in indexed db for next time
@@ -695,11 +574,6 @@ impl MutinyStorage for IndexedDbStorage {
             .map_err(|e| MutinyError::write_err(e.into()))?;
 
         for key in keys {
-            // Some values we want to write to local storage as well as indexed db
-            // we should delete them from local storage as well
-            if write_to_local_storage(&key) {
-                LocalStorage::delete(&key)
-            }
             map.remove(&key);
         }
 
@@ -818,9 +692,6 @@ impl MutinyStorage for IndexedDbStorage {
             .await
             .map_err(|e| MutinyError::write_err(anyhow!("Failed clear indexed db: {e}").into()))?;
 
-        // We use some localstorage right now for ensuring channel data
-        LocalStorage::clear();
-
         Ok(())
     }
 
@@ -839,20 +710,17 @@ impl MutinyStorage for IndexedDbStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::indexed_db::{IndexedDbStorage, WALLET_OBJECT_STORE_NAME};
+    use crate::indexed_db::IndexedDbStorage;
     use crate::utils::sleep;
     use crate::utils::test::log;
     use bip39::Mnemonic;
     use bitcoin::hashes::hex::ToHex;
-    use gloo_storage::{LocalStorage, Storage};
     use mutiny_core::storage::MutinyStorage;
-    use mutiny_core::test_utils::{MANAGER_BYTES, MONITOR_VERSION_HIGHER, MONITOR_VERSION_LOWER};
+    use mutiny_core::test_utils::MANAGER_BYTES;
     use mutiny_core::{encrypt::encryption_key_from_pass, logging::MutinyLogger};
-    use rexie::TransactionMode;
     use serde_json::json;
     use std::str::FromStr;
     use std::sync::Arc;
-    use wasm_bindgen::JsValue;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -1016,85 +884,6 @@ mod tests {
 
         // clear the storage to clean up
         IndexedDbStorage::clear().await.unwrap();
-    }
-
-    async fn compare_local_storage_versions(
-        test_name: &str,
-        local_storage: Vec<u8>,
-        indexed_db: Vec<u8>,
-    ) -> Vec<u8> {
-        let key = format!("{MONITORS_PREFIX_KEY}test_{test_name}");
-        // set in local storage
-        LocalStorage::set(&key, local_storage).unwrap();
-        // set in indexed db
-        let rexie = IndexedDbStorage::build_indexed_db_database().await.unwrap();
-        let tx = rexie
-            .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)
-            .unwrap();
-        let store = tx.store(WALLET_OBJECT_STORE_NAME).unwrap();
-        store
-            .put(
-                &JsValue::from_serde(&indexed_db).unwrap(),
-                Some(&JsValue::from(&key)),
-            )
-            .await
-            .unwrap();
-
-        tx.done().await.unwrap();
-
-        let logger = Arc::new(MutinyLogger::default());
-        let storage = IndexedDbStorage::new(None, None, None, logger)
-            .await
-            .unwrap();
-
-        let bytes: Vec<u8> = storage.get(&key).unwrap().unwrap();
-
-        // clear the storage to clean up
-        IndexedDbStorage::clear().await.unwrap();
-
-        bytes
-    }
-
-    #[test]
-    async fn test_local_storage_version_0_indexed_db_version_max() {
-        let test_name = "test_local_storage_version_0_indexed_db_version_max";
-        log!("{test_name}");
-
-        let bytes = compare_local_storage_versions(
-            test_name,
-            MONITOR_VERSION_LOWER.to_vec(),
-            MONITOR_VERSION_HIGHER.to_vec(),
-        )
-        .await;
-        assert_eq!(bytes, MONITOR_VERSION_HIGHER);
-    }
-
-    #[test]
-    async fn test_local_storage_version_max_indexed_db_version_0() {
-        let test_name = "test_local_storage_version_max_indexed_db_version_0";
-        log!("{test_name}");
-
-        let bytes = compare_local_storage_versions(
-            test_name,
-            MONITOR_VERSION_HIGHER.to_vec(),
-            MONITOR_VERSION_LOWER.to_vec(),
-        )
-        .await;
-        assert_eq!(bytes, MONITOR_VERSION_HIGHER);
-    }
-
-    #[test]
-    async fn test_local_storage_version_max_indexed_db_version_max() {
-        let test_name = "test_local_storage_version_max_indexed_db_version_max";
-        log!("{test_name}");
-
-        let bytes = compare_local_storage_versions(
-            test_name,
-            MONITOR_VERSION_HIGHER.to_vec(),
-            MONITOR_VERSION_HIGHER.to_vec(),
-        )
-        .await;
-        assert_eq!(bytes, MONITOR_VERSION_HIGHER);
     }
 
     #[test]
