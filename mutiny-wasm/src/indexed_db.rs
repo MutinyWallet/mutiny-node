@@ -714,9 +714,7 @@ mod tests {
     use crate::utils::sleep;
     use crate::utils::test::log;
     use bip39::Mnemonic;
-    use bitcoin::hashes::hex::ToHex;
     use mutiny_core::storage::MutinyStorage;
-    use mutiny_core::test_utils::MANAGER_BYTES;
     use mutiny_core::{encrypt::encryption_key_from_pass, logging::MutinyLogger};
     use serde_json::json;
     use std::str::FromStr;
@@ -892,17 +890,11 @@ mod tests {
         log!("{test_name}");
         let logger = Arc::new(MutinyLogger::default());
 
-        let key = format!("{CHANNEL_MANAGER_KEY}_test_{test_name}");
-        let data = VersionedValue {
-            version: 69,
-            // just use this as dummy data
-            value: Value::String(MANAGER_BYTES.to_hex()),
-        };
         let storage = IndexedDbStorage::new(None, None, None, logger.clone())
             .await
             .unwrap();
-
-        storage.set_data(&key, data, None).unwrap();
+        let seed = generate_seed(12).unwrap();
+        storage.set_data(MNEMONIC_KEY, seed, None).unwrap();
         // wait for the storage to be persisted
         utils::sleep(1_000).await;
 
@@ -914,9 +906,11 @@ mod tests {
             .transpose()
             .unwrap();
 
-        let result = IndexedDbStorage::new(password, cipher, None, logger).await;
+        let storage = IndexedDbStorage::new(password, cipher, None, logger)
+            .await
+            .unwrap();
 
-        match result {
+        match storage.get_mnemonic() {
             Err(MutinyError::IncorrectPassword) => (),
             Ok(_) => panic!("Expected IncorrectPassword error, got Ok"),
             Err(e) => panic!("Expected IncorrectPassword error, got {:?}", e),
