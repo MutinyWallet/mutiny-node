@@ -31,6 +31,7 @@ mod networking;
 mod node;
 pub mod nodemanager;
 pub mod nostr;
+pub mod notifications;
 mod onchain;
 mod peermanager;
 pub mod redshift;
@@ -54,6 +55,7 @@ use crate::labels::{Contact, LabelStorage};
 use crate::nostr::nwc::{
     BudgetPeriod, BudgetedSpendingConditions, NwcProfileTag, SpendingConditions,
 };
+use crate::notifications::MutinyNotificationClient;
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY};
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
@@ -61,6 +63,8 @@ use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
 use ::nostr::{Event, Kind, Metadata};
 use bip39::Mnemonic;
+use bitcoin::hashes::hex::ToHex;
+use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::Network;
@@ -86,6 +90,7 @@ pub struct MutinyWalletConfig {
     auth_client: Option<Arc<MutinyAuthClient>>,
     subscription_url: Option<String>,
     scorer_url: Option<String>,
+    notification_url: Option<String>,
     do_not_connect_peers: bool,
     skip_device_lock: bool,
     pub safe_mode: bool,
@@ -103,6 +108,7 @@ impl MutinyWalletConfig {
         auth_client: Option<Arc<MutinyAuthClient>>,
         subscription_url: Option<String>,
         scorer_url: Option<String>,
+        notification_url: Option<String>,
         skip_device_lock: bool,
     ) -> Self {
         Self {
@@ -113,6 +119,7 @@ impl MutinyWalletConfig {
             user_esplora_url,
             user_rgs_url,
             scorer_url,
+            notification_url,
             lsp_url,
             auth_client,
             subscription_url,
@@ -142,6 +149,7 @@ pub struct MutinyWallet<S: MutinyStorage> {
     pub storage: S,
     pub node_manager: Arc<NodeManager<S>>,
     pub nostr: Arc<NostrManager<S>>,
+    pub notification_client: Option<Arc<MutinyNotificationClient>>,
 }
 
 impl<S: MutinyStorage> MutinyWallet<S> {
@@ -163,10 +171,36 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         NodeManager::start_sync(node_manager.clone());
 
+        let notification_client = match config.notification_url.clone() {
+            Some(url) => {
+                let client = match config.auth_client.clone() {
+                    Some(auth_client) => MutinyNotificationClient::new_authenticated(
+                        auth_client,
+                        url,
+                        node_manager.logger.clone(),
+                    ),
+                    None => {
+                        // hash key and use that as identifier
+                        let hash = sha256::Hash::hash(&config.xprivkey.private_key.secret_bytes());
+                        let identifier_key = hash.to_hex();
+                        MutinyNotificationClient::new_unauthenticated(
+                            url,
+                            identifier_key,
+                            node_manager.logger.clone(),
+                        )
+                    }
+                };
+
+                Some(Arc::new(client))
+            }
+            None => None,
+        };
+
         // create nostr manager
         let nostr = Arc::new(NostrManager::from_mnemonic(
             node_manager.xprivkey,
             storage.clone(),
+            notification_client.clone(),
             node_manager.logger.clone(),
         )?);
 
@@ -175,6 +209,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             storage,
             node_manager,
             nostr,
+            notification_client,
         };
 
         #[cfg(not(test))]
@@ -632,6 +667,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         );
         let mw = MutinyWallet::new(storage.clone(), config)
@@ -656,6 +692,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Regtest,
+            None,
             None,
             None,
             None,
@@ -692,6 +729,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Regtest,
+            None,
             None,
             None,
             None,
@@ -735,6 +773,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         );
         let mw = MutinyWallet::new(storage.clone(), config)
@@ -754,6 +793,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Regtest,
+            None,
             None,
             None,
             None,
