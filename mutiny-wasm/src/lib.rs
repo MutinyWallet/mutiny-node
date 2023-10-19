@@ -23,6 +23,7 @@ use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
+use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
 use lightning::routing::gossip::NodeId;
 use lightning_invoice::Bolt11Invoice;
@@ -47,6 +48,15 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 use wasm_bindgen::prelude::*;
+
+static INITIALIZED: once_cell::sync::Lazy<Mutex<bool>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(false));
+
+#[cfg(test)]
+async fn uninit() {
+    let mut init = INITIALIZED.lock().await;
+    *init = false;
+}
 
 #[wasm_bindgen]
 pub struct MutinyWallet {
@@ -84,6 +94,13 @@ impl MutinyWallet {
         skip_device_lock: Option<bool>,
         safe_mode: Option<bool>,
     ) -> Result<MutinyWallet, MutinyJsError> {
+        let mut init = INITIALIZED.lock().await;
+        if *init {
+            return Err(MutinyJsError::AlreadyRunning);
+        } else {
+            *init = true;
+        }
+
         utils::set_panic_hook();
         let safe_mode = safe_mode.unwrap_or(false);
         let logger = Arc::new(MutinyLogger::default());
@@ -1453,8 +1470,9 @@ impl MutinyWallet {
 #[cfg(test)]
 mod tests {
     use crate::utils::test::*;
-    use crate::MutinyWallet;
+    use crate::{uninit, MutinyWallet};
 
+    use crate::error::MutinyJsError;
     use crate::indexed_db::IndexedDbStorage;
     use js_sys::Array;
     use mutiny_core::storage::MutinyStorage;
@@ -1494,6 +1512,65 @@ mod tests {
         IndexedDbStorage::clear()
             .await
             .expect("failed to clear storage");
+        uninit().await;
+    }
+
+    #[test]
+    async fn fail_to_create_2_mutiny_wallets() {
+        log!("trying to create 2 mutiny wallets!");
+        let password = Some("password".to_string());
+
+        assert!(!MutinyWallet::has_node_manager(password.clone()).await);
+        MutinyWallet::new(
+            password.clone(),
+            None,
+            None,
+            Some("regtest".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("mutiny wallet should initialize");
+        super::utils::sleep(1_000).await;
+        assert!(MutinyWallet::has_node_manager(password.clone()).await);
+
+        // try to create a second
+        let result = MutinyWallet::new(
+            password.clone(),
+            None,
+            None,
+            Some("regtest".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        if let Err(MutinyJsError::AlreadyRunning) = result {
+            // this is the expected error
+        } else {
+            panic!("should have failed to create a second mutiny wallet");
+        };
+
+        IndexedDbStorage::clear()
+            .await
+            .expect("failed to clear storage");
+        uninit().await;
     }
 
     #[test]
@@ -1531,6 +1608,7 @@ mod tests {
         IndexedDbStorage::clear()
             .await
             .expect("failed to clear storage");
+        uninit().await;
     }
 
     #[test]
@@ -1575,6 +1653,7 @@ mod tests {
         IndexedDbStorage::clear()
             .await
             .expect("failed to clear storage");
+        uninit().await;
     }
 
     fn js_to_option_vec_string(js_val: JsValue) -> Result<Option<Vec<String>>, JsValue> {
@@ -1649,6 +1728,7 @@ mod tests {
         IndexedDbStorage::clear()
             .await
             .expect("failed to clear storage");
+        uninit().await;
     }
 
     #[test]
@@ -1704,5 +1784,6 @@ mod tests {
         IndexedDbStorage::clear()
             .await
             .expect("failed to clear storage");
+        uninit().await;
     }
 }
