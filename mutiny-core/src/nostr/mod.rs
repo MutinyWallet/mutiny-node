@@ -378,7 +378,7 @@ impl<S: MutinyStorage> NostrManager<S> {
 
     fn find_nwc_data(
         &self,
-        hash: sha256::Hash,
+        hash: &sha256::Hash,
     ) -> Result<(NostrWalletConnect, PendingNwcInvoice), MutinyError> {
         let pending: Vec<PendingNwcInvoice> = self
             .storage
@@ -387,7 +387,7 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let inv = pending
             .iter()
-            .find(|x| x.invoice.payment_hash() == &hash)
+            .find(|x| x.invoice.payment_hash() == hash)
             .ok_or(MutinyError::NotFound)?;
 
         let nwc = {
@@ -449,7 +449,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         node_manager: &NodeManager<S>,
         from_node: &PublicKey,
     ) -> Result<EventId, MutinyError> {
-        let (nwc, inv) = self.find_nwc_data(hash)?;
+        let (nwc, inv) = self.find_nwc_data(&hash)?;
 
         let resp = nwc
             .pay_nwc_invoice(node_manager, from_node, &inv.invoice)
@@ -488,7 +488,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                 }),
                 result: None,
             };
-            let (nwc, inv) = self.find_nwc_data(hash)?;
+            let (nwc, inv) = self.find_nwc_data(&hash)?;
             self.broadcast_nwc_response(resp, nwc, inv).await?;
         }
 
@@ -508,6 +508,76 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         self.storage
             .set_data(PENDING_NWC_EVENTS_KEY, invoices, None)?;
+
+        Ok(())
+    }
+
+    /// Removes all invoices from the pending list
+    pub async fn deny_all_pending_nwc(&self) -> Result<(), MutinyError> {
+        // wait for lock
+        self.pending_nwc_lock.lock().await;
+
+        // need to tell relay to remove the invoice
+        // doesn't work in test environment
+        #[cfg(not(test))]
+        {
+            let client = Client::new(&self.primary_key);
+
+            let relays = self.get_relays();
+            for relay in relays {
+                #[cfg(target_arch = "wasm32")]
+                let add_relay_res = client.add_relay(relay.as_str()).await;
+                #[cfg(not(target_arch = "wasm32"))]
+                let add_relay_res = client.add_relay(relay.as_str(), None).await;
+
+                add_relay_res.expect("Failed to add relays");
+            }
+
+            client.connect().await;
+
+            let invoices: Vec<PendingNwcInvoice> = self
+                .storage
+                .get_data(PENDING_NWC_EVENTS_KEY)?
+                .unwrap_or_default();
+
+            for invoice in invoices {
+                let resp = Response {
+                    result_type: Method::PayInvoice,
+                    error: Some(NIP47Error {
+                        code: ErrorCode::Other,
+                        message: "Rejected".to_string(),
+                    }),
+                    result: None,
+                };
+                let (nwc, inv) = self.find_nwc_data(invoice.invoice.payment_hash())?;
+
+                let encrypted = encrypt(
+                    &nwc.server_key.secret_key().unwrap(),
+                    &nwc.client_pubkey(),
+                    resp.as_json(),
+                )
+                .unwrap();
+
+                let p_tag = Tag::PubKey(inv.pubkey, None);
+                let e_tag = Tag::Event(inv.event_id, None, None);
+                let response =
+                    EventBuilder::new(Kind::WalletConnectResponse, encrypted, &[p_tag, e_tag])
+                        .to_event(&nwc.server_key)
+                        .map_err(|e| {
+                            MutinyError::Other(anyhow::anyhow!("Failed to create event: {e:?}"))
+                        })?;
+
+                client.send_event(response).await.map_err(|e| {
+                    MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}"))
+                })?;
+            }
+
+            let _ = client.disconnect().await;
+        }
+
+        // need to define the type here, otherwise it will be ambiguous
+        let empty: Vec<PendingNwcInvoice> = vec![];
+        self.storage.set_data(PENDING_NWC_EVENTS_KEY, empty, None)?;
 
         Ok(())
     }
