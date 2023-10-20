@@ -51,7 +51,9 @@ pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
 use crate::auth::MutinyAuthClient;
 use crate::labels::{Contact, LabelStorage};
-use crate::nostr::nwc::{NwcProfileTag, SpendingConditions};
+use crate::nostr::nwc::{
+    BudgetPeriod, BudgetedSpendingConditions, NwcProfileTag, SpendingConditions,
+};
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY};
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
@@ -357,7 +359,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 // account for 3 day grace period
                 if expired_time + 86_400 * 3 > crate::utils::now().as_secs() {
                     // now submit the NWC string if never created before
-                    self.ensure_mutiny_nwc_profile(subscription_client).await?;
+                    self.ensure_mutiny_nwc_profile(subscription_client, false)
+                        .await?;
                 }
             }
             Ok(expired)
@@ -367,7 +370,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Pay the subscription invoice. This will post a NWC automatically afterwards.
-    pub async fn pay_subscription_invoice(&self, inv: &Bolt11Invoice) -> Result<(), MutinyError> {
+    pub async fn pay_subscription_invoice(
+        &self,
+        inv: &Bolt11Invoice,
+        autopay: bool,
+    ) -> Result<(), MutinyError> {
         if let Some(subscription_client) = self.node_manager.subscription_client.clone() {
             let nodes = self.node_manager.nodes.lock().await;
             let first_node_pubkey = if let Some(node) = nodes.values().next() {
@@ -388,7 +395,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 .await?;
 
             // now submit the NWC string if never created before
-            self.ensure_mutiny_nwc_profile(subscription_client).await?;
+            self.ensure_mutiny_nwc_profile(subscription_client, autopay)
+                .await?;
 
             Ok(())
         } else {
@@ -399,6 +407,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     async fn ensure_mutiny_nwc_profile(
         &self,
         subscription_client: Arc<subscription::MutinySubscriptionClient>,
+        autopay: bool,
     ) -> Result<(), MutinyError> {
         let nwc_profiles = self.nostr.profiles();
         let reserved_profile_index = ReservedProfile::MutinySubscription.info().1;
@@ -409,16 +418,33 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         match profile_opt {
             None => {
                 // profile with the reserved index does not exist, create a new one
-                let profile = self
-                    .nostr
-                    .create_new_nwc_profile(
-                        ProfileType::Reserved(ReservedProfile::MutinySubscription),
-                        SpendingConditions::RequireApproval,
-                        NwcProfileTag::Subscription,
-                    )
-                    .await?;
+                let nwc = if autopay {
+                    self.nostr
+                        .create_new_nwc_profile(
+                            ProfileType::Reserved(ReservedProfile::MutinySubscription),
+                            SpendingConditions::Budget(BudgetedSpendingConditions {
+                                budget: 21_000,
+                                single_max: None,
+                                payments: vec![],
+                                period: BudgetPeriod::Month,
+                            }),
+                            NwcProfileTag::Subscription,
+                        )
+                        .await?
+                        .nwc_uri
+                } else {
+                    self.nostr
+                        .create_new_nwc_profile(
+                            ProfileType::Reserved(ReservedProfile::MutinySubscription),
+                            SpendingConditions::RequireApproval,
+                            NwcProfileTag::Subscription,
+                        )
+                        .await?
+                        .nwc_uri
+                };
+
                 // only should have to submit the NWC if never created locally before
-                subscription_client.submit_nwc(profile.nwc_uri).await?;
+                subscription_client.submit_nwc(nwc).await?;
             }
             Some(profile) => {
                 if profile.tag != NwcProfileTag::Subscription {

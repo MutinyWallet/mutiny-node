@@ -1320,9 +1320,15 @@ impl MutinyWallet {
     }
 
     /// Pay the subscription invoice. This will post a NWC automatically afterwards.
-    pub async fn pay_subscription_invoice(&self, invoice_str: String) -> Result<(), MutinyJsError> {
+    pub async fn pay_subscription_invoice(
+        &self,
+        invoice_str: String,
+        autopay: bool,
+    ) -> Result<(), MutinyJsError> {
         let invoice = Bolt11Invoice::from_str(&invoice_str)?;
-        self.inner.pay_subscription_invoice(&invoice).await?;
+        self.inner
+            .pay_subscription_invoice(&invoice, autopay)
+            .await?;
         Ok(())
     }
 
