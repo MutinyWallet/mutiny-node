@@ -105,6 +105,8 @@ pub struct MutinyBip21RawMaterials {
     pub invoice: Option<Bolt11Invoice>,
     pub btc_amount: Option<String>,
     pub labels: Vec<String>,
+    pub pj: Option<String>,
+    pub ohttp: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
@@ -715,6 +717,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         Err(MutinyError::WalletOperationFailed)
     }
 
+    // Send v1 payjoin request
     pub async fn send_payjoin(
         &self,
         uri: Uri<'_, NetworkUnchecked>,
@@ -787,6 +790,52 @@ impl<S: MutinyStorage> NodeManager<S> {
         self.broadcast_transaction(tx).await?;
         log_debug!(self.logger, "Payjoin broadcast! TXID: {txid}");
         Ok(txid)
+    }
+
+    /// Poll the payjoin relay to maintain a payjoin session and create a payjoin proposal.
+    pub async fn receive_payjoin(
+        wallet: Arc<OnChainWallet<S>>,
+        mut enrolled: payjoin::receive::v2::Enrolled,
+    ) -> Result<Txid, crate::payjoin::Error> {
+        let http_client = reqwest::Client::builder().build()?;
+        let proposal: payjoin::receive::v2::UncheckedProposal =
+            Self::poll_for_fallback_psbt(&http_client, &mut enrolled).await?;
+        let mut payjoin_proposal = wallet
+            .process_payjoin_proposal(proposal)
+            .map_err(crate::payjoin::Error::Wallet)?;
+
+        let (req, ohttp_ctx) = payjoin_proposal.extract_v2_req()?;
+        let res = http_client
+            .post(req.url)
+            .header("Content-Type", "message/ohttp-req")
+            .body(req.body)
+            .send()
+            .await?;
+        let res = res.bytes().await?;
+        // enroll must succeed
+        let _res = payjoin_proposal.deserialize_res(res.to_vec(), ohttp_ctx)?;
+        Ok(payjoin_proposal.psbt().clone().extract_tx().txid())
+    }
+
+    async fn poll_for_fallback_psbt(
+        client: &reqwest::Client,
+        enroller: &mut payjoin::receive::v2::Enrolled,
+    ) -> Result<payjoin::receive::v2::UncheckedProposal, crate::payjoin::Error> {
+        loop {
+            let (req, context) = enroller.extract_req()?;
+            let ohttp_response = client
+                .post(req.url)
+                .header("Content-Type", "message/ohttp-req")
+                .body(req.body)
+                .send()
+                .await?;
+            let ohttp_response = ohttp_response.bytes().await?;
+            let proposal = enroller.process_res(ohttp_response.as_ref(), context)?;
+            match proposal {
+                Some(proposal) => return Ok(proposal),
+                None => utils::sleep(5000).await,
+            }
+        }
     }
 
     /// Sends an on-chain transaction to the given address.

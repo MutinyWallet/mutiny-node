@@ -14,7 +14,7 @@ use bdk_esplora::EsploraAsyncExt;
 use bitcoin::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::consensus::serialize;
 use bitcoin::psbt::{Input, PartiallySignedTransaction};
-use bitcoin::{Address, Network, OutPoint, ScriptBuf, Transaction, Txid};
+use bitcoin::{Address, Network, OutPoint, Script, ScriptBuf, Transaction, Txid};
 use esplora_client::AsyncClient;
 use hex_conservative::DisplayHex;
 use lightning::events::bump_transaction::{Utxo, WalletSource};
@@ -355,8 +355,113 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         Ok(())
     }
 
+    fn is_mine(&self, script: &Script) -> Result<bool, MutinyError> {
+        Ok(self.wallet.try_read()?.is_mine(script))
+    }
+
     pub fn list_utxos(&self) -> Result<Vec<LocalOutput>, MutinyError> {
         Ok(self.wallet.try_read()?.list_unspent().collect())
+    }
+
+    pub fn process_payjoin_proposal(
+        &self,
+        proposal: payjoin::receive::v2::UncheckedProposal,
+    ) -> Result<payjoin::receive::v2::PayjoinProposal, payjoin::Error> {
+        use payjoin::Error;
+
+        // Receive Check 1 bypass: We're not an automated payment processor.
+        let proposal = proposal.assume_interactive_receiver();
+        log::trace!("check1");
+
+        // Receive Check 2: receiver can't sign for proposal inputs
+        let proposal = proposal.check_inputs_not_owned(|input| {
+            self.is_mine(input).map_err(|e| Error::Server(e.into()))
+        })?;
+        log::trace!("check2");
+
+        // Receive Check 3: receiver can't sign for proposal inputs
+        let proposal = proposal.check_no_mixed_input_scripts()?;
+        log::trace!("check3");
+
+        // Receive Check 4: have we seen this input before?
+        let payjoin = proposal.check_no_inputs_seen_before(|_input| {
+            // This check ensures an automated sender does not get phished. It is not necessary for interactive payjoin **where the sender cannot generate bip21s from us**
+            // assume false since Mutiny is not an automatic payment processor
+            Ok(false)
+        })?;
+        log::trace!("check4");
+
+        let mut provisional_payjoin =
+            payjoin.identify_receiver_outputs(|output: &payjoin::bitcoin::Script| {
+                self.is_mine(output).map_err(|e| Error::Server(e.into()))
+            })?;
+        self.try_contributing_inputs(&mut provisional_payjoin)
+            .expect("input contribution failed");
+
+        // Outputs may be substituted for e.g. batching at this stage
+        // We're not doing this yet.
+
+        let payjoin_proposal = provisional_payjoin.finalize_proposal(
+            |psbt| {
+                let mut psbt = psbt.clone();
+                let wallet = self
+                    .wallet
+                    .try_read()
+                    .map_err(|_| Error::Server(MutinyError::WalletSigningFailed.into()))?;
+                wallet
+                    .sign(&mut psbt, SignOptions::default())
+                    .map_err(|_| Error::Server(MutinyError::WalletSigningFailed.into()))?;
+                Ok(psbt)
+            },
+            // TODO: check Mutiny's minfeerate is present here
+            Some(payjoin::bitcoin::FeeRate::MIN),
+        )?;
+        let payjoin_proposal_psbt = payjoin_proposal.psbt();
+        log::debug!(
+            "Receiver's Payjoin proposal PSBT Rsponse: {:#?}",
+            payjoin_proposal_psbt
+        );
+        Ok(payjoin_proposal)
+    }
+
+    fn try_contributing_inputs(
+        &self,
+        payjoin: &mut payjoin::receive::v2::ProvisionalProposal,
+    ) -> Result<(), MutinyError> {
+        use payjoin::bitcoin::Amount;
+
+        let available_inputs = self
+            .list_utxos()
+            .expect("Failed to list unspent from bitcoind");
+        let candidate_inputs: std::collections::HashMap<Amount, OutPoint> = available_inputs
+            .iter()
+            .map(|i| {
+                (
+                    Amount::from_sat(i.txout.value),
+                    OutPoint::from_str(&i.outpoint.to_string()).unwrap(),
+                )
+            })
+            .collect();
+
+        let selected_outpoint = payjoin
+            .try_preserving_privacy(candidate_inputs)
+            .expect("no privacy-preserving selection available");
+        let selected_utxo = available_inputs
+            .iter()
+            .find(|i| OutPoint::from_str(&i.outpoint.to_string()).unwrap() == selected_outpoint)
+            .expect("This shouldn't happen. Failed to retrieve the privacy preserving utxo from those we provided to the seclector.");
+        log::debug!("selected utxo: {:#?}", selected_utxo);
+
+        // calculate receiver payjoin outputs given receiver payjoin inputs and original_psbt,
+        let txo_to_contribute = payjoin::bitcoin::TxOut {
+            value: selected_utxo.txout.value,
+            script_pubkey: payjoin::bitcoin::Script::from_bytes(
+                &selected_utxo.txout.script_pubkey.clone().into_bytes(),
+            )
+            .into(),
+        };
+        payjoin.contribute_witness_input(txo_to_contribute, selected_outpoint);
+        Ok(())
     }
 
     pub fn list_transactions(
