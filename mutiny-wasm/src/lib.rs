@@ -1292,6 +1292,14 @@ impl MutinyWallet {
         Ok(())
     }
 
+    /// Removes all invoices from the pending list
+    #[wasm_bindgen]
+    pub async fn deny_all_pending_nwc(&self) -> Result<(), MutinyJsError> {
+        self.inner.nostr.deny_all_pending_nwc().await?;
+
+        Ok(())
+    }
+
     /// Checks whether or not the user is subscribed to Mutiny+.
     /// Submits a NWC string to keep the subscription active if not expired.
     ///
