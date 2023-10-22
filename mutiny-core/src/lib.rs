@@ -8,6 +8,7 @@
     type_alias_bounds
 )]
 extern crate core;
+extern crate payjoin as pj;
 
 pub mod auth;
 pub mod blindauth;
@@ -33,6 +34,7 @@ mod node;
 pub mod nodemanager;
 pub mod nostr;
 mod onchain;
+mod payjoin;
 mod peermanager;
 pub mod scorer;
 pub mod storage;
@@ -1573,11 +1575,31 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             return Err(MutinyError::WalletOperationFailed);
         };
 
+        let (pj, ohttp) = match self.node_manager.start_payjoin_session().await {
+            Ok((enrolled, ohttp_keys)) => {
+                let pj_uri = enrolled.fallback_target();
+                self.node_manager.spawn_payjoin_receiver(enrolled);
+                let ohttp = base64::encode_config(
+                    ohttp_keys
+                        .encode()
+                        .map_err(|_| MutinyError::PayjoinConfigError)?,
+                    base64::URL_SAFE_NO_PAD,
+                );
+                (Some(pj_uri), Some(ohttp))
+            }
+            Err(e) => {
+                log_error!(self.logger, "Error enrolling payjoin: {e}");
+                (None, None)
+            }
+        };
+
         Ok(MutinyBip21RawMaterials {
             address,
             invoice,
             btc_amount: amount.map(|amount| bitcoin::Amount::from_sat(amount).to_btc().to_string()),
             labels,
+            pj,
+            ohttp,
         })
     }
 

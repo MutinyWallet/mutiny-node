@@ -2,6 +2,7 @@ use crate::auth::MutinyAuthClient;
 use crate::labels::LabelStorage;
 use crate::ldkstorage::CHANNEL_CLOSURE_PREFIX;
 use crate::logging::LOGGING_KEY;
+use crate::payjoin::Error as PayjoinError;
 use crate::utils::{sleep, spawn};
 use crate::MutinyInvoice;
 use crate::MutinyWalletConfig;
@@ -50,6 +51,7 @@ use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use lightning_transaction_sync::EsploraSyncClient;
 use payjoin::Uri;
+use pj::receive::v2::Enrolled;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -99,6 +101,8 @@ pub struct MutinyBip21RawMaterials {
     pub invoice: Option<Bolt11Invoice>,
     pub btc_amount: Option<String>,
     pub labels: Vec<String>,
+    pub pj: Option<String>,
+    pub ohttp: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
@@ -666,6 +670,34 @@ impl<S: MutinyStorage> NodeManager<S> {
         Err(MutinyError::WalletOperationFailed)
     }
 
+    pub async fn start_payjoin_session(
+        &self,
+    ) -> Result<(Enrolled, payjoin::OhttpKeys), PayjoinError> {
+        use crate::payjoin::{fetch_ohttp_keys, random_ohttp_relay, PAYJOIN_DIR};
+
+        let ohttp_keys = fetch_ohttp_keys(PAYJOIN_DIR.to_owned()).await?;
+        let http_client = reqwest::Client::builder().build()?;
+
+        let mut enroller = payjoin::receive::v2::Enroller::from_directory_config(
+            PAYJOIN_DIR.to_owned(),
+            ohttp_keys.clone(),
+            random_ohttp_relay().to_owned(),
+        );
+        let (req, context) = enroller.extract_req()?;
+        let ohttp_response = http_client
+            .post(req.url)
+            .header("Content-Type", "message/ohttp-req")
+            .body(req.body)
+            .send()
+            .await?;
+        let ohttp_response = ohttp_response.bytes().await?;
+        Ok((
+            enroller.process_res(ohttp_response.as_ref(), context)?,
+            ohttp_keys,
+        ))
+    }
+
+    // Send v1 payjoin request
     pub async fn send_payjoin(
         &self,
         uri: Uri<'_, NetworkUnchecked>,
@@ -738,6 +770,78 @@ impl<S: MutinyStorage> NodeManager<S> {
         self.broadcast_transaction(tx).await?;
         log_debug!(self.logger, "Payjoin broadcast! TXID: {txid}");
         Ok(txid)
+    }
+
+    pub fn spawn_payjoin_receiver(&self, enrolled: Enrolled) {
+        let logger = self.logger.clone();
+        let wallet = self.wallet.clone();
+        utils::spawn(async move {
+            match Self::receive_payjoin(wallet, enrolled).await {
+                Ok(txid) => log_info!(logger, "Received payjoin txid: {txid}"),
+                Err(e) => log_error!(logger, "Error receiving payjoin: {e}"),
+            };
+        });
+    }
+
+    /// Poll the payjoin relay to maintain a payjoin session and create a payjoin proposal.
+    async fn receive_payjoin(
+        wallet: Arc<OnChainWallet<S>>,
+        mut enrolled: payjoin::receive::v2::Enrolled,
+    ) -> Result<Txid, MutinyError> {
+        let http_client = reqwest::Client::builder()
+            .build()
+            .map_err(PayjoinError::Reqwest)?;
+        let proposal: payjoin::receive::v2::UncheckedProposal =
+            Self::poll_for_fallback_psbt(&http_client, &mut enrolled).await?;
+        let original_tx = proposal.extract_tx_to_schedule_broadcast();
+        let mut payjoin_proposal = match wallet
+            .process_payjoin_proposal(proposal)
+            .map_err(|e| PayjoinError::ReceiverStateMachine(e.to_string()))
+        {
+            Ok(p) => p,
+            Err(e) => {
+                wallet.broadcast_transaction(original_tx).await?;
+                return Err(e.into());
+            }
+        };
+
+        let (req, ohttp_ctx) = payjoin_proposal
+            .extract_v2_req()
+            .map_err(|e| PayjoinError::ReceiverStateMachine(e.to_string()))?;
+        let res = http_client
+            .post(req.url)
+            .header("Content-Type", "message/ohttp-req")
+            .body(req.body)
+            .send()
+            .await
+            .map_err(PayjoinError::Reqwest)?;
+        let res = res.bytes().await.map_err(PayjoinError::Reqwest)?;
+        // enroll must succeed
+        let _res = payjoin_proposal
+            .deserialize_res(res.to_vec(), ohttp_ctx)
+            .map_err(|e| PayjoinError::ReceiverStateMachine(e.to_string()))?;
+        Ok(payjoin_proposal.psbt().clone().extract_tx().txid())
+    }
+
+    async fn poll_for_fallback_psbt(
+        client: &reqwest::Client,
+        enroller: &mut payjoin::receive::v2::Enrolled,
+    ) -> Result<payjoin::receive::v2::UncheckedProposal, PayjoinError> {
+        loop {
+            let (req, context) = enroller.extract_req()?;
+            let ohttp_response = client
+                .post(req.url)
+                .header("Content-Type", "message/ohttp-req")
+                .body(req.body)
+                .send()
+                .await?;
+            let ohttp_response = ohttp_response.bytes().await?;
+            let proposal = enroller.process_res(ohttp_response.as_ref(), context)?;
+            match proposal {
+                Some(proposal) => return Ok(proposal),
+                None => utils::sleep(5000).await,
+            }
+        }
     }
 
     /// Sends an on-chain transaction to the given address.
