@@ -22,7 +22,7 @@ pub const SCB_ENCRYPTION_KEY_DERIVATION_PATH: &str = "m/444'/444'/444'";
 #[derive(Default, PartialEq, Eq, Clone)]
 pub struct StaticChannelBackup {
     /// Map of the channel outpoint to the channel monitor
-    /// This is a Vec<u8> because we can't implement Readable for ChannelMonitor
+    /// This is a `Vec<u8>` because we can't implement Readable for ChannelMonitor
     /// without having a KeysManager, which we don't have here.
     pub(crate) monitors: HashMap<OutPoint, Vec<u8>>,
 }
