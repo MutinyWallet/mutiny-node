@@ -41,7 +41,6 @@ use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use core::time::Duration;
 use esplora_client::Builder;
 use futures::{future::join_all, lock::Mutex};
-use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::chain::Confirm;
 use lightning::events::ClosureReason;
 use lightning::io::Read;
@@ -1460,25 +1459,19 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Gets a fee estimate for a very low priority transaction.
     /// Value is in sat/vbyte.
     pub fn estimate_fee_low(&self) -> u32 {
-        self.fee_estimator
-            .get_est_sat_per_1000_weight(ConfirmationTarget::Background)
-            / 250
+        self.fee_estimator.get_low_fee_rate() / 250
     }
 
     /// Gets a fee estimate for an average priority transaction.
     /// Value is in sat/vbyte.
     pub fn estimate_fee_normal(&self) -> u32 {
-        self.fee_estimator
-            .get_est_sat_per_1000_weight(ConfirmationTarget::Normal)
-            / 250
+        self.fee_estimator.get_normal_fee_rate() / 250
     }
 
     /// Gets a fee estimate for an high priority transaction.
     /// Value is in sat/vbyte.
     pub fn estimate_fee_high(&self) -> u32 {
-        self.fee_estimator
-            .get_est_sat_per_1000_weight(ConfirmationTarget::HighPriority)
-            / 250
+        self.fee_estimator.get_high_fee_rate() / 250
     }
 
     /// Creates a new lightning node and adds it to the manager.
@@ -2077,9 +2070,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
                     // ldk uses background fee rate for closing channels which can be very slow
                     // so we use normal fee rate instead
-                    let fee_rate = self
-                        .fee_estimator
-                        .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+                    let fee_rate = self.wallet.fees.get_normal_fee_rate();
 
                     node.channel_manager
                         .close_channel_with_feerate_and_script(

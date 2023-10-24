@@ -15,7 +15,6 @@ use bitcoin::hashes::hex::ToHex;
 use bitcoin::psbt::PartiallySignedTransaction;
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, OutPoint, Script, Transaction, Txid};
-use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::events::bump_transaction::{Utxo, WalletSource};
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info, log_warn};
@@ -447,9 +446,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
         } else {
-            let sat_per_kwu = self
-                .fees
-                .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+            let sat_per_kwu = self.fees.get_normal_fee_rate();
             FeeRate::from_sat_per_kwu(sat_per_kwu as f32)
         };
         let (mut psbt, details) = {
@@ -495,9 +492,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
         } else {
-            let sat_per_kwu = self
-                .fees
-                .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+            let sat_per_kwu = self.fees.get_normal_fee_rate();
             FeeRate::from_sat_per_kwu(sat_per_kwu as f32)
         };
         let (mut psbt, details) = {
