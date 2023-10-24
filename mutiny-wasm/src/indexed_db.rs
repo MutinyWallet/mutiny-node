@@ -258,12 +258,12 @@ impl IndexedDbStorage {
             match current.get::<Vec<u8>>(&key)? {
                 Some(bytes) => {
                     // check first byte is 1, then take u64 from next 8 bytes
-                    let current_version = utils::get_monitor_version(bytes);
+                    let current_version = utils::get_monitor_version(&bytes);
 
                     let obj: Value = LocalStorage::get(&key).unwrap();
                     let value = decrypt_value(&key, obj, current.password())?;
                     if let Ok(local_bytes) = serde_json::from_value::<Vec<u8>>(value.clone()) {
-                        let local_version = utils::get_monitor_version(local_bytes);
+                        let local_version = utils::get_monitor_version(&local_bytes);
 
                         // if the current version is less than the version from local storage
                         // then we want to use the local storage version
@@ -372,7 +372,7 @@ impl IndexedDbStorage {
                     // we can get versions from monitors, so we should compare
                     match current.get::<Vec<u8>>(&kv.key)? {
                         Some(bytes) => {
-                            let current_version = utils::get_monitor_version(bytes);
+                            let current_version = utils::get_monitor_version(&bytes);
 
                             // if the current version is less than the version from vss, then we want to use the vss version
                             if current_version < kv.version as u64 {

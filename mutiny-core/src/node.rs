@@ -1,5 +1,5 @@
 use crate::labels::LabelStorage;
-use crate::ldkstorage::ChannelOpenParams;
+use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
 use crate::nodemanager::ChannelClosure;
 use crate::scb::StaticChannelBackup;
 use crate::{
@@ -39,6 +39,7 @@ use lightning::{
 };
 
 use crate::multiesplora::MultiEsploraClient;
+use crate::utils::get_monitor_version;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
 use lightning::ln::PaymentSecret;
@@ -547,6 +548,80 @@ impl<S: MutinyStorage> Node<S> {
             "Node started: {}",
             keys_manager.get_node_id(Recipient::Node).unwrap()
         );
+
+        // Here we re-attempt to persist any monitors that failed to persist previously.
+        let retry_logger = logger.clone();
+        let retry_persister = persister.clone();
+        let retry_stop = stop.clone();
+        let retry_chain_monitor = chain_monitor.clone();
+        utils::spawn(async move {
+            loop {
+                if retry_stop.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let updates = retry_chain_monitor.list_pending_monitor_updates();
+                for (funding_txo, update_ids) in updates {
+                    // if there are no updates, skip
+                    if update_ids.is_empty() {
+                        continue;
+                    }
+
+                    log_debug!(
+                        retry_logger,
+                        "Retrying to persist monitor for outpoint: {funding_txo:?}"
+                    );
+
+                    match retry_chain_monitor.get_monitor(funding_txo) {
+                        Ok(monitor) => {
+                            let key = retry_persister.get_monitor_key(&funding_txo);
+                            let object = monitor.encode();
+                            let update_id = monitor.get_latest_update_id();
+                            debug_assert_eq!(update_id, get_monitor_version(&object));
+
+                            // safely convert u64 to u32
+                            let version = if update_id >= u32::MAX as u64 {
+                                u32::MAX
+                            } else {
+                                update_id as u32
+                            };
+
+                            let res = persist_monitor(
+                                &retry_persister.storage,
+                                &key,
+                                &object,
+                                Some(version),
+                                &retry_logger,
+                            )
+                            .await;
+
+                            match res {
+                                Ok(_) => {
+                                    for id in update_ids {
+                                        if let Err(e) = retry_chain_monitor
+                                            .channel_monitor_updated(funding_txo, id)
+                                        {
+                                            log_error!(retry_logger, "Error notifying chain monitor of channel monitor update: {e:?}");
+                                        }
+                                    }
+                                }
+                                Err(e) => log_error!(
+                                    retry_logger,
+                                    "Failed to persist monitor for outpoint: {funding_txo:?}, error: {e:?}",
+                                ),
+                            }
+                        }
+                        Err(_) => log_error!(
+                            retry_logger,
+                            "Failed to get monitor for outpoint: {funding_txo:?}"
+                        ),
+                    }
+                }
+
+                // sleep 3 seconds
+                sleep(3_000).await;
+            }
+        });
 
         Ok(Node {
             _uuid: uuid,

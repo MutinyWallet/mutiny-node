@@ -178,7 +178,7 @@ where
 
 /// Returns the version of a channel monitor from a serialized version
 /// of a channel monitor.
-pub fn get_monitor_version(bytes: Vec<u8>) -> u64 {
+pub fn get_monitor_version(bytes: &[u8]) -> u64 {
     // first two bytes are the version
     // next 8 bytes are the version number
     u64::from_be_bytes(bytes[2..10].try_into().unwrap())
