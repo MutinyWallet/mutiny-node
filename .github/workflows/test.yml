@@ -25,12 +25,16 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: nightly
+          target: wasm32-unknown-unknown
           components: rustfmt
           profile: minimal
 
       - name: Check formatting
         run: |
           cargo +nightly fmt -- --check
+
+      - name: Check docs
+        run: cargo +nightly doc
 
   website:
     name: Build WASM binary

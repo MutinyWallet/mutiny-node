@@ -7,7 +7,7 @@
 
 extern crate mutiny_core;
 
-mod error;
+pub mod error;
 mod indexed_db;
 mod models;
 mod utils;
