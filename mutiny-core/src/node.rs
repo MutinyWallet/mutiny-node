@@ -555,6 +555,9 @@ impl<S: MutinyStorage> Node<S> {
         let retry_stop = stop.clone();
         let retry_chain_monitor = chain_monitor.clone();
         utils::spawn(async move {
+            // sleep 3 seconds before checking, we won't have any pending updates on startup
+            sleep(3_000).await;
+
             loop {
                 if retry_stop.load(Ordering::Relaxed) {
                     break;
