@@ -94,6 +94,7 @@ impl MutinyWallet {
         skip_device_lock: Option<bool>,
         safe_mode: Option<bool>,
     ) -> Result<MutinyWallet, MutinyJsError> {
+        utils::set_panic_hook();
         let mut init = INITIALIZED.lock().await;
         if *init {
             return Err(MutinyJsError::AlreadyRunning);
@@ -101,7 +102,50 @@ impl MutinyWallet {
             *init = true;
         }
 
-        utils::set_panic_hook();
+        match Self::new_internal(
+            password,
+            mnemonic_str,
+            websocket_proxy_addr,
+            network_str,
+            user_esplora_url,
+            user_rgs_url,
+            lsp_url,
+            auth_url,
+            subscription_url,
+            storage_url,
+            scorer_url,
+            do_not_connect_peers,
+            skip_device_lock,
+            safe_mode,
+        )
+        .await
+        {
+            Ok(m) => Ok(m),
+            Err(e) => {
+                // mark uninitialized because we failed to startup
+                *init = false;
+                Err(e)
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn new_internal(
+        password: Option<String>,
+        mnemonic_str: Option<String>,
+        websocket_proxy_addr: Option<String>,
+        network_str: Option<String>,
+        user_esplora_url: Option<String>,
+        user_rgs_url: Option<String>,
+        lsp_url: Option<String>,
+        auth_url: Option<String>,
+        subscription_url: Option<String>,
+        storage_url: Option<String>,
+        scorer_url: Option<String>,
+        do_not_connect_peers: Option<bool>,
+        skip_device_lock: Option<bool>,
+        safe_mode: Option<bool>,
+    ) -> Result<MutinyWallet, MutinyJsError> {
         let safe_mode = safe_mode.unwrap_or(false);
         let logger = Arc::new(MutinyLogger::default());
 
