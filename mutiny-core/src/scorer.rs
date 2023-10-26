@@ -320,7 +320,6 @@ impl ScoreLookUp for HubPreferentialScorer {
             penalty = penalty
                 .saturating_sub(HUB_BASE_DISCOUNT_PENALTY_MSAT)
                 .max(hub_to_hub_min_penalty); // Base fee discount
-            penalty = penalty.max(hub_to_hub_min_penalty);
         } else if self.is_preferred_hub(target) {
             // Only the target is a preferred hub (entering the "hub highway")
             penalty = penalty.saturating_mul(7).saturating_div(10); // 30% discount
@@ -335,7 +334,6 @@ impl ScoreLookUp for HubPreferentialScorer {
             penalty = penalty
                 .saturating_add(HUB_BASE_DISCOUNT_PENALTY_MSAT)
                 .max(score_params.base_penalty_msat); // Base fee penalty
-            penalty = penalty.max(score_params.base_penalty_msat);
         }
 
         penalty
