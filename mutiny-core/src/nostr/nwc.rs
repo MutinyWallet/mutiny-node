@@ -371,9 +371,12 @@ impl NostrWalletConnect {
                 return Ok(None);
             }
 
-            // if we have already paid this invoice, skip it
+            // if we have already paid or are attempting to pay this invoice, skip it
             let node = node_manager.get_node(from_node).await?;
-            if node.get_invoice(&invoice).is_ok_and(|i| i.paid()) {
+            if node
+                .get_invoice(&invoice)
+                .is_ok_and(|i| matches!(i.status, HTLCStatus::Succeeded | HTLCStatus::InFlight))
+            {
                 return Ok(None);
             }
             drop(node);
