@@ -1231,7 +1231,19 @@ impl<S: MutinyStorage> NodeManager<S> {
     pub async fn get_activity(&self) -> Result<Vec<ActivityItem>, MutinyError> {
         // todo add contacts to the activity
         let (lightning, closures) =
-            futures_util::try_join!(self.list_invoices(), self.list_channel_closures())?;
+            futures_util::join!(self.list_invoices(), self.list_channel_closures());
+        let lightning = lightning
+            .map_err(|e| {
+                log_warn!(self.logger, "Failed to get lightning activity: {e}");
+                e
+            })
+            .unwrap_or_default();
+        let closures = closures
+            .map_err(|e| {
+                log_warn!(self.logger, "Failed to get channel closures: {e}");
+                e
+            })
+            .unwrap_or_default();
         let onchain = self
             .list_onchain()
             .map_err(|e| {
