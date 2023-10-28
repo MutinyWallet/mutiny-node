@@ -18,7 +18,7 @@ use crate::models::*;
 use crate::utils::sleep;
 use bip39::Mnemonic;
 use bitcoin::consensus::deserialize;
-use bitcoin::hashes::hex::FromHex;
+use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
@@ -1522,6 +1522,13 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub fn convert_sats_to_btc(sats: u64) -> f64 {
         bitcoin::Amount::from_sat(sats).to_btc()
+    }
+
+    /// Convert an npub string to a hex string
+    #[wasm_bindgen]
+    pub async fn npub_to_hexpub(npub: String) -> Result<String, MutinyJsError> {
+        let npub = XOnlyPublicKey::from_bech32(npub)?;
+        Ok(npub.to_hex())
     }
 }
 
