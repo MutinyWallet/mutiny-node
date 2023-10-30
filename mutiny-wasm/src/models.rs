@@ -923,7 +923,7 @@ pub struct NwcProfile {
     /// Require approval before sending a payment
     pub require_approval: bool,
     spending_conditions: SpendingConditions,
-    nwc_uri: String,
+    nwc_uri: Option<String>,
     tag: String,
 }
 
@@ -980,7 +980,7 @@ impl NwcProfile {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn nwc_uri(&self) -> String {
+    pub fn nwc_uri(&self) -> Option<String> {
         self.nwc_uri.clone()
     }
 
@@ -1046,7 +1046,8 @@ impl NwcProfile {
     #[wasm_bindgen(getter)]
     pub fn url_suffix(&self) -> Option<String> {
         if let SpendingConditions::SingleUse(ref cond) = self.spending_conditions {
-            let encoded = urlencoding::encode(&self.nwc_uri);
+            let encoded =
+                urlencoding::encode(self.nwc_uri.as_ref().expect("single use must have uri"));
             Some(format!(
                 "/gift?amount={}&nwc_uri={}",
                 cond.amount_sats, encoded

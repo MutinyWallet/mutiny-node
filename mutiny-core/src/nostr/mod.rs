@@ -1,6 +1,7 @@
 use crate::logging::MutinyLogger;
 use crate::node::Node;
 use crate::nodemanager::NodeManager;
+use crate::nostr::nip49::{NIP49BudgetPeriod, NIP49URI};
 use crate::nostr::nwc::{
     BudgetPeriod, BudgetedSpendingConditions, NostrWalletConnect, NwcProfile, NwcProfileTag,
     PendingNwcInvoice, Profile, SingleUseSpendingConditions, SpendingConditions,
@@ -15,8 +16,8 @@ use bitcoin::secp256k1::{PublicKey, Secp256k1, Signing};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use futures::{pin_mut, select, FutureExt};
 use futures_util::lock::Mutex;
-use lightning::log_warn;
 use lightning::util::logger::Logger;
+use lightning::{log_error, log_warn};
 use nostr::key::SecretKey;
 use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
@@ -27,6 +28,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+pub mod nip49;
 pub mod nwc;
 
 const NWC_ACCOUNT_INDEX: u32 = 1;
@@ -103,7 +105,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             .collect()
     }
 
-    pub fn get_nwc_uri(&self, index: u32) -> Result<NostrWalletConnectURI, MutinyError> {
+    pub fn get_nwc_uri(&self, index: u32) -> Result<Option<NostrWalletConnectURI>, MutinyError> {
         let opt = self
             .nwc
             .read()
@@ -259,6 +261,71 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(nwc.nwc_profile())
     }
 
+    pub(crate) fn nostr_wallet_auth(
+        &self,
+        profile_type: ProfileType,
+        uri: NIP49URI,
+        budget: Option<BudgetedSpendingConditions>,
+        tag: NwcProfileTag,
+    ) -> Result<NwcProfile, MutinyError> {
+        let spending_conditions = match uri.budget {
+            None => match budget {
+                None => SpendingConditions::RequireApproval,
+                Some(budget) => SpendingConditions::Budget(budget),
+            },
+            Some(uri_budget) => {
+                // make sure we don't have 2 budgets
+                if budget.is_some() {
+                    return Err(MutinyError::InvalidArgumentsError);
+                }
+
+                SpendingConditions::Budget(BudgetedSpendingConditions {
+                    budget: uri_budget.amount,
+                    single_max: None,
+                    payments: vec![],
+                    period: match uri_budget.time_period {
+                        NIP49BudgetPeriod::Daily => BudgetPeriod::Day,
+                        NIP49BudgetPeriod::Weekly => BudgetPeriod::Week,
+                        NIP49BudgetPeriod::Monthly => BudgetPeriod::Month,
+                        NIP49BudgetPeriod::Yearly => BudgetPeriod::Year,
+                    },
+                })
+            }
+        };
+
+        let mut profiles = self.nwc.try_write()?;
+
+        let (name, index, child_key_index) = get_next_nwc_index(profile_type, &profiles)?;
+
+        let profile = Profile {
+            name,
+            index,
+            client_key: Some(uri.public_key),
+            child_key_index,
+            relay: "wss://nostr.mutinywallet.com".to_string(), // override with our relay
+            enabled: None,
+            archived: None,
+            spending_conditions,
+            tag,
+        };
+
+        let nwc = NostrWalletConnect::new(&Secp256k1::new(), self.xprivkey, profile)?;
+
+        profiles.push(nwc.clone());
+        profiles.sort_by_key(|nwc| nwc.profile.index);
+
+        // save to storage
+        {
+            let profiles = profiles
+                .iter()
+                .map(|x| x.profile.clone())
+                .collect::<Vec<_>>();
+            self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+        }
+
+        Ok(nwc.nwc_profile())
+    }
+
     /// Creates a new NWC profile and saves to storage
     pub(crate) fn create_new_profile(
         &self,
@@ -266,27 +333,9 @@ impl<S: MutinyStorage> NostrManager<S> {
         spending_conditions: SpendingConditions,
         tag: NwcProfileTag,
     ) -> Result<NwcProfile, MutinyError> {
-        let mut profiles = self.nwc.write().unwrap();
+        let mut profiles = self.nwc.try_write()?;
 
-        let (name, index, child_key_index) = match profile_type {
-            ProfileType::Reserved(reserved_profile) => {
-                let (name, index) = reserved_profile.info();
-                (name.to_string(), index, None)
-            }
-            // Ensure normal profiles start from 1000
-            ProfileType::Normal { name } => {
-                let next_index = profiles
-                    .iter()
-                    .filter(|&nwc| nwc.profile.index >= USER_NWC_PROFILE_START_INDEX)
-                    .max_by(|a, b| a.profile.index.cmp(&b.profile.index))
-                    .map(|nwc| nwc.profile.index + 1)
-                    .unwrap_or(USER_NWC_PROFILE_START_INDEX);
-
-                debug_assert!(next_index >= USER_NWC_PROFILE_START_INDEX);
-
-                (name, next_index, Some(get_random_bip32_child_index()))
-            }
-        };
+        let (name, index, child_key_index) = get_next_nwc_index(profile_type, &profiles)?;
 
         let profile = Profile {
             name,
@@ -297,6 +346,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             archived: None,
             spending_conditions,
             tag,
+            client_key: None,
         };
         let nwc = NostrWalletConnect::new(&Secp256k1::new(), self.xprivkey, profile)?;
 
@@ -368,6 +418,70 @@ impl<S: MutinyStorage> NostrManager<S> {
         });
         self.create_new_nwc_profile(profile, spending_conditions, NwcProfileTag::Gift)
             .await
+    }
+
+    /// Approves a nostr wallet auth request.
+    /// Creates a new NWC profile and saves to storage.
+    /// This will also broadcast the info event to the relay.
+    pub async fn approve_nostr_wallet_auth(
+        &self,
+        profile_type: ProfileType,
+        uri: NIP49URI,
+        budget: Option<BudgetedSpendingConditions>,
+        tag: NwcProfileTag,
+    ) -> Result<NwcProfile, MutinyError> {
+        // for now approve all commands
+        let mut commands = uri.required_commands.clone();
+        commands.extend_from_slice(&uri.optional_commands);
+
+        let secret = uri.secret.clone();
+        let relay = uri.relay_url.to_string();
+        let profile = self.nostr_wallet_auth(profile_type, uri, budget, tag)?;
+
+        let nwc = self.nwc.try_read()?.iter().find_map(|nwc| {
+            if nwc.profile.index == profile.index {
+                Some(nwc.clone())
+            } else {
+                None
+            }
+        });
+
+        if let Some(nwc) = nwc {
+            let client = Client::new(&self.primary_key);
+
+            #[cfg(target_arch = "wasm32")]
+            let add_relay_res = client
+                .add_relays(vec![relay, profile.relay.to_string()])
+                .await;
+
+            #[cfg(not(target_arch = "wasm32"))]
+            let add_relay_res = client
+                .add_relays(vec![(relay, None), (profile.relay.to_string(), None)])
+                .await;
+
+            add_relay_res.expect("Failed to add relays");
+            client.connect().await;
+
+            if let Some(event) = nwc.create_auth_confirmation_event(secret, commands)? {
+                client.send_event(event).await.map_err(|e| {
+                    MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}"))
+                })?;
+            }
+
+            let info_event = nwc.create_nwc_info_event()?;
+            client.send_event(info_event).await.map_err(|e| {
+                MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}"))
+            })?;
+
+            let _ = client.disconnect().await;
+        } else {
+            log_error!(self.logger, "Failed to create info & auth event");
+            return Err(MutinyError::Other(anyhow::anyhow!(
+                "Failed to create info & auth event"
+            )));
+        }
+
+        Ok(profile)
     }
 
     /// Lists all pending NWC invoices
@@ -868,6 +982,33 @@ impl<S: MutinyStorage> NostrManager<S> {
     }
 }
 
+fn get_next_nwc_index(
+    profile_type: ProfileType,
+    profiles: &[NostrWalletConnect],
+) -> Result<(String, u32, Option<u32>), MutinyError> {
+    let (name, index, child_key_index) = match profile_type {
+        ProfileType::Reserved(reserved_profile) => {
+            let (name, index) = reserved_profile.info();
+            (name.to_string(), index, None)
+        }
+        // Ensure normal profiles start from 1000
+        ProfileType::Normal { name } => {
+            let next_index = profiles
+                .iter()
+                .filter(|&nwc| nwc.profile.index >= USER_NWC_PROFILE_START_INDEX)
+                .max_by(|a, b| a.profile.index.cmp(&b.profile.index))
+                .map(|nwc| nwc.profile.index + 1)
+                .unwrap_or(USER_NWC_PROFILE_START_INDEX);
+
+            debug_assert!(next_index >= USER_NWC_PROFILE_START_INDEX);
+
+            (name, next_index, Some(get_random_bip32_child_index()))
+        }
+    };
+
+    Ok((name, index, child_key_index))
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -909,11 +1050,21 @@ mod test {
 
         assert_eq!(profile.name, name);
         assert_eq!(profile.index, 1000);
+        assert!(profile.client_key.is_none());
+        assert!(profile.nwc_uri.is_some());
+
+        let nwc =
+            NostrWalletConnect::new(&Secp256k1::new(), nostr_manager.xprivkey, profile.profile())
+                .unwrap();
+
+        assert!(nwc.client_key.secret_key().is_ok());
 
         let profiles = nostr_manager.profiles();
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].name, name);
         assert_eq!(profiles[0].index, 1000);
+        assert!(profiles[0].client_key.is_none());
+        assert!(profiles[0].nwc_uri.is_some());
 
         let profiles: Vec<Profile> = nostr_manager
             .storage
@@ -942,11 +1093,15 @@ mod test {
 
         assert_eq!(profile.name, name);
         assert_eq!(profile.index, 0);
+        assert!(profile.client_key.is_none());
+        assert!(profile.nwc_uri.is_some());
 
         let profiles = nostr_manager.profiles();
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].name, name);
         assert_eq!(profiles[0].index, 0);
+        assert!(profiles[0].client_key.is_none());
+        assert!(profiles[0].nwc_uri.is_some());
 
         let profiles: Vec<Profile> = nostr_manager
             .storage
@@ -977,6 +1132,7 @@ mod test {
         let non_child_key_index_profile = Profile {
             name,
             index: 1001,
+            client_key: None,
             relay: "wss://nostr.mutinywallet.com".to_string(),
             enabled: None,
             archived: None,
@@ -1031,6 +1187,58 @@ mod test {
         )
         .unwrap();
         assert_ne!(original_nwc_uri, changed_nwc.get_nwc_uri().unwrap());
+    }
+
+    #[test]
+    fn test_create_nwa_profile() {
+        let nostr_manager = create_nostr_manager();
+
+        let name = "test nwa".to_string();
+
+        let uri = NIP49URI::from_str("nostr+walletauth://6670c389b3c4797c410866fe0996074df5f7b3ae45b8fafeac91db5717f82ba2?relay=wss%3A%2F%2Frelay.damus.io%2F&secret=6889ab8537b5a400&required_commands=pay_invoice&identity=71bfa9cbf84110de617e959021b08c69524fcaa1033ffd062abd0ae2657ba24c").unwrap();
+
+        let profile = nostr_manager
+            .nostr_wallet_auth(
+                ProfileType::Normal { name: name.clone() },
+                uri.clone(),
+                None,
+                Default::default(),
+            )
+            .unwrap();
+
+        assert_eq!(profile.name, name);
+        assert_eq!(profile.index, 1000);
+        assert_eq!(profile.client_key, Some(uri.public_key));
+        assert_eq!(
+            profile.spending_conditions,
+            SpendingConditions::RequireApproval
+        );
+        assert!(profile.nwc_uri.is_none());
+
+        let nwc =
+            NostrWalletConnect::new(&Secp256k1::new(), nostr_manager.xprivkey, profile.profile())
+                .unwrap();
+
+        assert_eq!(nwc.client_pubkey().to_string(), uri.public_key.to_string());
+        assert!(nwc.client_key.secret_key().is_err());
+
+        let profiles = nostr_manager.profiles();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].name, name);
+        assert_eq!(profiles[0].index, 1000);
+        assert_eq!(profiles[0].client_key, Some(uri.public_key));
+        assert!(profiles[0].nwc_uri.is_none());
+
+        let profiles: Vec<Profile> = nostr_manager
+            .storage
+            .get_data(NWC_STORAGE_KEY)
+            .unwrap()
+            .unwrap_or_default();
+
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].name, name);
+        assert_eq!(profiles[0].index, 1000);
+        assert_eq!(profiles[0].client_key, Some(uri.public_key));
     }
 
     #[test]

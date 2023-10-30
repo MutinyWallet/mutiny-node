@@ -457,8 +457,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         .nwc_uri
                 };
 
-                // only should have to submit the NWC if never created locally before
-                subscription_client.submit_nwc(nwc).await?;
+                if let Some(nwc) = nwc {
+                    // only should have to submit the NWC if never created locally before
+                    subscription_client.submit_nwc(nwc).await?;
+                }
             }
             Some(profile) => {
                 if profile.tag != NwcProfileTag::Subscription {
