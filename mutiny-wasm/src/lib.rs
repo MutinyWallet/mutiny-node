@@ -49,20 +49,25 @@ use std::{
 };
 use wasm_bindgen::prelude::*;
 
-static INITIALIZED: once_cell::sync::Lazy<Mutex<bool>> =
-    once_cell::sync::Lazy::new(|| Mutex::new(false));
+static INITIALIZED: once_cell::sync::Lazy<Mutex<Option<MutinyWallet>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(None));
 
 #[cfg(test)]
 async fn uninit() {
     let mut init = INITIALIZED.lock().await;
-    *init = false;
+    *init = None;
 }
 
+#[derive(Clone)]
 #[wasm_bindgen]
 pub struct MutinyWallet {
     mnemonic: Mnemonic,
     inner: mutiny_core::MutinyWallet<IndexedDbStorage>,
 }
+
+// I think we can remove this after we use std version of ldk
+unsafe impl Sync for MutinyWallet {}
+unsafe impl Send for MutinyWallet {}
 
 /// The [MutinyWallet] is the main entry point for interacting with the Mutiny Wallet.
 /// It is responsible for managing the on-chain wallet and the lightning nodes.
@@ -95,11 +100,10 @@ impl MutinyWallet {
         safe_mode: Option<bool>,
     ) -> Result<MutinyWallet, MutinyJsError> {
         utils::set_panic_hook();
+        // if we are already initialized, return the existing wallet
         let mut init = INITIALIZED.lock().await;
-        if *init {
-            return Err(MutinyJsError::AlreadyRunning);
-        } else {
-            *init = true;
+        if let Some(mw) = init.as_ref() {
+            return Ok(mw.clone());
         }
 
         match Self::new_internal(
@@ -120,12 +124,12 @@ impl MutinyWallet {
         )
         .await
         {
-            Ok(m) => Ok(m),
-            Err(e) => {
-                // mark uninitialized because we failed to startup
-                *init = false;
-                Err(e)
+            Ok(m) => {
+                // mark initialized
+                *init = Some(m.clone());
+                Ok(m)
             }
+            Err(e) => Err(e),
         }
     }
 
@@ -1537,7 +1541,6 @@ mod tests {
     use crate::utils::test::*;
     use crate::{uninit, MutinyWallet};
 
-    use crate::error::MutinyJsError;
     use crate::indexed_db::IndexedDbStorage;
     use js_sys::Array;
     use mutiny_core::storage::MutinyStorage;
@@ -1585,10 +1588,11 @@ mod tests {
         log!("trying to create 2 mutiny wallets!");
         let password = Some("password".to_string());
 
+        let seed1 = mutiny_core::generate_seed(12).unwrap();
         assert!(!MutinyWallet::has_node_manager(password.clone()).await);
-        MutinyWallet::new(
+        let first = MutinyWallet::new(
             password.clone(),
-            None,
+            Some(seed1.to_string()),
             None,
             Some("regtest".to_owned()),
             None,
@@ -1608,9 +1612,12 @@ mod tests {
         assert!(MutinyWallet::has_node_manager(password.clone()).await);
 
         // try to create a second
-        let result = MutinyWallet::new(
+        // generate a seed, if this one is used then it created a second wallet
+        // and we should fail
+        let seed2 = mutiny_core::generate_seed(12).unwrap();
+        let second = MutinyWallet::new(
             password.clone(),
-            None,
+            Some(seed2.to_string()),
             None,
             Some("regtest".to_owned()),
             None,
@@ -1624,13 +1631,12 @@ mod tests {
             None,
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
-        if let Err(MutinyJsError::AlreadyRunning) = result {
-            // this is the expected error
-        } else {
-            panic!("should have failed to create a second mutiny wallet");
-        };
+        assert_eq!(first.show_seed(), seed1.to_string());
+        assert_ne!(second.show_seed(), seed2.to_string());
+        assert_eq!(first.show_seed(), second.show_seed());
 
         IndexedDbStorage::clear()
             .await
