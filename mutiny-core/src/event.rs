@@ -17,10 +17,7 @@ use core::fmt;
 use lightning::events::{Event, PaymentPurpose};
 use lightning::sign::SpendableOutputDescriptor;
 use lightning::{
-    chain::chaininterface::{ConfirmationTarget, FeeEstimator},
-    log_debug, log_error, log_info, log_warn,
-    util::errors::APIError,
-    util::logger::Logger,
+    log_debug, log_error, log_info, log_warn, util::errors::APIError, util::logger::Logger,
 };
 use lightning_invoice::Bolt11Invoice;
 use serde::{Deserialize, Serialize};
@@ -571,6 +568,10 @@ impl<S: MutinyStorage> EventHandler<S> {
             }
             Event::HTLCIntercepted { .. } => {}
             Event::BumpTransaction(event) => self.bump_tx_event_handler.handle_event(&event),
+            Event::InvoiceRequestFailed { payment_id } => {
+                // we don't support bolt 12 yet
+                log_warn!(self.logger, "EVENT: InvoiceRequestFailed: {payment_id}");
+            }
         }
     }
 
@@ -604,9 +605,7 @@ impl<S: MutinyStorage> EventHandler<S> {
             output_descriptors.len()
         );
 
-        let tx_feerate = self
-            .fee_estimator
-            .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+        let tx_feerate = self.fee_estimator.get_normal_fee_rate();
 
         // We set nLockTime to the current height to discourage fee sniping.
         // Occasionally randomly pick a nLockTime even further back, so

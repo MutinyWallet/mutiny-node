@@ -13,7 +13,6 @@ use std::{net::SocketAddr, sync::atomic::AtomicBool};
 
 use crate::networking::socket::{schedule_descriptor_read, MutinySocketDescriptor};
 use crate::scb::message_handler::SCBMessageHandler;
-use bitcoin::BlockHash;
 use lightning::events::{MessageSendEvent, MessageSendEventsProvider};
 use lightning::ln::features::{InitFeatures, NodeFeatures};
 use lightning::ln::msgs;
@@ -22,7 +21,6 @@ use lightning::ln::peer_handler::PeerHandleError;
 use lightning::ln::peer_handler::{IgnoringMessageHandler, PeerManager as LdkPeerManager};
 use lightning::log_warn;
 use lightning::routing::gossip::NodeId;
-use lightning::routing::utxo::{UtxoLookup, UtxoLookupError, UtxoResult};
 use lightning::util::logger::Logger;
 use std::sync::Arc;
 
@@ -176,16 +174,6 @@ pub struct GossipMessageHandler<S: MutinyStorage> {
 impl<S: MutinyStorage> MessageSendEventsProvider for GossipMessageHandler<S> {
     fn get_and_clear_pending_msg_events(&self) -> Vec<MessageSendEvent> {
         Vec::new()
-    }
-}
-
-// I needed some type to implement RoutingMessageHandler, but I don't want to implement it
-// we don't need to lookup UTXOs, so we can just return an error
-// This should never actually be called because we are passing in None for the UTXO lookup
-struct ErroringUtxoLookup {}
-impl UtxoLookup for ErroringUtxoLookup {
-    fn get_utxo(&self, _genesis_hash: &BlockHash, _short_channel_id: u64) -> UtxoResult {
-        UtxoResult::Sync(Err(UtxoLookupError::UnknownTx))
     }
 }
 

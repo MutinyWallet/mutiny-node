@@ -53,8 +53,7 @@ impl<S: MutinyStorage> MutinyFeeEstimator<S> {
         sats_per_kw: Option<u32>,
     ) -> u64 {
         // if no fee rate is provided, use the normal confirmation target
-        let sats_per_kw = sats_per_kw
-            .unwrap_or_else(|| self.get_est_sat_per_1000_weight(ConfirmationTarget::Normal));
+        let sats_per_kw = sats_per_kw.unwrap_or_else(|| self.get_normal_fee_rate());
         let expected_weight = {
             // Calculate the non-witness and witness data sizes
             let non_witness_size = TX_OVERHEAD
@@ -144,6 +143,21 @@ impl<S: MutinyStorage> MutinyFeeEstimator<S> {
 
         Ok(())
     }
+
+    pub fn get_low_fee_rate(&self) -> u32 {
+        // MinAllowedNonAnchorChannelRemoteFee is a fee rate we expect to get slowly
+        self.get_est_sat_per_1000_weight(ConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee)
+    }
+
+    pub fn get_normal_fee_rate(&self) -> u32 {
+        // NonAnchorChannelFee is a fee rate we expect to be confirmed in 6 blocks
+        self.get_est_sat_per_1000_weight(ConfirmationTarget::NonAnchorChannelFee)
+    }
+
+    pub fn get_high_fee_rate(&self) -> u32 {
+        // OnChainSweep is the highest fee rate we have, so use that
+        self.get_est_sat_per_1000_weight(ConfirmationTarget::OnChainSweep)
+    }
 }
 
 impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
@@ -151,7 +165,7 @@ impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
         let num_blocks = num_blocks_from_conf_target(confirmation_target);
         let fallback_fee = fallback_fee_from_conf_target(confirmation_target);
 
-        match self.storage.get_fee_estimates() {
+        let fee = match self.storage.get_fee_estimates() {
             Err(_) | Ok(None) => fallback_fee,
             Ok(Some(estimates)) => {
                 let found = estimates.get(&num_blocks.to_string());
@@ -160,13 +174,7 @@ impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
                         log_trace!(self.logger, "Got fee rate from saved cache!");
                         let sats_vbyte = num.to_owned();
                         // convert to sats per kw
-                        let mut fee_rate = sats_vbyte * 250.0;
-
-                        // if we're using the high priority target, multiply by 3
-                        // this should help prevent force closures from fee disputes
-                        if confirmation_target == ConfirmationTarget::HighPriority {
-                            fee_rate *= 3.0;
-                        }
+                        let fee_rate = sats_vbyte * 250.0;
 
                         // return the fee rate, but make sure it's not lower than the floor
                         (fee_rate as u32).max(FEERATE_FLOOR_SATS_PER_KW)
@@ -174,29 +182,38 @@ impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
                     None => fallback_fee,
                 }
             }
+        };
+
+        // any post processing we do after the we get the fee rate from the cache
+        match confirmation_target {
+            ConfirmationTarget::MaxAllowedNonAnchorChannelRemoteFee => fee * 30, // multiply by 30 to help prevent force closes
+            ConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee => fee - 250, // helps with rounding errors
+            _ => fee,
         }
     }
 }
 
 fn num_blocks_from_conf_target(confirmation_target: ConfirmationTarget) -> usize {
     match confirmation_target {
-        // MempoolMinimum is only used for anchor channels, we just set the target to 1008
-        // as that is esplora's highest block target available
-        ConfirmationTarget::MempoolMinimum => 1008,
-        // Background is VERY lax and may never confirm if used directly
-        // it is only meant for lower ranges of transaction to enter mempool
-        ConfirmationTarget::Background => 1008,
-        ConfirmationTarget::Normal => 6,
-        ConfirmationTarget::HighPriority => 1,
+        ConfirmationTarget::AnchorChannelFee => 1008,
+        ConfirmationTarget::MinAllowedAnchorChannelRemoteFee => 1008,
+        ConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee => 1008,
+        ConfirmationTarget::ChannelCloseMinimum => 1008,
+        ConfirmationTarget::NonAnchorChannelFee => 6,
+        ConfirmationTarget::MaxAllowedNonAnchorChannelRemoteFee => 1,
+        ConfirmationTarget::OnChainSweep => 1,
     }
 }
 
 fn fallback_fee_from_conf_target(confirmation_target: ConfirmationTarget) -> u32 {
     match confirmation_target {
-        ConfirmationTarget::MempoolMinimum => 3 * 250,
-        ConfirmationTarget::Background => 10 * 250,
-        ConfirmationTarget::Normal => 20 * 250,
-        ConfirmationTarget::HighPriority => 50 * 250,
+        ConfirmationTarget::MinAllowedAnchorChannelRemoteFee => 3 * 250,
+        ConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee => 3 * 250,
+        ConfirmationTarget::ChannelCloseMinimum => 10 * 250,
+        ConfirmationTarget::AnchorChannelFee => 10 * 250,
+        ConfirmationTarget::NonAnchorChannelFee => 20 * 250,
+        ConfirmationTarget::MaxAllowedNonAnchorChannelRemoteFee => 50 * 250,
+        ConfirmationTarget::OnChainSweep => 50 * 250,
     }
 }
 
@@ -229,12 +246,15 @@ mod test {
     #[test]
     fn test_num_blocks_from_conf_target() {
         assert_eq!(
-            num_blocks_from_conf_target(ConfirmationTarget::Background),
+            num_blocks_from_conf_target(ConfirmationTarget::ChannelCloseMinimum),
             1008
         );
-        assert_eq!(num_blocks_from_conf_target(ConfirmationTarget::Normal), 6);
         assert_eq!(
-            num_blocks_from_conf_target(ConfirmationTarget::HighPriority),
+            num_blocks_from_conf_target(ConfirmationTarget::NonAnchorChannelFee),
+            6
+        );
+        assert_eq!(
+            num_blocks_from_conf_target(ConfirmationTarget::OnChainSweep),
             1
         );
     }
@@ -242,15 +262,15 @@ mod test {
     #[test]
     fn test_fallback_fee_from_conf_target() {
         assert_eq!(
-            fallback_fee_from_conf_target(ConfirmationTarget::Background),
+            fallback_fee_from_conf_target(ConfirmationTarget::ChannelCloseMinimum),
             2_500
         );
         assert_eq!(
-            fallback_fee_from_conf_target(ConfirmationTarget::Normal),
+            fallback_fee_from_conf_target(ConfirmationTarget::NonAnchorChannelFee),
             5_000
         );
         assert_eq!(
-            fallback_fee_from_conf_target(ConfirmationTarget::HighPriority),
+            fallback_fee_from_conf_target(ConfirmationTarget::OnChainSweep),
             12_500
         );
     }
@@ -288,17 +308,17 @@ mod test {
 
         // test that we get the fee rate from the cache
         assert_eq!(
-            fee_estimator.get_est_sat_per_1000_weight(ConfirmationTarget::Normal),
+            fee_estimator.get_est_sat_per_1000_weight(ConfirmationTarget::NonAnchorChannelFee),
             2500
         );
 
         // test that we get the fallback fee rate
         assert_eq!(
-            fee_estimator.get_est_sat_per_1000_weight(ConfirmationTarget::Background),
+            fee_estimator.get_est_sat_per_1000_weight(ConfirmationTarget::ChannelCloseMinimum),
             2_500
         );
         assert_eq!(
-            fee_estimator.get_est_sat_per_1000_weight(ConfirmationTarget::HighPriority),
+            fee_estimator.get_est_sat_per_1000_weight(ConfirmationTarget::OnChainSweep),
             12_500
         );
     }

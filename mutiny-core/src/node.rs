@@ -32,7 +32,6 @@ use core::time::Duration;
 use lightning::chain::channelmonitor::ChannelMonitor;
 use lightning::util::ser::{ReadableArgs, Writeable};
 use lightning::{
-    chain::chaininterface::{ConfirmationTarget, FeeEstimator},
     ln::channelmanager::{RecipientOnionFields, RetryableSendFailure},
     routing::scoring::ProbabilisticScoringFeeParameters,
     util::config::ChannelConfig,
@@ -1422,10 +1421,7 @@ impl<S: MutinyStorage> Node<S> {
         let sats_per_vbyte = if let Some(sats_vbyte) = fee_rate {
             sats_vbyte
         } else {
-            let sats_per_kw = self
-                .wallet
-                .fees
-                .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+            let sats_per_kw = self.wallet.fees.get_normal_fee_rate();
 
             FeeRate::from_sat_per_kwu(sats_per_kw as f32).as_sat_per_vb()
         };
@@ -1496,10 +1492,8 @@ impl<S: MutinyStorage> Node<S> {
             total
         };
 
-        let sats_per_kw = self
-            .wallet
-            .fees
-            .get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+        let sats_per_kw = self.wallet.fees.get_normal_fee_rate();
+
         // Calculate the expected transaction fee
         let expected_fee = self.wallet.fees.calculate_expected_fee(
             utxos.len(),
