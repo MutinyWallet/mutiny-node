@@ -16,6 +16,24 @@ Both of those current web frontends import the NPM package that this project cre
 
 ## Development
 
+### Nixos
+
+A `flake.nix` file has been added for easier nix development and testing. Pretty much all cargo / wasm commands work, though right now optimized for `aarch64-unknown-linux-gnu` and `wasm32-unknown-unknown` compilation in the nix shell. 
+
+To start:
+```
+nix develop
+```
+
+Then the following `just` examples that work:
+
+```
+just clippy-nix
+just test-nix
+just pack
+just release
+```
+
 ### Building on the mac
 
 See the discussion here:
