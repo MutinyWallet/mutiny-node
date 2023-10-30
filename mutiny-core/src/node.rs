@@ -41,6 +41,7 @@ use lightning::{
 use crate::multiesplora::MultiEsploraClient;
 use crate::utils::get_monitor_version;
 use bitcoin::util::bip32::ExtendedPrivKey;
+use futures_util::lock::Mutex;
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
 use lightning::ln::PaymentSecret;
 use lightning::sign::{EntropySource, InMemorySigner, NodeSigner, Recipient};
@@ -162,6 +163,7 @@ pub(crate) struct Node<S: MutinyStorage> {
     wallet: Arc<OnChainWallet<S>>,
     logger: Arc<MutinyLogger>,
     pub(crate) lsp_client: Option<LspClient>,
+    pub(crate) sync_lock: Arc<Mutex<()>>,
     stop: Arc<AtomicBool>,
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
@@ -549,11 +551,14 @@ impl<S: MutinyStorage> Node<S> {
             keys_manager.get_node_id(Recipient::Node).unwrap()
         );
 
+        let sync_lock = Arc::new(Mutex::new(()));
+
         // Here we re-attempt to persist any monitors that failed to persist previously.
         let retry_logger = logger.clone();
         let retry_persister = persister.clone();
         let retry_stop = stop.clone();
         let retry_chain_monitor = chain_monitor.clone();
+        let retry_sync_lock = sync_lock.clone();
         utils::spawn(async move {
             // sleep 3 seconds before checking, we won't have any pending updates on startup
             sleep(3_000).await;
@@ -563,7 +568,11 @@ impl<S: MutinyStorage> Node<S> {
                     break;
                 }
 
-                let updates = retry_chain_monitor.list_pending_monitor_updates();
+                let updates = {
+                    let _lock = retry_sync_lock.lock().await;
+                    retry_chain_monitor.list_pending_monitor_updates()
+                };
+
                 for (funding_txo, update_ids) in updates {
                     // if there are no updates, skip
                     if update_ids.is_empty() {
@@ -642,6 +651,7 @@ impl<S: MutinyStorage> Node<S> {
             wallet,
             logger,
             lsp_client,
+            sync_lock,
             stop,
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,

@@ -1372,6 +1372,14 @@ impl<S: MutinyStorage> NodeManager<S> {
     async fn sync_ldk(&self) -> Result<(), MutinyError> {
         let nodes = self.nodes.lock().await;
 
+        // Lock all the nodes so we can sync them, make sure we keep the locks
+        // in scope so they don't get dropped and unlocked.
+        let futs = nodes
+            .iter()
+            .map(|(_, node)| node.sync_lock.lock())
+            .collect::<Vec<_>>();
+        let _locks = join_all(futs).await;
+
         let confirmables: Vec<&(dyn Confirm)> = nodes
             .iter()
             .flat_map(|(_, node)| {
