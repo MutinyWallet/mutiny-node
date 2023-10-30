@@ -1274,6 +1274,46 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(activity)
     }
 
+    /// Returns all the on-chain and lightning activity for a given label
+    pub async fn get_label_activity(
+        &self,
+        label: &String,
+    ) -> Result<Vec<ActivityItem>, MutinyError> {
+        let Some(label_item) = self.get_label(label)? else {
+            return Ok(Vec::new());
+        };
+
+        let mut activity = vec![];
+        for inv in label_item.invoices.iter() {
+            let ln = self.get_invoice(inv).await?;
+            // Only show paid and in-flight invoices
+            match ln.status {
+                HTLCStatus::Succeeded | HTLCStatus::InFlight => {
+                    activity.push(ActivityItem::Lightning(Box::new(ln)));
+                }
+                HTLCStatus::Pending | HTLCStatus::Failed => {}
+            }
+        }
+        let onchain = self
+            .list_onchain()
+            .map_err(|e| {
+                log_warn!(self.logger, "Failed to get bdk history: {e}");
+                e
+            })
+            .unwrap_or_default();
+
+        for on in onchain {
+            if on.labels.contains(label) {
+                activity.push(ActivityItem::OnChain(on));
+            }
+        }
+
+        // Newest first
+        activity.sort_by(|a, b| b.cmp(a));
+
+        Ok(activity)
+    }
+
     /// Adds labels to the TransactionDetails based on the address labels.
     /// This will panic if the TransactionDetails does not have a transaction.
     /// Make sure you flag `include_raw` when calling `list_transactions` to
