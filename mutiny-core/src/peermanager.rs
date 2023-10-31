@@ -1,28 +1,28 @@
-use crate::node::NetworkGraph;
+use crate::networking::socket::{schedule_descriptor_read, MutinySocketDescriptor};
+use crate::node::{NetworkGraph, OnionMessenger};
+use crate::scb::message_handler::SCBMessageHandler;
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, fees::MutinyFeeEstimator};
 use crate::{gossip, ldkstorage::PhantomChannelManager, logging::MutinyLogger};
 use crate::{gossip::read_peer_info, node::PubkeyConnectionInfo};
 use crate::{keymanager::PhantomKeysManager, node::ConnectionType};
 use bitcoin::secp256k1::PublicKey;
-use lightning::{
-    ln::{msgs::SocketAddress, peer_handler::SocketDescriptor as LdkSocketDescriptor},
-    log_debug, log_trace,
-};
-use std::{net::SocketAddr, sync::atomic::AtomicBool};
-
-use crate::networking::socket::{schedule_descriptor_read, MutinySocketDescriptor};
-use crate::scb::message_handler::SCBMessageHandler;
 use lightning::events::{MessageSendEvent, MessageSendEventsProvider};
 use lightning::ln::features::{InitFeatures, NodeFeatures};
 use lightning::ln::msgs;
 use lightning::ln::msgs::{LightningError, RoutingMessageHandler};
 use lightning::ln::peer_handler::PeerHandleError;
-use lightning::ln::peer_handler::{IgnoringMessageHandler, PeerManager as LdkPeerManager};
+use lightning::ln::peer_handler::PeerManager as LdkPeerManager;
 use lightning::log_warn;
+use lightning::onion_message::{Destination, MessageRouter, OnionMessagePath};
 use lightning::routing::gossip::NodeId;
 use lightning::util::logger::Logger;
+use lightning::{
+    ln::{msgs::SocketAddress, peer_handler::SocketDescriptor as LdkSocketDescriptor},
+    log_debug, log_trace,
+};
 use std::sync::Arc;
+use std::{net::SocketAddr, sync::atomic::AtomicBool};
 
 #[cfg(target_arch = "wasm32")]
 use crate::networking::ws_socket::WsTcpSocketDescriptor;
@@ -91,7 +91,7 @@ pub(crate) type PeerManagerImpl<S: MutinyStorage> = LdkPeerManager<
     MutinySocketDescriptor,
     Arc<PhantomChannelManager<S>>,
     Arc<GossipMessageHandler<S>>,
-    Arc<IgnoringMessageHandler>,
+    Arc<OnionMessenger<S>>,
     Arc<MutinyLogger>,
     Arc<SCBMessageHandler>,
     Arc<PhantomKeysManager<S>>,
@@ -291,6 +291,49 @@ impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
 
     fn provided_init_features(&self, _their_node_id: &PublicKey) -> InitFeatures {
         InitFeatures::empty()
+    }
+}
+
+/// LDK currently can't route onion messages, so we need to do it ourselves
+/// We just assume they are connected to us or the LSP.
+pub struct LspMessageRouter {
+    intermediate_nodes: Vec<PublicKey>,
+}
+
+impl LspMessageRouter {
+    pub fn new(lsp_pubkey: Option<PublicKey>) -> Self {
+        let intermediate_nodes = match lsp_pubkey {
+            Some(pubkey) => vec![pubkey],
+            None => vec![],
+        };
+
+        Self { intermediate_nodes }
+    }
+}
+
+impl MessageRouter for LspMessageRouter {
+    fn find_path(
+        &self,
+        _sender: PublicKey,
+        peers: Vec<PublicKey>,
+        destination: Destination,
+    ) -> Result<OnionMessagePath, ()> {
+        let first_node = match &destination {
+            Destination::Node(node_id) => *node_id,
+            Destination::BlindedPath(path) => path.introduction_node_id,
+        };
+
+        if peers.contains(&first_node) {
+            Ok(OnionMessagePath {
+                intermediate_nodes: vec![],
+                destination,
+            })
+        } else {
+            Ok(OnionMessagePath {
+                intermediate_nodes: self.intermediate_nodes.clone(),
+                destination,
+            })
+        }
     }
 }
 
