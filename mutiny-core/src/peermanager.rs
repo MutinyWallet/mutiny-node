@@ -297,6 +297,7 @@ impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
 pub(crate) async fn connect_peer_if_necessary<S: MutinyStorage>(
     #[cfg(target_arch = "wasm32")] websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
+    storage: &S,
     logger: Arc<MutinyLogger>,
     peer_manager: Arc<dyn PeerManager>,
     fee_estimator: Arc<MutinyFeeEstimator<S>>,
@@ -308,6 +309,15 @@ pub(crate) async fn connect_peer_if_necessary<S: MutinyStorage>(
     {
         Ok(())
     } else {
+        // make sure we have the device lock before connecting
+        // otherwise we could cause force closes
+        if let Some(lock) = storage.fetch_device_lock().await? {
+            let id = storage.get_device_id()?;
+            if lock.is_locked(&id) {
+                return Err(MutinyError::AlreadyRunning);
+            }
+        }
+
         // first check to see if the fee rate is mostly up to date
         // if not, we need to have updated fees or force closures
         // could occur due to UpdateFee message conflicts.

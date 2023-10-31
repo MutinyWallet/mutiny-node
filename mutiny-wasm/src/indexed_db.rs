@@ -760,6 +760,17 @@ impl MutinyStorage for IndexedDbStorage {
 
         Ok(())
     }
+
+    async fn fetch_device_lock(&self) -> Result<Option<DeviceLock>, MutinyError> {
+        match self.vss.as_ref() {
+            None => self.get_device_lock(),
+            Some(vss) => {
+                let json = vss.get_object(DEVICE_LOCK_KEY).await?;
+                let device_lock = serde_json::from_value(json.value)?;
+                Ok(Some(device_lock))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
