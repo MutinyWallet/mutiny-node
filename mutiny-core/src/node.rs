@@ -700,6 +700,7 @@ impl<S: MutinyStorage> Node<S> {
             #[cfg(target_arch = "wasm32")]
             &self.websocket_proxy_addr,
             &peer_connection_info,
+            &self.persister.storage,
             self.logger.clone(),
             self.peer_manager.clone(),
             self.fee_estimator.clone(),
@@ -1648,7 +1649,7 @@ pub(crate) fn scoring_params() -> ProbabilisticScoringFeeParameters {
 
 #[allow(clippy::too_many_arguments)]
 async fn start_reconnection_handling<S: MutinyStorage>(
-    storage: &impl MutinyStorage,
+    storage: &S,
     node_pubkey: PublicKey,
     #[cfg(target_arch = "wasm32")] websocket_proxy_addr: String,
     peer_man: Arc<dyn PeerManager>,
@@ -1699,6 +1700,7 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                 #[cfg(target_arch = "wasm32")]
                 &websocket_proxy_addr_copy_proxy,
                 &PubkeyConnectionInfo::new(lsp.connection_string.as_str()).unwrap(),
+                &storage_copy,
                 proxy_logger.clone(),
                 peer_man_proxy.clone(),
                 proxy_fee_estimator.clone(),
@@ -1801,6 +1803,7 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                     #[cfg(target_arch = "wasm32")]
                     &websocket_proxy_addr,
                     &peer_connection_info,
+                    &connect_storage,
                     connect_logger.clone(),
                     connect_peer_man.clone(),
                     connect_fee_estimator.clone(),

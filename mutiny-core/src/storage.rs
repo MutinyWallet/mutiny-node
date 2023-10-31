@@ -397,6 +397,8 @@ pub trait MutinyStorage: Clone + Sized + 'static {
         let lock = DeviceLock { time, device };
         self.set_data(DEVICE_LOCK_KEY, lock, Some(time))
     }
+
+    async fn fetch_device_lock(&self) -> Result<Option<DeviceLock>, MutinyError>;
 }
 
 #[derive(Clone)]
@@ -551,6 +553,10 @@ impl MutinyStorage for MemoryStorage {
     async fn clear() -> Result<(), MutinyError> {
         Ok(())
     }
+
+    async fn fetch_device_lock(&self) -> Result<Option<DeviceLock>, MutinyError> {
+        self.get_device_lock()
+    }
 }
 
 // Dummy implementation for testing or if people want to ignore persistence
@@ -613,6 +619,10 @@ impl MutinyStorage for () {
 
     async fn clear() -> Result<(), MutinyError> {
         Ok(())
+    }
+
+    async fn fetch_device_lock(&self) -> Result<Option<DeviceLock>, MutinyError> {
+        self.get_device_lock()
     }
 }
 
