@@ -52,13 +52,13 @@ impl ActivityItem {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn labels(&self) -> JsValue /* Vec<String> */ {
-        JsValue::from_serde(&self.labels).unwrap()
+    pub fn labels(&self) -> Vec<String> {
+        self.labels.clone()
     }
 
     #[wasm_bindgen(getter)]
-    pub fn contacts(&self) -> JsValue /* Vec<Contact> */ {
-        JsValue::from_serde(&self.contacts).unwrap()
+    pub fn contacts(&self) -> Vec<Contact> {
+        self.contacts.clone()
     }
 }
 
@@ -170,8 +170,8 @@ impl MutinyInvoice {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn labels(&self) -> JsValue /* Vec<String> */ {
-        JsValue::from_serde(&self.labels).unwrap()
+    pub fn labels(&self) -> Vec<String> {
+        self.labels.clone()
     }
 }
 
@@ -486,8 +486,8 @@ impl MutinyBip21RawMaterials {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn labels(&self) -> JsValue /* Vec<String> */ {
-        JsValue::from_serde(&self.labels).unwrap()
+    pub fn labels(&self) -> Vec<String> {
+        self.labels.clone()
     }
 }
 
@@ -523,8 +523,8 @@ impl AuthProfile {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn used_services(&self) -> JsValue /* Vec<String> */ {
-        JsValue::from_serde(&serde_json::to_value(&self.used_services).unwrap()).unwrap()
+    pub fn used_services(&self) -> Vec<String> {
+        self.used_services.clone()
     }
 }
 
@@ -998,8 +998,8 @@ impl NwcProfile {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn active_payments(&self) -> JsValue /* Vec<String> */ {
-        JsValue::from_serde(&serde_json::to_value(self._active_payments()).unwrap()).unwrap()
+    pub fn active_payments(&self) -> Vec<String> {
+        self._active_payments().clone()
     }
 
     #[wasm_bindgen(getter)]
@@ -1045,19 +1045,38 @@ impl From<nostr::nwc::NwcProfile> for NwcProfile {
 
 /// An invoice received over Nostr Wallet Connect that is pending approval or rejection
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[wasm_bindgen]
 pub struct PendingNwcInvoice {
     /// Index of the profile that received the invoice
     pub index: u32,
     /// The invoice that awaiting approval
-    pub invoice: String,
+    invoice: String,
     /// The id of the invoice, this is the payment hash
-    pub id: String,
+    id: String,
     /// The amount of sats that the invoice is for
     pub amount_sats: u64,
     /// The description of the invoice
-    pub invoice_description: Option<String>,
+    invoice_description: Option<String>,
     /// Invoice expire time in seconds since epoch
     pub expiry: u64,
+}
+
+#[wasm_bindgen]
+impl PendingNwcInvoice {
+    #[wasm_bindgen(getter)]
+    pub fn invoice(&self) -> String {
+        self.invoice.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> String {
+        self.id.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn invoice_description(&self) -> Option<String> {
+        self.invoice_description.clone()
+    }
 }
 
 impl From<nostr::nwc::PendingNwcInvoice> for PendingNwcInvoice {

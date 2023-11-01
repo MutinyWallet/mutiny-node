@@ -305,11 +305,8 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub fn get_new_address(
         &self,
-        labels: &JsValue, /* Vec<String> */
+        labels: Vec<String>,
     ) -> Result<MutinyBip21RawMaterials, MutinyJsError> {
-        let labels: Vec<String> = labels
-            .into_serde()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         let address = self.inner.node_manager.get_new_address(labels.clone())?;
         Ok(MutinyBip21RawMaterials {
             address: address.to_string(),
@@ -356,11 +353,8 @@ impl MutinyWallet {
     pub async fn create_bip21(
         &self,
         amount: Option<u64>,
-        labels: &JsValue, /* Vec<String> */
+        labels: Vec<String>,
     ) -> Result<MutinyBip21RawMaterials, MutinyJsError> {
-        let labels: Vec<String> = labels
-            .into_serde()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
@@ -378,13 +372,10 @@ impl MutinyWallet {
         &self,
         destination_address: String,
         amount: u64,
-        labels: &JsValue, /* Vec<String> */
+        labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<String, MutinyJsError> {
         let send_to = Address::from_str(&destination_address)?;
-        let labels: Vec<String> = labels
-            .into_serde()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
@@ -401,13 +392,10 @@ impl MutinyWallet {
     pub async fn sweep_wallet(
         &self,
         destination_address: String,
-        labels: &JsValue, /* Vec<String> */
+        labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<String, MutinyJsError> {
         let send_to = Address::from_str(&destination_address)?;
-        let labels: Vec<String> = labels
-            .into_serde()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
@@ -619,11 +607,8 @@ impl MutinyWallet {
     pub async fn create_invoice(
         &self,
         amount: Option<u64>,
-        labels: &JsValue, /* Vec<String> */
+        labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
-        let labels: Vec<String> = labels
-            .into_serde()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
@@ -641,13 +626,10 @@ impl MutinyWallet {
         from_node: String,
         invoice_str: String,
         amt_sats: Option<u64>,
-        labels: &JsValue, /* Vec<String> */
+        labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let from_node = PublicKey::from_str(&from_node)?;
         let invoice = Bolt11Invoice::from_str(&invoice_str)?;
-        let labels: Vec<String> = labels
-            .into_serde()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
@@ -665,13 +647,10 @@ impl MutinyWallet {
         to_node: String,
         amt_sats: u64,
         message: Option<String>,
-        labels: &JsValue, /* Vec<String> */
+        labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let from_node = PublicKey::from_str(&from_node)?;
         let to_node = PublicKey::from_str(&to_node)?;
-        let labels: Vec<String> = labels
-            .into_serde()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
@@ -717,13 +696,10 @@ impl MutinyWallet {
         lnurl: String,
         amount_sats: u64,
         zap_npub: Option<String>,
-        labels: &JsValue, /* Vec<String> */
+        labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let from_node = PublicKey::from_str(&from_node)?;
         let lnurl = LnUrl::from_str(&lnurl)?;
-        let labels: Vec<String> = labels
-            .into_serde()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
 
         let zap_npub = match zap_npub.filter(|z| !z.is_empty()) {
             Some(z) => {
@@ -1060,12 +1036,9 @@ impl MutinyWallet {
     pub fn set_address_labels(
         &self,
         address: String,
-        labels: &JsValue, /* Vec<String> */
+        labels: Vec<String>,
     ) -> Result<(), MutinyJsError> {
         let address = Address::from_str(&address)?;
-        let labels: Vec<String> = labels
-            .into_serde()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
@@ -1086,12 +1059,9 @@ impl MutinyWallet {
     pub fn set_invoice_labels(
         &self,
         invoice: String,
-        labels: &JsValue, /* Vec<String> */
+        labels: Vec<String>,
     ) -> Result<(), MutinyJsError> {
         let invoice = Bolt11Invoice::from_str(&invoice)?;
-        let labels: Vec<String> = labels
-            .into_serde()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
@@ -1156,7 +1126,7 @@ impl MutinyWallet {
         Ok(self.inner.node_manager.edit_contact(id, contact.into())?)
     }
 
-    pub fn get_tag_items(&self) -> Result<JsValue /* Vec<TagItem> */, MutinyJsError> {
+    pub fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyJsError> {
         let mut tags: Vec<TagItem> = self
             .inner
             .node_manager
@@ -1167,7 +1137,7 @@ impl MutinyWallet {
 
         tags.sort();
 
-        Ok(JsValue::from_serde(&tags)?)
+        Ok(tags)
     }
 
     /// Gets the current bitcoin price in chosen Fiat.
@@ -1202,13 +1172,13 @@ impl MutinyWallet {
 
     /// Get nostr wallet connect profiles
     #[wasm_bindgen]
-    pub fn get_nwc_profiles(&self) -> Result<JsValue /* Vec<NwcProfile> */, MutinyJsError> {
+    pub fn get_nwc_profiles(&self) -> Result<Vec<NwcProfile>, MutinyJsError> {
         let profiles = self.inner.nostr.profiles();
         let p = profiles
             .into_iter()
             .map(models::NwcProfile::from)
             .collect::<Vec<_>>();
-        Ok(JsValue::from_serde(&p)?)
+        Ok(p)
     }
 
     /// Create a nostr wallet connect profile
@@ -1333,9 +1303,7 @@ impl MutinyWallet {
     }
 
     /// Lists all pending NWC invoices
-    pub fn get_pending_nwc_invoices(
-        &self,
-    ) -> Result<JsValue /* Vec<PendingNwcInvoice> */, MutinyJsError> {
+    pub fn get_pending_nwc_invoices(&self) -> Result<Vec<PendingNwcInvoice>, MutinyJsError> {
         let pending: Vec<PendingNwcInvoice> = self
             .inner
             .nostr
@@ -1344,7 +1312,7 @@ impl MutinyWallet {
             .map(|i| i.into())
             .collect();
 
-        Ok(JsValue::from_serde(&pending)?)
+        Ok(pending)
     }
 
     /// Approves an invoice and sends the payment
