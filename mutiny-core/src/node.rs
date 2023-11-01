@@ -1,7 +1,11 @@
 use crate::labels::LabelStorage;
 use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
+use crate::multiesplora::MultiEsploraClient;
 use crate::nodemanager::ChannelClosure;
+use crate::peermanager::LspMessageRouter;
+use crate::scb::message_handler::SCBMessageHandler;
 use crate::scb::StaticChannelBackup;
+use crate::utils::get_monitor_version;
 use crate::{
     background::process_events_async,
     chain::MutinyChain,
@@ -18,33 +22,24 @@ use crate::{
     peermanager::{GossipMessageHandler, PeerManager, PeerManagerImpl},
     utils::{self, sleep},
 };
-use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
-
-use crate::scb::message_handler::SCBMessageHandler;
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
+use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
 use crate::{lspclient::FeeRequest, storage::MutinyStorage};
 use anyhow::{anyhow, Context};
 use bdk::FeeRate;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
 use bitcoin::secp256k1::rand;
+use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, BlockHash, Network, OutPoint};
 use core::time::Duration;
-use lightning::chain::channelmonitor::ChannelMonitor;
-use lightning::util::ser::{ReadableArgs, Writeable};
-use lightning::{
-    ln::channelmanager::{RecipientOnionFields, RetryableSendFailure},
-    routing::scoring::ProbabilisticScoringFeeParameters,
-    util::config::ChannelConfig,
-};
-
-use crate::multiesplora::MultiEsploraClient;
-use crate::utils::get_monitor_version;
-use bitcoin::util::bip32::ExtendedPrivKey;
 use futures_util::lock::Mutex;
+use lightning::chain::channelmonitor::ChannelMonitor;
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
 use lightning::ln::PaymentSecret;
+use lightning::onion_message::OnionMessenger as LdkOnionMessenger;
 use lightning::sign::{EntropySource, InMemorySigner, NodeSigner, Recipient};
 use lightning::util::config::MaxDustHTLCExposure;
+use lightning::util::ser::{ReadableArgs, Writeable};
 use lightning::{
     chain::{chainmonitor, Filter, Watch},
     ln::{
@@ -62,6 +57,11 @@ use lightning::{
         config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig},
         logger::Logger,
     },
+};
+use lightning::{
+    ln::channelmanager::{RecipientOnionFields, RetryableSendFailure},
+    routing::scoring::ProbabilisticScoringFeeParameters,
+    util::config::ChannelConfig,
 };
 use lightning_invoice::payment::PaymentError;
 use lightning_invoice::{
@@ -94,10 +94,19 @@ pub(crate) type RapidGossipSync =
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<MutinyLogger>>;
 
+pub(crate) type OnionMessenger<S: MutinyStorage> = LdkOnionMessenger<
+    Arc<PhantomKeysManager<S>>,
+    Arc<PhantomKeysManager<S>>,
+    Arc<MutinyLogger>,
+    Arc<LspMessageRouter>,
+    Arc<PhantomChannelManager<S>>,
+    IgnoringMessageHandler,
+>;
+
 pub(crate) type MessageHandler<S: MutinyStorage> = LdkMessageHandler<
     Arc<PhantomChannelManager<S>>,
     Arc<GossipMessageHandler<S>>,
-    Arc<IgnoringMessageHandler>,
+    Arc<OnionMessenger<S>>,
     Arc<SCBMessageHandler>,
 >;
 
@@ -310,21 +319,6 @@ impl<S: MutinyStorage> Node<S> {
             }
         }
 
-        let route_handler = Arc::new(GossipMessageHandler {
-            storage: persister.storage.clone(),
-            network_graph: gossip_sync.network_graph().clone(),
-            logger: logger.clone(),
-        });
-
-        // init peer manager
-        let scb_message_handler = Arc::new(SCBMessageHandler::new());
-        let ln_msg_handler = MessageHandler {
-            chan_handler: channel_manager.clone(),
-            route_handler,
-            onion_message_handler: Arc::new(IgnoringMessageHandler {}),
-            custom_message_handler: scb_message_handler.clone(),
-        };
-
         log_info!(logger, "creating lsp client");
         let lsp_client: Option<LspClient> = match node_index.lsp {
             None => {
@@ -341,6 +335,31 @@ impl<S: MutinyStorage> Node<S> {
             }
             Some(ref lsp) => lsp_clients.iter().find(|c| &c.url == lsp).cloned(),
         };
+        let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.pubkey);
+        let message_router = Arc::new(LspMessageRouter::new(lsp_client_pubkey));
+        let onion_message_handler = Arc::new(OnionMessenger::new(
+            keys_manager.clone(),
+            keys_manager.clone(),
+            logger.clone(),
+            message_router,
+            channel_manager.clone(),
+            IgnoringMessageHandler {},
+        ));
+
+        let route_handler = Arc::new(GossipMessageHandler {
+            storage: persister.storage.clone(),
+            network_graph: gossip_sync.network_graph().clone(),
+            logger: logger.clone(),
+        });
+
+        // init peer manager
+        let scb_message_handler = Arc::new(SCBMessageHandler::new());
+        let ln_msg_handler = MessageHandler {
+            chan_handler: channel_manager.clone(),
+            route_handler,
+            onion_message_handler,
+            custom_message_handler: scb_message_handler.clone(),
+        };
 
         let bump_tx_event_handler = Arc::new(BumpTransactionEventHandler::new(
             Arc::clone(&chain),
@@ -348,8 +367,6 @@ impl<S: MutinyStorage> Node<S> {
             Arc::clone(&keys_manager),
             Arc::clone(&logger),
         ));
-
-        let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.pubkey);
 
         // init event handler
         let event_handler = EventHandler::new(
