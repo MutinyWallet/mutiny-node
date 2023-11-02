@@ -148,6 +148,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     pub async fn new(
         storage: S,
         config: MutinyWalletConfig,
+        session_id: Option<String>,
     ) -> Result<MutinyWallet<S>, MutinyError> {
         let expected_network = storage.get::<Network>(EXPECTED_NETWORK_KEY)?;
         match expected_network {
@@ -159,7 +160,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             None => storage.set_data(EXPECTED_NETWORK_KEY, config.network, None)?,
         }
 
-        let node_manager = Arc::new(NodeManager::new(config.clone(), storage.clone()).await?);
+        let node_manager =
+            Arc::new(NodeManager::new(config.clone(), storage.clone(), session_id).await?);
 
         NodeManager::start_sync(node_manager.clone());
 
@@ -210,8 +212,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Not needed after [NodeManager]'s `new()` function.
     pub async fn start(&mut self) -> Result<(), MutinyError> {
         self.storage.start().await?;
+        // when we restart, gen a new session id
         self.node_manager =
-            Arc::new(NodeManager::new(self.config.clone(), self.storage.clone()).await?);
+            Arc::new(NodeManager::new(self.config.clone(), self.storage.clone(), None).await?);
         NodeManager::start_sync(self.node_manager.clone());
 
         // Redshifts disabled in safe mode
@@ -634,7 +637,7 @@ mod tests {
             None,
             false,
         );
-        let mw = MutinyWallet::new(storage.clone(), config)
+        let mw = MutinyWallet::new(storage.clone(), config, None)
             .await
             .expect("mutiny wallet should initialize");
         mw.storage.insert_mnemonic(mnemonic).unwrap();
@@ -664,7 +667,7 @@ mod tests {
             None,
             false,
         );
-        let mut mw = MutinyWallet::new(storage.clone(), config)
+        let mut mw = MutinyWallet::new(storage.clone(), config, None)
             .await
             .expect("mutiny wallet should initialize");
 
@@ -700,7 +703,7 @@ mod tests {
             None,
             false,
         );
-        let mut mw = MutinyWallet::new(storage.clone(), config)
+        let mut mw = MutinyWallet::new(storage.clone(), config, None)
             .await
             .expect("mutiny wallet should initialize");
 
@@ -737,7 +740,7 @@ mod tests {
             None,
             false,
         );
-        let mw = MutinyWallet::new(storage.clone(), config)
+        let mw = MutinyWallet::new(storage.clone(), config, None)
             .await
             .expect("mutiny wallet should initialize");
         let seed = mw.node_manager.xprivkey;
@@ -762,7 +765,7 @@ mod tests {
             None,
             false,
         );
-        let mw2 = MutinyWallet::new(storage2.clone(), config2.clone())
+        let mw2 = MutinyWallet::new(storage2.clone(), config2.clone(), None)
             .await
             .expect("mutiny wallet should initialize");
         let seed2 = mw2.node_manager.xprivkey;
@@ -783,7 +786,7 @@ mod tests {
             let seed = storage3.get_mnemonic().unwrap().unwrap();
             ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap()
         };
-        let mw2 = MutinyWallet::new(storage3, config2)
+        let mw2 = MutinyWallet::new(storage3, config2, None)
             .await
             .expect("mutiny wallet should initialize");
         let restored_seed = mw2.node_manager.xprivkey;
