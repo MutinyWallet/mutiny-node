@@ -580,7 +580,11 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Creates a new [NodeManager] with the given parameters.
     /// The mnemonic seed is read from storage, unless one is provided.
     /// If no mnemonic is provided, a new one is generated and stored.
-    pub async fn new(c: MutinyWalletConfig, storage: S) -> Result<NodeManager<S>, MutinyError> {
+    pub async fn new(
+        c: MutinyWalletConfig,
+        storage: S,
+        session_id: Option<String>,
+    ) -> Result<NodeManager<S>, MutinyError> {
         let stop = Arc::new(AtomicBool::new(false));
 
         #[cfg(target_arch = "wasm32")]
@@ -588,7 +592,11 @@ impl<S: MutinyStorage> NodeManager<S> {
             .websocket_proxy_addr
             .unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
 
-        let logger = Arc::new(MutinyLogger::with_writer(stop.clone(), storage.clone()));
+        let logger = Arc::new(MutinyLogger::with_writer(
+            stop.clone(),
+            storage.clone(),
+            session_id,
+        ));
 
         // Need to prevent other devices from running at the same time
         if !c.skip_device_lock {
@@ -2745,7 +2753,7 @@ mod tests {
             None,
             false,
         );
-        NodeManager::new(c, storage.clone())
+        NodeManager::new(c, storage.clone(), None)
             .await
             .expect("node manager should initialize");
         storage.insert_mnemonic(seed).unwrap();
@@ -2775,7 +2783,7 @@ mod tests {
             None,
             false,
         );
-        let nm = NodeManager::new(c, storage)
+        let nm = NodeManager::new(c, storage, None)
             .await
             .expect("node manager should initialize");
 
@@ -2828,7 +2836,7 @@ mod tests {
         );
         let c = c.with_safe_mode();
 
-        let nm = NodeManager::new(c, storage)
+        let nm = NodeManager::new(c, storage, None)
             .await
             .expect("node manager should initialize");
 
@@ -2862,7 +2870,7 @@ mod tests {
             None,
             false,
         );
-        let nm = NodeManager::new(c, storage)
+        let nm = NodeManager::new(c, storage, None)
             .await
             .expect("node manager should initialize");
 

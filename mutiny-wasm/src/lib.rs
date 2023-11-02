@@ -246,7 +246,9 @@ impl MutinyWallet {
             config = config.with_safe_mode();
         }
 
-        let inner = mutiny_core::MutinyWallet::new(storage, config).await?;
+        let inner =
+            mutiny_core::MutinyWallet::new(storage, config, Some(logger.session_id.clone()))
+                .await?;
         Ok(MutinyWallet { mnemonic, inner })
     }
 
@@ -1203,7 +1205,11 @@ impl MutinyWallet {
             .transpose()?;
         let storage = IndexedDbStorage::new(password, cipher, None, logger.clone()).await?;
         let stop = Arc::new(AtomicBool::new(false));
-        let logger = Arc::new(MutinyLogger::with_writer(stop.clone(), storage.clone()));
+        let logger = Arc::new(MutinyLogger::with_writer(
+            stop.clone(),
+            storage.clone(),
+            None,
+        ));
         let res = JsValue::from_serde(&NodeManager::get_logs(storage, logger)?)?;
         stop.swap(true, Ordering::Relaxed);
         Ok(res)

@@ -1,3 +1,4 @@
+use bitcoin::hashes::hex::ToHex;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -16,13 +17,19 @@ const MAX_LOG_ITEMS: usize = 10_000;
 
 #[derive(Clone)]
 pub struct MutinyLogger {
+    pub session_id: String,
     should_write_to_storage: bool,
     memory_logs: Arc<Mutex<Vec<String>>>,
 }
 
 impl MutinyLogger {
-    pub fn with_writer<S: MutinyStorage>(stop: Arc<AtomicBool>, logging_db: S) -> Self {
+    pub fn with_writer<S: MutinyStorage>(
+        stop: Arc<AtomicBool>,
+        logging_db: S,
+        session_id: Option<String>,
+    ) -> Self {
         let l = MutinyLogger {
+            session_id: session_id.unwrap_or_else(gen_session_id),
             should_write_to_storage: true,
             memory_logs: Arc::new(Mutex::new(vec![])),
         };
@@ -82,17 +89,27 @@ impl MutinyLogger {
 impl Default for MutinyLogger {
     fn default() -> Self {
         Self {
+            session_id: gen_session_id(),
             should_write_to_storage: Default::default(),
             memory_logs: Arc::new(Mutex::new(vec![])),
         }
     }
 }
 
+fn gen_session_id() -> String {
+    let mut entropy = vec![0u8; 2];
+    getrandom::getrandom(&mut entropy).unwrap();
+    entropy.to_hex()
+}
+
 impl Logger for MutinyLogger {
     fn log(&self, record: &Record) {
         let raw_log = record.args.to_string();
         let log = format!(
-            "{} {:<5} [{}:{}] {}\n",
+            "{} {} {:<5} [{}:{}] {}\n",
+            // log the session id so we can tie logs to a particular session, useful for detecting
+            // if we have multiple sessions running at once
+            self.session_id,
             // Note that a "real" lightning node almost certainly does *not* want subsecond
             // precision for message-receipt information as it makes log entries a target for
             // deanonymization attacks. For testing, however, its quite useful.
@@ -214,7 +231,7 @@ mod tests {
         let storage = MemoryStorage::default();
 
         let stop = Arc::new(AtomicBool::new(false));
-        let logger = MutinyLogger::with_writer(stop.clone(), storage.clone());
+        let logger = MutinyLogger::with_writer(stop.clone(), storage.clone(), None);
 
         let log_str = "testing logging with storage";
         log_debug!(logger, "{}", log_str);
