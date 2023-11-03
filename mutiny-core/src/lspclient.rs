@@ -45,6 +45,7 @@ pub struct ProposalRequest {
     pub host: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+    pub fee_id: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -60,6 +61,7 @@ pub struct FeeRequest {
 
 #[derive(Serialize, Deserialize)]
 pub struct FeeResponse {
+    pub id: String,
     pub fee_amount_msat: u64,
 }
 
@@ -120,11 +122,16 @@ impl LspClient {
         })
     }
 
-    pub(crate) async fn get_lsp_invoice(&self, bolt11: String) -> Result<String, MutinyError> {
+    pub(crate) async fn get_lsp_invoice(
+        &self,
+        bolt11: String,
+        fee_id: String,
+    ) -> Result<String, MutinyError> {
         let payload = ProposalRequest {
             bolt11,
             host: None,
             port: None,
+            fee_id,
         };
 
         let request = self
@@ -170,7 +177,7 @@ impl LspClient {
     pub(crate) async fn get_lsp_fee_msat(
         &self,
         fee_request: FeeRequest,
-    ) -> Result<u64, MutinyError> {
+    ) -> Result<FeeResponse, MutinyError> {
         let request = self
             .http_client
             .post(format!("{}{}", &self.url, FEE_PATH))
@@ -185,6 +192,6 @@ impl LspClient {
             .await
             .map_err(|_| MutinyError::LspGenericError)?;
 
-        Ok(fee_response.fee_amount_msat)
+        Ok(fee_response)
     }
 }
