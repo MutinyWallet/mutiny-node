@@ -178,11 +178,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let (checkpoints, spks) = {
             if let Ok(wallet) = self.wallet.try_read() {
                 let checkpoints = wallet.checkpoints();
-                let spks = wallet
-                    .spks_of_all_keychains()
-                    .into_iter()
-                    .map(|(k, spks)| (k, spks))
-                    .collect();
+                let spks = wallet.spks_of_all_keychains();
 
                 (checkpoints.clone(), spks)
             } else {
