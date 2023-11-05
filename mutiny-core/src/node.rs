@@ -1083,9 +1083,24 @@ impl<S: MutinyStorage> Node<S> {
             return Err(MutinyError::NonUniquePaymentHash);
         }
 
-        if self.channel_manager.list_channels().is_empty() {
-            // No channels so routing will always fail
-            return Err(MutinyError::RoutingFailed);
+        // get invoice amount or use amt_sats
+        let send_msats = invoice
+            .amount_milli_satoshis()
+            .or(amt_sats.map(|x| x * 1_000))
+            .ok_or(MutinyError::InvoiceInvalid)?;
+
+        // check if we have enough balance to send
+        let channels = self.channel_manager.list_channels();
+        if channels
+            .iter()
+            // only consider channels that are confirmed
+            .filter(|c| c.is_channel_ready)
+            .map(|c| c.balance_msat)
+            .sum::<u64>()
+            < send_msats
+        {
+            // Channels exist but not enough capacity
+            return Err(MutinyError::InsufficientBalance);
         }
 
         // make sure node at least has one connection before attempting payment
