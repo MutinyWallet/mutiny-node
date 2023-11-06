@@ -1928,6 +1928,7 @@ pub(crate) fn default_user_config() -> UserConfig {
             commit_upfront_shutdown_pubkey: false,
             negotiate_anchors_zero_fee_htlc_tx: true,
             max_inbound_htlc_value_in_flight_percent_of_channel: 100,
+            our_to_self_delay: 6 * 24 * 2, // 2 days
             ..Default::default()
         },
         manually_accept_inbound_channels: true,
