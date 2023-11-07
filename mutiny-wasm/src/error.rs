@@ -1,4 +1,5 @@
 use bitcoin::Network;
+use lightning::offers::parse::Bolt12ParseError;
 use lightning_invoice::ParseOrSemanticError;
 use mutiny_core::error::{MutinyError, MutinyStorageError};
 use thiserror::Error;
@@ -236,6 +237,12 @@ impl From<nostr::nips::nip19::Error> for MutinyJsError {
 
 impl From<ParseOrSemanticError> for MutinyJsError {
     fn from(_e: ParseOrSemanticError) -> Self {
+        Self::InvoiceInvalid
+    }
+}
+
+impl From<Bolt12ParseError> for MutinyJsError {
+    fn from(_e: Bolt12ParseError) -> Self {
         Self::InvoiceInvalid
     }
 }

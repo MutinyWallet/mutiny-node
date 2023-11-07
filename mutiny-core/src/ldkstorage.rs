@@ -5,9 +5,10 @@ use crate::gossip::PROB_SCORER_KEY;
 use crate::keymanager::PhantomKeysManager;
 use crate::logging::MutinyLogger;
 use crate::multiesplora::MultiEsploraClient;
+use crate::node::NetworkGraph;
 use crate::node::{default_user_config, ChainMonitor};
-use crate::node::{NetworkGraph, Router};
 use crate::nodemanager::ChannelClosure;
+use crate::router::MutinyRouter;
 use crate::storage::{MutinyStorage, VersionedValue};
 use crate::utils;
 use crate::utils::{sleep, spawn};
@@ -31,7 +32,7 @@ use lightning::sign::{InMemorySigner, SpendableOutputDescriptor, WriteableEcdsaC
 use lightning::util::logger::Logger;
 use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
-use lightning::{log_debug, log_error, log_trace};
+use lightning::{log_debug, log_error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
@@ -53,7 +54,7 @@ pub(crate) type PhantomChannelManager<S: MutinyStorage> = LdkChannelManager<
     Arc<PhantomKeysManager<S>>,
     Arc<PhantomKeysManager<S>>,
     Arc<MutinyFeeEstimator<S>>,
-    Arc<Router>,
+    Arc<MutinyRouter>,
     Arc<MutinyLogger>,
 >;
 
@@ -202,7 +203,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
         mutiny_logger: Arc<MutinyLogger>,
         keys_manager: Arc<PhantomKeysManager<S>>,
-        router: Arc<Router>,
+        router: Arc<MutinyRouter>,
         channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
         esplora: &MultiEsploraClient,
     ) -> Result<ReadChannelManager<S>, MutinyError> {
@@ -270,7 +271,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
         mutiny_logger: Arc<MutinyLogger>,
         keys_manager: Arc<PhantomKeysManager<S>>,
-        router: Arc<Router>,
+        router: Arc<MutinyRouter>,
         mut channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
     ) -> Result<ReadChannelManager<S>, MutinyError> {
         let mut channel_monitor_mut_references = Vec::new();
@@ -312,7 +313,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
         mutiny_logger: Arc<MutinyLogger>,
         keys_manager: Arc<PhantomKeysManager<S>>,
-        router: Arc<Router>,
+        router: Arc<MutinyRouter>,
         channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
         esplora: &MultiEsploraClient,
     ) -> Result<ReadChannelManager<S>, MutinyError> {
@@ -372,10 +373,10 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         &self,
         payment_hash: &[u8; 32],
         inbound: bool,
-        logger: &MutinyLogger,
+        _logger: &MutinyLogger,
     ) -> Option<PaymentInfo> {
         let key = self.get_key(payment_key(inbound, payment_hash).as_str());
-        log_trace!(logger, "Trace: checking payment key: {key}");
+        // log_trace!(logger, "Trace: checking payment key: {key}");
         let deserialized_value: Result<Option<PaymentInfo>, MutinyError> =
             self.storage.get_data(key);
         deserialized_value.ok().flatten()
@@ -619,7 +620,7 @@ impl<S: MutinyStorage>
         Arc<PhantomKeysManager<S>>,
         Arc<PhantomKeysManager<S>>,
         Arc<MutinyFeeEstimator<S>>,
-        Arc<Router>,
+        Arc<MutinyRouter>,
         Arc<MutinyLogger>,
         utils::Mutex<HubPreferentialScorer>,
     > for MutinyNodePersister<S>
@@ -744,6 +745,7 @@ pub(crate) async fn persist_monitor(
 #[cfg(test)]
 mod test {
     use crate::onchain::OnChainWallet;
+    use crate::router::MutinyRouter;
     use crate::storage::MemoryStorage;
     use crate::{esplora::EsploraSyncClient, node::scoring_params};
     use crate::{
@@ -757,7 +759,6 @@ mod test {
     use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Txid;
     use esplora_client::Builder;
-    use lightning::routing::router::DefaultRouter;
     use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
     use lightning::sign::EntropySource;
     use std::str::FromStr;
@@ -792,10 +793,12 @@ mod test {
 
         let payment_info = PaymentInfo {
             preimage: Some(preimage),
+            payment_hash: Some(payment_hash.0.to_hex()),
             status: HTLCStatus::Succeeded,
             amt_msat: MillisatAmount(Some(420)),
             fee_paid_msat: None,
             bolt11: None,
+            bolt12: None,
             payee_pubkey: Some(pubkey),
             secret: None,
             last_update: utils::now().as_secs(),
@@ -965,8 +968,9 @@ mod test {
             persister.clone(),
         ));
 
-        let router: Arc<Router> = Arc::new(DefaultRouter::new(
+        let router: Arc<MutinyRouter> = Arc::new(MutinyRouter::new(
             network_graph,
+            None,
             logger.clone(),
             km.clone().get_secure_random_bytes(),
             Arc::new(utils::Mutex::new(scorer)),

@@ -2,6 +2,7 @@ use crate::esplora::TxSyncError;
 use aes::cipher::block_padding::UnpadError;
 use bitcoin::Network;
 use lightning::ln::peer_handler::PeerHandleError;
+use lightning::offers::parse::Bolt12SemanticError;
 use lightning_invoice::payment::PaymentError;
 use lightning_invoice::ParseOrSemanticError;
 use lightning_rapid_gossip_sync::GraphSyncError;
@@ -444,5 +445,28 @@ impl From<nostr::nips::nip04::Error> for MutinyError {
 impl From<nostr::event::builder::Error> for MutinyError {
     fn from(_e: nostr::event::builder::Error) -> Self {
         Self::NostrError
+    }
+}
+
+impl From<Bolt12SemanticError> for MutinyError {
+    fn from(e: Bolt12SemanticError) -> Self {
+        match e {
+            Bolt12SemanticError::UnsupportedChain => MutinyError::NetworkMismatch,
+            Bolt12SemanticError::UnexpectedChain => MutinyError::NetworkMismatch,
+            Bolt12SemanticError::MissingAmount => MutinyError::BadAmountError,
+            Bolt12SemanticError::InvalidAmount => MutinyError::BadAmountError,
+            Bolt12SemanticError::InsufficientAmount => MutinyError::BadAmountError,
+            Bolt12SemanticError::UnexpectedAmount => MutinyError::BadAmountError,
+            Bolt12SemanticError::UnsupportedCurrency => MutinyError::BadAmountError,
+            Bolt12SemanticError::MissingSigningPubkey => MutinyError::PubkeyInvalid,
+            Bolt12SemanticError::InvalidSigningPubkey => MutinyError::PubkeyInvalid,
+            Bolt12SemanticError::UnexpectedSigningPubkey => MutinyError::PubkeyInvalid,
+            Bolt12SemanticError::MissingQuantity => MutinyError::BadAmountError,
+            Bolt12SemanticError::InvalidQuantity => MutinyError::BadAmountError,
+            Bolt12SemanticError::UnexpectedQuantity => MutinyError::BadAmountError,
+            Bolt12SemanticError::MissingPaths => MutinyError::RoutingFailed,
+            Bolt12SemanticError::AlreadyExpired => MutinyError::PaymentTimeout,
+            _ => MutinyError::LnDecodeError,
+        }
     }
 }

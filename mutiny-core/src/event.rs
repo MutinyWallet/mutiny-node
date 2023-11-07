@@ -28,6 +28,8 @@ pub(crate) struct PaymentInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preimage: Option<[u8; 32]>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub payment_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub secret: Option<[u8; 32]>,
     pub status: HTLCStatus,
     #[serde(skip_serializing_if = "MillisatAmount::is_none")]
@@ -36,6 +38,8 @@ pub(crate) struct PaymentInfo {
     pub fee_paid_msat: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bolt11: Option<Bolt11Invoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bolt12: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payee_pubkey: Option<PublicKey>,
     pub last_update: u64,
@@ -266,6 +270,8 @@ impl<S: MutinyStorage> EventHandler<S> {
                         let payment_secret = payment_secret.map(|p| p.0);
                         saved_payment_info.status = HTLCStatus::Succeeded;
                         saved_payment_info.preimage = payment_preimage;
+                        // set payment_hash, we won't have it yet for bolt 12
+                        saved_payment_info.payment_hash = Some(payment_hash.0.to_hex());
                         saved_payment_info.secret = payment_secret;
                         saved_payment_info.amt_msat = MillisatAmount(Some(amount_msat));
                         saved_payment_info.last_update = crate::utils::now().as_secs();
@@ -288,12 +294,14 @@ impl<S: MutinyStorage> EventHandler<S> {
 
                         let payment_info = PaymentInfo {
                             preimage: payment_preimage,
+                            payment_hash: Some(payment_hash.0.to_hex()),
                             secret: payment_secret,
                             status: HTLCStatus::Succeeded,
                             amt_msat: MillisatAmount(Some(amount_msat)),
                             fee_paid_msat: None,
                             payee_pubkey: receiver_node_id,
                             bolt11: None,
+                            bolt12: None,
                             last_update,
                         };
                         match self.persister.persist_payment_info(
@@ -311,10 +319,10 @@ impl<S: MutinyStorage> EventHandler<S> {
                 }
             }
             Event::PaymentSent {
+                payment_id,
                 payment_preimage,
                 payment_hash,
                 fee_paid_msat,
-                ..
             } => {
                 log_debug!(
                     self.logger,
@@ -322,17 +330,28 @@ impl<S: MutinyStorage> EventHandler<S> {
                     payment_hash.0.to_hex()
                 );
 
-                match self
+                // lookup by payment hash then payment id, we use payment_id for bolt 12
+                let mut lookup_id = payment_hash.0;
+                let found_payment_info = self
                     .persister
-                    .read_payment_info(&payment_hash.0, false, &self.logger)
-                {
+                    .read_payment_info(&lookup_id, false, &self.logger)
+                    .or_else(|| {
+                        payment_id.and_then(|id| {
+                            lookup_id = id.0;
+                            self.persister.read_payment_info(&id.0, false, &self.logger)
+                        })
+                    });
+
+                match found_payment_info {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Succeeded;
                         saved_payment_info.preimage = Some(payment_preimage.0);
+                        // bolt 12 won't have the payment hash set yet
+                        saved_payment_info.payment_hash = Some(payment_hash.0.to_hex());
                         saved_payment_info.fee_paid_msat = fee_paid_msat;
                         saved_payment_info.last_update = crate::utils::now().as_secs();
                         match self.persister.persist_payment_info(
-                            &payment_hash.0,
+                            &lookup_id,
                             &saved_payment_info,
                             false,
                         ) {
@@ -666,10 +685,12 @@ mod test {
 
         let payment_info = PaymentInfo {
             preimage: Some(preimage),
+            payment_hash: None,
             status: HTLCStatus::Succeeded,
             amt_msat: MillisatAmount(Some(420)),
             fee_paid_msat: None,
             bolt11: None,
+            bolt12: None,
             payee_pubkey: Some(pubkey),
             secret: None,
             last_update: utils::now().as_secs(),

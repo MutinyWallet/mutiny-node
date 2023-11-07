@@ -1225,11 +1225,13 @@ mod wasm_test {
         let invoice = create_dummy_invoice(Some(1_000), Network::Regtest, None);
         let payment_info = PaymentInfo {
             preimage: None,
+            payment_hash: None,
             secret: Some(invoice.payment_secret().0),
             status: HTLCStatus::InFlight,
             amt_msat: MillisatAmount(invoice.amount_milli_satoshis()),
             fee_paid_msat: None,
             bolt11: Some(invoice.clone()),
+            bolt12: None,
             payee_pubkey: None,
             last_update: utils::now().as_secs(),
         };
@@ -1245,11 +1247,13 @@ mod wasm_test {
         let invoice = create_dummy_invoice(Some(1_000), Network::Regtest, None);
         let payment_info = PaymentInfo {
             preimage: None,
+            payment_hash: None,
             secret: Some(invoice.payment_secret().0),
             status: HTLCStatus::Succeeded,
             amt_msat: MillisatAmount(invoice.amount_milli_satoshis()),
             fee_paid_msat: None,
             bolt11: Some(invoice.clone()),
+            bolt12: None,
             payee_pubkey: None,
             last_update: utils::now().as_secs(),
         };
