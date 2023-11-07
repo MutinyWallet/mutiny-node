@@ -1929,6 +1929,7 @@ pub(crate) fn default_user_config() -> UserConfig {
             negotiate_anchors_zero_fee_htlc_tx: false,
             max_inbound_htlc_value_in_flight_percent_of_channel: 100,
             our_to_self_delay: 6 * 24 * 2, // 2 days
+            their_channel_reserve_proportional_millionths: 0,
             ..Default::default()
         },
         manually_accept_inbound_channels: true,
