@@ -1926,7 +1926,7 @@ pub(crate) fn default_user_config() -> UserConfig {
             announced_channel: false,
             negotiate_scid_privacy: true,
             commit_upfront_shutdown_pubkey: false,
-            negotiate_anchors_zero_fee_htlc_tx: true,
+            negotiate_anchors_zero_fee_htlc_tx: false,
             max_inbound_htlc_value_in_flight_percent_of_channel: 100,
             ..Default::default()
         },
