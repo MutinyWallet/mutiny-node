@@ -567,7 +567,10 @@ impl<S: MutinyStorage> EventHandler<S> {
                 }
             }
             Event::HTLCIntercepted { .. } => {}
-            Event::BumpTransaction(event) => self.bump_tx_event_handler.handle_event(&event),
+            Event::BumpTransaction(event) => {
+                log_debug!(self.logger, "EVENT: BumpTransaction: {event:?}");
+                self.bump_tx_event_handler.handle_event(&event);
+            }
             Event::InvoiceRequestFailed { payment_id } => {
                 // we don't support bolt 12 yet
                 log_warn!(self.logger, "EVENT: InvoiceRequestFailed: {payment_id}");
