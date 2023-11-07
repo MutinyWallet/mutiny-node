@@ -644,12 +644,38 @@ impl<S: MutinyStorage> WalletSource for OnChainWallet<S> {
     }
 
     fn sign_tx(&self, tx: Transaction) -> Result<Transaction, ()> {
-        let wallet = self.wallet.try_read().map_err(|_| ())?;
-        // fixme will this work?
-        let mut psbt = PartiallySignedTransaction::from_unsigned_tx(tx).map_err(|_| ())?;
+        let wallet = self.wallet.try_read().map_err(|e| {
+            log_error!(
+                self.logger,
+                "Could not get wallet lock to sign transaction: {e:?}"
+            )
+        })?;
+        let mut psbt = PartiallySignedTransaction::from_unsigned_tx(tx).map_err(|e| {
+            log_error!(self.logger, "Could not create PSBT from transaction: {e:?}")
+        })?;
+
+        // set witness_utxo for inputs
+        wallet.list_unspent().for_each(|u| {
+            psbt.unsigned_tx
+                .input
+                .iter()
+                .enumerate()
+                .for_each(|(i, txin)| {
+                    if txin.previous_output == u.outpoint {
+                        psbt.inputs[i].witness_utxo = Some(u.txout.clone());
+                    }
+                })
+        });
+
+        // need to trust witness_utxo for signing since that's what we set above
+        // this is safe because we added it ourselves
+        let sign_options = SignOptions {
+            trust_witness_utxo: true,
+            ..Default::default()
+        };
         wallet
-            .sign(&mut psbt, SignOptions::default())
-            .map_err(|_| ())?;
+            .sign(&mut psbt, sign_options)
+            .map_err(|e| log_error!(self.logger, "Could not sign transaction: {e:?}"))?;
 
         Ok(psbt.extract_tx())
     }
