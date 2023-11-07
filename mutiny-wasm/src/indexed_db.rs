@@ -1,10 +1,10 @@
 use anyhow::anyhow;
+use bip39::Mnemonic;
 use gloo_storage::{LocalStorage, Storage};
 use gloo_utils::format::JsValueSerdeExt;
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error};
 use log::error;
-use mutiny_core::encrypt::encryption_key_from_pass;
 use mutiny_core::logging::MutinyLogger;
 use mutiny_core::nodemanager::NodeStorage;
 use mutiny_core::storage::*;
@@ -48,7 +48,14 @@ impl IndexedDbStorage {
         let indexed_db = Arc::new(RwLock::new(Some(Self::build_indexed_db_database().await?)));
         let password = password.filter(|p| !p.is_empty());
 
-        let map = Self::read_all(&indexed_db, password.clone(), vss.as_deref(), &logger).await?;
+        let map = Self::read_all(
+            &indexed_db,
+            password.clone(),
+            cipher.clone(),
+            vss.as_deref(),
+            &logger,
+        )
+        .await?;
         let memory = Arc::new(RwLock::new(map));
 
         Ok(IndexedDbStorage {
@@ -59,6 +66,65 @@ impl IndexedDbStorage {
             vss,
             logger,
         })
+    }
+
+    /// Read the mnemonic from indexed db, if one does not exist,
+    /// then generate a new one and save it to indexed db.
+    pub(crate) async fn get_mnemonic(
+        override_mnemonic: Option<Mnemonic>,
+        password: Option<&str>,
+        cipher: Option<Cipher>,
+    ) -> Result<Mnemonic, MutinyError> {
+        let indexed_db = Self::build_indexed_db_database().await?;
+        let tx = indexed_db
+            .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)
+            .map_err(|e| {
+                MutinyError::read_err(
+                    anyhow!("Failed to create indexed db transaction: {e}").into(),
+                )
+            })?;
+
+        let store = tx.store(WALLET_OBJECT_STORE_NAME).map_err(|e| {
+            MutinyError::read_err(anyhow!("Failed to create indexed db store: {e}").into())
+        })?;
+
+        let key = JsValue::from(MNEMONIC_KEY);
+        let read = store
+            .get(&key)
+            .await
+            .map_err(|_| MutinyError::read_err(MutinyStorageError::IndexedDBError))?;
+
+        // if there is no mnemonic in indexed db generate a new one and insert
+        let res = if read.is_null() || read.is_undefined() {
+            let seed = override_mnemonic.unwrap_or_else(|| generate_seed(12).unwrap());
+
+            // encrypt and save to indexed db
+            let value = encrypt_value(MNEMONIC_KEY, serde_json::to_value(seed.clone())?, cipher)?;
+            store
+                .put(&JsValue::from_serde(&value)?, Some(&key))
+                .await
+                .map_err(|_| MutinyError::write_err(MutinyStorageError::IndexedDBError))?;
+
+            seed
+        } else {
+            // if there is a mnemonic in indexed db, then decrypt it
+            let value = decrypt_value(MNEMONIC_KEY, read.into_serde()?, password)?;
+
+            let seed: Mnemonic = serde_json::from_value(value)?;
+
+            // if we hae an override mnemonic, then we need to check that it matches the one in indexed db
+            if override_mnemonic.is_some_and(|m| m != seed) {
+                return Err(MutinyError::InvalidMnemonic);
+            }
+
+            seed
+        };
+
+        tx.done()
+            .await
+            .map_err(|_| MutinyError::write_err(MutinyStorageError::IndexedDBError))?;
+
+        Ok(res)
     }
 
     async fn save_to_indexed_db(
@@ -149,6 +215,7 @@ impl IndexedDbStorage {
     pub(crate) async fn read_all(
         indexed_db: &Arc<RwLock<Option<Rexie>>>,
         password: Option<String>,
+        cipher: Option<Cipher>,
         vss: Option<&MutinyVssClient>,
         logger: &MutinyLogger,
     ) -> Result<HashMap<String, Value>, MutinyError> {
@@ -173,12 +240,6 @@ impl IndexedDbStorage {
                 MutinyError::read_err(anyhow!("Failed to create indexed db store {e}").into())
             })?
         };
-
-        let cipher = password
-            .as_ref()
-            .filter(|p| !p.is_empty())
-            .map(|p| encryption_key_from_pass(p))
-            .transpose()?;
 
         // use a memory storage to handle encryption and decryption
         let map = MemoryStorage::new(password, cipher, None);
@@ -454,6 +515,7 @@ impl IndexedDbStorage {
         let map = Self::read_all(
             &self.indexed_db,
             self.password.clone(),
+            self.cipher.clone(),
             self.vss.as_deref(),
             &self.logger,
         )
@@ -654,6 +716,7 @@ impl MutinyStorage for IndexedDbStorage {
         let map = Self::read_all(
             &indexed_db,
             self.password.clone(),
+            self.cipher.clone(),
             self.vss.as_deref(),
             &self.logger,
         )

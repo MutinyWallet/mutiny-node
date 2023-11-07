@@ -15,7 +15,7 @@ use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 pub const KEYCHAIN_STORE_KEY: &str = "bdk_keychain";
-pub(crate) const MNEMONIC_KEY: &str = "mnemonic";
+pub const MNEMONIC_KEY: &str = "mnemonic";
 pub(crate) const NEED_FULL_SYNC_KEY: &str = "needs_full_sync";
 pub const NODES_KEY: &str = "nodes";
 const FEE_ESTIMATES_KEY: &str = "fee_estimates";

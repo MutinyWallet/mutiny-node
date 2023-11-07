@@ -204,6 +204,12 @@ impl From<MutinyStorageError> for MutinyJsError {
     }
 }
 
+impl From<bip39::Error> for MutinyJsError {
+    fn from(_e: bip39::Error) -> Self {
+        Self::InvalidMnemonic
+    }
+}
+
 impl From<bitcoin::util::address::Error> for MutinyJsError {
     fn from(_: bitcoin::util::address::Error) -> Self {
         Self::JsonReadWriteError

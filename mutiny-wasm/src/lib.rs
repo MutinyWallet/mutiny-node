@@ -29,6 +29,7 @@ use lightning::routing::gossip::NodeId;
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::auth::MutinyAuthClient;
+use mutiny_core::encrypt::encryption_key_from_pass;
 use mutiny_core::lnurlauth::AuthManager;
 use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
 use mutiny_core::redshift::RedshiftManager;
@@ -36,7 +37,6 @@ use mutiny_core::redshift::RedshiftRecipient;
 use mutiny_core::scb::EncryptedSCB;
 use mutiny_core::storage::MutinyStorage;
 use mutiny_core::vss::MutinyVssClient;
-use mutiny_core::{encrypt::encryption_key_from_pass, generate_seed};
 use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
 use nostr::key::XOnlyPublicKey;
@@ -159,26 +159,11 @@ impl MutinyWallet {
             .map(|s| s.parse().expect("Invalid network"))
             .unwrap_or(Network::Bitcoin);
 
-        let storage =
-            IndexedDbStorage::new(password.clone(), cipher.clone(), None, logger.clone()).await?;
+        let override_mnemonic = mnemonic_str.map(|s| Mnemonic::from_str(&s)).transpose()?;
 
-        let mnemonic = match mnemonic_str {
-            Some(m) => {
-                let seed = Mnemonic::from_str(&m).map_err(|_| MutinyJsError::InvalidMnemonic)?;
-                storage.insert_mnemonic(seed)?
-            }
-            None => match storage.get_mnemonic() {
-                Ok(Some(mnemonic)) => mnemonic,
-                Ok(None) => {
-                    let seed = generate_seed(12)?;
-                    storage.insert_mnemonic(seed)?
-                }
-                Err(_) => {
-                    // if we get an error, then we have the wrong password
-                    return Err(MutinyJsError::IncorrectPassword);
-                }
-            },
-        };
+        let mnemonic =
+            IndexedDbStorage::get_mnemonic(override_mnemonic, password.as_deref(), cipher.clone())
+                .await?;
 
         let seed = mnemonic.to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(network, &seed).unwrap();
@@ -1616,6 +1601,61 @@ mod tests {
     }
 
     #[test]
+    async fn fail_to_create_wallet_different_seed() {
+        MutinyWallet::new(
+            None,
+            None,
+            None,
+            Some("regtest".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("mutiny wallet should initialize");
+        super::utils::sleep(1_000).await;
+        assert!(MutinyWallet::has_node_manager(None).await);
+        uninit().await;
+
+        let seed = mutiny_core::generate_seed(12).unwrap();
+        let result = MutinyWallet::new(
+            None,
+            Some(seed.to_string()),
+            None,
+            Some("regtest".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        match result {
+            Err(MutinyJsError::InvalidMnemonic) => {}
+            Err(e) => panic!("should have failed to create wallet with different seed {e:?}"),
+            Ok(_) => panic!("should have failed to create wallet with different seed"),
+        }
+
+        IndexedDbStorage::clear()
+            .await
+            .expect("failed to clear storage");
+        uninit().await;
+    }
+
+    #[test]
     async fn fail_to_create_2_mutiny_wallets() {
         log!("trying to create 2 mutiny wallets!");
         let password = Some("password".to_string());
@@ -1681,6 +1721,11 @@ mod tests {
 
         let password = Some("password".to_string());
 
+        // make sure storage is empty
+        IndexedDbStorage::clear()
+            .await
+            .expect("failed to clear storage");
+
         let nm = MutinyWallet::new(
             password.clone(),
             Some(seed.to_string()),
@@ -1715,13 +1760,9 @@ mod tests {
     async fn created_new_nodes() {
         log!("creating new nodes");
 
-        let mut entropy = [0u8; 32];
-        getrandom::getrandom(&mut entropy).unwrap();
-        let seed = bip39::Mnemonic::from_entropy(&entropy).unwrap();
-
         let nm = MutinyWallet::new(
             Some("password".to_string()),
-            Some(seed.to_string()),
+            None,
             None,
             Some("regtest".to_owned()),
             None,
@@ -1781,13 +1822,9 @@ mod tests {
     async fn test_get_logs_no_password() {
         log!("getting logs with no password");
 
-        let mut entropy = [0u8; 32];
-        getrandom::getrandom(&mut entropy).unwrap();
-        let seed = bip39::Mnemonic::from_entropy(&entropy).unwrap();
-
         let nm = MutinyWallet::new(
             None,
-            Some(seed.to_string()),
+            None,
             None,
             Some("regtest".to_owned()),
             None,
@@ -1835,13 +1872,10 @@ mod tests {
     async fn test_get_logs_with_password() {
         log!("getting logs with password");
 
-        let mut entropy = [0u8; 32];
-        getrandom::getrandom(&mut entropy).unwrap();
-        let seed = bip39::Mnemonic::from_entropy(&entropy).unwrap();
         let password = Some("password".to_string());
         let nm = MutinyWallet::new(
             password.clone(),
-            Some(seed.to_string()),
+            None,
             None,
             Some("regtest".to_owned()),
             None,
