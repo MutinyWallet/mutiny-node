@@ -1,3 +1,4 @@
+use crate::error::MutinyJsError;
 use ::nostr::key::XOnlyPublicKey;
 use ::nostr::prelude::{FromBech32, ToBech32};
 use bitcoin::hashes::hex::ToHex;
@@ -10,13 +11,12 @@ use lnurl::lnurl::LnUrl;
 use mutiny_core::labels::Contact as MutinyContact;
 use mutiny_core::nostr::nwc::SpendingConditions;
 use mutiny_core::redshift::{RedshiftRecipient, RedshiftStatus};
+use mutiny_core::utils::now;
 use mutiny_core::*;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::json;
 use std::str::FromStr;
 use wasm_bindgen::prelude::*;
-
-use crate::{error::MutinyJsError, utils};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[wasm_bindgen]
@@ -801,7 +801,7 @@ impl Contact {
             ln_address,
             lnurl,
             image_url,
-            last_used: utils::now().as_secs(),
+            last_used: now().as_secs(),
         })
     }
 

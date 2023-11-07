@@ -711,10 +711,10 @@ impl MutinyStorage for IndexedDbStorage {
 mod tests {
     use super::*;
     use crate::indexed_db::IndexedDbStorage;
-    use crate::utils::sleep;
     use crate::utils::test::log;
     use bip39::Mnemonic;
     use mutiny_core::storage::MutinyStorage;
+    use mutiny_core::utils::sleep;
     use mutiny_core::{encrypt::encryption_key_from_pass, logging::MutinyLogger};
     use serde_json::json;
     use std::str::FromStr;

@@ -15,7 +15,6 @@ mod utils;
 use crate::error::MutinyJsError;
 use crate::indexed_db::IndexedDbStorage;
 use crate::models::*;
-use crate::utils::sleep;
 use bip39::Mnemonic;
 use bitcoin::consensus::deserialize;
 use bitcoin::hashes::hex::{FromHex, ToHex};
@@ -36,6 +35,7 @@ use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::redshift::RedshiftRecipient;
 use mutiny_core::scb::EncryptedSCB;
 use mutiny_core::storage::MutinyStorage;
+use mutiny_core::utils::sleep;
 use mutiny_core::vss::MutinyVssClient;
 use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
@@ -1561,6 +1561,7 @@ mod tests {
     use crate::indexed_db::IndexedDbStorage;
     use js_sys::Array;
     use mutiny_core::storage::MutinyStorage;
+    use mutiny_core::utils::sleep;
     use wasm_bindgen::JsCast;
     use wasm_bindgen::JsValue;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
@@ -1591,7 +1592,7 @@ mod tests {
         )
         .await
         .expect("mutiny wallet should initialize");
-        super::utils::sleep(1_000).await;
+        sleep(1_000).await;
         assert!(MutinyWallet::has_node_manager(password).await);
 
         IndexedDbStorage::clear()
@@ -1620,7 +1621,7 @@ mod tests {
         )
         .await
         .expect("mutiny wallet should initialize");
-        super::utils::sleep(1_000).await;
+        sleep(1_000).await;
         assert!(MutinyWallet::has_node_manager(None).await);
         uninit().await;
 
@@ -1679,7 +1680,7 @@ mod tests {
         )
         .await
         .expect("mutiny wallet should initialize");
-        super::utils::sleep(1_000).await;
+        sleep(1_000).await;
         assert!(MutinyWallet::has_node_manager(password.clone()).await);
 
         // try to create a second
@@ -1855,7 +1856,7 @@ mod tests {
         assert_ne!("", node_identity.pubkey());
 
         // sleep to make sure logs save
-        super::utils::sleep(6_000).await;
+        sleep(6_000).await;
         let logs = MutinyWallet::get_logs(None).await.expect("should get logs");
         let parsed_logs = js_to_option_vec_string(logs).expect("should parse logs");
         assert!(parsed_logs.is_some());
@@ -1906,7 +1907,7 @@ mod tests {
         assert_ne!("", node_identity.pubkey());
 
         // sleep to make sure logs save
-        super::utils::sleep(6_000).await;
+        sleep(6_000).await;
         let logs = MutinyWallet::get_logs(password)
             .await
             .expect("should get logs");
