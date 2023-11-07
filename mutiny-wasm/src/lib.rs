@@ -163,8 +163,7 @@ impl MutinyWallet {
 
         let mnemonic =
             IndexedDbStorage::get_mnemonic(override_mnemonic, password.as_deref(), cipher.clone())
-                .await
-                .map_err(|_| MutinyJsError::IncorrectPassword)?;
+                .await?;
 
         let seed = mnemonic.to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(network, &seed).unwrap();
@@ -1594,6 +1593,61 @@ mod tests {
         .expect("mutiny wallet should initialize");
         super::utils::sleep(1_000).await;
         assert!(MutinyWallet::has_node_manager(password).await);
+
+        IndexedDbStorage::clear()
+            .await
+            .expect("failed to clear storage");
+        uninit().await;
+    }
+
+    #[test]
+    async fn fail_to_create_wallet_different_seed() {
+        MutinyWallet::new(
+            None,
+            None,
+            None,
+            Some("regtest".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("mutiny wallet should initialize");
+        super::utils::sleep(1_000).await;
+        assert!(MutinyWallet::has_node_manager(None).await);
+        uninit().await;
+
+        let seed = mutiny_core::generate_seed(12).unwrap();
+        let result = MutinyWallet::new(
+            None,
+            Some(seed.to_string()),
+            None,
+            Some("regtest".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        match result {
+            Err(MutinyJsError::InvalidMnemonic) => {}
+            Err(e) => panic!("should have failed to create wallet with different seed {e:?}"),
+            Ok(_) => panic!("should have failed to create wallet with different seed"),
+        }
 
         IndexedDbStorage::clear()
             .await

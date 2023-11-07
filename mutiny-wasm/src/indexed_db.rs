@@ -114,7 +114,7 @@ impl IndexedDbStorage {
 
             // if we hae an override mnemonic, then we need to check that it matches the one in indexed db
             if override_mnemonic.is_some_and(|m| m != seed) {
-                panic!("Mnemonic already exists in indexed db, cannot override");
+                return Err(MutinyError::InvalidMnemonic);
             }
 
             seed
