@@ -235,7 +235,7 @@ impl NostrWalletConnect {
         let uri = NostrWalletConnectURI::new(
             self.server_key.public_key(),
             self.profile.relay.parse()?,
-            Some(self.client_key.secret_key().unwrap()),
+            self.client_key.secret_key().unwrap(),
             None,
         )?;
 

@@ -45,7 +45,11 @@ pub struct Contact {
 impl Contact {
     /// Update the contact with metadata from their Nostr profile
     pub fn update_with_metadata(mut self, metadata: Metadata) -> Self {
-        self.name = metadata.display_name.or(metadata.name).unwrap_or(self.name);
+        self.name = metadata
+            .display_name
+            .filter(|n| !n.is_empty())
+            .or(metadata.name.filter(|n| !n.is_empty()))
+            .unwrap_or(self.name);
 
         let ln_address = metadata
             .lud16
@@ -57,7 +61,10 @@ impl Contact {
             .and_then(|lud06| LnUrl::from_str(&lud06).ok());
         self.lnurl = lnurl.or(self.lnurl);
 
-        self.image_url = metadata.picture.or(self.image_url);
+        self.image_url = metadata
+            .picture
+            .filter(|p| !p.is_empty())
+            .or(self.image_url);
 
         self
     }
