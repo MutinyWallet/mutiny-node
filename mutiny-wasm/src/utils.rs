@@ -1,5 +1,3 @@
-use core::time::Duration;
-use instant::SystemTime;
 use log::{debug, Level};
 use wasm_bindgen::prelude::*;
 
@@ -19,24 +17,6 @@ pub async fn main_js() -> Result<(), JsValue> {
     wasm_logger::init(wasm_logger::Config::new(Level::Debug).message_on_new_line());
     debug!("Main function begins and ends");
     Ok(())
-}
-
-pub fn now() -> Duration {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-}
-
-#[allow(dead_code)]
-pub async fn sleep(millis: i32) {
-    let mut cb = |resolve: js_sys::Function, _reject: js_sys::Function| {
-        web_sys::window()
-            .unwrap()
-            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, millis)
-            .unwrap();
-    };
-    let p = js_sys::Promise::new(&mut cb);
-    wasm_bindgen_futures::JsFuture::from(p).await.unwrap();
 }
 
 #[cfg(test)]
