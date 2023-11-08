@@ -7,18 +7,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{auth::MutinyAuthClient, error::MutinyError, logging::MutinyLogger, nodemanager::Plan};
 
-pub(crate) struct MutinySubscriptionClient {
+pub struct MutinySubscriptionClient {
     auth_client: Arc<MutinyAuthClient>,
     url: String,
     logger: Arc<MutinyLogger>,
 }
 
 impl MutinySubscriptionClient {
-    pub(crate) fn new(
-        auth_client: Arc<MutinyAuthClient>,
-        url: String,
-        logger: Arc<MutinyLogger>,
-    ) -> Self {
+    pub fn new(auth_client: Arc<MutinyAuthClient>, url: String, logger: Arc<MutinyLogger>) -> Self {
         Self {
             auth_client,
             url,
@@ -26,6 +22,12 @@ impl MutinySubscriptionClient {
         }
     }
 
+    /// Checks whether or not the user is subscribed to Mutiny+.
+    /// Submits a NWC string to keep the subscription active if not expired.
+    ///
+    /// Returns None if there's no subscription at all.
+    /// Returns Some(u64) for their unix expiration timestamp, which may be in the
+    /// past or in the future, depending on whether or not it is currently active.
     pub async fn check_subscribed(&self) -> Result<Option<u64>, MutinyError> {
         let url = Url::parse(&format!("{}/v1/check-subscribed", self.url)).map_err(|e| {
             log_error!(self.logger, "Error parsing check subscribed url: {e}");
