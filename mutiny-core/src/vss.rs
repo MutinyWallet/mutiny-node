@@ -17,7 +17,6 @@ pub struct MutinyVssClient {
     url: String,
     store_id: Option<String>,
     encryption_key: SecretKey,
-    pub premium: bool,
     pub logger: Arc<MutinyLogger>,
 }
 
@@ -89,7 +88,6 @@ impl MutinyVssClient {
             url,
             store_id: None, // we get this from the auth client
             encryption_key,
-            premium: false, // set later
             logger,
         }
     }
@@ -107,7 +105,6 @@ impl MutinyVssClient {
             url,
             store_id: Some(pk),
             encryption_key,
-            premium: true, // unauthenticated clients are self-hosted so they are premium
             logger,
         }
     }

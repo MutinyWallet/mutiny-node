@@ -24,9 +24,7 @@ use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
-use lightning::log_info;
 use lightning::routing::gossip::NodeId;
-use lightning::util::logger::Logger;
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::auth::MutinyAuthClient;
@@ -37,8 +35,7 @@ use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::redshift::RedshiftRecipient;
 use mutiny_core::scb::EncryptedSCB;
 use mutiny_core::storage::MutinyStorage;
-use mutiny_core::subscription::MutinySubscriptionClient;
-use mutiny_core::utils::{now, sleep};
+use mutiny_core::utils::sleep;
 use mutiny_core::vss::MutinyVssClient;
 use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
@@ -171,7 +168,7 @@ impl MutinyWallet {
         let seed = mnemonic.to_seed("");
         let xprivkey = ExtendedPrivKey::new_master(network, &seed).unwrap();
 
-        let (auth_client, mut vss_client) = if safe_mode {
+        let (auth_client, vss_client) = if safe_mode {
             (None, None)
         } else if let Some(auth_url) = auth_url.clone() {
             let auth_manager = AuthManager::new(xprivkey).unwrap();
@@ -190,53 +187,28 @@ impl MutinyWallet {
             ));
 
             let vss = storage_url.map(|url| {
-                MutinyVssClient::new_authenticated(
+                Arc::new(MutinyVssClient::new_authenticated(
                     auth_client.clone(),
                     url,
                     xprivkey.private_key,
                     logger.clone(),
-                )
+                ))
             });
 
             (Some(auth_client), vss)
         } else {
             let vss = storage_url.map(|url| {
-                MutinyVssClient::new_unauthenticated(url, xprivkey.private_key, logger.clone())
+                Arc::new(MutinyVssClient::new_unauthenticated(
+                    url,
+                    xprivkey.private_key,
+                    logger.clone(),
+                ))
             });
 
             (None, vss)
         };
 
-        let (subscription_client, subscribed) = if let Some(ref auth_client) = auth_client {
-            if let Some(subscription_url) = subscription_url {
-                let client = Arc::new(MutinySubscriptionClient::new(
-                    auth_client.clone(),
-                    subscription_url,
-                    logger.clone(),
-                ));
-
-                // check if we're subscribed, add 3 day grace period
-                let sub_expired_time = client.check_subscribed().await?.unwrap_or_default();
-                let subscribed = sub_expired_time + 86_400 * 3 > now().as_secs();
-
-                (Some(client), subscribed)
-            } else {
-                (None, false)
-            }
-        } else {
-            (None, false)
-        };
-
-        if subscribed {
-            log_info!(logger, "Welcome back Mutiny+ user!");
-            if let Some(vss) = vss_client.as_mut() {
-                vss.premium = true;
-            }
-        }
-
-        let storage =
-            IndexedDbStorage::new(password, cipher, vss_client.map(Arc::new), logger.clone())
-                .await?;
+        let storage = IndexedDbStorage::new(password, cipher, vss_client, logger.clone()).await?;
 
         let mut config = mutiny_core::MutinyWalletConfig::new(
             xprivkey,
@@ -246,7 +218,7 @@ impl MutinyWallet {
             user_rgs_url,
             lsp_url,
             auth_client,
-            subscription_client,
+            subscription_url,
             scorer_url,
             skip_device_lock.unwrap_or(false),
         );
@@ -1410,9 +1382,14 @@ impl MutinyWallet {
     }
 
     /// Checks whether or not the user is subscribed to Mutiny+.
+    /// Submits a NWC string to keep the subscription active if not expired.
+    ///
+    /// Returns None if there's no subscription at all.
+    /// Returns Some(u64) for their unix expiration timestamp, which may be in the
+    /// past or in the future, depending on whether or not it is currently active.
     #[wasm_bindgen]
-    pub fn check_subscribed(&self) -> bool {
-        self.inner.storage.premium()
+    pub async fn check_subscribed(&self) -> Result<Option<u64>, MutinyJsError> {
+        Ok(self.inner.check_subscribed().await?)
     }
 
     /// Gets the subscription plans for Mutiny+ subscriptions
