@@ -1089,19 +1089,18 @@ checksum = "89d92a4743f9a61002fae18374ed11e7973f530cb3a3255fb354818118b2203c"
 [[package]]
 name = "lightning"
 version = "0.0.118"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d52cec5fa9382154fe9671e8df93095b800c7d77abc66e2a5ef839d672521c5e"
+source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=22247dd4abf974349ae91ebaf2ba7b180ff10a48#22247dd4abf974349ae91ebaf2ba7b180ff10a48"
 dependencies = [
  "bitcoin 0.29.2",
  "core2",
  "hashbrown 0.8.2",
+ "musig2",
 ]
 
 [[package]]
 name = "lightning-invoice"
 version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3eb24878b0f4ef75f020976c886d9ad1503867802329cc963e0ab4623ea3b25c"
+source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=22247dd4abf974349ae91ebaf2ba7b180ff10a48#22247dd4abf974349ae91ebaf2ba7b180ff10a48"
 dependencies = [
  "bech32",
  "bitcoin 0.29.2",
@@ -1116,8 +1115,7 @@ dependencies = [
 [[package]]
 name = "lightning-rapid-gossip-sync"
 version = "0.0.118"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac66654c7593a16277cd9f1b7a078729318cad5cee2fe8948a2df4f756decb73"
+source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=22247dd4abf974349ae91ebaf2ba7b180ff10a48#22247dd4abf974349ae91ebaf2ba7b180ff10a48"
 dependencies = [
  "bitcoin 0.29.2",
  "lightning",
@@ -1220,6 +1218,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "musig2"
+version = "0.1.0"
+source = "git+https://github.com/arik-so/rust-musig2?rev=27797d7#27797d78cf64e8974e38d7f31ebb11e455015a9e"
+dependencies = [
+ "bitcoin 0.29.2",
 ]
 
 [[package]]
