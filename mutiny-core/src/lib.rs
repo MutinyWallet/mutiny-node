@@ -327,6 +327,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                 Ok(RelayPoolNotification::Message(_, _)) => {}, // ignore messages
                                 Ok(RelayPoolNotification::Shutdown) => break, // if we disconnect, we restart to reconnect
                                 Ok(RelayPoolNotification::Stop) => {}, // Currently unused
+                                Ok(RelayPoolNotification::RelayStatus { .. }) => {}, // Currently unused
                                 Err(_) => break, // if we are erroring we should reconnect
                             }
                         }
@@ -518,6 +519,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             let contact = Contact::create_from_metadata(npub, meta);
 
             if contact.name.is_empty() {
+                log_debug!(
+                    self.node_manager.logger,
+                    "Skipping creating contact with no name: {npub}"
+                );
                 continue;
             }
 

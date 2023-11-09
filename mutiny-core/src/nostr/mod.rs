@@ -767,6 +767,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                         },
                         Ok(RelayPoolNotification::Message(_, _)) => {}, // ignore messages
                         Ok(RelayPoolNotification::Stop) => {}, // ignore stops
+                        Ok(RelayPoolNotification::RelayStatus { .. }) => {}, // ignore status updates
                         Ok(RelayPoolNotification::Shutdown) =>
                             return Err(MutinyError::ConnectionFailed),
                         Err(_) => return Err(MutinyError::ConnectionFailed),
