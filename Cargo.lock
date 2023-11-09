@@ -1279,7 +1279,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
- "windowless_sleep",
 ]
 
 [[package]]
@@ -1312,7 +1311,6 @@ dependencies = [
  "wasm-bindgen-test",
  "wasm-logger",
  "web-sys",
- "windowless_sleep",
 ]
 
 [[package]]
@@ -2580,17 +2578,6 @@ name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
-
-[[package]]
-name = "windowless_sleep"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a3d03e99b3e6e0a5801289a81160c868bf2b1a35c937678b34efe30e749d512"
-dependencies = [
- "js-sys",
- "wasm-bindgen",
- "wasm-bindgen-futures",
-]
 
 [[package]]
 name = "windows-core"
