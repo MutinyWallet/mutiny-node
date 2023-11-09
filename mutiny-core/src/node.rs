@@ -1964,8 +1964,11 @@ pub(crate) fn default_user_config() -> UserConfig {
         },
         manually_accept_inbound_channels: true,
         channel_config: ChannelConfig {
+            // Set to max supply of bitcoin.
             // Don't care about dust exposure, we just want to be able to make payments.
-            max_dust_htlc_exposure: MaxDustHTLCExposure::FixedLimitMsat(u64::MAX),
+            max_dust_htlc_exposure: MaxDustHTLCExposure::FixedLimitMsat(
+                21_000_000 * 100_000_000 * 1_000,
+            ),
             ..Default::default()
         },
         ..Default::default()
