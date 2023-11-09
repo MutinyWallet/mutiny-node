@@ -101,11 +101,6 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     /// Get the VSS client used for storage
     fn vss_client(&self) -> Option<Arc<MutinyVssClient>>;
 
-    /// If the VSS client has premium features enabledss
-    fn premium(&self) -> bool {
-        self.vss_client().is_some_and(|v| v.premium)
-    }
-
     /// Set a value in the storage, the value will already be encrypted if needed
     fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
     where
