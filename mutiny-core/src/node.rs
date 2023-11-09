@@ -65,7 +65,6 @@ use lightning::{
 };
 use lightning_invoice::payment::PaymentError;
 use lightning_invoice::{
-    payment::{pay_invoice, pay_zero_value_invoice},
     utils::{create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice},
     Bolt11Invoice,
 };
@@ -1120,27 +1119,19 @@ impl<S: MutinyStorage> Node<S> {
             if amt_sats.is_none() {
                 return Err(MutinyError::InvoiceInvalid);
             }
-            let amt_msats = amt_sats.unwrap() * 1_000;
+            let amount_msats = amt_sats.unwrap() * 1_000;
             (
-                pay_zero_value_invoice(
-                    invoice,
-                    amt_msats,
-                    Self::retry_strategy(),
-                    self.channel_manager.as_ref(),
-                ),
-                amt_msats,
+                self.pay_invoice_internal(invoice, amount_msats),
+                amount_msats,
             )
         } else {
             if amt_sats.is_some() {
                 return Err(MutinyError::InvoiceInvalid);
             }
+            let amount_msats = invoice.amount_milli_satoshis().unwrap();
             (
-                pay_invoice(
-                    invoice,
-                    Self::retry_strategy(),
-                    self.channel_manager.as_ref(),
-                ),
-                invoice.amount_milli_satoshis().unwrap(),
+                self.pay_invoice_internal(invoice, amount_msats),
+                amount_msats,
             )
         };
 
@@ -1206,6 +1197,46 @@ impl<S: MutinyStorage> Node<S> {
 
                 Err(MutinyError::RoutingFailed)
             }
+        }
+    }
+
+    // copied from LDK, modified to change a couple params
+    fn pay_invoice_internal(
+        &self,
+        invoice: &Bolt11Invoice,
+        amount_msats: u64,
+    ) -> Result<PaymentId, PaymentError> {
+        let payment_id = PaymentId(invoice.payment_hash().into_inner());
+        let payment_hash = PaymentHash((*invoice.payment_hash()).into_inner());
+        let mut recipient_onion = RecipientOnionFields::secret_only(*invoice.payment_secret());
+        recipient_onion.payment_metadata = invoice.payment_metadata().cloned();
+        let mut payment_params = PaymentParameters::from_node_id(
+            invoice.recover_payee_pub_key(),
+            invoice.min_final_cltv_expiry_delta() as u32,
+        )
+        .with_expiry_time(invoice.expires_at().unwrap().as_secs())
+        .with_route_hints(invoice.route_hints())
+        .unwrap();
+        if let Some(features) = invoice.features() {
+            payment_params = payment_params
+                .with_bolt11_features(features.clone())
+                .unwrap();
+        }
+        let route_params = RouteParameters {
+            payment_params,
+            final_value_msat: amount_msats,
+            max_total_routing_fee_msat: None, // main change from LDK, we just want payment to succeed
+        };
+
+        match self.channel_manager.as_ref().send_payment(
+            payment_hash,
+            recipient_onion,
+            payment_id,
+            route_params,
+            Self::retry_strategy(),
+        ) {
+            Ok(()) => Ok(payment_id),
+            Err(e) => Err(PaymentError::Sending(e)),
         }
     }
 
@@ -1283,8 +1314,7 @@ impl<S: MutinyStorage> Node<S> {
 
         let amt_msats = amt_sats * 1000;
 
-        // TODO retry with allow_mpp false just in case recipient does not support
-        let payment_params = PaymentParameters::for_keysend(to_node, 40, true);
+        let payment_params = PaymentParameters::for_keysend(to_node, 40, false);
         let route_params: RouteParameters = RouteParameters {
             final_value_msat: amt_msats,
             payment_params,
