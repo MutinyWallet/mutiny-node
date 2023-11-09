@@ -65,6 +65,7 @@ async fn uninit() {
 pub struct MutinyWallet {
     mnemonic: Mnemonic,
     inner: mutiny_core::MutinyWallet<IndexedDbStorage>,
+    subscription_expire_time: Option<u64>,
 }
 
 /// The [MutinyWallet] is the main entry point for interacting with the Mutiny Wallet.
@@ -207,7 +208,7 @@ impl MutinyWallet {
             (None, vss)
         };
 
-        let (subscription_client, subscribed) = if let Some(ref auth_client) = auth_client {
+        let (subscription_client, sub_expired_time) = if let Some(ref auth_client) = auth_client {
             if let Some(subscription_url) = subscription_url {
                 let client = Arc::new(MutinySubscriptionClient::new(
                     auth_client.clone(),
@@ -215,24 +216,22 @@ impl MutinyWallet {
                     logger.clone(),
                 ));
 
-                // check if we're subscribed, add 3 day grace period
                 let sub_expired_time = client.check_subscribed().await?.unwrap_or_default();
-                let subscribed = sub_expired_time + 86_400 * 3 > now().as_secs();
 
-                (Some(client), subscribed)
+                (Some(client), Some(sub_expired_time))
             } else {
-                (None, false)
+                (None, None)
             }
         } else {
-            (None, false)
+            (None, None)
         };
 
-        if subscribed {
+        if let Some(time) = sub_expired_time {
             log_info!(logger, "Welcome back Mutiny+ user!");
             if let Some(vss) = vss_client.as_mut() {
-                vss.premium = true;
+                vss.premium = time + 86_400 * 3 > now().as_secs();
             }
-        }
+        };
 
         let storage =
             IndexedDbStorage::new(password, cipher, vss_client.map(Arc::new), logger.clone())
@@ -262,7 +261,11 @@ impl MutinyWallet {
         let inner =
             mutiny_core::MutinyWallet::new(storage, config, Some(logger.session_id.clone()))
                 .await?;
-        Ok(MutinyWallet { mnemonic, inner })
+        Ok(MutinyWallet {
+            mnemonic,
+            inner,
+            subscription_expire_time: sub_expired_time,
+        })
     }
 
     pub fn is_safe_mode(&self) -> bool {
@@ -1409,10 +1412,12 @@ impl MutinyWallet {
         Ok(())
     }
 
-    /// Checks whether or not the user is subscribed to Mutiny+.
+    /// Returns None if there's no subscription at all.
+    /// Returns Some(u64) for their unix expiration timestamp, which may be in the
+    /// past or in the future, depending on whether or not it is currently active.
     #[wasm_bindgen]
-    pub fn check_subscribed(&self) -> bool {
-        self.inner.storage.premium()
+    pub fn check_subscribed(&self) -> Option<u64> {
+        self.subscription_expire_time
     }
 
     /// Gets the subscription plans for Mutiny+ subscriptions
