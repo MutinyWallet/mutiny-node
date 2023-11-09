@@ -21,6 +21,9 @@ use std::sync::{Arc, RwLock};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::spawn_local;
 
+pub(crate) const LOCAL_LOCK_KEY: &str = "local_lock";
+pub(crate) const LOCAL_LOCK_INTERVAL_SECS: u64 = 3;
+
 pub(crate) const WALLET_DATABASE_NAME: &str = "wallet";
 pub(crate) const WALLET_OBJECT_STORE_NAME: &str = "wallet_store";
 
@@ -57,14 +60,30 @@ impl IndexedDbStorage {
         .await?;
         let memory = Arc::new(RwLock::new(map));
 
-        Ok(IndexedDbStorage {
+        let storage = IndexedDbStorage {
             password,
             cipher,
             memory,
             indexed_db,
             vss,
-            logger,
-        })
+            logger: logger.clone(),
+        };
+
+        // immediately set the local lock
+        let storage_clone = storage.clone();
+        utils::spawn(async move {
+            loop {
+                if let Err(e) = storage_clone
+                    .set_data_async(LOCAL_LOCK_KEY, utils::now().as_secs(), None)
+                    .await
+                {
+                    log_error!(logger, "Error setting device lock: {e}");
+                }
+                utils::sleep((LOCAL_LOCK_INTERVAL_SECS * 1_000) as i32).await;
+            }
+        });
+
+        Ok(storage)
     }
 
     /// Read the mnemonic from indexed db, if one does not exist,
@@ -254,14 +273,30 @@ impl IndexedDbStorage {
                     "key from indexedDB is not a string"
                 ))))?;
 
-            // we no longer need to read this key,
-            // so we can remove it from memory
-            if key == NETWORK_GRAPH_KEY {
-                continue;
+            match key.as_str() {
+                // we no longer need to read this key, so we can remove it from memory
+                NETWORK_GRAPH_KEY => continue,
+                // Check if we have a local lock, if we don't, then throw an error
+                // skip in tests, we don't care about local lock in tests
+                #[cfg(not(test))]
+                LOCAL_LOCK_KEY => {
+                    let local_lock: u64 = value.into_serde()?;
+                    let now = utils::now().as_secs();
+                    let diff = now.saturating_sub(local_lock);
+                    if diff < LOCAL_LOCK_INTERVAL_SECS * 2 {
+                        log_error!(
+                            logger,
+                            "Local lock is currently held by another instance! {diff} seconds ago"
+                        );
+                        return Err(MutinyError::AlreadyRunning);
+                    }
+                }
+                _ => {
+                    // save to memory
+                    let json: Value = value.into_serde()?;
+                    map.set(key, json)?;
+                }
             }
-
-            let json: Value = value.into_serde()?;
-            map.set(key, json)?;
         }
 
         match vss {
