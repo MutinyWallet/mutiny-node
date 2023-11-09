@@ -1964,10 +1964,8 @@ pub(crate) fn default_user_config() -> UserConfig {
         },
         manually_accept_inbound_channels: true,
         channel_config: ChannelConfig {
-            // 20k sats, 4x more than normal due to high fee rates
-            // Any lightning payment above this, but below current
-            // HTLC fees will have issues paying until anchor outputs
-            max_dust_htlc_exposure: MaxDustHTLCExposure::FixedLimitMsat(20_000_000),
+            // Don't care about dust exposure, we just want to be able to make payments.
+            max_dust_htlc_exposure: MaxDustHTLCExposure::FixedLimitMsat(u64::MAX),
             ..Default::default()
         },
         ..Default::default()
