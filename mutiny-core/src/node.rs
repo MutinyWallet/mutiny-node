@@ -169,7 +169,7 @@ pub(crate) struct Node<S: MutinyStorage> {
     network: Network,
     pub persister: Arc<MutinyNodePersister<S>>,
     wallet: Arc<OnChainWallet<S>>,
-    logger: Arc<MutinyLogger>,
+    pub(crate) logger: Arc<MutinyLogger>,
     pub(crate) lsp_client: Option<LspClient>,
     pub(crate) sync_lock: Arc<Mutex<()>>,
     stop: Arc<AtomicBool>,
