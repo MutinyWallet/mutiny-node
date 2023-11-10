@@ -16,7 +16,7 @@ pub const FETCH_TIMEOUT: i32 = 30_000;
 
 pub(crate) fn min_lightning_amount(network: Network) -> u64 {
     match network {
-        Network::Bitcoin => 50_000,
+        Network::Bitcoin => 100_000,
         Network::Testnet | Network::Signet | Network::Regtest => 10_000,
     }
 }
