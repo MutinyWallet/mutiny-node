@@ -160,6 +160,71 @@ pub enum MutinyStorageError {
     Other(#[from] anyhow::Error),
 }
 
+impl PartialEq for MutinyStorageError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::SerdeError { .. }, Self::SerdeError { .. }) => true,
+            (Self::LockError, Self::LockError) => true,
+            (Self::IndexedDBError, Self::IndexedDBError) => true,
+            (Self::Other(e), Self::Other(e2)) => e.to_string() == e2.to_string(),
+            _ => false,
+        }
+    }
+}
+
+impl PartialEq for MutinyError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::AlreadyRunning, Self::AlreadyRunning) => true,
+            (Self::NotRunning, Self::NotRunning) => true,
+            (Self::NetworkMismatch, Self::NetworkMismatch) => true,
+            (Self::NotFound, Self::NotFound) => true,
+            (Self::FundingTxCreationFailed, Self::FundingTxCreationFailed) => true,
+            (Self::ConnectionFailed, Self::ConnectionFailed) => true,
+            (Self::IncorrectNetwork(net), Self::IncorrectNetwork(net2)) => net == net2,
+            (Self::NonUniquePaymentHash, Self::NonUniquePaymentHash) => true,
+            (Self::PaymentTimeout, Self::PaymentTimeout) => true,
+            (Self::InvoiceInvalid, Self::InvoiceInvalid) => true,
+            (Self::InvoiceCreationFailed, Self::InvoiceCreationFailed) => true,
+            (Self::ReserveAmountError, Self::ReserveAmountError) => true,
+            (Self::InsufficientBalance, Self::InsufficientBalance) => true,
+            (Self::LnUrlFailure, Self::LnUrlFailure) => true,
+            (Self::LspGenericError, Self::LspGenericError) => true,
+            (Self::LspFundingError, Self::LspFundingError) => true,
+            (Self::LspAmountTooHighError, Self::LspAmountTooHighError) => true,
+            (Self::LspConnectionError, Self::LspConnectionError) => true,
+            (Self::SubscriptionClientNotConfigured, Self::SubscriptionClientNotConfigured) => true,
+            (Self::InvalidArgumentsError, Self::InvalidArgumentsError) => true,
+            (Self::RoutingFailed, Self::RoutingFailed) => true,
+            (Self::PeerInfoParseFailed, Self::PeerInfoParseFailed) => true,
+            (Self::ChannelCreationFailed, Self::ChannelCreationFailed) => true,
+            (Self::ChannelClosingFailed, Self::ChannelClosingFailed) => true,
+            (Self::PersistenceFailed { source }, Self::PersistenceFailed { source: source2 }) => {
+                source == source2
+            }
+            (Self::ReadError { source }, Self::ReadError { source: source2 }) => source == source2,
+            (Self::LnDecodeError, Self::LnDecodeError) => true,
+            (Self::SeedGenerationFailed, Self::SeedGenerationFailed) => true,
+            (Self::InvalidMnemonic, Self::InvalidMnemonic) => true,
+            (Self::WalletOperationFailed, Self::WalletOperationFailed) => true,
+            (Self::WalletSigningFailed, Self::WalletSigningFailed) => true,
+            (Self::ChainAccessFailed, Self::ChainAccessFailed) => true,
+            (Self::WalletSyncError, Self::WalletSyncError) => true,
+            (Self::RapidGossipSyncError, Self::RapidGossipSyncError) => true,
+            (Self::PubkeyInvalid, Self::PubkeyInvalid) => true,
+            (Self::IncorrectLnUrlFunction, Self::IncorrectLnUrlFunction) => true,
+            (Self::BadAmountError, Self::BadAmountError) => true,
+            (Self::BitcoinPriceError, Self::BitcoinPriceError) => true,
+            (Self::DLCManagerError, Self::DLCManagerError) => true,
+            (Self::NostrError, Self::NostrError) => true,
+            (Self::IncorrectPassword, Self::IncorrectPassword) => true,
+            (Self::SamePassword, Self::SamePassword) => true,
+            (Self::Other(e), Self::Other(e2)) => e.to_string() == e2.to_string(),
+            _ => false,
+        }
+    }
+}
+
 impl MutinyError {
     pub fn read_err(e: MutinyStorageError) -> Self {
         MutinyError::ReadError { source: e }
