@@ -73,7 +73,9 @@ pub fn decrypt_with_password(encrypted: &str, password: &str) -> Result<String, 
 
     let cipher = Aes256Gcm::new(&key);
 
-    let decrypted_data = cipher.decrypt(nonce, encrypted_bytes)?;
+    let decrypted_data = cipher
+        .decrypt(nonce, encrypted_bytes)
+        .map_err(|_| MutinyError::IncorrectPassword)?;
 
     let decrypted_string =
         String::from_utf8(decrypted_data).map_err(|_| MutinyError::IncorrectPassword)?;
