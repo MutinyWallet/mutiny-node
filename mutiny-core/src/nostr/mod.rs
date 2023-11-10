@@ -451,9 +451,8 @@ impl<S: MutinyStorage> NostrManager<S> {
     ) -> Result<EventId, MutinyError> {
         let (nwc, inv) = self.find_nwc_data(&hash)?;
 
-        let resp = nwc
-            .pay_nwc_invoice(node_manager, from_node, &inv.invoice)
-            .await?;
+        let node = node_manager.get_node(from_node).await?;
+        let resp = nwc.pay_nwc_invoice(&node, &inv.invoice).await?;
 
         let event_id = self.broadcast_nwc_response(resp, nwc, inv).await?;
 
@@ -617,9 +616,8 @@ impl<S: MutinyStorage> NostrManager<S> {
         };
 
         if let Some(mut nwc) = nwc {
-            let event = nwc
-                .handle_nwc_request(event, node_manager, from_node, self)
-                .await?;
+            let node = node_manager.get_node(from_node).await?;
+            let event = nwc.handle_nwc_request(event, &node, self).await?;
             Ok(event)
         } else {
             Ok(None)

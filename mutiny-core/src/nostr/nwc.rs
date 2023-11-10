@@ -1,12 +1,12 @@
 use crate::error::MutinyError;
 use crate::event::HTLCStatus;
-use crate::nodemanager::NodeManager;
+use crate::node::Node;
 use crate::nostr::NostrManager;
 use crate::storage::MutinyStorage;
 use crate::utils;
 use anyhow::anyhow;
 use bitcoin::hashes::hex::{FromHex, ToHex};
-use bitcoin::secp256k1::{PublicKey, Secp256k1, Signing};
+use bitcoin::secp256k1::{Secp256k1, Signing};
 use bitcoin::util::bip32::ExtendedPrivKey;
 use chrono::{DateTime, Datelike, Duration, NaiveDateTime, Utc};
 use core::fmt;
@@ -266,13 +266,12 @@ impl NostrWalletConnect {
 
     pub(crate) async fn pay_nwc_invoice<S: MutinyStorage>(
         &self,
-        node_manager: &NodeManager<S>,
-        from_node: &PublicKey,
+        node: &Node<S>,
         invoice: &Bolt11Invoice,
     ) -> Result<Response, MutinyError> {
         let labels = vec![self.profile.name.clone()];
-        match node_manager
-            .pay_invoice(from_node, invoice, None, labels)
+        match node
+            .pay_invoice_with_timeout(invoice, None, None, labels)
             .await
         {
             Ok(inv) => {
@@ -287,7 +286,7 @@ impl NostrWalletConnect {
                 })
             }
             Err(e) => {
-                log_error!(node_manager.logger, "failed to pay invoice: {e}");
+                log_error!(node.logger, "failed to pay invoice: {e}");
                 Err(e)
             }
         }
@@ -330,8 +329,7 @@ impl NostrWalletConnect {
     pub async fn handle_nwc_request<S: MutinyStorage>(
         &mut self,
         event: Event,
-        node_manager: &NodeManager<S>,
-        from_node: &PublicKey,
+        node: &Node<S>,
         nostr_manager: &NostrManager<S>,
     ) -> anyhow::Result<Option<Event>> {
         let client_pubkey = self.client_key.public_key();
@@ -365,21 +363,19 @@ impl NostrWalletConnect {
             // if the invoice has no amount, we cannot pay it
             if invoice.amount_milli_satoshis().is_none() {
                 log_warn!(
-                    node_manager.logger,
+                    node.logger,
                     "NWC Invoice amount not set, cannot pay: {invoice}"
                 );
                 return Ok(None);
             }
 
             // if we have already paid or are attempting to pay this invoice, skip it
-            let node = node_manager.get_node(from_node).await?;
             if node
                 .get_invoice(&invoice)
                 .is_ok_and(|i| matches!(i.status, HTLCStatus::Succeeded | HTLCStatus::InFlight))
             {
                 return Ok(None);
             }
-            drop(node);
 
             // if we need approval, just save in the db for later
             match self.profile.spending_conditions.clone() {
@@ -391,7 +387,6 @@ impl NostrWalletConnect {
                         Some(payment_hash) => {
                             let hash: [u8; 32] =
                                 FromHex::from_hex(&payment_hash).expect("invalid hash");
-                            let node = node_manager.get_node(from_node).await?;
                             node.persister
                                 .read_payment_info(&hash, false, &nostr_manager.logger)
                                 .map(|p| p.status)
@@ -414,10 +409,7 @@ impl NostrWalletConnect {
                         }
                         None | Some(HTLCStatus::Failed) => {
                             if msats <= single_use.amount_sats * 1_000 {
-                                match self
-                                    .pay_nwc_invoice(node_manager, from_node, &invoice)
-                                    .await
-                                {
+                                match self.pay_nwc_invoice(node, &invoice).await {
                                     Ok(resp) => {
                                         // after it is spent, delete the profile
                                         // so that it cannot be used again
@@ -527,7 +519,6 @@ impl NostrWalletConnect {
                     let budget_err = if budget.single_max.is_some_and(|max| sats > max) {
                         Some("Invoice amount too high.")
                     } else if budget.sum_payments() + sats > budget.budget {
-                        let node = node_manager.get_node(from_node).await?;
                         // budget might not actually be exceeded, we should verify that the payments
                         // all went through, and if not, remove them from the budget
                         budget.payments.retain(|p| {
@@ -585,10 +576,7 @@ impl NostrWalletConnect {
                             nostr_manager.save_nwc_profile(self.clone())?;
 
                             // attempt to pay invoice
-                            match self
-                                .pay_nwc_invoice(node_manager, from_node, &invoice)
-                                .await
-                            {
+                            match self.pay_nwc_invoice(node, &invoice).await {
                                 Ok(resp) => resp,
                                 Err(e) => {
                                     // remove payment if it failed
