@@ -1758,6 +1758,73 @@ mod tests {
     }
 
     #[test]
+    async fn give_correct_err_with_wrong_password() {
+        let seed = mutiny_core::generate_seed(12).unwrap();
+
+        let password = Some("password".to_string());
+
+        // make sure storage is empty
+        IndexedDbStorage::clear()
+            .await
+            .expect("failed to clear storage");
+
+        let nm = MutinyWallet::new(
+            password.clone(),
+            Some(seed.to_string()),
+            None,
+            Some("regtest".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        log!("checking nm");
+        assert!(MutinyWallet::has_node_manager(password).await);
+        log!("checking seed");
+        assert_eq!(seed.to_string(), nm.show_seed());
+        nm.stop().await.unwrap();
+        drop(nm);
+        uninit().await;
+
+        // create with incorrect password
+        let result = MutinyWallet::new(
+            None,
+            Some(seed.to_string()),
+            None,
+            Some("regtest".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        if !matches!(result, Err(MutinyJsError::IncorrectPassword)) {
+            panic!("should have failed to create wallet with incorrect password");
+        }
+
+        IndexedDbStorage::clear()
+            .await
+            .expect("failed to clear storage");
+        uninit().await;
+    }
+
+    #[test]
     async fn created_new_nodes() {
         log!("creating new nodes");
 

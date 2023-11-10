@@ -109,7 +109,9 @@ impl IndexedDbStorage {
             // if there is a mnemonic in indexed db, then decrypt it
             let value = decrypt_value(MNEMONIC_KEY, read.into_serde()?, password)?;
 
-            let seed: Mnemonic = serde_json::from_value(value)?;
+            // If we can't deserialize the value, then the password was incorrect when we tried to decrypt
+            let seed: Mnemonic =
+                serde_json::from_value(value).map_err(|_| MutinyError::IncorrectPassword)?;
 
             // if we hae an override mnemonic, then we need to check that it matches the one in indexed db
             if override_mnemonic.is_some_and(|m| m != seed) {
