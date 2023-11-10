@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub fn create_manager() -> AuthManager {
     let mnemonic = generate_seed(12).unwrap();
     let seed = mnemonic.to_seed("");
@@ -35,6 +37,80 @@ pub async fn create_vss_client() -> MutinyVssClient {
     )
 }
 
+pub(crate) async fn create_node<S: MutinyStorage>(storage: S) -> Node<S> {
+    // mark first sync as done so we can execute node functions
+    storage.set_done_first_sync().unwrap();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let logger = Arc::new(MutinyLogger::default());
+    let seed = generate_seed(12).unwrap();
+    let network = Network::Regtest;
+    let xprivkey = ExtendedPrivKey::new_master(network, &seed.to_seed("")).unwrap();
+    let network_graph = Arc::new(NetworkGraph::new(network, logger.clone()));
+    let gossip_sync = Arc::new(RapidGossipSync::new(network_graph.clone(), logger.clone()));
+    let params = ProbabilisticScoringDecayParameters::default();
+    let scorer = Arc::new(Mutex::new(HubPreferentialScorer::new(ProbScorer::new(
+        params,
+        network_graph.clone(),
+        logger.clone(),
+    ))));
+
+    let esplora_server_url = get_esplora_url(network, None);
+    let client = Arc::new(
+        esplora_client::Builder::new(&esplora_server_url)
+            .build_async()
+            .unwrap(),
+    );
+    let esplora = MultiEsploraClient::new(vec![client]);
+    let tx_sync = Arc::new(EsploraSyncClient::from_client(
+        esplora.clone(),
+        logger.clone(),
+    ));
+    let esplora = Arc::new(esplora);
+    let fee_estimator = Arc::new(MutinyFeeEstimator::new(
+        storage.clone(),
+        esplora.clone(),
+        logger.clone(),
+    ));
+
+    let wallet = Arc::new(
+        OnChainWallet::new(
+            xprivkey,
+            storage.clone(),
+            network,
+            esplora.clone(),
+            fee_estimator.clone(),
+            stop.clone(),
+            logger.clone(),
+        )
+        .unwrap(),
+    );
+
+    let chain = Arc::new(MutinyChain::new(tx_sync, wallet.clone(), logger.clone()));
+
+    Node::new(
+        Uuid::new_v4().to_string(),
+        &NodeIndex::default(),
+        xprivkey,
+        storage,
+        gossip_sync,
+        scorer,
+        chain,
+        fee_estimator,
+        wallet,
+        network,
+        &esplora,
+        &[],
+        logger,
+        false,
+        false,
+        #[cfg(target_arch = "wasm32")]
+        String::from("wss://p.mutinywallet.com"),
+    )
+    .await
+    .unwrap()
+}
+
 #[allow(unused_macros)]
 macro_rules! log {
         ( $( $t:tt )* ) => {
@@ -46,12 +122,25 @@ macro_rules! log {
     }
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::{util::bip32::ExtendedPrivKey, Network};
+use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
 #[allow(unused_imports)]
 pub(crate) use log;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use uuid::Uuid;
 
 use crate::auth::MutinyAuthClient;
+use crate::chain::MutinyChain;
+use crate::esplora::EsploraSyncClient;
+use crate::fees::MutinyFeeEstimator;
 use crate::logging::MutinyLogger;
+use crate::multiesplora::MultiEsploraClient;
+use crate::node::{NetworkGraph, Node, RapidGossipSync};
+use crate::nodemanager::NodeIndex;
+use crate::onchain::{get_esplora_url, OnChainWallet};
+use crate::scorer::{HubPreferentialScorer, ProbScorer};
+use crate::storage::MutinyStorage;
+use crate::utils::Mutex;
 use crate::vss::MutinyVssClient;
 use crate::{generate_seed, lnurlauth::AuthManager};
 
