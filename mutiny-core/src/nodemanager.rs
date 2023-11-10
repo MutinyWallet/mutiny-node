@@ -79,7 +79,7 @@ pub struct NodeStorage {
 }
 
 // This is the NodeIndex reference that is saved to the DB
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default)]
 pub struct NodeIndex {
     pub child_index: u32,
     pub lsp: Option<String>,

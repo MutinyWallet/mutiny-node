@@ -35,6 +35,7 @@ use core::time::Duration;
 use futures_util::lock::Mutex;
 use lightning::chain::channelmonitor::ChannelMonitor;
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
+use lightning::ln::channelmanager::ChannelDetails;
 use lightning::ln::PaymentSecret;
 use lightning::onion_message::OnionMessenger as LdkOnionMessenger;
 use lightning::sign::{EntropySource, InMemorySigner, NodeSigner, Recipient};
@@ -1161,8 +1162,8 @@ impl<S: MutinyStorage> Node<S> {
 
         match pay_result {
             Ok(id) => Ok((id, PaymentHash(payment_hash.to_owned()))),
-            Err(e) => {
-                log_error!(self.logger, "failed to make payment: {:?}", e);
+            Err(error) => {
+                log_error!(self.logger, "failed to make payment: {error:?}");
                 // call list channels to see what our channels are
                 let current_channels = self.channel_manager.list_channels();
                 log_debug!(
@@ -1175,28 +1176,7 @@ impl<S: MutinyStorage> Node<S> {
                 self.persister
                     .persist_payment_info(payment_hash, &payment_info, false)?;
 
-                // If the payment failed because of a route not found, check if the amount was
-                // valid and return the correct error
-                if let PaymentError::Sending(RetryableSendFailure::RouteNotFound) = e {
-                    // If the amount was greater than our balance, return an InsufficientBalance error
-                    let ln_balance: u64 = current_channels.iter().map(|c| c.balance_msat).sum();
-                    if amt_msat > ln_balance {
-                        return Err(MutinyError::InsufficientBalance);
-                    }
-
-                    // If the amount was within our balance but we couldn't pay because of
-                    // the channel reserve, return a ReserveAmountError
-                    let reserved_amt: u64 = current_channels
-                        .into_iter()
-                        .flat_map(|c| c.unspendable_punishment_reserve)
-                        .sum::<u64>()
-                        * 1_000; // multiply by 1k to convert to msat
-                    if ln_balance - reserved_amt < amt_msat {
-                        return Err(MutinyError::ReserveAmountError);
-                    }
-                }
-
-                Err(MutinyError::RoutingFailed)
+                Err(map_sending_failure(error, amt_msat, &current_channels))
             }
         }
     }
@@ -1365,11 +1345,16 @@ impl<S: MutinyStorage> Node<S> {
                     MutinyInvoice::from(payment_info, payment_hash, false, labels)?;
                 Ok(mutiny_invoice)
             }
-            Err(_) => {
+            Err(error) => {
                 payment_info.status = HTLCStatus::Failed;
                 self.persister
                     .persist_payment_info(&payment_hash.0, &payment_info, false)?;
-                Err(MutinyError::RoutingFailed)
+                let current_channels = self.channel_manager.list_channels();
+                Err(map_sending_failure(
+                    PaymentError::Sending(error),
+                    amt_msats,
+                    &current_channels,
+                ))
             }
         }
     }
@@ -1710,6 +1695,41 @@ pub(crate) fn scoring_params() -> ProbabilisticScoringFeeParameters {
     }
 }
 
+fn map_sending_failure(
+    error: PaymentError,
+    amt_msat: u64,
+    current_channels: &[ChannelDetails],
+) -> MutinyError {
+    // If the payment failed because of a route not found, check if the amount was
+    // valid and return the correct error
+    match error {
+        PaymentError::Sending(RetryableSendFailure::RouteNotFound) => {
+            // If the amount was greater than our balance, return an InsufficientBalance error
+            let ln_balance: u64 = current_channels.iter().map(|c| c.balance_msat).sum();
+            if amt_msat > ln_balance {
+                return MutinyError::InsufficientBalance;
+            }
+
+            // If the amount was within our balance but we couldn't pay because of
+            // the channel reserve, return a ReserveAmountError
+            let reserved_amt: u64 = current_channels
+                .iter()
+                .flat_map(|c| c.unspendable_punishment_reserve)
+                .sum::<u64>()
+                * 1_000; // multiply by 1k to convert to msat
+            if ln_balance - reserved_amt < amt_msat {
+                return MutinyError::ReserveAmountError;
+            }
+            MutinyError::RoutingFailed
+        }
+        PaymentError::Invoice(_) => MutinyError::InvoiceInvalid,
+        PaymentError::Sending(RetryableSendFailure::PaymentExpired) => MutinyError::InvoiceInvalid,
+        PaymentError::Sending(RetryableSendFailure::DuplicatePayment) => {
+            MutinyError::NonUniquePaymentHash
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn start_reconnection_handling<S: MutinyStorage>(
     storage: &S,
@@ -1977,19 +1997,21 @@ pub(crate) fn default_user_config() -> UserConfig {
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
+    use super::*;
+    use crate::node::{map_sending_failure, parse_peer_info};
+    use crate::storage::MemoryStorage;
     use crate::test_utils::*;
     use bitcoin::secp256k1::PublicKey;
+    use lightning::ln::channelmanager::ChannelCounterparty;
+    use lightning::ln::features::InitFeatures;
+    use lightning::ln::ChannelId;
+    use lightning_invoice::Bolt11InvoiceDescription;
     use std::str::FromStr;
 
-    use crate::node::parse_peer_info;
-
-    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
-
-    wasm_bindgen_test_configure!(run_in_browser);
-
     #[test]
-    async fn test_parse_peer_info() {
+    fn test_parse_peer_info() {
         log!("test parse peer info");
 
         let pub_key = PublicKey::from_str(
@@ -2005,7 +2027,7 @@ mod tests {
     }
 
     #[test]
-    async fn test_parse_peer_info_no_port() {
+    fn test_parse_peer_info_no_port() {
         log!("test parse peer info with no port");
 
         let pub_key = PublicKey::from_str(
@@ -2019,5 +2041,408 @@ mod tests {
 
         assert_eq!(pub_key, peer_pubkey);
         assert_eq!(format!("{addr}:{port}"), peer_addr);
+    }
+
+    #[test]
+    fn test_map_sending_failure() {
+        let amt_msat = 1_000_000;
+
+        // test simple cases
+        assert_eq!(
+            map_sending_failure(PaymentError::Invoice(""), amt_msat, &[]),
+            MutinyError::InvoiceInvalid
+        );
+        assert_eq!(
+            map_sending_failure(
+                PaymentError::Sending(RetryableSendFailure::PaymentExpired),
+                amt_msat,
+                &[]
+            ),
+            MutinyError::InvoiceInvalid
+        );
+        assert_eq!(
+            map_sending_failure(
+                PaymentError::Sending(RetryableSendFailure::DuplicatePayment),
+                amt_msat,
+                &[]
+            ),
+            MutinyError::NonUniquePaymentHash
+        );
+
+        let mut channel_details = ChannelDetails {
+            channel_id: ChannelId::new_zero(),
+            counterparty: ChannelCounterparty {
+                node_id: PublicKey::from_slice(&[2; 33]).unwrap(), // dummy value
+                features: InitFeatures::empty(),
+                unspendable_punishment_reserve: 0,
+                forwarding_info: None,
+                outbound_htlc_minimum_msat: None,
+                outbound_htlc_maximum_msat: None,
+            },
+            funding_txo: None,
+            channel_type: None,
+            short_channel_id: None,
+            outbound_scid_alias: None,
+            inbound_scid_alias: None,
+            channel_value_satoshis: 0,
+            unspendable_punishment_reserve: None,
+            user_channel_id: 0,
+            feerate_sat_per_1000_weight: None,
+            balance_msat: 0,
+            outbound_capacity_msat: 0,
+            next_outbound_htlc_limit_msat: 0,
+            next_outbound_htlc_minimum_msat: 0,
+            inbound_capacity_msat: 0,
+            confirmations_required: None,
+            confirmations: None,
+            force_close_spend_delay: None,
+            is_outbound: false,
+            is_channel_ready: false,
+            channel_shutdown_state: None,
+            is_usable: false,
+            is_public: false,
+            inbound_htlc_minimum_msat: None,
+            inbound_htlc_maximum_msat: None,
+            config: None,
+        };
+
+        assert_eq!(
+            map_sending_failure(
+                PaymentError::Sending(RetryableSendFailure::RouteNotFound),
+                amt_msat,
+                &[channel_details.clone()]
+            ),
+            MutinyError::InsufficientBalance
+        );
+
+        assert_eq!(
+            map_sending_failure(
+                PaymentError::Sending(RetryableSendFailure::RouteNotFound),
+                amt_msat,
+                &[channel_details.clone()]
+            ),
+            MutinyError::InsufficientBalance
+        );
+
+        channel_details.balance_msat = amt_msat + 10;
+        channel_details.unspendable_punishment_reserve = Some(20);
+        assert_eq!(
+            map_sending_failure(
+                PaymentError::Sending(RetryableSendFailure::RouteNotFound),
+                amt_msat,
+                &[channel_details.clone()]
+            ),
+            MutinyError::ReserveAmountError
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_node() {
+        let storage = MemoryStorage::default();
+        let node = create_node(storage).await;
+        assert!(!node.pubkey.to_hex().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_invoice() {
+        let storage = MemoryStorage::default();
+        let node = create_node(storage.clone()).await;
+
+        let now = crate::utils::now().as_secs();
+
+        let amount_sats = 1_000;
+        let label = "test".to_string();
+        let labels = vec![label.clone()];
+
+        let invoice = node
+            .create_invoice(Some(amount_sats), labels.clone(), None)
+            .await
+            .unwrap();
+
+        assert_eq!(invoice.amount_milli_satoshis(), Some(amount_sats * 1000));
+        match invoice.description() {
+            Bolt11InvoiceDescription::Direct(desc) => {
+                assert_eq!(desc.to_string(), "");
+            }
+            _ => panic!("unexpected invoice description"),
+        }
+
+        let from_storage = node.get_invoice(&invoice).unwrap();
+        let by_hash = node.get_invoice_by_hash(invoice.payment_hash()).unwrap();
+
+        assert_eq!(from_storage, by_hash);
+        assert_eq!(from_storage.bolt11, Some(invoice.clone()));
+        assert_eq!(from_storage.description, None);
+        assert_eq!(from_storage.payment_hash, invoice.payment_hash().to_owned());
+        assert_eq!(from_storage.preimage, None);
+        assert_eq!(from_storage.payee_pubkey, None);
+        assert_eq!(from_storage.amount_sats, Some(amount_sats));
+        assert_eq!(from_storage.status, HTLCStatus::Pending);
+        assert_eq!(from_storage.fees_paid, None);
+        assert_eq!(from_storage.labels, labels.clone());
+        assert!(from_storage.inbound);
+        assert!(from_storage.last_updated >= now);
+
+        // check labels
+
+        let invoice_labels = storage.get_invoice_labels().unwrap();
+        assert_eq!(invoice_labels.len(), 1);
+        assert_eq!(invoice_labels.get(&invoice).cloned(), Some(labels));
+
+        let label_item = storage.get_label("test").unwrap().unwrap();
+
+        assert!(label_item.last_used_time >= now);
+        assert!(label_item.addresses.is_empty());
+        assert_eq!(label_item.invoices, vec![invoice]);
+    }
+
+    #[tokio::test]
+    async fn test_fail_own_invoice() {
+        let storage = MemoryStorage::default();
+        let node = create_node(storage).await;
+
+        let invoice = node
+            .create_invoice(Some(10_000), vec![], None)
+            .await
+            .unwrap();
+
+        let result = node
+            .pay_invoice_with_timeout(&invoice, None, None, vec![])
+            .await;
+
+        match result {
+            Err(MutinyError::NonUniquePaymentHash) => {}
+            Err(e) => panic!("unexpected error {e:?}"),
+            Ok(_) => panic!("somehow paid own invoice"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_await_payment() {
+        let storage = MemoryStorage::default();
+        let node = create_node(storage).await;
+        let payment_id = PaymentId([0; 32]);
+        let payment_hash = PaymentHash([0; 32]);
+
+        // check that we get PaymentTimeout if we don't have the payment info
+
+        let result = node
+            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await;
+
+        assert_eq!(result.unwrap_err(), MutinyError::PaymentTimeout);
+
+        let mut payment_info = PaymentInfo {
+            preimage: None,
+            secret: Some([0; 32]),
+            status: HTLCStatus::InFlight,
+            amt_msat: MillisatAmount(Some(1000)),
+            fee_paid_msat: None,
+            bolt11: None,
+            payee_pubkey: None,
+            last_update: crate::utils::now().as_secs(),
+        };
+
+        // check that it still fails if it is inflight
+
+        node.persister
+            .persist_payment_info(&payment_hash.0, &payment_info, false)
+            .unwrap();
+
+        let result = node
+            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await;
+
+        assert_eq!(result.unwrap_err(), MutinyError::PaymentTimeout);
+
+        // check that we get proper error if it fails
+
+        payment_info.status = HTLCStatus::Failed;
+        node.persister
+            .persist_payment_info(&payment_hash.0, &payment_info, false)
+            .unwrap();
+
+        let result = node
+            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await;
+
+        assert_eq!(result.unwrap_err(), MutinyError::RoutingFailed);
+
+        // check that we get success
+
+        payment_info.status = HTLCStatus::Succeeded;
+        node.persister
+            .persist_payment_info(&payment_hash.0, &payment_info, false)
+            .unwrap();
+
+        let result = node
+            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await;
+
+        assert!(result.is_ok());
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_arch = "wasm32")]
+mod wasm_test {
+    use crate::error::MutinyError;
+    use crate::event::{MillisatAmount, PaymentInfo};
+    use crate::labels::LabelStorage;
+    use crate::storage::MemoryStorage;
+    use crate::test_utils::create_node;
+    use crate::HTLCStatus;
+    use bitcoin::hashes::hex::ToHex;
+    use lightning::ln::channelmanager::PaymentId;
+    use lightning::ln::PaymentHash;
+    use lightning_invoice::Bolt11InvoiceDescription;
+    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test]
+    async fn test_create_node() {
+        let storage = MemoryStorage::default();
+        let node = create_node(storage).await;
+        assert!(!node.pubkey.to_hex().is_empty());
+    }
+
+    #[test]
+    async fn test_create_invoice() {
+        let storage = MemoryStorage::default();
+        let node = create_node(storage.clone()).await;
+
+        let now = crate::utils::now().as_secs();
+
+        let amount_sats = 1_000;
+        let label = "test".to_string();
+        let labels = vec![label.clone()];
+
+        let invoice = node
+            .create_invoice(Some(amount_sats), labels.clone(), None)
+            .await
+            .unwrap();
+
+        assert_eq!(invoice.amount_milli_satoshis(), Some(amount_sats * 1000));
+        match invoice.description() {
+            Bolt11InvoiceDescription::Direct(desc) => {
+                assert_eq!(desc.to_string(), "");
+            }
+            _ => panic!("unexpected invoice description"),
+        }
+
+        let from_storage = node.get_invoice(&invoice).unwrap();
+        let by_hash = node.get_invoice_by_hash(invoice.payment_hash()).unwrap();
+
+        assert_eq!(from_storage, by_hash);
+        assert_eq!(from_storage.bolt11, Some(invoice.clone()));
+        assert_eq!(from_storage.description, None);
+        assert_eq!(from_storage.payment_hash, invoice.payment_hash().to_owned());
+        assert_eq!(from_storage.preimage, None);
+        assert_eq!(from_storage.payee_pubkey, None);
+        assert_eq!(from_storage.amount_sats, Some(amount_sats));
+        assert_eq!(from_storage.status, HTLCStatus::Pending);
+        assert_eq!(from_storage.fees_paid, None);
+        assert_eq!(from_storage.labels, labels.clone());
+        assert!(from_storage.inbound);
+        assert!(from_storage.last_updated >= now);
+
+        // check labels
+
+        let invoice_labels = storage.get_invoice_labels().unwrap();
+        assert_eq!(invoice_labels.len(), 1);
+        assert_eq!(invoice_labels.get(&invoice).cloned(), Some(labels));
+
+        let label_item = storage.get_label("test").unwrap().unwrap();
+
+        assert!(label_item.last_used_time >= now);
+        assert!(label_item.addresses.is_empty());
+        assert_eq!(label_item.invoices, vec![invoice]);
+    }
+
+    #[test]
+    async fn test_fail_own_invoice() {
+        let storage = MemoryStorage::default();
+        let node = create_node(storage).await;
+
+        let invoice = node
+            .create_invoice(Some(10_000), vec![], None)
+            .await
+            .unwrap();
+
+        let result = node
+            .pay_invoice_with_timeout(&invoice, None, None, vec![])
+            .await;
+
+        match result {
+            Err(MutinyError::NonUniquePaymentHash) => {}
+            Err(e) => panic!("unexpected error {e:?}"),
+            Ok(_) => panic!("somehow paid own invoice"),
+        }
+    }
+
+    #[test]
+    async fn test_await_payment() {
+        let storage = MemoryStorage::default();
+        let node = create_node(storage).await;
+        let payment_id = PaymentId([0; 32]);
+        let payment_hash = PaymentHash([0; 32]);
+
+        // check that we get PaymentTimeout if we don't have the payment info
+
+        let result = node
+            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await;
+
+        assert_eq!(result.unwrap_err(), MutinyError::PaymentTimeout);
+
+        let mut payment_info = PaymentInfo {
+            preimage: None,
+            secret: Some([0; 32]),
+            status: HTLCStatus::InFlight,
+            amt_msat: MillisatAmount(Some(1000)),
+            fee_paid_msat: None,
+            bolt11: None,
+            payee_pubkey: None,
+            last_update: crate::utils::now().as_secs(),
+        };
+
+        // check that it still fails if it is inflight
+
+        node.persister
+            .persist_payment_info(&payment_hash.0, &payment_info, false)
+            .unwrap();
+
+        let result = node
+            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await;
+
+        assert_eq!(result.unwrap_err(), MutinyError::PaymentTimeout);
+
+        // check that we get proper error if it fails
+
+        payment_info.status = HTLCStatus::Failed;
+        node.persister
+            .persist_payment_info(&payment_hash.0, &payment_info, false)
+            .unwrap();
+
+        let result = node
+            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await;
+
+        assert_eq!(result.unwrap_err(), MutinyError::RoutingFailed);
+
+        // check that we get success
+
+        payment_info.status = HTLCStatus::Succeeded;
+        node.persister
+            .persist_payment_info(&payment_hash.0, &payment_info, false)
+            .unwrap();
+
+        let result = node
+            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await;
+
+        assert!(result.is_ok());
     }
 }

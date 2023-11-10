@@ -38,11 +38,11 @@ pub mod scb;
 pub mod scorer;
 pub mod storage;
 mod subscription;
+pub mod utils;
 pub mod vss;
 
-#[cfg(any(test, feature = "test-utils"))]
-pub mod test_utils;
-pub mod utils;
+#[cfg(test)]
+mod test_utils;
 
 pub use crate::event::HTLCStatus;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
