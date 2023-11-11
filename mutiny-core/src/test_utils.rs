@@ -126,7 +126,11 @@ pub(crate) async fn create_node<S: MutinyStorage>(storage: S) -> Node<S> {
     .unwrap()
 }
 
-pub fn create_dummy_invoice(msats: Option<u64>, network: Network) -> Bolt11Invoice {
+pub fn create_dummy_invoice(
+    msats: Option<u64>,
+    network: Network,
+    sk: Option<SecretKey>,
+) -> Bolt11Invoice {
     let hash = &mut [0u8; 32];
     getrandom::getrandom(hash).unwrap();
     let invoice_hash = sha256::Hash::from_slice(hash).unwrap();
@@ -134,9 +138,11 @@ pub fn create_dummy_invoice(msats: Option<u64>, network: Network) -> Bolt11Invoi
     let payment_secret = &mut [0u8; 32];
     getrandom::getrandom(payment_secret).unwrap();
 
-    let priv_key_bytes = &mut [0u8; 32];
-    getrandom::getrandom(priv_key_bytes).unwrap();
-    let private_key = SecretKey::from_slice(priv_key_bytes).unwrap();
+    let sk = sk.unwrap_or_else(|| {
+        let priv_key_bytes = &mut [0u8; 32];
+        getrandom::getrandom(priv_key_bytes).unwrap();
+        SecretKey::from_slice(priv_key_bytes).unwrap()
+    });
 
     let secp = Secp256k1::new();
     let builder = InvoiceBuilder::new(network.into())
@@ -153,7 +159,7 @@ pub fn create_dummy_invoice(msats: Option<u64>, network: Network) -> Bolt11Invoi
     };
 
     builder
-        .build_signed(|hash| secp.sign_ecdsa_recoverable(hash, &private_key))
+        .build_signed(|hash| secp.sign_ecdsa_recoverable(hash, &sk))
         .unwrap()
 }
 

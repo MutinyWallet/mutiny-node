@@ -1043,12 +1043,15 @@ mod test {
 mod wasm_test {
     use super::*;
     use crate::event::{MillisatAmount, PaymentInfo};
+    use crate::logging::MutinyLogger;
     use crate::nostr::ProfileType;
     use crate::storage::MemoryStorage;
     use crate::test_utils::{create_dummy_invoice, create_node, create_nwc_request};
     use bitcoin::hashes::Hash;
+    use bitcoin::secp256k1::ONE_KEY;
     use bitcoin::Network;
     use nostr::key::SecretKey;
+    use std::sync::Arc;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -1101,7 +1104,8 @@ mod wasm_test {
         let uri = nwc.get_nwc_uri().unwrap();
 
         // test hodl invoice
-        let invoice = "lnbc10u1pj40d0ypp5gpupr2ce8rq2uh850ylkmugnn8dfey0ugqp72ttjq3gc6gz20vpqhp5d60tc9xkcdzwjst3jmzg3flfu662hjy3yyu4eyhfhm03pzurrsgscqz8qxqrrsssp5r74mhdtu7mr799wmjckukw5unh6phvdevw8cym7ppxfk8d52r3ks9qyyssqzefsn7a8sl8f35hvv2tkye074ml8am42unrrgvedmkxlxrr9xsxkvyyldjt8kr8trn0lzudjjd0ugy0dc9wk9dwapz4m23u8anlyldcp0azm0s".to_string();
+        let invoice =
+            create_dummy_invoice(Some(10_000), Network::Regtest, Some(ONE_KEY)).to_string();
         let event = create_nwc_request(&uri, invoice.clone());
         let result = nwc
             .handle_nwc_request(event.clone(), &node, &nostr_manager)
@@ -1189,7 +1193,7 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test amount-less invoice
-        let invoice = create_dummy_invoice(None, Network::Regtest);
+        let invoice = create_dummy_invoice(None, Network::Regtest, None);
         let event = create_nwc_request(&uri, invoice.to_string());
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
         check_nwc_error_response(
@@ -1203,7 +1207,9 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test hodl invoice
-        let event = create_nwc_request(&uri, "lnbc10u1pj40d0ypp5gpupr2ce8rq2uh850ylkmugnn8dfey0ugqp72ttjq3gc6gz20vpqhp5d60tc9xkcdzwjst3jmzg3flfu662hjy3yyu4eyhfhm03pzurrsgscqz8qxqrrsssp5r74mhdtu7mr799wmjckukw5unh6phvdevw8cym7ppxfk8d52r3ks9qyyssqzefsn7a8sl8f35hvv2tkye074ml8am42unrrgvedmkxlxrr9xsxkvyyldjt8kr8trn0lzudjjd0ugy0dc9wk9dwapz4m23u8anlyldcp0azm0s".to_string());
+        let invoice =
+            create_dummy_invoice(Some(10_000), Network::Regtest, Some(ONE_KEY)).to_string();
+        let event = create_nwc_request(&uri, invoice);
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
         check_nwc_error_response(
             result.unwrap().unwrap(),
@@ -1216,7 +1222,7 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test in-flight payment
-        let invoice = create_dummy_invoice(Some(1_000), Network::Regtest);
+        let invoice = create_dummy_invoice(Some(1_000), Network::Regtest, None);
         let payment_info = PaymentInfo {
             preimage: None,
             secret: Some(invoice.payment_secret().0),
@@ -1236,7 +1242,7 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test completed payment
-        let invoice = create_dummy_invoice(Some(1_000), Network::Regtest);
+        let invoice = create_dummy_invoice(Some(1_000), Network::Regtest, None);
         let payment_info = PaymentInfo {
             preimage: None,
             secret: Some(invoice.payment_secret().0),
@@ -1256,7 +1262,7 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test it goes to pending
-        let invoice = create_dummy_invoice(Some(1_000), Network::Regtest);
+        let invoice = create_dummy_invoice(Some(1_000), Network::Regtest, None);
         let event = create_nwc_request(&uri, invoice.to_string());
         let result = nwc
             .handle_nwc_request(event.clone(), &node, &nostr_manager)
@@ -1272,5 +1278,115 @@ mod wasm_test {
         assert_eq!(pending[0].event_id, event.id);
         assert_eq!(pending[0].index, nwc.profile.index);
         assert_eq!(pending[0].pubkey, event.pubkey);
+    }
+
+    #[test]
+    async fn test_clear_expired_pending_invoices() {
+        let storage = MemoryStorage::default();
+        let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
+        let nostr_manager = NostrManager::from_mnemonic(
+            xprivkey,
+            storage.clone(),
+            Arc::new(MutinyLogger::default()),
+        )
+        .unwrap();
+
+        // check we start with no pending invoices
+        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        assert_eq!(pending.len(), 0);
+
+        // add an expired invoice
+        let expired = PendingNwcInvoice {
+            index: 0,
+            invoice: Bolt11Invoice::from_str(INVOICE).unwrap(),
+            event_id: EventId::all_zeros(),
+            pubkey: nostr_manager.primary_key.public_key(),
+        };
+        // add an unexpired invoice
+        let unexpired = PendingNwcInvoice {
+            index: 0,
+            invoice: create_dummy_invoice(Some(1_000), Network::Regtest, None),
+            event_id: EventId::all_zeros(),
+            pubkey: nostr_manager.primary_key.public_key(),
+        };
+        storage
+            .set_data(
+                PENDING_NWC_EVENTS_KEY,
+                vec![expired, unexpired.clone()],
+                None,
+            )
+            .unwrap();
+        // make sure we added them
+        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        assert_eq!(pending.len(), 2);
+
+        // check that the expired invoice is cleared
+        nostr_manager.clear_expired_nwc_invoices().await.unwrap();
+        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0], unexpired);
+    }
+
+    #[test]
+    async fn test_process_nwc_event_budget() {
+        let storage = MemoryStorage::default();
+        let node = create_node(storage.clone()).await;
+
+        let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
+        let nostr_manager =
+            NostrManager::from_mnemonic(xprivkey, storage.clone(), node.logger.clone()).unwrap();
+
+        let budget = 10_000;
+        let profile = nostr_manager
+            .create_new_profile(
+                ProfileType::Normal {
+                    name: "test".to_string(),
+                },
+                SpendingConditions::Budget(BudgetedSpendingConditions {
+                    budget,
+                    single_max: None,
+                    payments: vec![],
+                    period: BudgetPeriod::Seconds(10),
+                }),
+                NwcProfileTag::General,
+            )
+            .unwrap();
+
+        let secp = Secp256k1::new();
+        let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
+        let uri = nwc.get_nwc_uri().unwrap();
+
+        // test failed payment goes to pending, we have no channels so it will fail
+        let invoice = create_dummy_invoice(Some(10), Network::Regtest, None);
+        let event = create_nwc_request(&uri, invoice.to_string());
+        let result = nwc
+            .handle_nwc_request(event.clone(), &node, &nostr_manager)
+            .await;
+        assert!(result.unwrap().is_some()); // should get a error response
+        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].invoice, invoice);
+        assert_eq!(pending[0].event_id, event.id);
+        assert_eq!(pending[0].index, nwc.profile.index);
+        assert_eq!(pending[0].pubkey, event.pubkey);
+
+        // clear pending
+        nostr_manager.deny_all_pending_nwc().await.unwrap();
+
+        // test over budget payment goes to pending
+        let invoice = create_dummy_invoice(Some(budget + 1), Network::Regtest, None);
+        let event = create_nwc_request(&uri, invoice.to_string());
+        let result = nwc
+            .handle_nwc_request(event.clone(), &node, &nostr_manager)
+            .await;
+        assert!(result.unwrap().is_some()); // should get a error response
+        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].invoice, invoice);
+        assert_eq!(pending[0].event_id, event.id);
+        assert_eq!(pending[0].index, nwc.profile.index);
+        assert_eq!(pending[0].pubkey, event.pubkey);
+
+        // todo test successful payment is added to budget
     }
 }
