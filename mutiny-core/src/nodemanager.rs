@@ -6,9 +6,10 @@ use crate::scb::{
     EncryptedSCB, StaticChannelBackup, StaticChannelBackupStorage,
     SCB_ENCRYPTION_KEY_DERIVATION_PATH,
 };
-use crate::storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY};
-use crate::utils::{sleep, spawn};
+use crate::storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY, DEVICE_LOCK_KEY, DeviceLock};
+use crate::utils::{sleep, spawn, now};
 use crate::MutinyWalletConfig;
+use crate::vss::VssKeyValueItem;
 use crate::{
     chain::MutinyChain,
     error::MutinyError,
@@ -847,6 +848,21 @@ impl<S: MutinyStorage> NodeManager<S> {
         join_all(node_futures).await;
         nodes.clear();
         log_debug!(self.logger, "stopped all nodes");
+
+        // release the device lock
+        if let Some(vss) = self.storage.vss_client() {
+            let device = self.storage.get_device_id()?;
+            // set time to 0 to unlock
+            let lock = DeviceLock { time: 0, device };
+            // still update the version so it is written to VSS
+            let time = now().as_secs() as u32;
+            let item = VssKeyValueItem {
+                key: DEVICE_LOCK_KEY.to_string(),
+                value: serde_json::to_value(lock)?,
+                version: time,
+            };
+            vss.put_objects(vec![item]).await?;
+        }
 
         // stop the indexeddb object to close db connection
         if self.storage.connected().unwrap_or(false) {
