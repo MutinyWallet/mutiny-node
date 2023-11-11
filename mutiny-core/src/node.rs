@@ -784,7 +784,7 @@ impl<S: MutinyStorage> Node<S> {
         route_hints: Option<Vec<PhantomRouteHints>>,
     ) -> Result<Bolt11Invoice, MutinyError> {
         // the amount to create for the invoice whether or not there is an lsp
-        let (amount_sat, lsp_fee_msat) = if let Some(lsp) = self.lsp_client.clone() {
+        let (amount_sat, lsp_fee_msat) = if let Some(lsp) = self.lsp_client.as_ref() {
             // LSP requires an amount:
             let amount_sat = amount_sat.ok_or(MutinyError::BadAmountError)?;
 
@@ -837,7 +837,7 @@ impl<S: MutinyStorage> Node<S> {
             .create_internal_invoice(amount_sat, lsp_fee_msat, labels, route_hints)
             .await?;
 
-        if let Some(lsp) = self.lsp_client.clone() {
+        if let Some(lsp) = self.lsp_client.as_ref() {
             self.connect_peer(PubkeyConnectionInfo::new(&lsp.connection_string)?, None)
                 .await?;
             let lsp_invoice = match lsp.get_lsp_invoice(invoice.to_string()).await {
