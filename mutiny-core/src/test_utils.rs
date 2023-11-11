@@ -37,6 +37,20 @@ pub async fn create_vss_client() -> MutinyVssClient {
     )
 }
 
+pub fn create_nwc_request(nwc: &NostrWalletConnectURI, invoice: String) -> Event {
+    let req = Request {
+        method: Method::PayInvoice,
+        params: RequestParams::PayInvoice(PayInvoiceRequestParams { invoice }),
+    };
+
+    let encrypted = encrypt(&nwc.secret, &nwc.public_key, req.as_json()).unwrap();
+    let p_tag = Tag::PubKey(nwc.public_key, None);
+
+    EventBuilder::new(Kind::WalletConnectRequest, encrypted, &[p_tag])
+        .to_event(&Keys::new(nwc.secret))
+        .unwrap()
+}
+
 pub(crate) async fn create_node<S: MutinyStorage>(storage: S) -> Node<S> {
     // mark first sync as done so we can execute node functions
     storage.set_done_first_sync().unwrap();
@@ -111,6 +125,37 @@ pub(crate) async fn create_node<S: MutinyStorage>(storage: S) -> Node<S> {
     .unwrap()
 }
 
+pub fn create_dummy_invoice(msats: Option<u64>, network: Network) -> Bolt11Invoice {
+    let hash = &mut [0u8; 32];
+    getrandom::getrandom(hash).unwrap();
+    let invoice_hash = sha256::Hash::from_slice(hash).unwrap();
+
+    let payment_secret = &mut [0u8; 32];
+    getrandom::getrandom(payment_secret).unwrap();
+
+    let priv_key_bytes = &mut [0u8; 32];
+    getrandom::getrandom(priv_key_bytes).unwrap();
+    let private_key = SecretKey::from_slice(priv_key_bytes).unwrap();
+
+    let secp = Secp256k1::new();
+    let builder = InvoiceBuilder::new(network.into())
+        .description("Dummy invoice".to_string())
+        .duration_since_epoch(now())
+        .payment_hash(invoice_hash)
+        .payment_secret(PaymentSecret(*payment_secret))
+        .min_final_cltv_expiry_delta(144);
+
+    let builder = if let Some(msats) = msats {
+        builder.amount_milli_satoshis(msats)
+    } else {
+        builder
+    };
+
+    builder
+        .build_signed(|hash| secp.sign_ecdsa_recoverable(hash, &private_key))
+        .unwrap()
+}
+
 #[allow(unused_macros)]
 macro_rules! log {
         ( $( $t:tt )* ) => {
@@ -120,11 +165,17 @@ macro_rules! log {
             println!( $( $t )* );
         }
     }
-use bitcoin::secp256k1::SecretKey;
+use bitcoin::hashes::{sha256, Hash};
+use bitcoin::secp256k1::{Secp256k1, SecretKey};
 use bitcoin::{util::bip32::ExtendedPrivKey, Network};
+use lightning::ln::PaymentSecret;
 use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
+use lightning_invoice::{Bolt11Invoice, InvoiceBuilder};
 #[allow(unused_imports)]
 pub(crate) use log;
+use nostr::nips::nip47::*;
+use nostr::prelude::{encrypt, NostrWalletConnectURI};
+use nostr::{Event, EventBuilder, Keys, Kind, Tag};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -140,7 +191,7 @@ use crate::nodemanager::NodeIndex;
 use crate::onchain::{get_esplora_url, OnChainWallet};
 use crate::scorer::{HubPreferentialScorer, ProbScorer};
 use crate::storage::MutinyStorage;
-use crate::utils::Mutex;
+use crate::utils::{now, Mutex};
 use crate::vss::MutinyVssClient;
 use crate::{generate_seed, lnurlauth::AuthManager};
 
