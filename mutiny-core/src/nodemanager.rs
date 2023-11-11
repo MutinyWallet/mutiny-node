@@ -601,6 +601,9 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         // Need to prevent other devices from running at the same time
         if !c.skip_device_lock {
+            if let Some(lock) = storage.get_device_lock()? {
+                log_info!(logger, "Current device lock: {lock:?}");
+            }
             storage.set_device_lock()?;
         }
 
