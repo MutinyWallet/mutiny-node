@@ -101,7 +101,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             .collect()
     }
 
-    pub fn get_nwc_uri(&self, index: u32) -> Result<String, MutinyError> {
+    pub fn get_nwc_uri(&self, index: u32) -> Result<NostrWalletConnectURI, MutinyError> {
         let opt = self
             .nwc
             .read()

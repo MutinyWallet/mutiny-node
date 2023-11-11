@@ -231,7 +231,7 @@ impl NostrWalletConnect {
         })
     }
 
-    pub fn get_nwc_uri(&self) -> anyhow::Result<String> {
+    pub fn get_nwc_uri(&self) -> anyhow::Result<NostrWalletConnectURI> {
         let uri = NostrWalletConnectURI::new(
             self.server_key.public_key(),
             self.profile.relay.parse()?,
@@ -239,7 +239,7 @@ impl NostrWalletConnect {
             None,
         )?;
 
-        Ok(uri.to_string())
+        Ok(uri)
     }
 
     pub fn client_pubkey(&self) -> XOnlyPublicKey {
@@ -652,7 +652,10 @@ impl NostrWalletConnect {
             relay: self.profile.relay.clone(),
             enabled: self.profile.enabled,
             archived: self.profile.archived,
-            nwc_uri: self.get_nwc_uri().expect("failed to get nwc uri"),
+            nwc_uri: self
+                .get_nwc_uri()
+                .expect("failed to get nwc uri")
+                .to_string(),
             spending_conditions: self.profile.spending_conditions.clone(),
             child_key_index: self.profile.child_key_index,
             tag: self.profile.tag,
@@ -991,5 +994,158 @@ mod test {
             .and_utc();
         budget.clean_old_payments(time);
         assert_eq!(budget.payments.len(), 0);
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_arch = "wasm32")]
+mod wasm_test {
+    use super::*;
+    use crate::event::{MillisatAmount, PaymentInfo};
+    use crate::nostr::ProfileType;
+    use crate::storage::MemoryStorage;
+    use crate::test_utils::{create_dummy_invoice, create_node, create_nwc_request};
+    use bitcoin::hashes::Hash;
+    use bitcoin::Network;
+    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    const INVOICE: &str = "lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm";
+
+    fn check_no_pending_invoices(storage: &MemoryStorage) {
+        let pending: Vec<PendingNwcInvoice> = storage
+            .get_data(PENDING_NWC_EVENTS_KEY)
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(pending.len(), 0);
+    }
+
+    #[test]
+    async fn test_process_nwc_event_require_approval() {
+        let storage = MemoryStorage::default();
+        let node = create_node(storage.clone()).await;
+
+        let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
+        let nostr_manager =
+            NostrManager::from_mnemonic(xprivkey, storage.clone(), node.logger.clone()).unwrap();
+
+        let profile = nostr_manager
+            .create_new_profile(
+                ProfileType::Normal {
+                    name: "test".to_string(),
+                },
+                SpendingConditions::RequireApproval,
+                NwcProfileTag::General,
+            )
+            .unwrap();
+
+        let secp = Secp256k1::new();
+        let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
+        let uri = nwc.get_nwc_uri().unwrap();
+
+        // test wrong kind
+        let event = {
+            EventBuilder::new(Kind::TextNote, "", &[])
+                .to_event(&Keys::new(uri.secret))
+                .unwrap()
+        };
+        let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
+        assert_eq!(result.unwrap(), None);
+        check_no_pending_invoices(&storage);
+
+        // test unexpected command
+        let event = {
+            let req = Request {
+                method: Method::GetBalance,
+                params: RequestParams::GetBalance,
+            };
+
+            let encrypted = encrypt(&uri.secret, &uri.public_key, req.as_json()).unwrap();
+            let p_tag = Tag::PubKey(uri.public_key, None);
+            EventBuilder::new(Kind::WalletConnectRequest, encrypted, &[p_tag])
+                .to_event(&Keys::new(uri.secret))
+                .unwrap()
+        };
+        let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
+        assert_eq!(result.unwrap(), None);
+        check_no_pending_invoices(&storage);
+
+        // test invalid invoice
+        let event = create_nwc_request(&uri, "invalid invoice".to_string());
+        let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
+        assert_eq!(result.unwrap_err().to_string(), "Failed to parse invoice");
+        check_no_pending_invoices(&storage);
+
+        // test expired invoice
+        let event = create_nwc_request(&uri, INVOICE.to_string());
+        let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
+        assert_eq!(result.unwrap(), None);
+        check_no_pending_invoices(&storage);
+
+        // test amount-less invoice
+        let invoice = create_dummy_invoice(None, Network::Regtest);
+        let event = create_nwc_request(&uri, invoice.to_string());
+        let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
+        assert_eq!(result.unwrap(), None);
+        check_no_pending_invoices(&storage);
+
+        // test in-flight payment
+        let invoice = create_dummy_invoice(Some(1_000), Network::Regtest);
+        let payment_info = PaymentInfo {
+            preimage: None,
+            secret: Some(invoice.payment_secret().0),
+            status: HTLCStatus::InFlight,
+            amt_msat: MillisatAmount(invoice.amount_milli_satoshis()),
+            fee_paid_msat: None,
+            bolt11: Some(invoice.clone()),
+            payee_pubkey: None,
+            last_update: utils::now().as_secs(),
+        };
+        node.persister
+            .persist_payment_info(invoice.payment_hash().as_inner(), &payment_info, false)
+            .unwrap();
+        let event = create_nwc_request(&uri, invoice.to_string());
+        let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
+        assert_eq!(result.unwrap(), None);
+        check_no_pending_invoices(&storage);
+
+        // test completed payment
+        let invoice = create_dummy_invoice(Some(1_000), Network::Regtest);
+        let payment_info = PaymentInfo {
+            preimage: None,
+            secret: Some(invoice.payment_secret().0),
+            status: HTLCStatus::Succeeded,
+            amt_msat: MillisatAmount(invoice.amount_milli_satoshis()),
+            fee_paid_msat: None,
+            bolt11: Some(invoice.clone()),
+            payee_pubkey: None,
+            last_update: utils::now().as_secs(),
+        };
+        node.persister
+            .persist_payment_info(invoice.payment_hash().as_inner(), &payment_info, false)
+            .unwrap();
+        let event = create_nwc_request(&uri, invoice.to_string());
+        let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
+        assert_eq!(result.unwrap(), None);
+        check_no_pending_invoices(&storage);
+
+        // test it goes to pending
+        let invoice = create_dummy_invoice(Some(1_000), Network::Regtest);
+        let event = create_nwc_request(&uri, invoice.to_string());
+        let result = nwc
+            .handle_nwc_request(event.clone(), &node, &nostr_manager)
+            .await;
+        assert_eq!(result.unwrap(), None);
+
+        let pending: Vec<PendingNwcInvoice> = storage
+            .get_data(PENDING_NWC_EVENTS_KEY)
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].invoice, invoice);
+        assert_eq!(pending[0].event_id, event.id);
+        assert_eq!(pending[0].index, nwc.profile.index);
+        assert_eq!(pending[0].pubkey, event.pubkey);
     }
 }

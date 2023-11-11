@@ -1326,10 +1326,10 @@ impl MutinyWallet {
     /// Get nostr wallet connect URI
     #[wasm_bindgen]
     pub fn get_nwc_uri(&self, index: u32) -> Result<String, MutinyJsError> {
-        self.inner
-            .nostr
-            .get_nwc_uri(index)
-            .map_err(|_| MutinyJsError::JsonReadWriteError)
+        match self.inner.nostr.get_nwc_uri(index) {
+            Ok(uri) => Ok(uri.to_string()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Lists all pending NWC invoices
