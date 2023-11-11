@@ -789,13 +789,14 @@ impl<S: MutinyStorage> Node<S> {
             let amount_sat = amount_sat.ok_or(MutinyError::BadAmountError)?;
 
             // Needs any amount over 0 if channel exists
-            // Needs amount over 10k if no channel
-            let has_usable_channel = self
+            // Needs amount over minimum if no channel
+            let inbound_capacity_msat: u64 = self
                 .channel_manager
                 .list_channels_with_counterparty(&lsp.pubkey)
                 .iter()
-                .any(|c| c.inbound_capacity_msat >= amount_sat * 1000);
-            let min_amount_sat = if has_usable_channel {
+                .map(|c| c.inbound_capacity_msat)
+                .sum();
+            let min_amount_sat = if inbound_capacity_msat > amount_sat * 1_000 {
                 1
             } else {
                 utils::min_lightning_amount(self.network)
