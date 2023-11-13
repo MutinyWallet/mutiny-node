@@ -33,7 +33,6 @@ use mutiny_core::lnurlauth::AuthManager;
 use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
 use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::redshift::RedshiftRecipient;
-use mutiny_core::scb::EncryptedSCB;
 use mutiny_core::storage::MutinyStorage;
 use mutiny_core::utils::sleep;
 use mutiny_core::vss::MutinyVssClient;
@@ -907,33 +906,6 @@ impl MutinyWallet {
         Ok(JsValue::from_serde(
             &self.inner.node_manager.list_channels().await?,
         )?)
-    }
-
-    /// Takes an encrypted static channel backup and recovers the channels from it.
-    /// If the backup is encrypted with a different key than the current key, it will fail.
-    #[wasm_bindgen]
-    pub async fn recover_from_static_channel_backup(
-        &self,
-        scb: String,
-    ) -> Result<(), MutinyJsError> {
-        let scb = EncryptedSCB::from_str(&scb).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        self.inner
-            .node_manager
-            .recover_from_static_channel_backup(scb)
-            .await?;
-        Ok(())
-    }
-
-    /// Creates a static channel backup for all the nodes in the node manager.
-    /// The backup is encrypted with the SCB key.
-    #[wasm_bindgen]
-    pub async fn create_static_channel_backup(&self) -> Result<String, MutinyJsError> {
-        let scb = self
-            .inner
-            .node_manager
-            .create_static_channel_backup()
-            .await?;
-        Ok(scb.to_string())
     }
 
     /// Lists all the peers for all the nodes in the node manager.
