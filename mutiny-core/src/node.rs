@@ -3,8 +3,6 @@ use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
 use crate::multiesplora::MultiEsploraClient;
 use crate::nodemanager::ChannelClosure;
 use crate::peermanager::LspMessageRouter;
-use crate::scb::message_handler::SCBMessageHandler;
-use crate::scb::StaticChannelBackup;
 use crate::utils::get_monitor_version;
 use crate::{
     background::process_events_async,
@@ -30,17 +28,16 @@ use bdk::FeeRate;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
 use bitcoin::secp256k1::rand;
 use bitcoin::util::bip32::ExtendedPrivKey;
-use bitcoin::{hashes::Hash, secp256k1::PublicKey, BlockHash, Network, OutPoint};
+use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint};
 use core::time::Duration;
 use futures_util::lock::Mutex;
-use lightning::chain::channelmonitor::ChannelMonitor;
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
 use lightning::ln::channelmanager::ChannelDetails;
 use lightning::ln::PaymentSecret;
 use lightning::onion_message::OnionMessenger as LdkOnionMessenger;
 use lightning::sign::{EntropySource, InMemorySigner, NodeSigner, Recipient};
 use lightning::util::config::MaxDustHTLCExposure;
-use lightning::util::ser::{ReadableArgs, Writeable};
+use lightning::util::ser::Writeable;
 use lightning::{
     chain::{chainmonitor, Filter, Watch},
     ln::{
@@ -107,7 +104,7 @@ pub(crate) type MessageHandler<S: MutinyStorage> = LdkMessageHandler<
     Arc<PhantomChannelManager<S>>,
     Arc<GossipMessageHandler<S>>,
     Arc<OnionMessenger<S>>,
-    Arc<SCBMessageHandler>,
+    IgnoringMessageHandler,
 >;
 
 pub(crate) type ChainMonitor<S: MutinyStorage> = chainmonitor::ChainMonitor<
@@ -165,7 +162,6 @@ pub(crate) struct Node<S: MutinyStorage> {
     pub channel_manager: Arc<PhantomChannelManager<S>>,
     pub chain_monitor: Arc<ChainMonitor<S>>,
     pub fee_estimator: Arc<MutinyFeeEstimator<S>>,
-    pub scb_message_handler: Arc<SCBMessageHandler>,
     network: Network,
     pub persister: Arc<MutinyNodePersister<S>>,
     wallet: Arc<OnChainWallet<S>>,
@@ -353,12 +349,11 @@ impl<S: MutinyStorage> Node<S> {
         });
 
         // init peer manager
-        let scb_message_handler = Arc::new(SCBMessageHandler::new());
         let ln_msg_handler = MessageHandler {
             chan_handler: channel_manager.clone(),
             route_handler,
             onion_message_handler,
-            custom_message_handler: scb_message_handler.clone(),
+            custom_message_handler: IgnoringMessageHandler {},
         };
 
         let bump_tx_event_handler = Arc::new(BumpTransactionEventHandler::new(
@@ -661,7 +656,6 @@ impl<S: MutinyStorage> Node<S> {
             channel_manager,
             chain_monitor,
             fee_estimator,
-            scb_message_handler,
             network,
             persister,
             wallet,
@@ -1614,76 +1608,6 @@ impl<S: MutinyStorage> Node<S> {
             .await?;
 
         self.await_chan_funding_tx(init, &pubkey, timeout).await
-    }
-
-    pub fn create_static_channel_backup(&self) -> Result<StaticChannelBackup, MutinyError> {
-        let mut monitors = HashMap::new();
-        for outpoint in self.chain_monitor.list_monitors() {
-            let monitor = self
-                .chain_monitor
-                .get_monitor(outpoint)
-                .map_err(|_| MutinyError::Other(anyhow!("Failed to get channel monitor")))?;
-
-            let monitor_bytes = monitor.encode();
-            monitors.insert(outpoint.into_bitcoin_outpoint(), monitor_bytes);
-        }
-
-        Ok(StaticChannelBackup { monitors })
-    }
-
-    pub async fn recover_from_static_channel_backup(
-        &self,
-        scb: StaticChannelBackup,
-        peer_connections: &HashMap<PublicKey, String>,
-    ) -> Result<(), MutinyError> {
-        for (outpoint, monitor_bytes) in scb.monitors {
-            let ln_outpoint = lightning::chain::transaction::OutPoint {
-                txid: outpoint.txid,
-                index: outpoint.vout as u16,
-            };
-
-            let reader = &mut lightning::io::Cursor::new(&monitor_bytes);
-            let (_, monitor) = <(BlockHash, ChannelMonitor<InMemorySigner>)>::read(
-                reader,
-                (self.keys_manager.as_ref(), self.keys_manager.as_ref()),
-            )?;
-
-            // unwrap is safe for ldk > 0.0.110
-            let node_id = monitor
-                .get_counterparty_node_id()
-                .expect("failed to get node id");
-
-            // watch the channel in the case peer tries to cheat us
-            // if there are no claimable balances, we don't need to watch the channel
-            if !monitor.get_claimable_balances().is_empty() {
-                self.chain_monitor
-                    .watch_channel(ln_outpoint, monitor)
-                    .map_err(|_| MutinyError::ChainAccessFailed)?;
-            } else {
-                log_debug!(
-                    self.logger,
-                    "no claimable balances for channel {ln_outpoint:?}, skipping watch"
-                );
-            }
-
-            // connect to peer if we have a connection string
-            if let Some(connection_string) = peer_connections.get(&node_id) {
-                let connect = PubkeyConnectionInfo::new(connection_string)
-                    .expect("invalid connection string");
-                self.connect_peer(connect, None).await?;
-            }
-
-            // then ask peer to force close the channel
-            self.scb_message_handler
-                .request_channel_close(node_id, ln_outpoint.to_channel_id());
-        }
-
-        // fire off all the send events
-        if self.scb_message_handler.has_pending_messages() {
-            self.peer_manager.process_events();
-        }
-
-        Ok(())
     }
 }
 

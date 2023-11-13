@@ -34,7 +34,6 @@ pub mod nostr;
 mod onchain;
 mod peermanager;
 pub mod redshift;
-pub mod scb;
 pub mod scorer;
 pub mod storage;
 mod subscription;
