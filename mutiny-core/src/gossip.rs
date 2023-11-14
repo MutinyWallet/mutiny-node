@@ -1,12 +1,13 @@
-use crate::scorer::{HubPreferentialScorer, ProbScorer};
+use crate::{
+    node::decay_params,
+    scorer::{HubPreferentialScorer, ProbScorer},
+};
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::Network;
+use lightning::ln::msgs::NodeAnnouncement;
 use lightning::routing::gossip::NodeId;
 use lightning::util::logger::Logger;
 use lightning::util::ser::ReadableArgs;
-use lightning::{
-    ln::msgs::NodeAnnouncement, routing::scoring::ProbabilisticScoringDecayParameters,
-};
 use lightning::{log_debug, log_error, log_info, log_warn};
 use reqwest::Client;
 use reqwest::{Method, Url};
@@ -51,7 +52,7 @@ async fn get_scorer(
     if let Some(prob_scorer_str) = storage.get_data::<String>(PROB_SCORER_KEY)? {
         let prob_scorer_bytes: Vec<u8> = Vec::from_hex(&prob_scorer_str)?;
         let mut readable_bytes = lightning::io::Cursor::new(prob_scorer_bytes);
-        let params = ProbabilisticScoringDecayParameters::default();
+        let params = decay_params();
         let args = (params, Arc::clone(&network_graph), Arc::clone(&logger));
         let scorer = ProbScorer::read(&mut readable_bytes, args)?;
         Ok(Some(HubPreferentialScorer::new(scorer)))
@@ -165,7 +166,7 @@ pub async fn get_gossip_sync(
         match get_remote_scorer_bytes(client, &url).await {
             Ok(scorer_bytes) => {
                 let mut readable_bytes = lightning::io::Cursor::new(scorer_bytes);
-                let params = ProbabilisticScoringDecayParameters::default();
+                let params = decay_params();
                 let args = (
                     params,
                     Arc::clone(&gossip_data.network_graph),
@@ -194,7 +195,7 @@ pub async fn get_gossip_sync(
     let prob_scorer = match gossip_data.scorer {
         Some(scorer) => scorer,
         None => {
-            let params = ProbabilisticScoringDecayParameters::default();
+            let params = decay_params();
             let scorer = ProbScorer::new(params, gossip_data.network_graph.clone(), logger.clone());
             HubPreferentialScorer::new(scorer)
         }
