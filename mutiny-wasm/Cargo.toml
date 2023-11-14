@@ -19,8 +19,8 @@ crate-type = ["cdylib"]
 mutiny-core = { path = "../mutiny-core" }
 
 anyhow = "1.0"
-wasm-bindgen = "0.2.84"
-wasm-bindgen-futures = "0.4.33"
+wasm-bindgen = "0.2.88"
+wasm-bindgen-futures = "0.4.38"
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
 bitcoin = { version = "0.29.2", default-features = false, features = ["serde", "secp-recovery", "rand"] }
@@ -33,7 +33,6 @@ nostr = { version = "0.24.0", default-features = false }
 wasm-logger = "0.2.0"
 log = "0.4.17"
 rexie = "0.4"
-js-sys = "0.3.60"
 gloo-utils = { version = "0.1.6", features = ["serde"] }
 web-sys = { version = "0.3.60", features = ["console"] }
 bip39 = { version = "2.0.0" }
@@ -46,10 +45,12 @@ once_cell = "1.18.0"
 # logging them with `console.error`. This is great for development, but requires
 # all the `std::fmt` and `std::panicking` infrastructure, so isn't great for
 # code size when deploying.
-console_error_panic_hook = { version = "0.1.6", optional = true }
+console_error_panic_hook = { version = "0.1.7", optional = true }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.33"
+web-sys = { version = "0.3.65", features = ["console"] }
+js-sys = "0.3.65"
 
 [features]
 default = []
