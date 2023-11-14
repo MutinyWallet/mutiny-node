@@ -6,6 +6,7 @@ use crate::nostr::nwc::{
     PendingNwcInvoice, Profile, SingleUseSpendingConditions, SpendingConditions,
     PENDING_NWC_EVENTS_KEY,
 };
+use crate::notifications::MutinyNotificationClient;
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
 use crate::{utils, HTLCStatus};
@@ -69,6 +70,8 @@ pub struct NostrManager<S: MutinyStorage> {
     pub storage: S,
     /// Lock for pending nwc invoices
     pending_nwc_lock: Arc<Mutex<()>>,
+    /// Notification Client
+    pub notifications: Option<Arc<MutinyNotificationClient>>,
     /// Logger
     pub logger: Arc<MutinyLogger>,
 }
@@ -348,6 +351,17 @@ impl<S: MutinyStorage> NostrManager<S> {
             })?;
 
             let _ = client.disconnect().await;
+        }
+
+        // register for subscriptions
+        if let Some(notifications) = &self.notifications {
+            // just created, unwrap is safe
+            let uri = NostrWalletConnectURI::from_str(&profile.nwc_uri).expect("invalid uri");
+            let author = uri.secret.x_only_public_key(nostr::SECP256K1).0;
+
+            notifications
+                .register_nwc(author, uri.public_key, &profile.relay, &profile.name)
+                .await?;
         }
 
         Ok(profile)
@@ -839,6 +853,7 @@ impl<S: MutinyStorage> NostrManager<S> {
     pub fn from_mnemonic(
         xprivkey: ExtendedPrivKey,
         storage: S,
+        notifications: Option<Arc<MutinyNotificationClient>>,
         logger: Arc<MutinyLogger>,
     ) -> Result<Self, MutinyError> {
         let context = Secp256k1::new();
@@ -861,6 +876,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             nwc: Arc::new(RwLock::new(nwc)),
             storage,
             pending_nwc_lock: Arc::new(Mutex::new(())),
+            notifications,
             logger,
         })
     }
@@ -888,7 +904,7 @@ mod test {
 
         let logger = Arc::new(MutinyLogger::default());
 
-        NostrManager::from_mnemonic(xprivkey, storage, logger).unwrap()
+        NostrManager::from_mnemonic(xprivkey, storage, None, logger).unwrap()
     }
 
     #[test]

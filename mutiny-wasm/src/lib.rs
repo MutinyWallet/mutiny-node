@@ -89,6 +89,7 @@ impl MutinyWallet {
         subscription_url: Option<String>,
         storage_url: Option<String>,
         scorer_url: Option<String>,
+        notification_url: Option<String>,
         do_not_connect_peers: Option<bool>,
         skip_device_lock: Option<bool>,
         safe_mode: Option<bool>,
@@ -113,6 +114,7 @@ impl MutinyWallet {
             subscription_url,
             storage_url,
             scorer_url,
+            notification_url,
             do_not_connect_peers,
             skip_device_lock,
             safe_mode,
@@ -141,6 +143,7 @@ impl MutinyWallet {
         subscription_url: Option<String>,
         storage_url: Option<String>,
         scorer_url: Option<String>,
+        notification_url: Option<String>,
         do_not_connect_peers: Option<bool>,
         skip_device_lock: Option<bool>,
         safe_mode: Option<bool>,
@@ -219,6 +222,7 @@ impl MutinyWallet {
             auth_client,
             subscription_url,
             scorer_url,
+            notification_url,
             skip_device_lock.unwrap_or(false),
         );
 
@@ -1391,6 +1395,22 @@ impl MutinyWallet {
         Ok(self.inner.reset_onchain_tracker().await?)
     }
 
+    /// Register the wallet for web-push notifications
+    #[wasm_bindgen]
+    pub async fn register_web_push(&self, info: JsValue) -> Result<(), MutinyJsError> {
+        match self.inner.notification_client.as_ref() {
+            Some(client) => {
+                let info = info.into_serde()?;
+                client.register(info).await?;
+            }
+            None => return Err(MutinyJsError::NotFound),
+        }
+
+        log::info!("Web Push Registered!");
+
+        Ok(())
+    }
+
     /// Exports the current state of the node manager to a json object.
     #[wasm_bindgen]
     pub async fn export_json(password: Option<String>) -> Result<String, MutinyJsError> {
@@ -1529,6 +1549,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1617,6 +1638,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1629,6 +1651,7 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1672,6 +1695,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1783,6 +1807,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1845,6 +1870,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1886,6 +1912,7 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,

@@ -2570,6 +2570,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         );
         NodeManager::new(c, storage.clone(), None)
@@ -2594,6 +2595,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Regtest,
+            None,
             None,
             None,
             None,
@@ -2651,6 +2653,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         );
         let c = c.with_safe_mode();
@@ -2681,6 +2684,7 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Signet,
+            None,
             None,
             None,
             None,
