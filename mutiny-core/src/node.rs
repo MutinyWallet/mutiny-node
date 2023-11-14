@@ -35,6 +35,7 @@ use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
 use lightning::ln::channelmanager::ChannelDetails;
 use lightning::ln::PaymentSecret;
 use lightning::onion_message::OnionMessenger as LdkOnionMessenger;
+use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
 use lightning::sign::{EntropySource, InMemorySigner, NodeSigner, Recipient};
 use lightning::util::config::MaxDustHTLCExposure;
 use lightning::util::ser::Writeable;
@@ -1613,9 +1614,20 @@ impl<S: MutinyStorage> Node<S> {
 
 pub(crate) fn scoring_params() -> ProbabilisticScoringFeeParameters {
     ProbabilisticScoringFeeParameters {
-        base_penalty_amount_multiplier_msat: 8192 * 100, // default * 100
-        base_penalty_msat: 100_000,                      // 100 sat for each hop
+        base_penalty_amount_multiplier_msat: 8192 * 100,
+        base_penalty_msat: 100_000,
+        liquidity_penalty_multiplier_msat: 30_000 * 15,
+        liquidity_penalty_amount_multiplier_msat: 192 * 15,
+        historical_liquidity_penalty_multiplier_msat: 10_000 * 15,
+        historical_liquidity_penalty_amount_multiplier_msat: 64 * 15,
         ..Default::default()
+    }
+}
+
+pub(crate) fn decay_params() -> ProbabilisticScoringDecayParameters {
+    ProbabilisticScoringDecayParameters {
+        liquidity_offset_half_life: core::time::Duration::from_secs(3 * 60 * 60),
+        historical_no_updates_half_life: core::time::Duration::from_secs(60 * 60 * 24 * 3),
     }
 }
 
