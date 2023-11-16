@@ -15,6 +15,6 @@ opt-level = "z"
 opt-level = "z"
 
 [patch.crates-io]
-lightning = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "b6e1aad283f8c5551465fbd260b90757859e418d" }
-lightning-invoice = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "b6e1aad283f8c5551465fbd260b90757859e418d" }
-lightning-rapid-gossip-sync = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "b6e1aad283f8c5551465fbd260b90757859e418d" }
+lightning = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "999cf71be4cb5e47ef311ea7c6d7c21eac78008a" }
+lightning-invoice = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "999cf71be4cb5e47ef311ea7c6d7c21eac78008a" }
+lightning-rapid-gossip-sync = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "999cf71be4cb5e47ef311ea7c6d7c21eac78008a" }
