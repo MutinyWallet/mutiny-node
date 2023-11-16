@@ -422,7 +422,7 @@ impl Ord for ActivityItem {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         // We want None to be greater than Some because those are pending transactions
         // so those should be at the top of the list
-        match (self.last_updated(), other.last_updated()) {
+        let sort = match (self.last_updated(), other.last_updated()) {
             (Some(self_time), Some(other_time)) => self_time.cmp(&other_time),
             (Some(_), None) => core::cmp::Ordering::Less,
             (None, Some(_)) => core::cmp::Ordering::Greater,
@@ -446,7 +446,14 @@ impl Ord for ActivityItem {
                     _ => core::cmp::Ordering::Equal,
                 }
             }
-        }
+        };
+
+        // if the sort is equal, sort by serialization so we have a stable sort
+        sort.then_with(|| {
+            serde_json::to_string(self)
+                .unwrap()
+                .cmp(&serde_json::to_string(other).unwrap())
+        })
     }
 }
 
@@ -2937,12 +2944,44 @@ mod tests {
             last_updated: 1581781585,
         };
 
+        let invoice4: MutinyInvoice = MutinyInvoice {
+            bolt11: None,
+            description: None,
+            payment_hash,
+            preimage: None,
+            payee_pubkey: Some(pubkey),
+            amount_sats: Some(102),
+            expire: 1581781585,
+            status: HTLCStatus::InFlight,
+            fees_paid: None,
+            inbound: false,
+            labels: vec![],
+            last_updated: 1581781585,
+        };
+
+        let invoice5: MutinyInvoice = MutinyInvoice {
+            bolt11: None,
+            description: Some("difference".to_string()),
+            payment_hash,
+            preimage: Some(preimage.to_hex()),
+            payee_pubkey: Some(pubkey),
+            amount_sats: Some(100),
+            expire: 1681781585,
+            status: HTLCStatus::Succeeded,
+            fees_paid: Some(1),
+            inbound: false,
+            labels: vec![],
+            last_updated: 1781781585,
+        };
+
         let mut vec = vec![
             ActivityItem::OnChain(tx1.clone()),
             ActivityItem::OnChain(tx2.clone()),
             ActivityItem::Lightning(Box::new(invoice1.clone())),
             ActivityItem::Lightning(Box::new(invoice2.clone())),
             ActivityItem::Lightning(Box::new(invoice3.clone())),
+            ActivityItem::Lightning(Box::new(invoice4.clone())),
+            ActivityItem::Lightning(Box::new(invoice5.clone())),
             ActivityItem::ChannelClosed(closure.clone()),
         ];
         vec.sort();
@@ -2953,9 +2992,11 @@ mod tests {
                 ActivityItem::OnChain(tx2),
                 ActivityItem::Lightning(Box::new(invoice1)),
                 ActivityItem::ChannelClosed(closure),
+                ActivityItem::Lightning(Box::new(invoice5)),
                 ActivityItem::Lightning(Box::new(invoice2)),
                 ActivityItem::OnChain(tx1),
                 ActivityItem::Lightning(Box::new(invoice3)),
+                ActivityItem::Lightning(Box::new(invoice4)),
             ]
         );
     }
