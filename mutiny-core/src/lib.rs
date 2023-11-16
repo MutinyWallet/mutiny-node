@@ -174,6 +174,13 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             node_manager.logger.clone(),
         )?);
 
+        if !config.skip_hodl_invoices {
+            log_warn!(
+                node_manager.logger,
+                "Starting with HODL invoices enabled. This is not recommended!"
+            );
+        }
+
         let mw = Self {
             config,
             storage,
