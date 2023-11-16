@@ -88,6 +88,7 @@ pub struct MutinyWalletConfig {
     do_not_connect_peers: bool,
     skip_device_lock: bool,
     pub safe_mode: bool,
+    skip_hodl_invoices: bool,
 }
 
 impl MutinyWalletConfig {
@@ -103,6 +104,7 @@ impl MutinyWalletConfig {
         subscription_url: Option<String>,
         scorer_url: Option<String>,
         skip_device_lock: bool,
+        skip_hodl_invoices: bool,
     ) -> Self {
         Self {
             xprivkey,
@@ -118,6 +120,7 @@ impl MutinyWalletConfig {
             do_not_connect_peers: false,
             skip_device_lock,
             safe_mode: false,
+            skip_hodl_invoices,
         }
     }
 
@@ -640,6 +643,7 @@ mod tests {
             None,
             None,
             false,
+            true,
         );
         let mw = MutinyWallet::new(storage.clone(), config, None)
             .await
@@ -670,6 +674,7 @@ mod tests {
             None,
             None,
             false,
+            true,
         );
         let mut mw = MutinyWallet::new(storage.clone(), config, None)
             .await
@@ -706,6 +711,7 @@ mod tests {
             None,
             None,
             false,
+            true,
         );
         let mut mw = MutinyWallet::new(storage.clone(), config, None)
             .await
@@ -743,6 +749,7 @@ mod tests {
             None,
             None,
             false,
+            true,
         );
         let mw = MutinyWallet::new(storage.clone(), config, None)
             .await
@@ -768,6 +775,7 @@ mod tests {
             None,
             None,
             false,
+            true,
         );
         let mw2 = MutinyWallet::new(storage2.clone(), config2.clone(), None)
             .await

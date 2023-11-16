@@ -118,6 +118,7 @@ pub(crate) async fn create_node<S: MutinyStorage>(storage: S) -> Node<S> {
         logger,
         false,
         false,
+        true,
         #[cfg(target_arch = "wasm32")]
         String::from("wss://p.mutinywallet.com"),
     )

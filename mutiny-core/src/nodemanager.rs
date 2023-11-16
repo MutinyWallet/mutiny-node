@@ -504,6 +504,7 @@ pub struct NodeManager<S: MutinyStorage> {
     pub(crate) logger: Arc<MutinyLogger>,
     bitcoin_price_cache: Arc<Mutex<HashMap<String, (f32, Duration)>>>,
     do_not_connect_peers: bool,
+    skip_hodl_invoices: bool,
     pub safe_mode: bool,
 }
 
@@ -665,6 +666,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                     logger.clone(),
                     c.do_not_connect_peers,
                     false,
+                    c.skip_hodl_invoices,
                     #[cfg(target_arch = "wasm32")]
                     websocket_proxy_addr.clone(),
                 )
@@ -751,6 +753,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             bitcoin_price_cache: Arc::new(Mutex::new(price_cache)),
             do_not_connect_peers: c.do_not_connect_peers,
             safe_mode: c.safe_mode,
+            skip_hodl_invoices: c.skip_hodl_invoices,
         };
 
         Ok(nm)
@@ -2494,6 +2497,7 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         node_manager.logger.clone(),
         node_manager.do_not_connect_peers,
         false,
+        node_manager.skip_hodl_invoices,
         #[cfg(target_arch = "wasm32")]
         node_manager.websocket_proxy_addr.clone(),
     )
@@ -2571,6 +2575,7 @@ mod tests {
             None,
             None,
             false,
+            true,
         );
         NodeManager::new(c, storage.clone(), None)
             .await
@@ -2601,6 +2606,7 @@ mod tests {
             None,
             None,
             false,
+            true,
         );
         let nm = NodeManager::new(c, storage, None)
             .await
@@ -2652,6 +2658,7 @@ mod tests {
             None,
             None,
             false,
+            true,
         );
         let c = c.with_safe_mode();
 
@@ -2688,6 +2695,7 @@ mod tests {
             None,
             None,
             false,
+            true,
         );
         let nm = NodeManager::new(c, storage, None)
             .await
