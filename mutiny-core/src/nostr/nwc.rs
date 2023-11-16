@@ -6,7 +6,6 @@ use crate::storage::MutinyStorage;
 use crate::utils;
 use anyhow::anyhow;
 use bitcoin::hashes::hex::{FromHex, ToHex};
-use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::{Secp256k1, Signing};
 use bitcoin::util::bip32::ExtendedPrivKey;
 use chrono::{DateTime, Datelike, Duration, NaiveDateTime, Utc};
@@ -21,8 +20,6 @@ use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::str::FromStr;
-
-const ZEUS_PAY_NODE_ID: &str = "031b301307574bbe9b9ac7b79cbe1700e31e544513eae0b5d7497483083f99e581";
 
 pub(crate) const PENDING_NWC_EVENTS_KEY: &str = "pending_nwc_events";
 
@@ -372,10 +369,14 @@ impl NostrWalletConnect {
                 return Ok(None);
             }
 
-            // Skip Zeus Pay invoices as they can cause force closes
-            if invoice.recover_payee_pub_key() == PublicKey::from_str(ZEUS_PAY_NODE_ID).unwrap() {
-                log_warn!(node.logger, "Received Zeus Pay invoice, skipping...");
-                return Ok(None);
+            if node.skip_hodl_invoices {
+                // Skip potential hodl invoices as they can cause force closes
+                if utils::HODL_INVOICE_NODES
+                    .contains(&invoice.recover_payee_pub_key().to_hex().as_str())
+                {
+                    log_warn!(node.logger, "Received potential hodl invoice, skipping...");
+                    return Ok(None);
+                }
             }
 
             // if we have already paid or are attempting to pay this invoice, skip it

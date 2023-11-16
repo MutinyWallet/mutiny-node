@@ -92,6 +92,7 @@ impl MutinyWallet {
         do_not_connect_peers: Option<bool>,
         skip_device_lock: Option<bool>,
         safe_mode: Option<bool>,
+        skip_hodl_invoices: Option<bool>,
     ) -> Result<MutinyWallet, MutinyJsError> {
         utils::set_panic_hook();
         let mut init = INITIALIZED.lock().await;
@@ -116,6 +117,7 @@ impl MutinyWallet {
             do_not_connect_peers,
             skip_device_lock,
             safe_mode,
+            skip_hodl_invoices,
         )
         .await
         {
@@ -144,6 +146,7 @@ impl MutinyWallet {
         do_not_connect_peers: Option<bool>,
         skip_device_lock: Option<bool>,
         safe_mode: Option<bool>,
+        skip_hodl_invoices: Option<bool>,
     ) -> Result<MutinyWallet, MutinyJsError> {
         let safe_mode = safe_mode.unwrap_or(false);
         let logger = Arc::new(MutinyLogger::default());
@@ -220,6 +223,7 @@ impl MutinyWallet {
             subscription_url,
             scorer_url,
             skip_device_lock.unwrap_or(false),
+            skip_hodl_invoices.unwrap_or(true),
         );
 
         if let Some(true) = do_not_connect_peers {
@@ -1529,6 +1533,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1558,6 +1563,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1571,6 +1577,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1617,6 +1624,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1629,6 +1637,7 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1682,6 +1691,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1723,6 +1733,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1741,6 +1752,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1773,6 +1785,7 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1845,6 +1858,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1886,6 +1900,7 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,

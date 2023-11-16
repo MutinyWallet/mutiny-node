@@ -170,6 +170,7 @@ pub(crate) struct Node<S: MutinyStorage> {
     pub(crate) lsp_client: Option<LspClient>,
     pub(crate) sync_lock: Arc<Mutex<()>>,
     stop: Arc<AtomicBool>,
+    pub skip_hodl_invoices: bool,
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
 }
@@ -192,6 +193,7 @@ impl<S: MutinyStorage> Node<S> {
         logger: Arc<MutinyLogger>,
         do_not_connect_peers: bool,
         empty_state: bool,
+        skip_hodl_invoices: bool,
         #[cfg(target_arch = "wasm32")] websocket_proxy_addr: String,
     ) -> Result<Self, MutinyError> {
         log_info!(logger, "initializing a new node: {uuid}");
@@ -664,6 +666,7 @@ impl<S: MutinyStorage> Node<S> {
             lsp_client,
             sync_lock,
             stop,
+            skip_hodl_invoices,
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
         })

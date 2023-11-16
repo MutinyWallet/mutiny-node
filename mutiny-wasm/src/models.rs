@@ -124,6 +124,7 @@ pub struct MutinyInvoice {
     pub fees_paid: Option<u64>,
     pub inbound: bool,
     pub last_updated: u64,
+    pub potential_hodl_invoice: bool,
     labels: Vec<String>,
 }
 
@@ -177,6 +178,12 @@ impl MutinyInvoice {
 
 impl From<nodemanager::MutinyInvoice> for MutinyInvoice {
     fn from(m: nodemanager::MutinyInvoice) -> Self {
+        let potential_hodl_invoice = match m.bolt11 {
+            Some(ref b) => {
+                utils::HODL_INVOICE_NODES.contains(&b.recover_payee_pub_key().to_hex().as_str())
+            }
+            None => false,
+        };
         MutinyInvoice {
             bolt11: m.bolt11,
             description: m.description,
@@ -189,6 +196,7 @@ impl From<nodemanager::MutinyInvoice> for MutinyInvoice {
             fees_paid: m.fees_paid,
             inbound: m.inbound,
             last_updated: m.last_updated,
+            potential_hodl_invoice,
             labels: m.labels,
         }
     }
