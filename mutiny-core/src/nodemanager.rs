@@ -37,7 +37,6 @@ use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use core::time::Duration;
 use esplora_client::Builder;
 use futures::{future::join_all, lock::Mutex};
-use lightning::chain::channelmonitor::Balance;
 use lightning::chain::Confirm;
 use lightning::events::ClosureReason;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
@@ -1357,13 +1356,14 @@ impl<S: MutinyStorage> NodeManager<S> {
                 n.chain_monitor.get_claimable_balances(&ignored_channels)
             })
             // need to filter out pending mutual closes, these are counted in the on-chain balance
-            .filter(|b| {
-                !matches!(
-                    b,
-                    Balance::ClaimableOnChannelClose { .. }
-                        | Balance::ClaimableAwaitingConfirmations { .. }
-                )
-            })
+            // comment out for now until https://github.com/lightningdevkit/rust-lightning/issues/2738
+            // .filter(|b| {
+            //     !matches!(
+            //         b,
+            //         Balance::ClaimableOnChannelClose { .. }
+            //             | Balance::ClaimableAwaitingConfirmations { .. }
+            //     )
+            // })
             .map(|bal| bal.claimable_amount_satoshis())
             .sum();
 
