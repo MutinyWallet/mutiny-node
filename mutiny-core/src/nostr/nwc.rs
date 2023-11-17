@@ -323,6 +323,28 @@ impl NostrWalletConnect {
         Ok(())
     }
 
+    fn get_skipped_error_event(&self, event: &Event, message: String) -> anyhow::Result<Event> {
+        let server_key = self.server_key.secret_key()?;
+        let client_pubkey = self.client_key.public_key();
+        let content = Response {
+            result_type: Method::PayInvoice,
+            error: Some(NIP47Error {
+                code: ErrorCode::Other,
+                message,
+            }),
+            result: None,
+        };
+
+        let encrypted = encrypt(&server_key, &client_pubkey, content.as_json())?;
+
+        let p_tag = Tag::PubKey(event.pubkey, None);
+        let e_tag = Tag::Event(event.id, None, None);
+        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, &[p_tag, e_tag])
+            .to_event(&self.server_key)?;
+
+        Ok(response)
+    }
+
     /// Handle a Nostr Wallet Connect request
     ///
     /// Returns a response event if one is needed
@@ -357,7 +379,9 @@ impl NostrWalletConnect {
 
             // if the invoice has expired, skip it
             if invoice.would_expire(utils::now()) {
-                return Ok(None);
+                return self
+                    .get_skipped_error_event(&event, "Invoice expired".to_string())
+                    .map(Some);
             }
 
             // if the invoice has no amount, we cannot pay it
@@ -366,7 +390,9 @@ impl NostrWalletConnect {
                     node.logger,
                     "NWC Invoice amount not set, cannot pay: {invoice}"
                 );
-                return Ok(None);
+                return self
+                    .get_skipped_error_event(&event, "Invoice amount not set".to_string())
+                    .map(Some);
             }
 
             if node.skip_hodl_invoices {
@@ -375,7 +401,12 @@ impl NostrWalletConnect {
                     .contains(&invoice.recover_payee_pub_key().to_hex().as_str())
                 {
                     log_warn!(node.logger, "Received potential hodl invoice, skipping...");
-                    return Ok(None);
+                    return self
+                        .get_skipped_error_event(
+                            &event,
+                            "Paying hodl invoices disabled".to_string(),
+                        )
+                        .map(Some);
                 }
             }
 
@@ -1017,6 +1048,7 @@ mod wasm_test {
     use crate::test_utils::{create_dummy_invoice, create_node, create_nwc_request};
     use bitcoin::hashes::Hash;
     use bitcoin::Network;
+    use nostr::key::SecretKey;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -1029,6 +1061,62 @@ mod wasm_test {
             .unwrap()
             .unwrap_or_default();
         assert_eq!(pending.len(), 0);
+    }
+
+    fn check_nwc_error_response(event: Event, sk: &SecretKey, expected: NIP47Error) {
+        assert_eq!(event.kind, Kind::WalletConnectResponse);
+        let decrypted = decrypt(sk, &event.pubkey, &event.content).unwrap();
+        let resp: Response = Response::from_json(decrypted).unwrap();
+        let error = resp.error.unwrap();
+        // need to compare json strings because the error code does not implement PartialEq
+        assert_eq!(
+            serde_json::to_string(&error.code).unwrap(),
+            serde_json::to_string(&expected.code).unwrap()
+        );
+        assert_eq!(error.message, expected.message);
+    }
+
+    #[test]
+    async fn test_allowed_hodl_invoice() {
+        let storage = MemoryStorage::default();
+        let mut node = create_node(storage.clone()).await;
+        node.skip_hodl_invoices = false; // allow hodl invoices
+
+        let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
+        let nostr_manager =
+            NostrManager::from_mnemonic(xprivkey, storage.clone(), node.logger.clone()).unwrap();
+
+        let profile = nostr_manager
+            .create_new_profile(
+                ProfileType::Normal {
+                    name: "test".to_string(),
+                },
+                SpendingConditions::RequireApproval,
+                NwcProfileTag::General,
+            )
+            .unwrap();
+
+        let secp = Secp256k1::new();
+        let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
+        let uri = nwc.get_nwc_uri().unwrap();
+
+        // test hodl invoice
+        let invoice = "lnbc10u1pj40d0ypp5gpupr2ce8rq2uh850ylkmugnn8dfey0ugqp72ttjq3gc6gz20vpqhp5d60tc9xkcdzwjst3jmzg3flfu662hjy3yyu4eyhfhm03pzurrsgscqz8qxqrrsssp5r74mhdtu7mr799wmjckukw5unh6phvdevw8cym7ppxfk8d52r3ks9qyyssqzefsn7a8sl8f35hvv2tkye074ml8am42unrrgvedmkxlxrr9xsxkvyyldjt8kr8trn0lzudjjd0ugy0dc9wk9dwapz4m23u8anlyldcp0azm0s".to_string();
+        let event = create_nwc_request(&uri, invoice.clone());
+        let result = nwc
+            .handle_nwc_request(event.clone(), &node, &nostr_manager)
+            .await;
+        assert_eq!(result.unwrap(), None);
+
+        let pending: Vec<PendingNwcInvoice> = storage
+            .get_data(PENDING_NWC_EVENTS_KEY)
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].invoice.to_string(), invoice);
+        assert_eq!(pending[0].event_id, event.id);
+        assert_eq!(pending[0].index, nwc.profile.index);
+        assert_eq!(pending[0].pubkey, event.pubkey);
     }
 
     #[test]
@@ -1090,14 +1178,41 @@ mod wasm_test {
         // test expired invoice
         let event = create_nwc_request(&uri, INVOICE.to_string());
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
-        assert_eq!(result.unwrap(), None);
+        check_nwc_error_response(
+            result.unwrap().unwrap(),
+            &uri.secret,
+            NIP47Error {
+                code: ErrorCode::Other,
+                message: "Invoice expired".to_string(),
+            },
+        );
         check_no_pending_invoices(&storage);
 
         // test amount-less invoice
         let invoice = create_dummy_invoice(None, Network::Regtest);
         let event = create_nwc_request(&uri, invoice.to_string());
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
-        assert_eq!(result.unwrap(), None);
+        check_nwc_error_response(
+            result.unwrap().unwrap(),
+            &uri.secret,
+            NIP47Error {
+                code: ErrorCode::Other,
+                message: "Invoice amount not set".to_string(),
+            },
+        );
+        check_no_pending_invoices(&storage);
+
+        // test hodl invoice
+        let event = create_nwc_request(&uri, "lnbc10u1pj40d0ypp5gpupr2ce8rq2uh850ylkmugnn8dfey0ugqp72ttjq3gc6gz20vpqhp5d60tc9xkcdzwjst3jmzg3flfu662hjy3yyu4eyhfhm03pzurrsgscqz8qxqrrsssp5r74mhdtu7mr799wmjckukw5unh6phvdevw8cym7ppxfk8d52r3ks9qyyssqzefsn7a8sl8f35hvv2tkye074ml8am42unrrgvedmkxlxrr9xsxkvyyldjt8kr8trn0lzudjjd0ugy0dc9wk9dwapz4m23u8anlyldcp0azm0s".to_string());
+        let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
+        check_nwc_error_response(
+            result.unwrap().unwrap(),
+            &uri.secret,
+            NIP47Error {
+                code: ErrorCode::Other,
+                message: "Paying hodl invoices disabled".to_string(),
+            },
+        );
         check_no_pending_invoices(&storage);
 
         // test in-flight payment
