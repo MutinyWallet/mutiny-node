@@ -27,3 +27,6 @@ Things to test before cutting a release:
 - Restoring with an encryption password
 - Export logs
   - Try with and without encryption password
+- Mutual Close Channel
+  - Known Issue: balance will be double counted until 6 confirmations
+- Force Close Channel
