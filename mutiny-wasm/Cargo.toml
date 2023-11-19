@@ -42,6 +42,7 @@ futures = "0.3.25"
 urlencoding = "2.1.2"
 once_cell = "1.18.0"
 payjoin = { version = "0.10.0", features = ["send", "base64"] }
+fedimint-core = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09c76b8a15615114d4f2c2663c738d8ff3135" }
 
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires

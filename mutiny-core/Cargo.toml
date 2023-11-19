@@ -46,6 +46,14 @@ jwt-compact = { version = "0.8.0-beta.1", features = ["es256k"] }
 argon2 = { version = "0.5.0", features = ["password-hash", "alloc"] }
 payjoin = { version = "0.10.0", features = ["send", "base64"] }
 
+fedimint-client = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09c76b8a15615114d4f2c2663c738d8ff3135" }
+fedimint-core = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09c76b8a15615114d4f2c2663c738d8ff3135" }
+fedimint-wallet-client = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09c76b8a15615114d4f2c2663c738d8ff3135" }
+fedimint-mint-client = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09c76b8a15615114d4f2c2663c738d8ff3135" }
+fedimint-ln-client = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09c76b8a15615114d4f2c2663c738d8ff3135" }
+fedimint-bip39 = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09c76b8a15615114d4f2c2663c738d8ff3135" }
+fedimint-ln-common = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09c76b8a15615114d4f2c2663c738d8ff3135" }
+
 base64 = "0.13.0"
 pbkdf2 = "0.11"
 aes-gcm = "0.10.1"
