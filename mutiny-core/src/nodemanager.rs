@@ -547,7 +547,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             if let Some(lock) = storage.get_device_lock()? {
                 log_info!(logger, "Current device lock: {lock:?}");
             }
-            storage.set_device_lock()?;
+            storage.set_device_lock().await?;
         }
 
         let storage_clone = storage.clone();
@@ -559,7 +559,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                     break;
                 }
                 sleep((DEVICE_LOCK_INTERVAL_SECS * 1_000) as i32).await;
-                if let Err(e) = storage_clone.set_device_lock() {
+                if let Err(e) = storage_clone.set_device_lock().await {
                     log_error!(logger_clone, "Error setting device lock: {e}");
                 }
             }

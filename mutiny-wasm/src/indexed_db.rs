@@ -133,6 +133,11 @@ impl IndexedDbStorage {
         key: &str,
         data: &Value,
     ) -> Result<(), MutinyError> {
+        // Device lock is only saved to VSS
+        if key == DEVICE_LOCK_KEY {
+            return Ok(());
+        }
+
         let tx = indexed_db
             .try_write()
             .map_err(|e| MutinyError::read_err(e.into()))
