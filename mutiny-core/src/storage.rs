@@ -82,6 +82,12 @@ pub struct DeviceLock {
 }
 
 impl DeviceLock {
+    pub fn remaining_secs(&self) -> u64 {
+        let now = now().as_secs();
+        let diff = now.saturating_sub(self.time as u64);
+        (DEVICE_LOCK_INTERVAL_SECS * 2).saturating_sub(diff)
+    }
+
     /// Check if the device is locked
     /// This is determined if the time is less than 2 minutes ago
     pub fn is_locked(&self, id: &str) -> bool {
