@@ -60,7 +60,7 @@ use std::{collections::HashMap, ops::Deref, sync::Arc};
 use uuid::Uuid;
 
 const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
-pub const DEVICE_LOCK_INTERVAL_SECS: u64 = 60;
+pub const DEVICE_LOCK_INTERVAL_SECS: u64 = 30;
 
 // This is the NodeStorage object saved to the DB
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
