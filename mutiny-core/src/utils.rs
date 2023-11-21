@@ -183,5 +183,12 @@ pub fn get_monitor_version(bytes: &[u8]) -> u64 {
     u64::from_be_bytes(bytes[2..10].try_into().unwrap())
 }
 
+#[cfg(not(test))]
 pub const HODL_INVOICE_NODES: [&str; 1] =
     ["031b301307574bbe9b9ac7b79cbe1700e31e544513eae0b5d7497483083f99e581"];
+
+#[cfg(test)]
+pub const HODL_INVOICE_NODES: [&str; 2] = [
+    "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798", // pubkey of ONE_KEY
+    "031b301307574bbe9b9ac7b79cbe1700e31e544513eae0b5d7497483083f99e581",
+];
