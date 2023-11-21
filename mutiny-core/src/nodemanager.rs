@@ -250,6 +250,7 @@ pub struct MutinyChannel {
     pub peer: PublicKey,
     pub confirmations_required: Option<u32>,
     pub confirmations: u32,
+    pub is_outbound: bool,
 }
 
 impl From<&ChannelDetails> for MutinyChannel {
@@ -263,6 +264,7 @@ impl From<&ChannelDetails> for MutinyChannel {
             peer: c.counterparty.node_id,
             confirmations_required: c.confirmations_required,
             confirmations: c.confirmations.unwrap_or(0),
+            is_outbound: c.is_outbound,
         }
     }
 }

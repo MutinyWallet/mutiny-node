@@ -269,6 +269,7 @@ pub struct MutinyChannel {
     peer: String,
     pub confirmations_required: Option<u32>,
     pub confirmations: u32,
+    pub is_outbound: bool,
 }
 
 #[wasm_bindgen]
@@ -307,6 +308,7 @@ impl From<nodemanager::MutinyChannel> for MutinyChannel {
             peer: m.peer.to_hex(),
             confirmations_required: m.confirmations_required,
             confirmations: m.confirmations,
+            is_outbound: m.is_outbound,
         }
     }
 }
