@@ -82,6 +82,12 @@ pub struct DeviceLock {
 }
 
 impl DeviceLock {
+    pub fn remaining_secs(&self) -> u64 {
+        let now = now().as_secs();
+        let diff = now.saturating_sub(self.time as u64);
+        (DEVICE_LOCK_INTERVAL_SECS * 2).saturating_sub(diff)
+    }
+
     /// Check if the device is locked
     /// This is determined if the time is less than 2 minutes ago
     pub fn is_locked(&self, id: &str) -> bool {
@@ -385,7 +391,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
         self.get_data(DEVICE_LOCK_KEY)
     }
 
-    fn set_device_lock(&self) -> Result<(), MutinyError> {
+    async fn set_device_lock(&self) -> Result<(), MutinyError> {
         let device = self.get_device_id()?;
         if let Some(lock) = self.get_device_lock()? {
             if lock.is_locked(&device) {
@@ -395,7 +401,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
 
         let time = now().as_secs() as u32;
         let lock = DeviceLock { time, device };
-        self.set_data(DEVICE_LOCK_KEY, lock, Some(time))
+        self.set_data_async(DEVICE_LOCK_KEY, lock, Some(time)).await
     }
 
     async fn fetch_device_lock(&self) -> Result<Option<DeviceLock>, MutinyError>;
@@ -714,7 +720,7 @@ mod tests {
         let lock = storage.get_device_lock().unwrap();
         assert_eq!(None, lock);
 
-        storage.set_device_lock().unwrap();
+        storage.set_device_lock().await.unwrap();
         // sleep 1 second to make sure it writes to VSS
         sleep(1_000).await;
 
@@ -725,7 +731,7 @@ mod tests {
         assert_eq!(lock.unwrap().device, id);
 
         // make sure we can set lock again, should work because same device id
-        storage.set_device_lock().unwrap();
+        storage.set_device_lock().await.unwrap();
         // sleep 1 second to make sure it writes to VSS
         sleep(1_000).await;
 
@@ -744,6 +750,9 @@ mod tests {
         assert!(lock.clone().unwrap().is_locked(&new_id));
         assert_eq!(lock.unwrap().device, id);
 
-        assert!(storage.set_device_lock().is_err())
+        assert_eq!(
+            storage.set_device_lock().await,
+            Err(crate::MutinyError::AlreadyRunning)
+        );
     }
 }

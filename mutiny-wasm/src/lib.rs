@@ -33,7 +33,7 @@ use mutiny_core::lnurlauth::AuthManager;
 use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
 use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::redshift::RedshiftRecipient;
-use mutiny_core::storage::MutinyStorage;
+use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
 use mutiny_core::utils::sleep;
 use mutiny_core::vss::MutinyVssClient;
 use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
@@ -262,6 +262,70 @@ impl MutinyWallet {
             .await
             .expect("Failed to init");
         NodeManager::has_node_manager(storage)
+    }
+
+    /// Returns the number of remaining seconds until the device lock expires.
+    #[wasm_bindgen]
+    pub async fn get_device_lock_remaining_secs(
+        password: Option<String>,
+        auth_url: Option<String>,
+        storage_url: Option<String>,
+    ) -> Result<Option<u64>, MutinyJsError> {
+        let logger = Arc::new(MutinyLogger::default());
+        let cipher = password
+            .as_ref()
+            .filter(|p| !p.is_empty())
+            .map(|p| encryption_key_from_pass(p))
+            .transpose()?;
+        let mnemonic =
+            IndexedDbStorage::get_mnemonic(None, password.as_deref(), cipher.clone()).await?;
+
+        let seed = mnemonic.to_seed("");
+        // Network doesn't matter here, only for encoding
+        let xprivkey = ExtendedPrivKey::new_master(Network::Bitcoin, &seed).unwrap();
+
+        let vss_client = if let Some(auth_url) = auth_url {
+            let auth_manager = AuthManager::new(xprivkey).unwrap();
+
+            let lnurl_client = Arc::new(
+                lnurl::Builder::default()
+                    .build_async()
+                    .expect("failed to make lnurl client"),
+            );
+
+            let auth_client = Arc::new(MutinyAuthClient::new(
+                auth_manager,
+                lnurl_client,
+                logger.clone(),
+                auth_url,
+            ));
+
+            storage_url.map(|url| {
+                Arc::new(MutinyVssClient::new_authenticated(
+                    auth_client.clone(),
+                    url,
+                    xprivkey.private_key,
+                    logger.clone(),
+                ))
+            })
+        } else {
+            storage_url.map(|url| {
+                Arc::new(MutinyVssClient::new_unauthenticated(
+                    url,
+                    xprivkey.private_key,
+                    logger.clone(),
+                ))
+            })
+        };
+
+        if let Some(vss) = vss_client {
+            let obj = vss.get_object(DEVICE_LOCK_KEY).await?;
+            let lock = serde_json::from_value::<DeviceLock>(obj.value)?;
+
+            return Ok(Some(lock.remaining_secs()));
+        };
+
+        Ok(None)
     }
 
     /// Starts up all the nodes again.
