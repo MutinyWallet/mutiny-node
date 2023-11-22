@@ -49,10 +49,11 @@ pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
 use crate::auth::MutinyAuthClient;
-use crate::labels::{Contact, LabelStorage};
+use crate::labels::{get_contact_key, Contact, LabelStorage};
 use crate::nostr::nwc::{
     BudgetPeriod, BudgetedSpendingConditions, NwcProfileTag, SpendingConditions,
 };
+use crate::nostr::MUTINY_PLUS_SUBSCRIPTION_LABEL;
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY};
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
@@ -403,7 +404,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     &first_node_pubkey,
                     inv,
                     None,
-                    vec!["Mutiny+ Subscription".to_string()],
+                    vec![MUTINY_PLUS_SUBSCRIPTION_LABEL.to_string()],
                 )
                 .await?;
 
@@ -465,6 +466,27 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     nwc.tag = NwcProfileTag::Subscription;
                     self.nostr.edit_profile(nwc)?;
                 }
+            }
+        }
+
+        // check if we have a contact, if not create one
+        match self
+            .node_manager
+            .get_contact(MUTINY_PLUS_SUBSCRIPTION_LABEL)?
+        {
+            Some(_) => {}
+            None => {
+                let key = get_contact_key(MUTINY_PLUS_SUBSCRIPTION_LABEL);
+                let contact = Contact {
+                    name: MUTINY_PLUS_SUBSCRIPTION_LABEL.to_string(),
+                    npub: None,
+                    ln_address: None,
+                    lnurl: None,
+                    image_url: Some("https://void.cat/d/CZPXhnwjqRhULSjPJ3sXTE.webp".to_string()),
+                    archived: None,
+                    last_used: utils::now().as_secs(),
+                };
+                self.storage.set_data(key, contact, None)?;
             }
         }
 
