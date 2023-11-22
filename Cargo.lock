@@ -1076,14 +1076,17 @@ checksum = "da2479e8c062e40bf0066ffa0bc823de0a9368974af99c9f6df941d2c231e03f"
 
 [[package]]
 name = "lnurl-rs"
-version = "0.2.7"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "484ddb262f554ee83de5adf4a1852c433ed095240a6bc8590cc57a5a0cfb64cc"
+checksum = "f4fa42d2e0488393c00b96d0ea170eb6f9acbda7f965690fcd40ce6447517db7"
 dependencies = [
+ "aes",
  "anyhow",
+ "base64 0.13.1",
  "bech32",
  "bitcoin 0.29.2",
  "bitcoin_hashes 0.12.0",
+ "cbc",
  "email_address",
  "reqwest",
  "serde",

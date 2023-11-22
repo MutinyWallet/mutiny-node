@@ -1799,10 +1799,10 @@ impl<S: MutinyStorage> NodeManager<S> {
 
                 let invoice = self
                     .lnurl_client
-                    .get_invoice(&pay, msats, zap_request)
+                    .get_invoice(&pay, msats, zap_request, None)
                     .await?;
 
-                let invoice = Bolt11Invoice::from_str(&invoice.invoice())?;
+                let invoice = Bolt11Invoice::from_str(invoice.invoice())?;
 
                 if invoice
                     .amount_milli_satoshis()
