@@ -22,9 +22,10 @@ use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
+use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
-use lightning::routing::gossip::NodeId;
+use lightning::{log_error, routing::gossip::NodeId, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
@@ -998,6 +999,43 @@ impl MutinyWallet {
         }
 
         Ok(JsValue::from_serde(&activity)?)
+    }
+
+    /// Adds a new federation based on its federation code
+    #[wasm_bindgen]
+    pub async fn new_federation(
+        &self,
+        federation_code: String,
+    ) -> Result<FederationIdentity, MutinyJsError> {
+        Ok(self
+            .inner
+            .new_federation(InviteCode::from_str(&federation_code).map_err(|e| {
+                log_error!(
+                    self.inner.logger,
+                    "Error parsing federation code ({federation_code}): {e}"
+                );
+                MutinyJsError::InvalidArgumentsError
+            })?)
+            .await?
+            .into())
+    }
+
+    /// Lists the federation id's of the federation clients in the manager.
+    #[wasm_bindgen]
+    pub async fn list_federations(&self) -> Result<JsValue /* Vec<String> */, MutinyJsError> {
+        Ok(JsValue::from_serde(&self.inner.list_federations().await?)?)
+    }
+
+    /// Removes a federation by setting its archived status to true, based on the FederationId.
+    #[wasm_bindgen]
+    pub async fn remove_federation(&self, federation_id: String) -> Result<(), MutinyJsError> {
+        Ok(self
+            .inner
+            .remove_federation(
+                FederationId::from_str(&federation_id)
+                    .map_err(|_| MutinyJsError::InvalidArgumentsError)?,
+            )
+            .await?)
     }
 
     /// Initiates a redshift

@@ -492,6 +492,42 @@ impl From<nodemanager::NodeIdentity> for NodeIdentity {
     }
 }
 
+// This is the FederationIdentity that refer to a specific node
+// Used for public facing identification.
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[wasm_bindgen]
+pub struct FederationIdentity {
+    uuid: String,
+    federation_id: String,
+}
+
+#[wasm_bindgen]
+impl FederationIdentity {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn uuid(&self) -> String {
+        self.uuid.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn federation_code(&self) -> String {
+        self.federation_id.to_string()
+    }
+}
+
+impl From<crate::models::federation::FederationIdentity> for FederationIdentity {
+    fn from(m: crate::models::federation::FederationIdentity) -> Self {
+        FederationIdentity {
+            uuid: m.uuid,
+            federation_id: m.federation_id.to_string(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
 pub struct MutinyBip21RawMaterials {

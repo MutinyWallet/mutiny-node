@@ -1,9 +1,12 @@
-use crate::encrypt::{decrypt_with_password, encrypt, encryption_key_from_pass, Cipher};
 use crate::error::{MutinyError, MutinyStorageError};
 use crate::ldkstorage::CHANNEL_MANAGER_KEY;
 use crate::nodemanager::{NodeStorage, DEVICE_LOCK_INTERVAL_SECS};
 use crate::utils::{now, spawn};
 use crate::vss::{MutinyVssClient, VssKeyValueItem};
+use crate::{
+    encrypt::{decrypt_with_password, encrypt, encryption_key_from_pass, Cipher},
+    federation::FederationStorage,
+};
 use async_trait::async_trait;
 use bdk::chain::{Append, PersistBackend};
 use bip39::Mnemonic;
@@ -19,6 +22,7 @@ pub const KEYCHAIN_STORE_KEY: &str = "bdk_keychain";
 pub const MNEMONIC_KEY: &str = "mnemonic";
 pub(crate) const NEED_FULL_SYNC_KEY: &str = "needs_full_sync";
 pub const NODES_KEY: &str = "nodes";
+pub const FEDERATIONS_KEY: &str = "federations";
 const FEE_ESTIMATES_KEY: &str = "fee_estimates";
 pub const BITCOIN_PRICE_CACHE_KEY: &str = "bitcoin_price_cache";
 const FIRST_SYNC_KEY: &str = "first_sync";
@@ -343,6 +347,21 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
     fn insert_nodes(&self, nodes: NodeStorage) -> Result<(), MutinyError> {
         let version = Some(nodes.version);
         self.set_data(NODES_KEY.to_string(), nodes, version)
+    }
+
+    /// Gets the federation indexes from storage
+    fn get_federations(&self) -> Result<FederationStorage, MutinyError> {
+        let res: Option<FederationStorage> = self.get_data(FEDERATIONS_KEY)?;
+        match res {
+            Some(f) => Ok(f),
+            None => Ok(FederationStorage::default()),
+        }
+    }
+
+    /// Inserts the federation indexes into storage
+    fn insert_federations(&self, federations: FederationStorage) -> Result<(), MutinyError> {
+        let version = Some(federations.version);
+        self.set_data(FEDERATIONS_KEY.to_string(), federations, version)
     }
 
     /// Get the current fee estimates from storage

@@ -7,12 +7,14 @@ use crate::error::MutinyError;
 
 pub(crate) enum ChildKey {
     NodeChildKey,
+    FederationChildKey,
 }
 
 impl ChildKey {
     pub(crate) fn to_child_number(&self) -> u32 {
         match self {
             ChildKey::NodeChildKey => 0,
+            ChildKey::FederationChildKey => 1,
         }
     }
 }
@@ -39,8 +41,10 @@ fn run_key_generation_tests() {
 
     let first_root_key = create_root_child_key(&context, xpriv, ChildKey::NodeChildKey);
     let copy_root_key = create_root_child_key(&context, xpriv, ChildKey::NodeChildKey);
-
     assert_eq!(first_root_key, copy_root_key);
+
+    let federation_root_key = create_root_child_key(&context, xpriv, ChildKey::FederationChildKey);
+    assert_ne!(first_root_key, federation_root_key);
 }
 
 #[cfg(test)]

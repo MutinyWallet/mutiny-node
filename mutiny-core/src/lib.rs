@@ -14,6 +14,7 @@ mod chain;
 pub mod encrypt;
 pub mod error;
 mod event;
+pub mod federation;
 mod fees;
 mod gossip;
 mod key;
@@ -45,6 +46,7 @@ pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
+use crate::federation::{FederationClient, FederationIdentity, FederationIndex, FederationStorage};
 use crate::logging::LOGGING_KEY;
 use crate::nodemanager::{
     ChannelClosure, MutinyBip21RawMaterials, MutinyInvoice, TransactionDetails,
@@ -69,7 +71,9 @@ use bip39::Mnemonic;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::Network;
 use bitcoin::{hashes::sha256, secp256k1::PublicKey};
+use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::{pin_mut, select, FutureExt};
+use futures_util::lock::Mutex;
 use lightning::{log_debug, util::logger::Logger};
 use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
@@ -79,6 +83,7 @@ use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::{collections::HashMap, sync::atomic::AtomicBool};
+use uuid::Uuid;
 
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 
@@ -265,6 +270,8 @@ pub struct MutinyWallet<S: MutinyStorage> {
     pub storage: S,
     pub node_manager: Arc<NodeManager<S>>,
     pub nostr: Arc<NostrManager<S>>,
+    pub federation_storage: Arc<Mutex<FederationStorage>>,
+    pub(crate) federations: Arc<Mutex<HashMap<FederationId, Arc<FederationClient<S>>>>>,
     pub stop: Arc<AtomicBool>,
     pub logger: Arc<MutinyLogger>,
 }
@@ -310,6 +317,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             node_manager.logger.clone(),
         )?);
 
+        // create federation library
+        let (federation_storage, federations) =
+            create_federations(&storage, &config, &logger, stop.clone()).await?;
+        let federation_storage = Arc::new(Mutex::new(federation_storage));
+        let federations = federations;
+
         if !config.skip_hodl_invoices {
             log_warn!(
                 node_manager.logger,
@@ -322,6 +335,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             storage,
             node_manager,
             nostr,
+            federation_storage,
+            federations,
             stop,
             logger,
         };
@@ -884,6 +899,162 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         Ok(invoice.into())
     }
+
+    /// Adds a new federation based on its federation code
+    pub async fn new_federation(
+        &self,
+        federation_code: InviteCode,
+    ) -> Result<FederationIdentity, MutinyError> {
+        create_new_federation(
+            self.config.xprivkey,
+            self.storage.clone(),
+            self.config.network,
+            self.logger.clone(),
+            self.federation_storage.clone(),
+            self.federations.clone(),
+            federation_code,
+            self.stop.clone(),
+        )
+        .await
+    }
+
+    /// Lists the federation id's of the federation clients in the manager.
+    pub async fn list_federations(&self) -> Result<Vec<FederationId>, MutinyError> {
+        let federations = self.federations.lock().await;
+        let federation_ids = federations
+            .iter()
+            .map(|(_, n)| n.fedimint_client.federation_id())
+            .collect();
+        Ok(federation_ids)
+    }
+
+    /// Removes a federation by setting its archived status to true, based on the FederationId.
+    pub async fn remove_federation(&self, federation_id: FederationId) -> Result<(), MutinyError> {
+        let mut federations_guard = self.federations.lock().await;
+
+        if let Some(fedimint_client) = federations_guard.get(&federation_id) {
+            let uuid = &fedimint_client._uuid;
+
+            let mut federation_storage_guard = self.federation_storage.lock().await;
+
+            if federation_storage_guard.federations.contains_key(uuid) {
+                federation_storage_guard.federations.remove(uuid);
+                self.storage
+                    .insert_federations(federation_storage_guard.clone())?;
+                federations_guard.remove(&federation_id);
+            } else {
+                return Err(MutinyError::NotFound);
+            }
+        } else {
+            return Err(MutinyError::NotFound);
+        }
+
+        Ok(())
+    }
+}
+
+async fn create_federations<S: MutinyStorage>(
+    storage: &S,
+    c: &MutinyWalletConfig,
+    logger: &Arc<MutinyLogger>,
+    stop: Arc<AtomicBool>,
+) -> Result<
+    (
+        FederationStorage,
+        Arc<Mutex<HashMap<FederationId, Arc<FederationClient<S>>>>>,
+    ),
+    MutinyError,
+> {
+    let federation_storage = storage.get_federations()?;
+    let federations = federation_storage.clone().federations.into_iter();
+    let mut federation_map = HashMap::new();
+    for federation_item in federations {
+        let federation = FederationClient::new(
+            federation_item.0,
+            &federation_item.1,
+            federation_item.1.federation_code.clone(),
+            c.xprivkey,
+            storage.clone(),
+            c.network,
+            logger.clone(),
+            stop.clone(),
+        )
+        .await?;
+
+        let id = federation.fedimint_client.federation_id();
+
+        federation_map.insert(id, Arc::new(federation));
+    }
+    let federations = Arc::new(Mutex::new(federation_map));
+    Ok((federation_storage, federations))
+}
+
+// This will create a new federation and returns the Federation ID of the client created.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn create_new_federation<S: MutinyStorage>(
+    xprivkey: ExtendedPrivKey,
+    storage: S,
+    network: Network,
+    logger: Arc<MutinyLogger>,
+    federation_storage: Arc<Mutex<FederationStorage>>,
+    federations: Arc<Mutex<HashMap<FederationId, Arc<FederationClient<S>>>>>,
+    federation_code: InviteCode,
+    stop: Arc<AtomicBool>,
+) -> Result<FederationIdentity, MutinyError> {
+    // Begin with a mutex lock so that nothing else can
+    // save or alter the federation list while it is about to
+    // be saved.
+    let mut federation_mutex = federation_storage.lock().await;
+
+    // Get the current federations so that we can check if the new federation already exists
+    let mut existing_federations = storage.get_federations()?;
+
+    // Check if the federation already exists
+    if existing_federations
+        .federations
+        .values()
+        .any(|federation| federation.federation_code == federation_code)
+    {
+        return Err(MutinyError::InvalidArgumentsError);
+    }
+
+    // Create and save a new federation
+    let next_federation_uuid = Uuid::new_v4().to_string();
+    let next_federation = FederationIndex {
+        federation_code: federation_code.clone(),
+    };
+
+    existing_federations.version += 1;
+    existing_federations
+        .federations
+        .insert(next_federation_uuid.clone(), next_federation.clone());
+
+    storage.insert_federations(existing_federations.clone())?;
+    federation_mutex.federations = existing_federations.federations.clone();
+
+    // now create the federation process and init it
+    let new_federation = FederationClient::new(
+        next_federation_uuid.clone(),
+        &next_federation,
+        federation_code,
+        xprivkey,
+        storage.clone(),
+        network,
+        logger.clone(),
+        stop,
+    )
+    .await?;
+
+    let federation_id = new_federation.fedimint_client.federation_id();
+    federations
+        .lock()
+        .await
+        .insert(federation_id, Arc::new(new_federation));
+
+    Ok(FederationIdentity {
+        uuid: next_federation_uuid.clone(),
+        federation_id,
+    })
 }
 
 #[cfg(test)]
