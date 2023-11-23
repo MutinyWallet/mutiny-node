@@ -40,10 +40,12 @@ pub enum ReservedProfile {
     MutinySubscription,
 }
 
+pub(crate) const MUTINY_PLUS_SUBSCRIPTION_LABEL: &str = "Mutiny+ Subscription";
+
 impl ReservedProfile {
     pub fn info(&self) -> (&'static str, u32) {
         let (n, i) = match self {
-            ReservedProfile::MutinySubscription => ("Mutiny+ Subscription", 0),
+            ReservedProfile::MutinySubscription => (MUTINY_PLUS_SUBSCRIPTION_LABEL, 0),
         };
         if i >= USER_NWC_PROFILE_START_INDEX {
             panic!("Must not exceed 1000 reserved indexes")
@@ -928,7 +930,7 @@ mod test {
     fn test_create_reserve_profile() {
         let nostr_manager = create_nostr_manager();
 
-        let name = "Mutiny+ Subscription".to_string();
+        let name = MUTINY_PLUS_SUBSCRIPTION_LABEL.to_string();
 
         let profile = nostr_manager
             .create_new_profile(

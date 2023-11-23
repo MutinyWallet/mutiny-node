@@ -88,7 +88,7 @@ fn get_label_item_key(label: impl AsRef<str>) -> String {
     format!("{}{}", LABEL_PREFIX, label.as_ref())
 }
 
-fn get_contact_key(label: impl AsRef<str>) -> String {
+pub(crate) fn get_contact_key(label: impl AsRef<str>) -> String {
     format!("{}{}", CONTACT_PREFIX, label.as_ref())
 }
 
