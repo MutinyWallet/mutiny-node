@@ -3,6 +3,7 @@ use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
 use crate::multiesplora::MultiEsploraClient;
 use crate::nodemanager::ChannelClosure;
 use crate::peermanager::LspMessageRouter;
+use crate::router::MutinyRouter;
 use crate::utils::get_monitor_version;
 use crate::{
     background::process_events_async,
@@ -34,6 +35,7 @@ use futures_util::lock::Mutex;
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
 use lightning::ln::channelmanager::ChannelDetails;
 use lightning::ln::PaymentSecret;
+use lightning::offers::offer::{Offer, Quantity};
 use lightning::onion_message::OnionMessenger as LdkOnionMessenger;
 use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
 use lightning::sign::{EntropySource, InMemorySigner, NodeSigner, Recipient};
@@ -50,7 +52,7 @@ use lightning::{
     routing::{
         gossip,
         gossip::NodeId,
-        router::{DefaultRouter, PaymentParameters, RouteParameters},
+        router::{PaymentParameters, RouteParameters},
     },
     util::{
         config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig},
@@ -115,14 +117,6 @@ pub(crate) type ChainMonitor<S: MutinyStorage> = chainmonitor::ChainMonitor<
     Arc<MutinyFeeEstimator<S>>,
     Arc<MutinyLogger>,
     Arc<MutinyNodePersister<S>>,
->;
-
-pub(crate) type Router = DefaultRouter<
-    Arc<NetworkGraph>,
-    Arc<MutinyLogger>,
-    Arc<utils::Mutex<HubPreferentialScorer>>,
-    ProbabilisticScoringFeeParameters,
-    HubPreferentialScorer,
 >;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -247,8 +241,27 @@ impl<S: MutinyStorage> Node<S> {
 
         let network_graph = gossip_sync.network_graph().clone();
 
-        let router: Arc<Router> = Arc::new(DefaultRouter::new(
+        log_info!(logger, "creating lsp client");
+        let lsp_client: Option<LspClient> = match node_index.lsp {
+            None => {
+                if lsp_clients.is_empty() {
+                    log_info!(logger, "no lsp saved and no lsp clients available");
+                    None
+                } else {
+                    log_info!(logger, "no lsp saved, picking random one");
+                    // If we don't have an lsp saved we should pick a random
+                    // one from our client list and save it for next time
+                    let rand = rand::random::<usize>() % lsp_clients.len();
+                    Some(lsp_clients[rand].clone())
+                }
+            }
+            Some(ref lsp) => lsp_clients.iter().find(|c| &c.url == lsp).cloned(),
+        };
+        let lsp_pubkey = lsp_client.as_ref().map(|l| l.pubkey);
+
+        let router: Arc<MutinyRouter> = Arc::new(MutinyRouter::new(
             network_graph,
+            lsp_pubkey,
             logger.clone(),
             keys_manager.clone().get_secure_random_bytes(),
             scorer.clone(),
@@ -926,11 +939,13 @@ impl<S: MutinyStorage> Node<S> {
         let payment_hash = PaymentHash(invoice.payment_hash().into_inner());
         let payment_info = PaymentInfo {
             preimage: None,
+            payment_hash: Some(payment_hash.0.to_hex()),
             secret: Some(invoice.payment_secret().0),
             status: HTLCStatus::Pending,
             amt_msat: MillisatAmount(amount_msat),
             fee_paid_msat: fee_amount_msat,
             bolt11: Some(invoice.clone()),
+            bolt12: None,
             payee_pubkey: None,
             last_update,
         };
@@ -943,11 +958,48 @@ impl<S: MutinyStorage> Node<S> {
 
         self.persister
             .storage
-            .set_invoice_labels(invoice.clone(), labels)?;
+            .set_invoice_labels(invoice.to_string(), labels)?;
 
         log_info!(self.logger, "SUCCESS: generated invoice: {invoice}");
 
         Ok(invoice)
+    }
+
+    pub async fn create_offer(
+        &self,
+        amount_sat: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<Offer, MutinyError> {
+        // wait for first sync to complete
+        for _ in 0..60 {
+            // check if we've been stopped
+            if self.stop.load(Ordering::Relaxed) {
+                return Err(MutinyError::NotRunning);
+            }
+
+            if let Ok(true) = self.persister.storage.has_done_first_sync() {
+                break;
+            }
+
+            sleep(1_000).await;
+        }
+
+        let mut builder = self
+            .channel_manager
+            .create_offer_builder("".to_string())
+            .supported_quantity(Quantity::Unbounded);
+
+        if let Some(amount_sats) = amount_sat {
+            builder = builder.amount_msats(amount_sats * 1_000);
+        }
+
+        let offer = builder.build()?;
+
+        self.persister
+            .storage
+            .set_invoice_labels(offer.to_string(), labels)?;
+
+        Ok(offer)
     }
 
     pub fn get_invoice(&self, invoice: &Bolt11Invoice) -> Result<MutinyInvoice, MutinyError> {
@@ -960,12 +1012,12 @@ impl<S: MutinyStorage> Node<S> {
         let labels = payment_info
             .bolt11
             .as_ref()
-            .and_then(|inv| labels_map.get(inv).cloned())
+            .and_then(|inv| labels_map.get(&inv.to_string()).cloned())
             .unwrap_or_default();
 
         MutinyInvoice::from(
             payment_info,
-            PaymentHash(payment_hash.into_inner()),
+            Some(PaymentHash(payment_hash.into_inner())),
             inbound,
             labels,
         )
@@ -990,11 +1042,15 @@ impl<S: MutinyStorage> Node<S> {
             .list_payment_info(inbound)?
             .into_iter()
             .filter_map(|(h, i)| {
-                let labels = match i.bolt11.clone() {
-                    None => vec![],
-                    Some(i) => labels_map.get(&i).cloned().unwrap_or_default(),
+                // lookup bolt 11 then bolt 12 for label
+                let labels = match i.bolt11 {
+                    None => match i.bolt12 {
+                        None => vec![],
+                        Some(ref bolt12) => labels_map.get(bolt12).cloned().unwrap_or_default(),
+                    },
+                    Some(ref i) => labels_map.get(&i.to_string()).cloned().unwrap_or_default(),
                 };
-                let mutiny_invoice = MutinyInvoice::from(i.clone(), h, inbound, labels).ok();
+                let mutiny_invoice = MutinyInvoice::from(i.clone(), Some(h), inbound, labels).ok();
 
                 // filter out expired invoices
                 mutiny_invoice.filter(|invoice| {
@@ -1138,7 +1194,7 @@ impl<S: MutinyStorage> Node<S> {
         if let Err(e) = self
             .persister
             .storage
-            .set_invoice_labels(invoice.clone(), labels)
+            .set_invoice_labels(invoice.to_string(), labels)
         {
             log_error!(self.logger, "could not set invoice label: {e}");
         }
@@ -1146,11 +1202,13 @@ impl<S: MutinyStorage> Node<S> {
         let last_update = utils::now().as_secs();
         let mut payment_info = PaymentInfo {
             preimage: None,
+            payment_hash: Some(payment_hash.to_hex()),
             secret: None,
             status: HTLCStatus::InFlight,
             amt_msat: MillisatAmount(Some(amt_msat)),
             fee_paid_msat: None,
             bolt11: Some(invoice.clone()),
+            bolt12: None,
             payee_pubkey: None,
             last_update,
         };
@@ -1219,10 +1277,99 @@ impl<S: MutinyStorage> Node<S> {
         }
     }
 
+    /// init_offer_payment sends off the payment but does not wait for results
+    /// use pay_offer_with_timeout to wait for results
+    pub async fn init_offer_payment(
+        &self,
+        offer: Offer,
+        amt_sats: Option<u64>,
+        quantity: Option<u64>,
+        payer_note: Option<String>,
+        labels: Vec<String>,
+    ) -> Result<PaymentId, MutinyError> {
+        if self.channel_manager.list_channels().is_empty() {
+            // No channels so routing will always fail
+            return Err(MutinyError::RoutingFailed);
+        }
+
+        // make sure node at least has one connection before attempting payment
+        // wait for connection before paying, or otherwise instant fail anyways
+        for _ in 0..DEFAULT_PAYMENT_TIMEOUT {
+            // check if we've been stopped
+            if self.stop.load(Ordering::Relaxed) {
+                return Err(MutinyError::NotRunning);
+            }
+            if !self.channel_manager.list_usable_channels().is_empty() {
+                break;
+            }
+            sleep(1_000).await;
+        }
+
+        let mut bytes = [0u8; 32];
+        getrandom::getrandom(&mut bytes).map_err(|_| MutinyError::SeedGenerationFailed)?;
+        let payment_id = PaymentId(bytes);
+
+        let quantity = match quantity {
+            None => {
+                if offer.expects_quantity() {
+                    Some(1)
+                } else {
+                    None
+                }
+            }
+            Some(q) => Some(q),
+        };
+
+        let amount_msats = amt_sats.map(|a| a * 1_000);
+        self.channel_manager
+            .pay_for_offer(
+                &offer,
+                quantity,
+                amount_msats,
+                payer_note,
+                payment_id,
+                Self::retry_strategy(),
+                None,
+            )
+            .map_err(|e| {
+                log_error!(self.logger, "failed to make payment: {e:?}");
+                e
+            })?;
+
+        // persist and label offer after calling pay_for_offer, it only fails if we can't initiate a payment
+
+        let offer_string = offer.to_string();
+        if let Err(e) = self
+            .persister
+            .storage
+            .set_invoice_labels(offer_string.clone(), labels)
+        {
+            log_error!(self.logger, "could not set offer label: {e}");
+        }
+
+        let payment_info = PaymentInfo {
+            preimage: None,
+            payment_hash: None,
+            secret: None,
+            status: HTLCStatus::InFlight,
+            amt_msat: MillisatAmount(amount_msats),
+            fee_paid_msat: None,
+            bolt11: None,
+            bolt12: Some(offer_string),
+            payee_pubkey: None,
+            last_update: utils::now().as_secs(),
+        };
+
+        self.persister
+            .persist_payment_info(&payment_id.0, &payment_info, false)?;
+
+        Ok(payment_id)
+    }
+
     async fn await_payment(
         &self,
         payment_id: PaymentId,
-        payment_hash: PaymentHash,
+        payment_hash: Option<PaymentHash>,
         timeout: u64,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
@@ -1236,9 +1383,12 @@ impl<S: MutinyStorage> Node<S> {
                 return Err(MutinyError::PaymentTimeout);
             }
 
-            let payment_info =
-                self.persister
-                    .read_payment_info(&payment_hash.0, false, &self.logger);
+            // Use payment hash if we have it, otherwise use payment id
+            let lookup_id = payment_hash.map(|h| h.0).unwrap_or(payment_id.0);
+
+            let payment_info = self
+                .persister
+                .read_payment_info(&lookup_id, false, &self.logger);
 
             if let Some(info) = payment_info {
                 match info.status {
@@ -1269,8 +1419,26 @@ impl<S: MutinyStorage> Node<S> {
             .await?;
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
 
-        self.await_payment(payment_id, payment_hash, timeout, labels)
+        self.await_payment(payment_id, Some(payment_hash), timeout, labels)
             .await
+    }
+
+    pub async fn pay_offer_with_timeout(
+        &self,
+        offer: Offer,
+        amt_sats: Option<u64>,
+        quantity: Option<u64>,
+        payer_note: Option<String>,
+        labels: Vec<String>,
+        timeout_secs: Option<u64>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        // initiate payment
+        let payment_id = self
+            .init_offer_payment(offer, amt_sats, quantity, payer_note, labels.clone())
+            .await?;
+        let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
+
+        self.await_payment(payment_id, None, timeout, labels).await
     }
 
     /// init_keysend_payment sends off the payment but does not wait for results
@@ -1325,11 +1493,13 @@ impl<S: MutinyStorage> Node<S> {
         let last_update = utils::now().as_secs();
         let mut payment_info = PaymentInfo {
             preimage: Some(preimage.0),
+            payment_hash: Some(payment_hash.0.to_hex()),
             secret: None,
             status: HTLCStatus::InFlight,
             amt_msat: MillisatAmount(Some(amt_msats)),
             fee_paid_msat: None,
             bolt11: None,
+            bolt12: None,
             payee_pubkey: Some(to_node),
             last_update,
         };
@@ -1340,7 +1510,7 @@ impl<S: MutinyStorage> Node<S> {
         match pay_result {
             Ok(_) => {
                 let mutiny_invoice =
-                    MutinyInvoice::from(payment_info, payment_hash, false, labels)?;
+                    MutinyInvoice::from(payment_info, Some(payment_hash), false, labels)?;
                 Ok(mutiny_invoice)
             }
             Err(error) => {
@@ -1376,7 +1546,7 @@ impl<S: MutinyStorage> Node<S> {
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
         let payment_hash = PaymentHash(pay.payment_hash.into_inner());
 
-        self.await_payment(payment_id, payment_hash, timeout, labels)
+        self.await_payment(payment_id, Some(payment_hash), timeout, labels)
             .await
     }
 
@@ -2126,13 +2296,16 @@ mod tests {
 
         let invoice_labels = storage.get_invoice_labels().unwrap();
         assert_eq!(invoice_labels.len(), 1);
-        assert_eq!(invoice_labels.get(&invoice).cloned(), Some(labels));
+        assert_eq!(
+            invoice_labels.get(&invoice.to_string()).cloned(),
+            Some(labels)
+        );
 
         let label_item = storage.get_label("test").unwrap().unwrap();
 
         assert!(label_item.last_used_time >= now);
         assert!(label_item.addresses.is_empty());
-        assert_eq!(label_item.invoices, vec![invoice]);
+        assert_eq!(label_item.invoices, vec![invoice.to_string()]);
     }
 
     #[tokio::test]
@@ -2166,18 +2339,20 @@ mod tests {
         // check that we get PaymentTimeout if we don't have the payment info
 
         let result = node
-            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await_payment(payment_id, Some(payment_hash), 1, vec![])
             .await;
 
         assert_eq!(result.unwrap_err(), MutinyError::PaymentTimeout);
 
         let mut payment_info = PaymentInfo {
             preimage: None,
+            payment_hash: None,
             secret: Some([0; 32]),
             status: HTLCStatus::InFlight,
             amt_msat: MillisatAmount(Some(1000)),
             fee_paid_msat: None,
             bolt11: None,
+            bolt12: None,
             payee_pubkey: None,
             last_update: crate::utils::now().as_secs(),
         };
@@ -2189,7 +2364,7 @@ mod tests {
             .unwrap();
 
         let result = node
-            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await_payment(payment_id, Some(payment_hash), 1, vec![])
             .await;
 
         assert_eq!(result.unwrap_err(), MutinyError::PaymentTimeout);
@@ -2202,7 +2377,7 @@ mod tests {
             .unwrap();
 
         let result = node
-            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await_payment(payment_id, Some(payment_hash), 1, vec![])
             .await;
 
         assert_eq!(result.unwrap_err(), MutinyError::RoutingFailed);
@@ -2215,7 +2390,7 @@ mod tests {
             .unwrap();
 
         let result = node
-            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await_payment(payment_id, Some(payment_hash), 1, vec![])
             .await;
 
         assert!(result.is_ok());
@@ -2290,13 +2465,16 @@ mod wasm_test {
 
         let invoice_labels = storage.get_invoice_labels().unwrap();
         assert_eq!(invoice_labels.len(), 1);
-        assert_eq!(invoice_labels.get(&invoice).cloned(), Some(labels));
+        assert_eq!(
+            invoice_labels.get(&invoice.to_string()).cloned(),
+            Some(labels)
+        );
 
         let label_item = storage.get_label("test").unwrap().unwrap();
 
         assert!(label_item.last_used_time >= now);
         assert!(label_item.addresses.is_empty());
-        assert_eq!(label_item.invoices, vec![invoice]);
+        assert_eq!(label_item.invoices, vec![invoice.to_string()]);
     }
 
     #[test]
@@ -2330,18 +2508,20 @@ mod wasm_test {
         // check that we get PaymentTimeout if we don't have the payment info
 
         let result = node
-            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await_payment(payment_id, Some(payment_hash), 1, vec![])
             .await;
 
         assert_eq!(result.unwrap_err(), MutinyError::PaymentTimeout);
 
         let mut payment_info = PaymentInfo {
             preimage: None,
+            payment_hash: None,
             secret: Some([0; 32]),
             status: HTLCStatus::InFlight,
             amt_msat: MillisatAmount(Some(1000)),
             fee_paid_msat: None,
             bolt11: None,
+            bolt12: None,
             payee_pubkey: None,
             last_update: crate::utils::now().as_secs(),
         };
@@ -2353,7 +2533,7 @@ mod wasm_test {
             .unwrap();
 
         let result = node
-            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await_payment(payment_id, Some(payment_hash), 1, vec![])
             .await;
 
         assert_eq!(result.unwrap_err(), MutinyError::PaymentTimeout);
@@ -2366,7 +2546,7 @@ mod wasm_test {
             .unwrap();
 
         let result = node
-            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await_payment(payment_id, Some(payment_hash), 1, vec![])
             .await;
 
         assert_eq!(result.unwrap_err(), MutinyError::RoutingFailed);
@@ -2379,7 +2559,7 @@ mod wasm_test {
             .unwrap();
 
         let result = node
-            .await_payment(payment_id, payment_hash, 1, vec![])
+            .await_payment(payment_id, Some(payment_hash), 1, vec![])
             .await;
 
         assert!(result.is_ok());

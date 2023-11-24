@@ -28,8 +28,9 @@ use crate::{labels::LabelStorage, subscription::MutinySubscriptionClient};
 use anyhow::anyhow;
 use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::{wallet::AddressIndex, LocalUtxo};
+use bitcoin::blockdata::constants::ChainHash;
 use bitcoin::blockdata::script;
-use bitcoin::hashes::hex::ToHex;
+use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{rand, PublicKey};
 use bitcoin::util::bip32::ExtendedPrivKey;
@@ -42,6 +43,7 @@ use lightning::events::ClosureReason;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning::ln::script::ShutdownScript;
 use lightning::ln::{ChannelId, PaymentHash};
+use lightning::offers::offer::Offer;
 use lightning::routing::gossip::NodeId;
 use lightning::sign::{NodeSigner, Recipient};
 use lightning::util::logger::*;
@@ -102,6 +104,7 @@ pub struct MutinyBip21RawMaterials {
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct MutinyInvoice {
     pub bolt11: Option<Bolt11Invoice>,
+    pub bolt12: Option<String>,
     pub description: Option<String>,
     pub payment_hash: sha256::Hash,
     pub preimage: Option<String>,
@@ -143,6 +146,7 @@ impl From<Bolt11Invoice> for MutinyInvoice {
 
         MutinyInvoice {
             bolt11: Some(value),
+            bolt12: None,
             description,
             payment_hash,
             preimage: None,
@@ -161,7 +165,7 @@ impl From<Bolt11Invoice> for MutinyInvoice {
 impl MutinyInvoice {
     pub(crate) fn from(
         i: PaymentInfo,
-        payment_hash: PaymentHash,
+        payment_hash: Option<PaymentHash>,
         inbound: bool,
         labels: Vec<String>,
     ) -> Result<Self, MutinyError> {
@@ -193,9 +197,17 @@ impl MutinyInvoice {
                 let amount_sats: Option<u64> = i.amt_msat.0.map(|s| s / 1_000);
                 let fees_paid = i.fee_paid_msat.map(|f| f / 1_000);
                 let preimage = i.preimage.map(|p| p.to_hex());
-                let payment_hash = sha256::Hash::from_inner(payment_hash.0);
+                let payment_hash = match payment_hash {
+                    Some(hash) => sha256::Hash::from_inner(hash.0),
+                    None => match i.payment_hash {
+                        Some(hex) => sha256::Hash::from_hex(&hex).unwrap(),
+                        None => return Err(MutinyError::InvalidArgumentsError),
+                    },
+                };
+
                 let invoice = MutinyInvoice {
                     bolt11: None,
+                    bolt12: i.bolt12,
                     description: None,
                     payment_hash,
                     preimage,
@@ -251,6 +263,7 @@ pub struct MutinyChannel {
     pub confirmations_required: Option<u32>,
     pub confirmations: u32,
     pub is_outbound: bool,
+    pub inbound_scid_alias: Option<u64>,
 }
 
 impl From<&ChannelDetails> for MutinyChannel {
@@ -265,6 +278,7 @@ impl From<&ChannelDetails> for MutinyChannel {
             confirmations_required: c.confirmations_required,
             confirmations: c.confirmations.unwrap_or(0),
             is_outbound: c.is_outbound,
+            inbound_scid_alias: c.inbound_scid_alias,
         }
     }
 }
@@ -1244,13 +1258,18 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let mut activity = vec![];
         for inv in label_item.invoices.iter() {
-            let ln = self.get_invoice(inv).await?;
-            // Only show paid and in-flight invoices
-            match ln.status {
-                HTLCStatus::Succeeded | HTLCStatus::InFlight => {
-                    activity.push(ActivityItem::Lightning(Box::new(ln)));
+            match Bolt11Invoice::from_str(inv) {
+                Ok(invoice) => {
+                    let ln = self.get_invoice(&invoice).await?;
+                    // Only show paid and in-flight invoices
+                    match ln.status {
+                        HTLCStatus::Succeeded | HTLCStatus::InFlight => {
+                            activity.push(ActivityItem::Lightning(Box::new(ln)));
+                        }
+                        HTLCStatus::Pending | HTLCStatus::Failed => {}
+                    }
                 }
-                HTLCStatus::Pending | HTLCStatus::Failed => {}
+                Err(_) => todo!("handle non bolt12 invoices"),
             }
         }
         let onchain = self
@@ -1678,6 +1697,20 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(invoice.into())
     }
 
+    /// Creates a lightning offer. The amount should be in satoshis.
+    /// If no amount is provided, the offer will be created with no amount.
+    pub async fn create_offer(
+        &self,
+        from_node: &PublicKey,
+        amount: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<Offer, MutinyError> {
+        let node = self.get_node(from_node).await?;
+        let offer = node.create_offer(amount, labels).await?;
+
+        Ok(offer)
+    }
+
     /// Pays a lightning invoice from the selected node.
     /// An amount should only be provided if the invoice does not have an amount.
     /// The amount should be in satoshis.
@@ -1694,6 +1727,27 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let node = self.get_node(from_node).await?;
         node.pay_invoice_with_timeout(invoice, amt_sats, None, labels)
+            .await
+    }
+
+    /// Pays a lightning offer from the selected node.
+    /// An amount should only be provided if the offer does not have an amount.
+    /// The amount should be in satoshis.
+    pub async fn pay_offer(
+        &self,
+        from_node: &PublicKey,
+        offer: Offer,
+        amt_sats: Option<u64>,
+        quantity: Option<u64>,
+        payer_note: Option<String>,
+        labels: Vec<String>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        if !offer.supports_chain(ChainHash::using_genesis_block(self.network)) {
+            return Err(MutinyError::IncorrectNetwork(self.network));
+        }
+
+        let node = self.get_node(from_node).await?;
+        node.pay_offer_with_timeout(offer, amt_sats, quantity, payer_note, labels, None)
             .await
     }
 
@@ -2774,17 +2828,20 @@ mod tests {
 
         let payment_info = PaymentInfo {
             preimage: Some(preimage),
+            payment_hash: Some(payment_hash.to_hex()),
             secret: Some(secret),
             status: HTLCStatus::Succeeded,
             amt_msat: MillisatAmount(Some(100_000_000)),
             fee_paid_msat: None,
             bolt11: Some(invoice.clone()),
+            bolt12: None,
             payee_pubkey: None,
             last_update: 1681781585,
         };
 
         let expected: MutinyInvoice = MutinyInvoice {
             bolt11: Some(invoice),
+            bolt12: None,
             description: None,
             payment_hash,
             preimage: Some(preimage.to_hex()),
@@ -2800,7 +2857,7 @@ mod tests {
 
         let actual = MutinyInvoice::from(
             payment_info,
-            PaymentHash(payment_hash.into_inner()),
+            Some(PaymentHash(payment_hash.into_inner())),
             true,
             labels,
         )
@@ -2827,17 +2884,20 @@ mod tests {
 
         let payment_info = PaymentInfo {
             preimage: Some(preimage),
+            payment_hash: Some(payment_hash.to_hex()),
             secret: None,
             status: HTLCStatus::Succeeded,
             amt_msat: MillisatAmount(Some(100_000)),
             fee_paid_msat: Some(1_000),
             bolt11: None,
+            bolt12: None,
             payee_pubkey: Some(pubkey),
             last_update: 1681781585,
         };
 
         let expected: MutinyInvoice = MutinyInvoice {
             bolt11: None,
+            bolt12: None,
             description: None,
             payment_hash,
             preimage: Some(preimage.to_hex()),
@@ -2853,7 +2913,7 @@ mod tests {
 
         let actual = MutinyInvoice::from(
             payment_info,
-            PaymentHash(payment_hash.into_inner()),
+            Some(PaymentHash(payment_hash.into_inner())),
             false,
             vec![],
         )
@@ -2911,6 +2971,7 @@ mod tests {
 
         let invoice1: MutinyInvoice = MutinyInvoice {
             bolt11: None,
+            bolt12: None,
             description: None,
             payment_hash,
             preimage: Some(preimage.to_hex()),
@@ -2926,6 +2987,7 @@ mod tests {
 
         let invoice2: MutinyInvoice = MutinyInvoice {
             bolt11: None,
+            bolt12: None,
             description: None,
             payment_hash,
             preimage: Some(preimage.to_hex()),
@@ -2941,6 +3003,7 @@ mod tests {
 
         let invoice3: MutinyInvoice = MutinyInvoice {
             bolt11: None,
+            bolt12: None,
             description: None,
             payment_hash,
             preimage: None,
@@ -2956,6 +3019,7 @@ mod tests {
 
         let invoice4: MutinyInvoice = MutinyInvoice {
             bolt11: None,
+            bolt12: None,
             description: None,
             payment_hash,
             preimage: None,
@@ -2971,6 +3035,7 @@ mod tests {
 
         let invoice5: MutinyInvoice = MutinyInvoice {
             bolt11: None,
+            bolt12: None,
             description: Some("difference".to_string()),
             payment_hash,
             preimage: Some(preimage.to_hex()),

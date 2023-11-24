@@ -24,6 +24,7 @@ use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
+use lightning::offers::offer::Offer;
 use lightning::routing::gossip::NodeId;
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lnurl::LnUrl;
@@ -684,6 +685,27 @@ impl MutinyWallet {
             .into())
     }
 
+    /// Creates a lightning offer. The amount should be in satoshis.
+    /// If no amount is provided, the offer will be created with no amount.
+    #[wasm_bindgen]
+    pub async fn create_offer(
+        &self,
+        from_node: String,
+        amount: Option<u64>,
+        labels: &JsValue, /* Vec<String> */
+    ) -> Result<String, MutinyJsError> {
+        let from_node = PublicKey::from_str(&from_node)?;
+        let labels: Vec<String> = labels
+            .into_serde()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        Ok(self
+            .inner
+            .node_manager
+            .create_offer(&from_node, amount, labels)
+            .await?
+            .to_string())
+    }
+
     /// Pays a lightning invoice from the selected node.
     /// An amount should only be provided if the invoice does not have an amount.
     /// The amount should be in satoshis.
@@ -701,6 +723,34 @@ impl MutinyWallet {
             .inner
             .node_manager
             .pay_invoice(&from_node, &invoice, amt_sats, labels)
+            .await?
+            .into())
+    }
+
+    /// Pays a lightning offer from the selected node.
+    /// An amount should only be provided if the offer does not have an amount.
+    /// The amount should be in satoshis.
+    pub async fn pay_offer(
+        &self,
+        from_node: String,
+        offer: String,
+        amt_sats: Option<u64>,
+        quantity: Option<u64>,
+        payer_note: Option<String>,
+        labels: &JsValue, /* Vec<String> */
+    ) -> Result<MutinyInvoice, MutinyJsError> {
+        let from_node = PublicKey::from_str(&from_node)?;
+        let offer = Offer::from_str(&offer)?;
+        let labels: Vec<String> = labels
+            .into_serde()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        // filter out empty note
+        let payer_note = payer_note.filter(|p| !p.is_empty());
+
+        Ok(self
+            .inner
+            .node_manager
+            .pay_offer(&from_node, offer, amt_sats, quantity, payer_note, labels)
             .await?
             .into())
     }
@@ -1101,7 +1151,6 @@ impl MutinyWallet {
         invoice: String,
         labels: Vec<String>,
     ) -> Result<(), MutinyJsError> {
-        let invoice = Bolt11Invoice::from_str(&invoice)?;
         Ok(self
             .inner
             .node_manager

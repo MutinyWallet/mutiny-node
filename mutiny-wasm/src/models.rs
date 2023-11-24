@@ -270,6 +270,7 @@ pub struct MutinyChannel {
     pub confirmations_required: Option<u32>,
     pub confirmations: u32,
     pub is_outbound: bool,
+    pub inbound_scid_alias: Option<u64>,
 }
 
 #[wasm_bindgen]
@@ -309,6 +310,7 @@ impl From<nodemanager::MutinyChannel> for MutinyChannel {
             confirmations_required: m.confirmations_required,
             confirmations: m.confirmations,
             is_outbound: m.is_outbound,
+            inbound_scid_alias: m.inbound_scid_alias,
         }
     }
 }
