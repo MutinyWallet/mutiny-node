@@ -1043,6 +1043,8 @@ mod wasm_test {
     use super::*;
     use crate::event::{MillisatAmount, PaymentInfo};
     use crate::logging::MutinyLogger;
+    use crate::node::MockLnNode;
+    use crate::nodemanager::MutinyInvoice;
     use crate::nostr::ProfileType;
     use crate::storage::MemoryStorage;
     use crate::test_utils::{create_dummy_invoice, create_node, create_nwc_request};
@@ -1329,7 +1331,7 @@ mod wasm_test {
     }
 
     #[test]
-    async fn test_process_nwc_event_budget() {
+    async fn test_failed_process_nwc_event_budget() {
         let storage = MemoryStorage::default();
         let node = create_node(storage.clone()).await;
 
@@ -1387,7 +1389,82 @@ mod wasm_test {
         assert_eq!(pending[0].event_id, event.id);
         assert_eq!(pending[0].index, nwc.profile.index);
         assert_eq!(pending[0].pubkey, event.pubkey);
+    }
 
-        // todo test successful payment is added to budget
+    #[test]
+    async fn test_process_nwc_event_budget() {
+        let storage = MemoryStorage::default();
+        let logger = Arc::new(MutinyLogger::default());
+        let mut node = MockLnNode::new();
+
+        let amount_msats = 5_000;
+
+        let (invoice, preimage) = create_dummy_invoice(Some(amount_msats), Network::Regtest, None);
+
+        node.expect_skip_hodl_invoices().once().returning(|| true);
+        node.expect_logger().return_const(MutinyLogger::default());
+        node.expect_get_outbound_payment_status().return_const(None);
+        node.expect_pay_invoice_with_timeout()
+            .once()
+            .returning(move |inv, _, _, _| {
+                let mut mutiny_invoice: MutinyInvoice = inv.clone().into();
+                mutiny_invoice.preimage = Some(preimage.to_hex());
+                mutiny_invoice.status = HTLCStatus::Succeeded;
+                mutiny_invoice.last_updated = utils::now().as_secs();
+                mutiny_invoice.fees_paid = Some(0);
+                Ok(mutiny_invoice)
+            });
+
+        let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
+        let nostr_manager = NostrManager::from_mnemonic(xprivkey, storage.clone(), logger).unwrap();
+
+        let budget = 10_000;
+        let profile = nostr_manager
+            .create_new_profile(
+                ProfileType::Normal {
+                    name: "test".to_string(),
+                },
+                SpendingConditions::Budget(BudgetedSpendingConditions {
+                    budget,
+                    single_max: None,
+                    payments: vec![],
+                    period: BudgetPeriod::Seconds(10),
+                }),
+                NwcProfileTag::General,
+            )
+            .unwrap();
+
+        let secp = Secp256k1::new();
+        let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
+        let uri = nwc.get_nwc_uri().unwrap();
+
+        // test successful payment
+        let event = create_nwc_request(&uri, invoice.to_string());
+        let result = nwc
+            .handle_nwc_request(event.clone(), &node, &nostr_manager)
+            .await;
+        let event = result.unwrap().unwrap();
+        let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
+        let response: Response = Response::from_json(content).unwrap();
+        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        assert!(pending.is_empty());
+        assert_eq!(response.result_type, Method::PayInvoice);
+        assert!(response.error.is_none());
+
+        match response.result {
+            Some(ResponseResult::PayInvoice(PayInvoiceResponseResult { preimage: pre })) => {
+                assert_eq!(pre, preimage.to_hex());
+            }
+            _ => panic!("wrong response"),
+        }
+
+        match nwc.profile.spending_conditions {
+            SpendingConditions::Budget(budget) => {
+                assert_eq!(budget.payments.len(), 1);
+                assert_eq!(budget.payments[0].amt, amount_msats / 1_000);
+                assert_eq!(budget.payments[0].hash, invoice.payment_hash().to_hex());
+            }
+            _ => panic!("wrong spending conditions"),
+        }
     }
 }
