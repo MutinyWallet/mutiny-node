@@ -1103,8 +1103,9 @@ mod wasm_test {
         let uri = nwc.get_nwc_uri().unwrap();
 
         // test hodl invoice
-        let invoice =
-            create_dummy_invoice(Some(10_000), Network::Regtest, Some(ONE_KEY)).to_string();
+        let invoice = create_dummy_invoice(Some(10_000), Network::Regtest, Some(ONE_KEY))
+            .0
+            .to_string();
         let event = create_nwc_request(&uri, invoice.clone());
         let result = nwc
             .handle_nwc_request(event.clone(), &node, &nostr_manager)
@@ -1192,7 +1193,7 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test amount-less invoice
-        let invoice = create_dummy_invoice(None, Network::Regtest, None);
+        let (invoice, _) = create_dummy_invoice(None, Network::Regtest, None);
         let event = create_nwc_request(&uri, invoice.to_string());
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
         check_nwc_error_response(
@@ -1206,8 +1207,9 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test hodl invoice
-        let invoice =
-            create_dummy_invoice(Some(10_000), Network::Regtest, Some(ONE_KEY)).to_string();
+        let invoice = create_dummy_invoice(Some(10_000), Network::Regtest, Some(ONE_KEY))
+            .0
+            .to_string();
         let event = create_nwc_request(&uri, invoice);
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
         check_nwc_error_response(
@@ -1221,7 +1223,7 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test in-flight payment
-        let invoice = create_dummy_invoice(Some(1_000), Network::Regtest, None);
+        let (invoice, _) = create_dummy_invoice(Some(1_000), Network::Regtest, None);
         let payment_info = PaymentInfo {
             preimage: None,
             secret: Some(invoice.payment_secret().0),
@@ -1241,7 +1243,7 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test completed payment
-        let invoice = create_dummy_invoice(Some(1_000), Network::Regtest, None);
+        let (invoice, _) = create_dummy_invoice(Some(1_000), Network::Regtest, None);
         let payment_info = PaymentInfo {
             preimage: None,
             secret: Some(invoice.payment_secret().0),
@@ -1261,7 +1263,7 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test it goes to pending
-        let invoice = create_dummy_invoice(Some(1_000), Network::Regtest, None);
+        let (invoice, _) = create_dummy_invoice(Some(1_000), Network::Regtest, None);
         let event = create_nwc_request(&uri, invoice.to_string());
         let result = nwc
             .handle_nwc_request(event.clone(), &node, &nostr_manager)
@@ -1304,7 +1306,7 @@ mod wasm_test {
         // add an unexpired invoice
         let unexpired = PendingNwcInvoice {
             index: 0,
-            invoice: create_dummy_invoice(Some(1_000), Network::Regtest, None),
+            invoice: create_dummy_invoice(Some(1_000), Network::Regtest, None).0,
             event_id: EventId::all_zeros(),
             pubkey: nostr_manager.primary_key.public_key(),
         };
@@ -1356,7 +1358,7 @@ mod wasm_test {
         let uri = nwc.get_nwc_uri().unwrap();
 
         // test failed payment goes to pending, we have no channels so it will fail
-        let invoice = create_dummy_invoice(Some(10), Network::Regtest, None);
+        let (invoice, _) = create_dummy_invoice(Some(10), Network::Regtest, None);
         let event = create_nwc_request(&uri, invoice.to_string());
         let result = nwc
             .handle_nwc_request(event.clone(), &node, &nostr_manager)
@@ -1373,7 +1375,7 @@ mod wasm_test {
         nostr_manager.deny_all_pending_nwc().await.unwrap();
 
         // test over budget payment goes to pending
-        let invoice = create_dummy_invoice(Some(budget + 1), Network::Regtest, None);
+        let (invoice, _) = create_dummy_invoice(Some(budget + 1), Network::Regtest, None);
         let event = create_nwc_request(&uri, invoice.to_string());
         let result = nwc
             .handle_nwc_request(event.clone(), &node, &nostr_manager)
