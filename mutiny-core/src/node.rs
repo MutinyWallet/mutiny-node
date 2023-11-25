@@ -1659,6 +1659,15 @@ fn map_sending_failure(
             if ln_balance - reserved_amt < amt_msat {
                 return MutinyError::ReserveAmountError;
             }
+
+            // if none of our channels could afford an HTLC, return a ReserveAmountError
+            if current_channels
+                .iter()
+                .all(|c| c.next_outbound_htlc_limit_msat < amt_msat)
+            {
+                return MutinyError::ReserveAmountError;
+            }
+
             MutinyError::RoutingFailed
         }
         PaymentError::Invoice(_) => MutinyError::InvoiceInvalid,
@@ -2063,6 +2072,7 @@ mod tests {
             MutinyError::InsufficientBalance
         );
 
+        // test punishment reserve
         channel_details.balance_msat = amt_msat + 10;
         channel_details.unspendable_punishment_reserve = Some(20);
         assert_eq!(
@@ -2072,6 +2082,28 @@ mod tests {
                 &[channel_details.clone()]
             ),
             MutinyError::ReserveAmountError
+        );
+
+        // set reserve back to 0 so we can test htlc reserve
+        channel_details.unspendable_punishment_reserve = Some(0);
+        assert_eq!(
+            map_sending_failure(
+                PaymentError::Sending(RetryableSendFailure::RouteNotFound),
+                amt_msat,
+                &[channel_details.clone()]
+            ),
+            MutinyError::ReserveAmountError
+        );
+
+        // set htlc limit to be greater than amt_msat so we can pass the htlc limit check
+        channel_details.next_outbound_htlc_limit_msat = amt_msat + 10;
+        assert_eq!(
+            map_sending_failure(
+                PaymentError::Sending(RetryableSendFailure::RouteNotFound),
+                amt_msat,
+                &[channel_details.clone()]
+            ),
+            MutinyError::RoutingFailed
         );
     }
 
