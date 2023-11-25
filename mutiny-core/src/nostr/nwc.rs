@@ -181,6 +181,8 @@ pub(crate) struct Profile {
     pub child_key_index: Option<u32>,
     #[serde(default)]
     pub tag: NwcProfileTag,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 impl Profile {
@@ -310,9 +312,13 @@ impl NostrWalletConnect {
         node: &impl LnNode,
         invoice: &Bolt11Invoice,
     ) -> Result<Response, MutinyError> {
-        let labels = vec![self.profile.name.clone()];
+        let label = self
+            .profile
+            .label
+            .clone()
+            .unwrap_or(self.profile.name.clone());
         match node
-            .pay_invoice_with_timeout(invoice, None, None, labels)
+            .pay_invoice_with_timeout(invoice, None, None, vec![label])
             .await
         {
             Ok(inv) => {
@@ -741,6 +747,7 @@ impl NostrWalletConnect {
             spending_conditions: self.profile.spending_conditions.clone(),
             child_key_index: self.profile.child_key_index,
             tag: self.profile.tag,
+            label: self.profile.label.clone(),
         }
     }
 }
@@ -766,6 +773,8 @@ pub struct NwcProfile {
     pub child_key_index: Option<u32>,
     #[serde(default)]
     pub tag: NwcProfileTag,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 impl NwcProfile {
@@ -780,6 +789,7 @@ impl NwcProfile {
             spending_conditions: self.spending_conditions.clone(),
             child_key_index: self.child_key_index,
             tag: self.tag,
+            label: self.label.clone(),
         }
     }
 }

@@ -925,6 +925,7 @@ pub struct NwcProfile {
     spending_conditions: SpendingConditions,
     nwc_uri: Option<String>,
     tag: String,
+    label: Option<String>,
 }
 
 impl Serialize for NwcProfile {
@@ -941,6 +942,7 @@ impl Serialize for NwcProfile {
             "spending_conditions": json!(self.spending_conditions),
             "nwc_uri": self.nwc_uri,
             "tag": self.tag,
+            "label": self.label,
             "budget_amount": self.budget_amount(),
             "budget_period": self.budget_period(),
             "budget_remaining": self.budget_remaining(),
@@ -987,6 +989,11 @@ impl NwcProfile {
     #[wasm_bindgen(getter)]
     pub fn tag(&self) -> String {
         self.tag.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn label(&self) -> Option<String> {
+        self.label.clone()
     }
 
     #[wasm_bindgen(getter)]
@@ -1081,6 +1088,7 @@ impl From<nostr::nwc::NwcProfile> for NwcProfile {
             spending_conditions: value.spending_conditions,
             nwc_uri: value.nwc_uri,
             tag: value.tag.to_string(),
+            label: value.label,
         }
     }
 }

@@ -1,3 +1,4 @@
+use crate::labels::LabelStorage;
 use crate::logging::MutinyLogger;
 use crate::node::Node;
 use crate::nodemanager::NodeManager;
@@ -297,6 +298,21 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let (name, index, child_key_index) = get_next_nwc_index(profile_type, &profiles)?;
 
+        let label = match uri.identity {
+            Some(identity) => {
+                let contacts = self.storage.get_contacts()?;
+                contacts.into_iter().find_map(|(id, c)| {
+                    // compare by to_hex because of different types across rust-bitcoin versions
+                    if c.npub.map(|x| x.to_hex()) == Some(identity.to_hex()) {
+                        Some(id)
+                    } else {
+                        None
+                    }
+                })
+            }
+            None => None,
+        };
+
         let profile = Profile {
             name,
             index,
@@ -307,6 +323,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             archived: None,
             spending_conditions,
             tag,
+            label,
         };
 
         let nwc = NostrWalletConnect::new(&Secp256k1::new(), self.xprivkey, profile)?;
@@ -347,6 +364,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             spending_conditions,
             tag,
             client_key: None,
+            label: None,
         };
         let nwc = NostrWalletConnect::new(&Secp256k1::new(), self.xprivkey, profile)?;
 
@@ -1139,6 +1157,7 @@ mod test {
             child_key_index: None,
             spending_conditions: Default::default(),
             tag: Default::default(),
+            label: None,
         };
         let mut profiles = nostr_manager.nwc.write().unwrap();
         let nwc = NostrWalletConnect::new(
