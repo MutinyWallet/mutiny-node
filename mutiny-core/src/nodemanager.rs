@@ -270,6 +270,7 @@ pub struct MutinyChannel {
     pub balance: u64,
     pub size: u64,
     pub reserve: u64,
+    pub inbound: u64,
     pub outpoint: Option<OutPoint>,
     pub peer: PublicKey,
     pub confirmations_required: Option<u32>,
@@ -282,9 +283,11 @@ impl From<&ChannelDetails> for MutinyChannel {
     fn from(c: &ChannelDetails) -> Self {
         MutinyChannel {
             user_chan_id: c.user_channel_id.to_hex(),
-            balance: c.outbound_capacity_msat / 1_000,
+            balance: c.next_outbound_htlc_limit_msat / 1_000,
             size: c.channel_value_satoshis,
-            reserve: c.unspendable_punishment_reserve.unwrap_or(0),
+            reserve: ((c.outbound_capacity_msat - c.next_outbound_htlc_limit_msat) / 1_000)
+                + c.unspendable_punishment_reserve.unwrap_or(0),
+            inbound: c.inbound_capacity_msat / 1_000,
             outpoint: c.funding_txo.map(|f| f.into_bitcoin_outpoint()),
             peer: c.counterparty.node_id,
             confirmations_required: c.confirmations_required,
