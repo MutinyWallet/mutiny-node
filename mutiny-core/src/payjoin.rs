@@ -34,6 +34,7 @@ pub enum Error {
     ReceiverStateMachine(payjoin::receive::Error),
     Wallet(payjoin::Error),
     Txid(bitcoin::hashes::hex::Error),
+    Shutdown,
 }
 
 impl std::error::Error for Error {}
@@ -45,6 +46,7 @@ impl std::fmt::Display for Error {
             Error::ReceiverStateMachine(e) => write!(f, "Payjoin error: {}", e),
             Error::Wallet(e) => write!(f, "Payjoin wallet error: {}", e),
             Error::Txid(e) => write!(f, "Payjoin txid error: {}", e),
+            Error::Shutdown => write!(f, "Payjoin stopped by application shutdown"),
         }
     }
 }

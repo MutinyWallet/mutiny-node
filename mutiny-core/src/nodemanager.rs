@@ -795,14 +795,13 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Poll the payjoin relay to maintain a payjoin session and create a payjoin proposal.
     pub async fn receive_payjoin(
         wallet: Arc<OnChainWallet<S>>,
+        stop: Arc<AtomicBool>,
         mut enrolled: payjoin::receive::v2::Enrolled,
     ) -> Result<Txid, crate::payjoin::Error> {
         let http_client = reqwest::Client::builder().build()?;
         let proposal: payjoin::receive::v2::UncheckedProposal =
-            Self::poll_for_fallback_psbt(&http_client, &mut enrolled).await?;
-        let mut payjoin_proposal = wallet
-            .process_payjoin_proposal(proposal)
-            .map_err(crate::payjoin::Error::Wallet)?;
+            Self::poll_for_fallback_psbt(stop, &http_client, &mut enrolled).await?;
+        let mut payjoin_proposal = wallet.process_payjoin_proposal(proposal).unwrap();
 
         let (req, ohttp_ctx) = payjoin_proposal.extract_v2_req()?;
         let res = http_client
@@ -818,10 +817,14 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     async fn poll_for_fallback_psbt(
+        stop: Arc<AtomicBool>,
         client: &reqwest::Client,
         enroller: &mut payjoin::receive::v2::Enrolled,
     ) -> Result<payjoin::receive::v2::UncheckedProposal, crate::payjoin::Error> {
         loop {
+            if stop.load(Ordering::Relaxed) {
+                return Err(crate::payjoin::Error::Shutdown);
+            }
             let (req, context) = enroller.extract_req()?;
             let ohttp_response = client
                 .post(req.url)
