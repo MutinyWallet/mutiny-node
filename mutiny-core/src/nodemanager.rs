@@ -63,18 +63,42 @@ const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 pub const DEVICE_LOCK_INTERVAL_SECS: u64 = 30;
 
 // This is the NodeStorage object saved to the DB
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
 pub struct NodeStorage {
     pub nodes: HashMap<String, NodeIndex>,
     #[serde(default)]
     pub version: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LspConfig {
+    VoltageFlow(String),
+}
+
+fn deserialize_lsp_config<'de, D>(deserializer: D) -> Result<Option<LspConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v: Option<Value> = Option::deserialize(deserializer)?;
+    match v {
+        Some(Value::String(s)) => Ok(Some(LspConfig::VoltageFlow(s))),
+        Some(Value::Object(_)) => LspConfig::deserialize(v.unwrap())
+            .map(Some)
+            .map_err(|e| serde::de::Error::custom(format!("invalid lsp config: {e}"))),
+        Some(Value::Null) => Ok(None),
+        Some(x) => Err(serde::de::Error::custom(format!(
+            "invalid lsp config: {x:?}"
+        ))),
+        None => Ok(None),
+    }
+}
+
 // This is the NodeIndex reference that is saved to the DB
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default)]
 pub struct NodeIndex {
     pub child_index: u32,
-    pub lsp: Option<String>,
+    #[serde(deserialize_with = "deserialize_lsp_config")]
+    pub lsp: Option<LspConfig>,
     pub archived: Option<bool>,
 }
 
@@ -2472,7 +2496,9 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         // If we don't have an lsp saved we should pick a random
         // one from our client list and save it for next time
         let rand = rand::random::<usize>() % node_manager.lsp_clients.len();
-        Some(node_manager.lsp_clients[rand].url.clone())
+        Some(LspConfig::VoltageFlow(
+            node_manager.lsp_clients[rand].url.clone(),
+        ))
     };
 
     let next_node = NodeIndex {
@@ -2548,11 +2574,13 @@ mod tests {
     use bitcoin::{Network, PackedLockTime, Transaction, TxOut, Txid};
     use lightning::ln::PaymentHash;
     use lightning_invoice::Bolt11Invoice;
+    use std::collections::HashMap;
     use std::str::FromStr;
 
     use crate::test_utils::*;
 
     use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
+    use crate::nodemanager::{LspConfig, NodeIndex, NodeStorage};
     use crate::storage::{MemoryStorage, MutinyStorage};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
@@ -2860,6 +2888,27 @@ mod tests {
         .unwrap();
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_serialize_node_storage() {
+        let old: NodeStorage = serde_json::from_str("{\"nodes\":{\"93ca1ee3-d5f1-42ed-8bd9-042b298c70dc\":{\"archived\":false,\"child_index\":0,\"lsp\":\"https://signet-lsp.mutinywallet.com\"}},\"version\":11}").unwrap();
+        let node = NodeIndex {
+            child_index: 0,
+            lsp: Some(LspConfig::VoltageFlow(
+                "https://signet-lsp.mutinywallet.com".to_string(),
+            )),
+            archived: Some(false),
+        };
+        let mut nodes = HashMap::new();
+        nodes.insert("93ca1ee3-d5f1-42ed-8bd9-042b298c70dc".to_string(), node);
+        let expected = NodeStorage { nodes, version: 11 };
+
+        assert_eq!(old, expected);
+
+        let serialized = serde_json::to_string(&expected).unwrap();
+        let deserialized: NodeStorage = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, expected);
     }
 
     #[test]
