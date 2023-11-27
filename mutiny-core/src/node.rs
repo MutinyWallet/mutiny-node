@@ -1,7 +1,7 @@
 use crate::labels::LabelStorage;
 use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
 use crate::multiesplora::MultiEsploraClient;
-use crate::nodemanager::ChannelClosure;
+use crate::nodemanager::{ChannelClosure, LspConfig};
 use crate::peermanager::LspMessageRouter;
 use crate::utils::get_monitor_version;
 use crate::{
@@ -332,7 +332,12 @@ impl<S: MutinyStorage> Node<S> {
                     Some(lsp_clients[rand].clone())
                 }
             }
-            Some(ref lsp) => lsp_clients.iter().find(|c| &c.url == lsp).cloned(),
+            Some(ref lsp) => lsp_clients
+                .iter()
+                .find(|c| match lsp {
+                    LspConfig::VoltageFlow(ref url) => url == &c.url,
+                })
+                .cloned(),
         };
         let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.pubkey);
         let message_router = Arc::new(LspMessageRouter::new(lsp_client_pubkey));
@@ -701,7 +706,10 @@ impl<S: MutinyStorage> Node<S> {
     pub fn node_index(&self) -> NodeIndex {
         NodeIndex {
             child_index: self.child_index,
-            lsp: self.lsp_client.clone().map(|l| l.url),
+            lsp: self
+                .lsp_client
+                .clone()
+                .map(|l| LspConfig::VoltageFlow(l.url)),
             archived: Some(false),
         }
     }
