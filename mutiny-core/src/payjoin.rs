@@ -35,6 +35,7 @@ pub enum Error {
     ReceiverStateMachine(String),
     Txid(bitcoin::hashes::hex::Error),
     OhttpDecodeFailed,
+    Shutdown,
 }
 
 impl std::error::Error for Error {}
@@ -46,6 +47,7 @@ impl std::fmt::Display for Error {
             Error::ReceiverStateMachine(e) => write!(f, "Payjoin state machine error: {}", e),
             Error::Txid(e) => write!(f, "Payjoin txid error: {}", e),
             Error::OhttpDecodeFailed => write!(f, "Failed to decode ohttp keys"),
+            Error::Shutdown => write!(f, "Payjoin stopped by application shutdown"),
         }
     }
 }

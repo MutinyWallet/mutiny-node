@@ -774,9 +774,10 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     pub fn spawn_payjoin_receiver(&self, enrolled: Enrolled) {
         let logger = self.logger.clone();
+        let stop = self.stop.clone();
         let wallet = self.wallet.clone();
         utils::spawn(async move {
-            match Self::receive_payjoin(wallet, enrolled).await {
+            match Self::receive_payjoin(wallet, stop, enrolled).await {
                 Ok(txid) => log_info!(logger, "Received payjoin txid: {txid}"),
                 Err(e) => log_error!(logger, "Error receiving payjoin: {e}"),
             };
@@ -786,13 +787,14 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Poll the payjoin relay to maintain a payjoin session and create a payjoin proposal.
     async fn receive_payjoin(
         wallet: Arc<OnChainWallet<S>>,
+        stop: Arc<AtomicBool>,
         mut enrolled: payjoin::receive::v2::Enrolled,
     ) -> Result<Txid, MutinyError> {
         let http_client = reqwest::Client::builder()
             .build()
             .map_err(PayjoinError::Reqwest)?;
         let proposal: payjoin::receive::v2::UncheckedProposal =
-            Self::poll_for_fallback_psbt(&http_client, &mut enrolled).await?;
+            Self::poll_for_fallback_psbt(stop, &http_client, &mut enrolled).await?;
         let original_tx = proposal.extract_tx_to_schedule_broadcast();
         let mut payjoin_proposal = match wallet
             .process_payjoin_proposal(proposal)
@@ -824,10 +826,14 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     async fn poll_for_fallback_psbt(
+        stop: Arc<AtomicBool>,
         client: &reqwest::Client,
         enroller: &mut payjoin::receive::v2::Enrolled,
     ) -> Result<payjoin::receive::v2::UncheckedProposal, PayjoinError> {
         loop {
+            if stop.load(Ordering::Relaxed) {
+                return Err(crate::payjoin::Error::Shutdown);
+            }
             let (req, context) = enroller.extract_req()?;
             let ohttp_response = client
                 .post(req.url)
