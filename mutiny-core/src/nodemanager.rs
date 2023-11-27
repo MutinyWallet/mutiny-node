@@ -1797,7 +1797,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         lnurl: &LnUrl,
         amount_sats: u64,
         zap_npub: Option<XOnlyPublicKey>,
-        labels: Vec<String>,
+        mut labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let response = self.lnurl_client.make_request(&lnurl.url).await?;
 
@@ -1825,15 +1825,22 @@ impl<S: MutinyStorage> NodeManager<S> {
 
                 let invoice = self
                     .lnurl_client
-                    .get_invoice(&pay, msats, zap_request)
+                    .get_invoice(&pay, msats, zap_request, None)
                     .await?;
 
-                let invoice = Bolt11Invoice::from_str(&invoice.invoice())?;
+                let invoice = Bolt11Invoice::from_str(invoice.invoice())?;
 
                 if invoice
                     .amount_milli_satoshis()
                     .is_some_and(|amt| msats == amt)
                 {
+                    // If we have a contact for this lnurl, add it to the labels as the first
+                    if let Some(label) = self.get_contact_for_lnurl(lnurl)? {
+                        if !labels.contains(&label) {
+                            labels.insert(0, label)
+                        }
+                    }
+
                     self.pay_invoice(from_node, &invoice, None, labels).await
                 } else {
                     log_error!(self.logger, "LNURL return invoice with incorrect amount");

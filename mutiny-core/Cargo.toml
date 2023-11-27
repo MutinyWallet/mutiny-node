@@ -12,7 +12,7 @@ homepage = "https://mutinywallet.com"
 repository = "https://github.com/mutinywallet/mutiny-node"
 
 [dependencies]
-lnurl-rs = { version = "0.2.7", default-features = false, features = ["async", "async-https"] }
+lnurl-rs = { version = "0.3.1", default-features = false, features = ["async", "async-https"] }
 
 cfg-if = "1.0.0"
 bip39 = { version = "2.0.0" }

@@ -76,6 +76,21 @@ impl Contact {
         };
         init.update_with_metadata(metadata)
     }
+
+    /// Checks if the contact has the given lnurl as either a lnurl or a lightning address
+    pub fn has_lnurl(&self, lnurl: &LnUrl) -> bool {
+        if self.lnurl.as_ref().is_some_and(|l| l == lnurl) {
+            return true;
+        }
+
+        if let Some(ln_address) = self.ln_address.as_ref() {
+            if lnurl.lightning_address().as_ref() == Some(ln_address) {
+                return true;
+            }
+        }
+
+        false
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, Ord, PartialEq, PartialOrd, Hash)]
@@ -131,6 +146,16 @@ pub trait LabelStorage {
     fn edit_contact(&self, id: impl AsRef<str>, contact: Contact) -> Result<(), MutinyError>;
     /// Gets all the existing tags (labels and contacts)
     fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyError>;
+    /// Finds a contact that has the given lnurl as either a lnurl or a lightning address
+    fn get_contact_for_lnurl(&self, lnurl: &LnUrl) -> Result<Option<String>, MutinyError> {
+        let contacts = self.get_contacts()?;
+        for (id, contact) in contacts {
+            if contact.has_lnurl(lnurl) {
+                return Ok(Some(id));
+            }
+        }
+        Ok(None)
+    }
 }
 
 impl<S: MutinyStorage> LabelStorage for S {
