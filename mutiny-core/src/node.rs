@@ -67,6 +67,8 @@ use lightning_invoice::{
     utils::{create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice},
     Bolt11Invoice,
 };
+#[cfg(test)]
+use mockall::{automock, predicate::*};
 use std::collections::HashMap;
 use std::{
     str::FromStr,
@@ -1940,6 +1942,47 @@ pub(crate) fn default_user_config() -> UserConfig {
             ..Default::default()
         },
         ..Default::default()
+    }
+}
+
+#[cfg_attr(test, automock)]
+pub(crate) trait LnNode {
+    fn logger(&self) -> &MutinyLogger;
+    fn skip_hodl_invoices(&self) -> bool;
+    fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus>;
+    async fn pay_invoice_with_timeout(
+        &self,
+        invoice: &Bolt11Invoice,
+        amt_sats: Option<u64>,
+        timeout_secs: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyInvoice, MutinyError>;
+}
+
+impl<S: MutinyStorage> LnNode for Node<S> {
+    fn logger(&self) -> &MutinyLogger {
+        self.logger.as_ref()
+    }
+
+    fn skip_hodl_invoices(&self) -> bool {
+        self.skip_hodl_invoices
+    }
+
+    fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus> {
+        self.persister
+            .read_payment_info(payment_hash, false, &self.logger)
+            .map(|p| p.status)
+    }
+
+    async fn pay_invoice_with_timeout(
+        &self,
+        invoice: &Bolt11Invoice,
+        amt_sats: Option<u64>,
+        timeout_secs: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        self.pay_invoice_with_timeout(invoice, amt_sats, timeout_secs, labels)
+            .await
     }
 }
 

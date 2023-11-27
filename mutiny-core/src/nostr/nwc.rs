@@ -1,12 +1,12 @@
 use crate::error::MutinyError;
 use crate::event::HTLCStatus;
-use crate::node::Node;
+use crate::node::LnNode;
 use crate::nostr::NostrManager;
 use crate::storage::MutinyStorage;
 use crate::utils;
 use anyhow::anyhow;
 use bitcoin::hashes::hex::{FromHex, ToHex};
-use bitcoin::secp256k1::{Secp256k1, Signing};
+use bitcoin::secp256k1::{Secp256k1, Signing, ThirtyTwoByteHash};
 use bitcoin::util::bip32::ExtendedPrivKey;
 use chrono::{DateTime, Datelike, Duration, NaiveDateTime, Utc};
 use core::fmt;
@@ -264,9 +264,9 @@ impl NostrWalletConnect {
         Ok(info)
     }
 
-    pub(crate) async fn pay_nwc_invoice<S: MutinyStorage>(
+    pub(crate) async fn pay_nwc_invoice(
         &self,
-        node: &Node<S>,
+        node: &impl LnNode,
         invoice: &Bolt11Invoice,
     ) -> Result<Response, MutinyError> {
         let labels = vec![self.profile.name.clone()];
@@ -286,7 +286,7 @@ impl NostrWalletConnect {
                 })
             }
             Err(e) => {
-                log_error!(node.logger, "failed to pay invoice: {e}");
+                log_error!(node.logger(), "failed to pay invoice: {e}");
                 Err(e)
             }
         }
@@ -351,7 +351,7 @@ impl NostrWalletConnect {
     pub async fn handle_nwc_request<S: MutinyStorage>(
         &mut self,
         event: Event,
-        node: &Node<S>,
+        node: &impl LnNode,
         nostr_manager: &NostrManager<S>,
     ) -> anyhow::Result<Option<Event>> {
         let client_pubkey = self.client_key.public_key();
@@ -387,7 +387,7 @@ impl NostrWalletConnect {
             // if the invoice has no amount, we cannot pay it
             if invoice.amount_milli_satoshis().is_none() {
                 log_warn!(
-                    node.logger,
+                    node.logger(),
                     "NWC Invoice amount not set, cannot pay: {invoice}"
                 );
                 return self
@@ -395,12 +395,15 @@ impl NostrWalletConnect {
                     .map(Some);
             }
 
-            if node.skip_hodl_invoices {
+            if node.skip_hodl_invoices() {
                 // Skip potential hodl invoices as they can cause force closes
                 if utils::HODL_INVOICE_NODES
                     .contains(&invoice.recover_payee_pub_key().to_hex().as_str())
                 {
-                    log_warn!(node.logger, "Received potential hodl invoice, skipping...");
+                    log_warn!(
+                        node.logger(),
+                        "Received potential hodl invoice, skipping..."
+                    );
                     return self
                         .get_skipped_error_event(
                             &event,
@@ -412,8 +415,10 @@ impl NostrWalletConnect {
 
             // if we have already paid or are attempting to pay this invoice, skip it
             if node
-                .get_invoice(&invoice)
-                .is_ok_and(|i| matches!(i.status, HTLCStatus::Succeeded | HTLCStatus::InFlight))
+                .get_outbound_payment_status(&invoice.payment_hash().into_32())
+                .is_some_and(|status| {
+                    matches!(status, HTLCStatus::Succeeded | HTLCStatus::InFlight)
+                })
             {
                 return Ok(None);
             }
@@ -428,9 +433,7 @@ impl NostrWalletConnect {
                         Some(payment_hash) => {
                             let hash: [u8; 32] =
                                 FromHex::from_hex(&payment_hash).expect("invalid hash");
-                            node.persister
-                                .read_payment_info(&hash, false, &nostr_manager.logger)
-                                .map(|p| p.status)
+                            node.get_outbound_payment_status(&hash)
                         }
                         None => None,
                     };
@@ -564,12 +567,8 @@ impl NostrWalletConnect {
                         // all went through, and if not, remove them from the budget
                         budget.payments.retain(|p| {
                             let hash: [u8; 32] = FromHex::from_hex(&p.hash).unwrap();
-                            match node.persister.read_payment_info(
-                                &hash,
-                                false,
-                                &nostr_manager.logger,
-                            ) {
-                                Some(info) => info.status != HTLCStatus::Failed, // remove failed payments from budget
+                            match node.get_outbound_payment_status(&hash) {
+                                Some(status) => status != HTLCStatus::Failed, // remove failed payments from budget
                                 None => true, // if we can't find the payment, keep it to be safe
                             }
                         });
@@ -1044,6 +1043,8 @@ mod wasm_test {
     use super::*;
     use crate::event::{MillisatAmount, PaymentInfo};
     use crate::logging::MutinyLogger;
+    use crate::node::MockLnNode;
+    use crate::nodemanager::MutinyInvoice;
     use crate::nostr::ProfileType;
     use crate::storage::MemoryStorage;
     use crate::test_utils::{create_dummy_invoice, create_node, create_nwc_request};
@@ -1104,8 +1105,9 @@ mod wasm_test {
         let uri = nwc.get_nwc_uri().unwrap();
 
         // test hodl invoice
-        let invoice =
-            create_dummy_invoice(Some(10_000), Network::Regtest, Some(ONE_KEY)).to_string();
+        let invoice = create_dummy_invoice(Some(10_000), Network::Regtest, Some(ONE_KEY))
+            .0
+            .to_string();
         let event = create_nwc_request(&uri, invoice.clone());
         let result = nwc
             .handle_nwc_request(event.clone(), &node, &nostr_manager)
@@ -1193,7 +1195,7 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test amount-less invoice
-        let invoice = create_dummy_invoice(None, Network::Regtest, None);
+        let (invoice, _) = create_dummy_invoice(None, Network::Regtest, None);
         let event = create_nwc_request(&uri, invoice.to_string());
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
         check_nwc_error_response(
@@ -1207,8 +1209,9 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test hodl invoice
-        let invoice =
-            create_dummy_invoice(Some(10_000), Network::Regtest, Some(ONE_KEY)).to_string();
+        let invoice = create_dummy_invoice(Some(10_000), Network::Regtest, Some(ONE_KEY))
+            .0
+            .to_string();
         let event = create_nwc_request(&uri, invoice);
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
         check_nwc_error_response(
@@ -1222,7 +1225,7 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test in-flight payment
-        let invoice = create_dummy_invoice(Some(1_000), Network::Regtest, None);
+        let (invoice, _) = create_dummy_invoice(Some(1_000), Network::Regtest, None);
         let payment_info = PaymentInfo {
             preimage: None,
             secret: Some(invoice.payment_secret().0),
@@ -1242,7 +1245,7 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test completed payment
-        let invoice = create_dummy_invoice(Some(1_000), Network::Regtest, None);
+        let (invoice, _) = create_dummy_invoice(Some(1_000), Network::Regtest, None);
         let payment_info = PaymentInfo {
             preimage: None,
             secret: Some(invoice.payment_secret().0),
@@ -1262,7 +1265,7 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test it goes to pending
-        let invoice = create_dummy_invoice(Some(1_000), Network::Regtest, None);
+        let (invoice, _) = create_dummy_invoice(Some(1_000), Network::Regtest, None);
         let event = create_nwc_request(&uri, invoice.to_string());
         let result = nwc
             .handle_nwc_request(event.clone(), &node, &nostr_manager)
@@ -1305,7 +1308,7 @@ mod wasm_test {
         // add an unexpired invoice
         let unexpired = PendingNwcInvoice {
             index: 0,
-            invoice: create_dummy_invoice(Some(1_000), Network::Regtest, None),
+            invoice: create_dummy_invoice(Some(1_000), Network::Regtest, None).0,
             event_id: EventId::all_zeros(),
             pubkey: nostr_manager.primary_key.public_key(),
         };
@@ -1328,7 +1331,7 @@ mod wasm_test {
     }
 
     #[test]
-    async fn test_process_nwc_event_budget() {
+    async fn test_failed_process_nwc_event_budget() {
         let storage = MemoryStorage::default();
         let node = create_node(storage.clone()).await;
 
@@ -1357,7 +1360,7 @@ mod wasm_test {
         let uri = nwc.get_nwc_uri().unwrap();
 
         // test failed payment goes to pending, we have no channels so it will fail
-        let invoice = create_dummy_invoice(Some(10), Network::Regtest, None);
+        let (invoice, _) = create_dummy_invoice(Some(10), Network::Regtest, None);
         let event = create_nwc_request(&uri, invoice.to_string());
         let result = nwc
             .handle_nwc_request(event.clone(), &node, &nostr_manager)
@@ -1374,7 +1377,7 @@ mod wasm_test {
         nostr_manager.deny_all_pending_nwc().await.unwrap();
 
         // test over budget payment goes to pending
-        let invoice = create_dummy_invoice(Some(budget + 1), Network::Regtest, None);
+        let (invoice, _) = create_dummy_invoice(Some(budget + 1), Network::Regtest, None);
         let event = create_nwc_request(&uri, invoice.to_string());
         let result = nwc
             .handle_nwc_request(event.clone(), &node, &nostr_manager)
@@ -1386,7 +1389,82 @@ mod wasm_test {
         assert_eq!(pending[0].event_id, event.id);
         assert_eq!(pending[0].index, nwc.profile.index);
         assert_eq!(pending[0].pubkey, event.pubkey);
+    }
 
-        // todo test successful payment is added to budget
+    #[test]
+    async fn test_process_nwc_event_budget() {
+        let storage = MemoryStorage::default();
+        let logger = Arc::new(MutinyLogger::default());
+        let mut node = MockLnNode::new();
+
+        let amount_msats = 5_000;
+
+        let (invoice, preimage) = create_dummy_invoice(Some(amount_msats), Network::Regtest, None);
+
+        node.expect_skip_hodl_invoices().once().returning(|| true);
+        node.expect_logger().return_const(MutinyLogger::default());
+        node.expect_get_outbound_payment_status().return_const(None);
+        node.expect_pay_invoice_with_timeout()
+            .once()
+            .returning(move |inv, _, _, _| {
+                let mut mutiny_invoice: MutinyInvoice = inv.clone().into();
+                mutiny_invoice.preimage = Some(preimage.to_hex());
+                mutiny_invoice.status = HTLCStatus::Succeeded;
+                mutiny_invoice.last_updated = utils::now().as_secs();
+                mutiny_invoice.fees_paid = Some(0);
+                Ok(mutiny_invoice)
+            });
+
+        let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
+        let nostr_manager = NostrManager::from_mnemonic(xprivkey, storage.clone(), logger).unwrap();
+
+        let budget = 10_000;
+        let profile = nostr_manager
+            .create_new_profile(
+                ProfileType::Normal {
+                    name: "test".to_string(),
+                },
+                SpendingConditions::Budget(BudgetedSpendingConditions {
+                    budget,
+                    single_max: None,
+                    payments: vec![],
+                    period: BudgetPeriod::Seconds(10),
+                }),
+                NwcProfileTag::General,
+            )
+            .unwrap();
+
+        let secp = Secp256k1::new();
+        let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
+        let uri = nwc.get_nwc_uri().unwrap();
+
+        // test successful payment
+        let event = create_nwc_request(&uri, invoice.to_string());
+        let result = nwc
+            .handle_nwc_request(event.clone(), &node, &nostr_manager)
+            .await;
+        let event = result.unwrap().unwrap();
+        let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
+        let response: Response = Response::from_json(content).unwrap();
+        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        assert!(pending.is_empty());
+        assert_eq!(response.result_type, Method::PayInvoice);
+        assert!(response.error.is_none());
+
+        match response.result {
+            Some(ResponseResult::PayInvoice(PayInvoiceResponseResult { preimage: pre })) => {
+                assert_eq!(pre, preimage.to_hex());
+            }
+            _ => panic!("wrong response"),
+        }
+
+        match nwc.profile.spending_conditions {
+            SpendingConditions::Budget(budget) => {
+                assert_eq!(budget.payments.len(), 1);
+                assert_eq!(budget.payments[0].amt, amount_msats / 1_000);
+                assert_eq!(budget.payments[0].hash, invoice.payment_hash().to_hex());
+            }
+            _ => panic!("wrong spending conditions"),
+        }
     }
 }
