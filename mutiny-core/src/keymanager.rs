@@ -9,7 +9,7 @@ use bitcoin::bech32::u5;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::RecoverableSignature;
 use bitcoin::secp256k1::ecdsa::Signature;
-use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, Signing};
+use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, SecretKey, Signing};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{PackedLockTime, Script, Transaction, TxOut};
 use lightning::ln::msgs::{DecodeError, UnsignedGossipMessage};
@@ -51,6 +51,10 @@ impl<S: MutinyStorage> PhantomKeysManager<S> {
             wallet,
             logger,
         }
+    }
+
+    pub(crate) fn get_node_secret_key(&self) -> SecretKey {
+        self.inner.get_node_secret_key()
     }
 
     /// See [`KeysManager::spend_spendable_outputs`] for documentation on this method.

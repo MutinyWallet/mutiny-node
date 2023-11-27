@@ -11,7 +11,7 @@ use crate::{
     gossip,
     gossip::{fetch_updated_gossip, get_rgs_url},
     logging::MutinyLogger,
-    lspclient::LspClient,
+    lsp::{deserialize_lsp_config, Lsp, LspConfig},
     node::{Node, PubkeyConnectionInfo, RapidGossipSync},
     onchain::get_esplora_url,
     onchain::OnChainWallet,
@@ -70,29 +70,6 @@ pub struct NodeStorage {
     pub nodes: HashMap<String, NodeIndex>,
     #[serde(default)]
     pub version: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum LspConfig {
-    VoltageFlow(String),
-}
-
-fn deserialize_lsp_config<'de, D>(deserializer: D) -> Result<Option<LspConfig>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let v: Option<Value> = Option::deserialize(deserializer)?;
-    match v {
-        Some(Value::String(s)) => Ok(Some(LspConfig::VoltageFlow(s))),
-        Some(Value::Object(_)) => LspConfig::deserialize(v.unwrap())
-            .map(Some)
-            .map_err(|e| serde::de::Error::custom(format!("invalid lsp config: {e}"))),
-        Some(Value::Null) => Ok(None),
-        Some(x) => Err(serde::de::Error::custom(format!(
-            "invalid lsp config: {x:?}"
-        ))),
-        None => Ok(None),
-    }
 }
 
 // This is the NodeIndex reference that is saved to the DB
@@ -538,7 +515,7 @@ pub struct NodeManager<S: MutinyStorage> {
     pub(crate) nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node<S>>>>>,
     auth: AuthManager,
     lnurl_client: Arc<LnUrlClient>,
-    pub(crate) lsp_clients: Vec<LspClient>,
+    pub(crate) lsp_configs: Vec<LspConfig>,
     pub(crate) subscription_client: Option<Arc<MutinySubscriptionClient>>,
     pub(crate) logger: Arc<MutinyLogger>,
     bitcoin_price_cache: Arc<Mutex<HashMap<String, (f32, Duration)>>>,
@@ -637,30 +614,33 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let gossip_sync = Arc::new(gossip_sync);
 
-        // load lsp clients, if any
-        let lsp_clients: Vec<LspClient> = match c.lsp_url.clone() {
+        // load voltage flow configs, if any
+        let mut lsp_configs: Vec<LspConfig> = match c.lsp_url.clone() {
             // check if string is some and not an empty string
             // and safe_mode is not enabled
-            Some(lsp_urls) if !lsp_urls.is_empty() && !c.safe_mode => {
-                let urls: Vec<&str> = lsp_urls.split(',').collect();
-
-                let futs = urls.into_iter().map(|url| LspClient::new(url.trim()));
-
-                let results = futures::future::join_all(futs).await;
-
-                results
-                    .into_iter()
-                    .flat_map(|res| match res {
-                        Ok(client) => Some(client),
-                        Err(e) => {
-                            log_warn!(logger, "Error starting up lsp client: {e}");
-                            None
-                        }
-                    })
-                    .collect()
-            }
+            Some(lsp_urls) if !lsp_urls.is_empty() && !c.safe_mode => lsp_urls
+                .split(',')
+                .map(|s| LspConfig::new_voltage_flow(s.trim().to_string()))
+                .collect(),
             _ => Vec::new(),
         };
+
+        // load lsps flow configs, if any
+        if let Some(lsp_connection_string) = c.lsp_connection_string.clone() {
+            if !lsp_connection_string.is_empty() && !c.safe_mode {
+                let lsp_connection_strings: Vec<&str> = lsp_connection_string.split(',').collect();
+                let lsp_token = c.lsp_token.unwrap_or_default();
+                let lsp_tokens: Vec<&str> = lsp_token.split(',').collect();
+
+                for (index, connection_string) in lsp_connection_strings.into_iter().enumerate() {
+                    let lsp_token = lsp_tokens.get(index).map(|t| t.to_string());
+                    lsp_configs.push(LspConfig::new_lsps(
+                        connection_string.to_string(),
+                        lsp_token,
+                    ));
+                }
+            }
+        }
 
         let node_storage = storage.get_nodes()?;
 
@@ -691,7 +671,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                     wallet.clone(),
                     c.network,
                     &esplora,
-                    &lsp_clients,
+                    &lsp_configs,
                     logger.clone(),
                     c.do_not_connect_peers,
                     false,
@@ -776,7 +756,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             esplora,
             auth,
             lnurl_client,
-            lsp_clients,
+            lsp_configs,
             subscription_client,
             logger,
             bitcoin_price_cache: Arc::new(Mutex::new(price_cache)),
@@ -1742,7 +1722,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
-        let use_phantom = nodes.len() > 1 && self.lsp_clients.is_empty();
+        let use_phantom = nodes.len() > 1 && self.lsp_configs.is_empty();
         if nodes.len() == 0 {
             return Err(MutinyError::InvoiceCreationFailed);
         }
@@ -2043,12 +2023,11 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let to_pubkey = match to_pubkey {
             Some(pubkey) => pubkey,
-            None => {
-                node.lsp_client
-                    .as_ref()
-                    .ok_or(MutinyError::PubkeyInvalid)?
-                    .pubkey
-            }
+            None => node
+                .lsp_client
+                .as_ref()
+                .ok_or(MutinyError::PubkeyInvalid)?
+                .get_lsp_pubkey(),
         };
 
         let outpoint = node
@@ -2082,12 +2061,11 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let to_pubkey = match to_pubkey {
             Some(pubkey) => pubkey,
-            None => {
-                node.lsp_client
-                    .as_ref()
-                    .ok_or(MutinyError::PubkeyInvalid)?
-                    .pubkey
-            }
+            None => node
+                .lsp_client
+                .as_ref()
+                .ok_or(MutinyError::PubkeyInvalid)?
+                .get_lsp_pubkey(),
         };
 
         let outpoint = node
@@ -2561,7 +2539,7 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
     // Create and save a new node using the next child index
     let next_node_uuid = Uuid::new_v4().to_string();
 
-    let lsp = if node_manager.lsp_clients.is_empty() {
+    let lsp = if node_manager.lsp_configs.is_empty() {
         log_info!(
             node_manager.logger,
             "no lsp saved and no lsp clients available"
@@ -2571,10 +2549,8 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         log_info!(node_manager.logger, "no lsp saved, picking random one");
         // If we don't have an lsp saved we should pick a random
         // one from our client list and save it for next time
-        let rand = rand::random::<usize>() % node_manager.lsp_clients.len();
-        Some(LspConfig::VoltageFlow(
-            node_manager.lsp_clients[rand].url.clone(),
-        ))
+        let rand = rand::random::<usize>() % node_manager.lsp_configs.len();
+        Some(node_manager.lsp_configs[rand].clone())
     };
 
     let next_node = NodeIndex {
@@ -2604,7 +2580,7 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         node_manager.wallet.clone(),
         node_manager.network,
         &node_manager.esplora,
-        &node_manager.lsp_clients,
+        &node_manager.lsp_configs,
         node_manager.logger.clone(),
         node_manager.do_not_connect_peers,
         false,
@@ -2687,6 +2663,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
             false,
             true,
         );
@@ -2712,6 +2690,8 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Regtest,
+            None,
+            None,
             None,
             None,
             None,
@@ -2770,6 +2750,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
             false,
             true,
         );
@@ -2801,6 +2783,8 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Signet,
+            None,
+            None,
             None,
             None,
             None,
