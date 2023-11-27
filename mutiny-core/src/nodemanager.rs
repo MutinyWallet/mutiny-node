@@ -251,6 +251,7 @@ pub struct MutinyChannel {
     pub confirmations_required: Option<u32>,
     pub confirmations: u32,
     pub is_outbound: bool,
+    pub is_usable: bool,
 }
 
 impl From<&ChannelDetails> for MutinyChannel {
@@ -265,6 +266,7 @@ impl From<&ChannelDetails> for MutinyChannel {
             confirmations_required: c.confirmations_required,
             confirmations: c.confirmations.unwrap_or(0),
             is_outbound: c.is_outbound,
+            is_usable: c.is_usable,
         }
     }
 }
