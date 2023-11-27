@@ -2,8 +2,10 @@ use crate::{
     error::MutinyError,
     key::{create_root_child_key, ChildKey},
     logging::MutinyLogger,
+    nodemanager::MutinyInvoice,
     onchain::coin_type_from_network,
     storage::MutinyStorage,
+    HTLCStatus,
 };
 use bip39::Mnemonic;
 use bitcoin::{secp256k1::Secp256k1, util::bip32::ExtendedPrivKey};
@@ -17,18 +19,62 @@ use fedimint_client::{
     secret::{get_default_client_secret, RootSecretStrategy},
     ClientArc, FederationInfo,
 };
-use fedimint_core::db::mem_impl::MemDatabase;
-use fedimint_core::{api::InviteCode, config::FederationId};
-use fedimint_ln_client::LightningClientInit;
+use fedimint_core::{api::InviteCode, config::FederationId, db::mem_impl::MemDatabase, Amount};
+use fedimint_ln_client::{
+    InternalPayState, LightningClientInit, LightningClientModule, LnPayState, LnReceiveState,
+};
 use fedimint_mint_client::MintClientInit;
 use fedimint_wallet_client::WalletClientInit;
-use lightning::log_info;
+use futures_util::StreamExt;
 use lightning::util::logger::Logger;
+use lightning::{log_debug, log_info};
+use lightning_invoice::Bolt11Invoice;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     sync::{atomic::AtomicBool, Arc, RwLock},
 };
+
+impl From<LnReceiveState> for HTLCStatus {
+    fn from(state: LnReceiveState) -> Self {
+        match state {
+            LnReceiveState::Created => HTLCStatus::Pending,
+            LnReceiveState::Claimed => HTLCStatus::Succeeded,
+            LnReceiveState::WaitingForPayment { .. } => HTLCStatus::Pending,
+            LnReceiveState::Canceled { .. } => HTLCStatus::Failed,
+            LnReceiveState::Funded => HTLCStatus::InFlight,
+            LnReceiveState::AwaitingFunds => HTLCStatus::InFlight,
+        }
+    }
+}
+
+impl From<InternalPayState> for HTLCStatus {
+    fn from(state: InternalPayState) -> Self {
+        match state {
+            InternalPayState::Funding => HTLCStatus::InFlight,
+            InternalPayState::Preimage(_) => HTLCStatus::Succeeded,
+            InternalPayState::RefundSuccess { .. } => HTLCStatus::Failed,
+            InternalPayState::RefundError { .. } => HTLCStatus::Failed,
+            InternalPayState::FundingFailed { .. } => HTLCStatus::Failed,
+            InternalPayState::UnexpectedError(_) => HTLCStatus::Failed,
+        }
+    }
+}
+
+impl From<LnPayState> for HTLCStatus {
+    fn from(state: LnPayState) -> Self {
+        match state {
+            LnPayState::Created => HTLCStatus::Pending,
+            LnPayState::Canceled => HTLCStatus::Failed,
+            LnPayState::Funded => HTLCStatus::InFlight,
+            LnPayState::WaitingForRefund { .. } => HTLCStatus::InFlight,
+            LnPayState::AwaitingChange => HTLCStatus::InFlight,
+            LnPayState::Success { .. } => HTLCStatus::Succeeded,
+            LnPayState::Refunded { .. } => HTLCStatus::Failed,
+            LnPayState::UnexpectedError { .. } => HTLCStatus::Failed,
+        }
+    }
+}
 
 // This is the FederationStorage object saved to the DB
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -117,6 +163,96 @@ impl<S: MutinyStorage> FederationClient<S> {
             logger,
             stop,
         })
+    }
+
+    pub(crate) async fn get_invoice(&self, amount: u64) -> Result<MutinyInvoice, MutinyError> {
+        let lightning_module = self
+            .fedimint_client
+            .get_first_module::<LightningClientModule>();
+        let (_id, invoice) = lightning_module
+            .create_bolt11_invoice(Amount::from_sats(amount), String::new(), None, ())
+            .await?;
+        Ok(invoice.into())
+    }
+
+    /// Get the balance of this fedimint client in sats
+    pub(crate) async fn get_balance(&self) -> Result<u64, MutinyError> {
+        Ok(self.fedimint_client.get_balance().await.msats / 1_000)
+    }
+
+    pub(crate) async fn pay_invoice(
+        &self,
+        invoice: Bolt11Invoice,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        let lightning_module = self
+            .fedimint_client
+            .get_first_module::<LightningClientModule>();
+        let outgoing_payment = lightning_module
+            .pay_bolt11_invoice(invoice.clone(), ())
+            .await?;
+
+        let mut inv: MutinyInvoice = invoice.clone().into();
+        match outgoing_payment.payment_type {
+            fedimint_ln_client::PayType::Internal(pay_id) => {
+                // TODO merge the two as much as we can
+                let pay_outcome = lightning_module
+                    .subscribe_internal_pay(pay_id)
+                    .await
+                    .map_err(|_| MutinyError::ConnectionFailed)?;
+
+                match pay_outcome {
+                    fedimint_client::oplog::UpdateStreamOrOutcome::UpdateStream(mut s) => {
+                        log_debug!(
+                            self.logger,
+                            "waiting for update stream on payment: {}",
+                            pay_id
+                        );
+                        while let Some(outcome) = s.next().await {
+                            log_info!(self.logger, "Outcome: {outcome:?}");
+                            inv.status = outcome.into();
+
+                            if matches!(inv.status, HTLCStatus::Failed | HTLCStatus::Succeeded) {
+                                break;
+                            }
+                        }
+                    }
+                    fedimint_client::oplog::UpdateStreamOrOutcome::Outcome(o) => {
+                        log_info!(self.logger, "Outcome: {o:?}");
+                        inv.status = o.into();
+                    }
+                }
+            }
+            fedimint_ln_client::PayType::Lightning(pay_id) => {
+                let pay_outcome = lightning_module
+                    .subscribe_ln_pay(pay_id)
+                    .await
+                    .map_err(|_| MutinyError::ConnectionFailed)?;
+
+                match pay_outcome {
+                    fedimint_client::oplog::UpdateStreamOrOutcome::UpdateStream(mut s) => {
+                        log_debug!(
+                            self.logger,
+                            "waiting for update stream on payment: {}",
+                            pay_id
+                        );
+                        while let Some(outcome) = s.next().await {
+                            log_info!(self.logger, "Outcome: {outcome:?}");
+                            inv.status = outcome.into();
+
+                            if matches!(inv.status, HTLCStatus::Failed | HTLCStatus::Succeeded) {
+                                break;
+                            }
+                        }
+                    }
+                    fedimint_client::oplog::UpdateStreamOrOutcome::Outcome(o) => {
+                        log_info!(self.logger, "Outcome: {o:?}");
+                        inv.status = o.into();
+                    }
+                }
+            }
+        }
+
+        Ok(inv)
     }
 }
 

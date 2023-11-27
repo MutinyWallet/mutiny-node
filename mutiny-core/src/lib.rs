@@ -518,8 +518,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         });
     }
 
-    /// Pays a lightning invoice from the selected node.
+    /// Pays a lightning invoice from a federation (preferred) or node.
     /// An amount should only be provided if the invoice does not have an amount.
+    /// Amountless invoices cannot be paid by a federation.
     /// The amount should be in satoshis.
     pub async fn pay_invoice(
         &self,
@@ -531,6 +532,31 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             return Err(MutinyError::IncorrectNetwork(inv.network()));
         }
 
+        // Check the amount specified in the invoice, we need one to make the payment
+        let send_msat = inv
+            .amount_milli_satoshis()
+            .or(amt_sats.map(|x| x * 1_000))
+            .ok_or(MutinyError::InvoiceInvalid)?;
+
+        // Try each federation first
+        let federation_ids = self.list_federations().await?;
+        for federation_id in federation_ids {
+            if let Some(fedimint_client) = self.federations.lock().await.get(&federation_id) {
+                // Check if the federation has enough balance
+                let balance = fedimint_client.get_balance().await?;
+                if balance >= send_msat / 1_000 {
+                    // Try to pay the invoice using the federation
+                    let payment_result = fedimint_client.pay_invoice(inv.clone()).await;
+                    if payment_result.is_ok() {
+                        return payment_result;
+                    }
+                }
+            }
+            // If payment fails or invoice amount is None or balance is not sufficient, continue to next federation
+        }
+        // If federation client is not found, continue to next federation
+
+        // If no federation could pay the invoice, fall back to using node_manager for payment
         self.node_manager
             .pay_invoice(None, inv, amt_sats, labels)
             .await
@@ -567,15 +593,34 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         amount: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyBip21RawMaterials, MutinyError> {
-        // If we are in safe mode, we don't create invoices
         let invoice = if self.config.safe_mode {
             None
         } else {
-            let inv = self
-                .node_manager
-                .create_invoice(amount, labels.clone())
-                .await?;
-            Some(inv.bolt11.ok_or(MutinyError::WalletOperationFailed)?)
+            // Check if a federation exists
+            let federation_ids = self.list_federations().await?;
+            if !federation_ids.is_empty() {
+                // Use the first federation for simplicity
+                let federation_id = &federation_ids[0];
+                let fedimint_client = self.federations.lock().await.get(federation_id).cloned();
+
+                match fedimint_client {
+                    Some(client) => {
+                        // Try to create an invoice using the federation
+                        match client.get_invoice(amount.unwrap_or_default()).await {
+                            Ok(inv) => Some(inv.bolt11.ok_or(MutinyError::WalletOperationFailed)?),
+                            Err(_) => None, // Handle the error or fallback to node_manager invoice creation
+                        }
+                    }
+                    None => None, // No federation client found, fallback to node_manager invoice creation
+                }
+            } else {
+                // Fallback to node_manager invoice creation if no federation is found
+                let inv = self
+                    .node_manager
+                    .create_invoice(amount, labels.clone())
+                    .await?;
+                Some(inv.bolt11.ok_or(MutinyError::WalletOperationFailed)?)
+            }
         };
 
         let Ok(address) = self.node_manager.get_new_address(labels.clone()) else {
