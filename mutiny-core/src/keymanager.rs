@@ -1,8 +1,8 @@
-use crate::error::MutinyError;
-use crate::labels::LabelStorage;
 use crate::logging::MutinyLogger;
 use crate::onchain::OnChainWallet;
 use crate::storage::MutinyStorage;
+use crate::{error::MutinyError, key::create_root_child_key};
+use crate::{key::ChildKey, labels::LabelStorage};
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
 use bitcoin::bech32::u5;
@@ -223,10 +223,7 @@ pub(crate) fn create_keys_manager<S: MutinyStorage>(
 ) -> Result<PhantomKeysManager<S>, MutinyError> {
     let context = Secp256k1::new();
 
-    let shared_key = xprivkey.derive_priv(
-        &context,
-        &DerivationPath::from(vec![ChildNumber::from_hardened_idx(0)?]),
-    )?;
+    let shared_key = create_root_child_key(&context, xprivkey, ChildKey::NodeChildKey)?;
 
     let xpriv = shared_key.derive_priv(
         &context,

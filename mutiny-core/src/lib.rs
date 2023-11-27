@@ -16,6 +16,7 @@ pub mod error;
 mod event;
 mod fees;
 mod gossip;
+mod key;
 mod keymanager;
 pub mod labels;
 mod ldkstorage;
@@ -44,8 +45,10 @@ pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
-use crate::labels::{get_contact_key, Contact, LabelStorage};
 use crate::logging::LOGGING_KEY;
+use crate::nodemanager::{
+    ChannelClosure, MutinyBip21RawMaterials, MutinyInvoice, TransactionDetails,
+};
 use crate::nostr::nwc::{
     BudgetPeriod, BudgetedSpendingConditions, NwcProfileTag, SpendingConditions,
 };
@@ -53,23 +56,137 @@ use crate::nostr::MUTINY_PLUS_SUBSCRIPTION_LABEL;
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY};
 use crate::{auth::MutinyAuthClient, logging::MutinyLogger};
 use crate::{error::MutinyError, nostr::ReservedProfile};
+use crate::{
+    labels::{get_contact_key, Contact, LabelStorage},
+    nodemanager::NodeBalance,
+};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
 use ::nostr::{Event, Kind, Metadata};
+use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
-use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::Network;
+use bitcoin::{hashes::sha256, secp256k1::PublicKey};
 use futures::{pin_mut, select, FutureExt};
 use lightning::{log_debug, util::logger::Logger};
 use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use nostr_sdk::{Client, RelayPoolNotification};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::{collections::HashMap, sync::atomic::AtomicBool};
+
+const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
+
+#[derive(Copy, Clone)]
+pub struct MutinyBalance {
+    pub confirmed: u64,
+    pub unconfirmed: u64,
+    pub lightning: u64,
+    pub force_close: u64,
+}
+
+impl MutinyBalance {
+    fn new(ln_balance: NodeBalance) -> Self {
+        Self {
+            confirmed: ln_balance.confirmed,
+            unconfirmed: ln_balance.unconfirmed,
+            lightning: ln_balance.lightning,
+            force_close: ln_balance.force_close,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum ActivityItem {
+    OnChain(TransactionDetails),
+    Lightning(Box<MutinyInvoice>),
+    ChannelClosed(ChannelClosure),
+}
+
+impl ActivityItem {
+    pub fn last_updated(&self) -> Option<u64> {
+        match self {
+            ActivityItem::OnChain(t) => match t.confirmation_time {
+                ConfirmationTime::Confirmed { time, .. } => Some(time),
+                ConfirmationTime::Unconfirmed { .. } => None,
+            },
+            ActivityItem::Lightning(i) => match i.status {
+                HTLCStatus::Succeeded => Some(i.last_updated),
+                HTLCStatus::Failed => Some(i.last_updated),
+                HTLCStatus::Pending | HTLCStatus::InFlight => None,
+            },
+            ActivityItem::ChannelClosed(c) => Some(c.timestamp),
+        }
+    }
+
+    pub fn labels(&self) -> Vec<String> {
+        match self {
+            ActivityItem::OnChain(t) => t.labels.clone(),
+            ActivityItem::Lightning(i) => i.labels.clone(),
+            ActivityItem::ChannelClosed(_) => vec![],
+        }
+    }
+
+    pub fn is_channel_open(&self) -> bool {
+        match self {
+            ActivityItem::OnChain(onchain) => {
+                onchain.labels.iter().any(|l| l.contains("LN Channel:"))
+            }
+            ActivityItem::Lightning(_) => false,
+            ActivityItem::ChannelClosed(_) => false,
+        }
+    }
+}
+
+impl PartialOrd for ActivityItem {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ActivityItem {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        // We want None to be greater than Some because those are pending transactions
+        // so those should be at the top of the list
+        let sort = match (self.last_updated(), other.last_updated()) {
+            (Some(self_time), Some(other_time)) => self_time.cmp(&other_time),
+            (Some(_), None) => core::cmp::Ordering::Less,
+            (None, Some(_)) => core::cmp::Ordering::Greater,
+            (None, None) => {
+                // if both are none, do lightning first
+                match (self, other) {
+                    (ActivityItem::Lightning(_), ActivityItem::OnChain(_)) => {
+                        core::cmp::Ordering::Greater
+                    }
+                    (ActivityItem::OnChain(_), ActivityItem::Lightning(_)) => {
+                        core::cmp::Ordering::Less
+                    }
+                    (ActivityItem::Lightning(l1), ActivityItem::Lightning(l2)) => {
+                        // compare lightning by expire time
+                        l1.expire.cmp(&l2.expire)
+                    }
+                    (ActivityItem::OnChain(o1), ActivityItem::OnChain(o2)) => {
+                        // compare onchain by confirmation time (which will be last seen for unconfirmed)
+                        o1.confirmation_time.cmp(&o2.confirmation_time)
+                    }
+                    _ => core::cmp::Ordering::Equal,
+                }
+            }
+        };
+
+        // if the sort is equal, sort by serialization so we have a stable sort
+        sort.then_with(|| {
+            serde_json::to_string(self)
+                .unwrap()
+                .cmp(&serde_json::to_string(other).unwrap())
+        })
+    }
+}
 
 #[derive(Clone)]
 pub struct MutinyWalletConfig {
@@ -386,6 +503,106 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         });
     }
 
+    /// Pays a lightning invoice from the selected node.
+    /// An amount should only be provided if the invoice does not have an amount.
+    /// The amount should be in satoshis.
+    pub async fn pay_invoice(
+        &self,
+        inv: &Bolt11Invoice,
+        amt_sats: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        if inv.network() != self.config.network {
+            return Err(MutinyError::IncorrectNetwork(inv.network()));
+        }
+
+        self.node_manager
+            .pay_invoice(None, inv, amt_sats, labels)
+            .await
+    }
+
+    /// Creates a BIP 21 invoice. This creates a new address and a lightning invoice.
+    /// The lightning invoice may return errors related to the LSP. Check the error and
+    /// fallback to `get_new_address` and warn the user that Lightning is not available.
+    ///
+    /// Errors that might be returned include:
+    ///
+    /// - [`MutinyError::LspGenericError`]: This is returned for various reasons, including if a
+    ///   request to the LSP server fails for any reason, or if the server returns
+    ///   a status other than 500 that can't be parsed into a `ProposalResponse`.
+    ///
+    /// - [`MutinyError::LspFundingError`]: Returned if the LSP server returns an error with
+    ///   a status of 500, indicating an "Internal Server Error", and a message
+    ///   stating "Cannot fund new channel at this time". This means that the LSP cannot support
+    ///   a new channel at this time.
+    ///
+    /// - [`MutinyError::LspAmountTooHighError`]: Returned if the LSP server returns an error with
+    ///   a status of 500, indicating an "Internal Server Error", and a message stating "Invoice
+    ///   amount is too high". This means that the LSP cannot support the amount that the user
+    ///   requested. The user should request a smaller amount from the LSP.
+    ///
+    /// - [`MutinyError::LspConnectionError`]: Returned if the LSP server returns an error with
+    ///   a status of 500, indicating an "Internal Server Error", and a message that starts with
+    ///   "Failed to connect to peer". This means that the LSP is not connected to our node.
+    ///
+    /// If the server returns a status of 500 with a different error message,
+    /// a [`MutinyError::LspGenericError`] is returned.
+    pub async fn create_bip21(
+        &self,
+        amount: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyBip21RawMaterials, MutinyError> {
+        // If we are in safe mode, we don't create invoices
+        let invoice = if self.config.safe_mode {
+            None
+        } else {
+            let inv = self
+                .node_manager
+                .create_invoice(amount, labels.clone())
+                .await?;
+            Some(inv.bolt11.ok_or(MutinyError::WalletOperationFailed)?)
+        };
+
+        let Ok(address) = self.node_manager.get_new_address(labels.clone()) else {
+            return Err(MutinyError::WalletOperationFailed);
+        };
+
+        Ok(MutinyBip21RawMaterials {
+            address,
+            invoice,
+            btc_amount: amount.map(|amount| bitcoin::Amount::from_sat(amount).to_btc().to_string()),
+            labels,
+        })
+    }
+
+    /// Gets the current balance of the wallet.
+    /// This includes both on-chain and lightning funds.
+    ///
+    /// This will not include any funds in an unconfirmed lightning channel.
+    pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyError> {
+        Ok(MutinyBalance::new(self.node_manager.get_balance().await?))
+    }
+
+    /// Get the sorted activity list for lightning payments, channels, and txs.
+    pub async fn get_activity(&self) -> Result<Vec<ActivityItem>, MutinyError> {
+        self.node_manager.get_activity().await
+    }
+
+    /// Gets an invoice.
+    /// This includes sent and received invoices.
+    pub async fn get_invoice(&self, invoice: &Bolt11Invoice) -> Result<MutinyInvoice, MutinyError> {
+        self.get_invoice_by_hash(invoice.payment_hash()).await
+    }
+
+    /// Looks up an invoice by hash.
+    /// This includes sent and received invoices.
+    pub async fn get_invoice_by_hash(
+        &self,
+        hash: &sha256::Hash,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        self.node_manager.get_invoice_by_hash(hash).await
+    }
+
     /// Checks whether or not the user is subscribed to Mutiny+.
     /// Submits a NWC string to keep the subscription active if not expired.
     ///
@@ -417,18 +634,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         autopay: bool,
     ) -> Result<(), MutinyError> {
         if let Some(subscription_client) = self.node_manager.subscription_client.clone() {
-            let nodes = self.node_manager.nodes.lock().await;
-            let first_node_pubkey = if let Some(node) = nodes.values().next() {
-                node.pubkey
-            } else {
-                return Err(MutinyError::WalletOperationFailed);
-            };
-            drop(nodes);
-
             // TODO if this times out, we should make the next part happen in EventManager
             self.node_manager
                 .pay_invoice(
-                    &first_node_pubkey,
+                    None,
                     inv,
                     None,
                     vec![MUTINY_PLUS_SUBSCRIPTION_LABEL.to_string()],
@@ -661,6 +870,20 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         storage.set_data(LOGGING_KEY.to_string(), logs, None)?;
         Ok(())
     }
+
+    /// Decodes a lightning invoice into useful information.
+    /// Will return an error if the invoice is for a different network.
+    pub fn decode_invoice(
+        &self,
+        invoice: Bolt11Invoice,
+        network: Option<Network>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        if invoice.network() != network.unwrap_or(self.config.network) {
+            return Err(MutinyError::IncorrectNetwork(invoice.network()));
+        }
+
+        Ok(invoice.into())
+    }
 }
 
 #[cfg(test)]
@@ -873,5 +1096,47 @@ mod tests {
             .expect("mutiny wallet should initialize");
         let restored_seed = mw2.node_manager.xprivkey;
         assert_eq!(seed, restored_seed);
+    }
+
+    #[test]
+    async fn create_mutiny_wallet_safe_mode() {
+        let test_name = "create_mutiny_wallet";
+        log!("{}", test_name);
+
+        let mnemonic = generate_seed(12).unwrap();
+        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &mnemonic.to_seed("")).unwrap();
+
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
+        assert!(!NodeManager::has_node_manager(storage.clone()));
+        let config = MutinyWalletConfig::new(
+            xpriv,
+            #[cfg(target_arch = "wasm32")]
+            None,
+            Network::Regtest,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            true,
+        )
+        .with_safe_mode();
+        let mw = MutinyWallet::new(storage.clone(), config, None)
+            .await
+            .expect("mutiny wallet should initialize");
+        mw.storage.insert_mnemonic(mnemonic).unwrap();
+        assert!(NodeManager::has_node_manager(storage));
+
+        let bip21 = mw.create_bip21(None, vec![]).await.unwrap();
+        assert!(bip21.invoice.is_none());
+
+        let new_node = mw.node_manager.new_node().await;
+        assert!(new_node.is_err());
     }
 }

@@ -59,30 +59,30 @@ impl ActivityItem {
     }
 }
 
-impl From<nodemanager::ActivityItem> for ActivityItem {
-    fn from(a: nodemanager::ActivityItem) -> Self {
+impl From<mutiny_core::ActivityItem> for ActivityItem {
+    fn from(a: mutiny_core::ActivityItem) -> Self {
         let kind = match a {
-            nodemanager::ActivityItem::OnChain(_) => {
+            mutiny_core::ActivityItem::OnChain(_) => {
                 if a.is_channel_open() {
                     ActivityType::ChannelOpen
                 } else {
                     ActivityType::OnChain
                 }
             }
-            nodemanager::ActivityItem::Lightning(_) => ActivityType::Lightning,
-            nodemanager::ActivityItem::ChannelClosed(_) => ActivityType::ChannelClose,
+            mutiny_core::ActivityItem::Lightning(_) => ActivityType::Lightning,
+            mutiny_core::ActivityItem::ChannelClosed(_) => ActivityType::ChannelClose,
         };
 
         let id = match a {
-            nodemanager::ActivityItem::OnChain(ref t) => t.txid.to_hex(),
-            nodemanager::ActivityItem::Lightning(ref ln) => ln.payment_hash.to_hex(),
-            nodemanager::ActivityItem::ChannelClosed(ref c) => {
+            mutiny_core::ActivityItem::OnChain(ref t) => t.txid.to_hex(),
+            mutiny_core::ActivityItem::Lightning(ref ln) => ln.payment_hash.to_hex(),
+            mutiny_core::ActivityItem::ChannelClosed(ref c) => {
                 c.user_channel_id.map(|c| c.to_hex()).unwrap_or_default()
             }
         };
 
         let (inbound, amount_sats) = match a {
-            nodemanager::ActivityItem::OnChain(ref t) => {
+            mutiny_core::ActivityItem::OnChain(ref t) => {
                 let inbound = t.received > t.sent;
                 let amount_sats = if inbound {
                     Some(t.received - t.sent)
@@ -91,8 +91,8 @@ impl From<nodemanager::ActivityItem> for ActivityItem {
                 };
                 (inbound, amount_sats)
             }
-            nodemanager::ActivityItem::Lightning(ref ln) => (ln.inbound, ln.amount_sats),
-            nodemanager::ActivityItem::ChannelClosed(_) => (false, None),
+            mutiny_core::ActivityItem::Lightning(ref ln) => (ln.inbound, ln.amount_sats),
+            mutiny_core::ActivityItem::ChannelClosed(_) => (false, None),
         };
 
         ActivityItem {
@@ -414,8 +414,8 @@ impl MutinyBalance {
     }
 }
 
-impl From<nodemanager::MutinyBalance> for MutinyBalance {
-    fn from(m: nodemanager::MutinyBalance) -> Self {
+impl From<mutiny_core::MutinyBalance> for MutinyBalance {
+    fn from(m: mutiny_core::MutinyBalance) -> Self {
         MutinyBalance {
             confirmed: m.confirmed,
             unconfirmed: m.unconfirmed,

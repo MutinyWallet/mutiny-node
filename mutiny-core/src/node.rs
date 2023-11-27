@@ -1,4 +1,3 @@
-use crate::labels::LabelStorage;
 use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
 use crate::lsp::{InvoiceRequest, LspConfig};
 use crate::messagehandler::MutinyMessageHandler;
@@ -23,6 +22,7 @@ use crate::{
 };
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
+use crate::{labels::LabelStorage, DEFAULT_PAYMENT_TIMEOUT};
 use anyhow::{anyhow, Context};
 use bdk::FeeRate;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
@@ -83,7 +83,6 @@ use std::{
     },
 };
 
-const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 const INITIAL_RECONNECTION_DELAY: u64 = 5;
 const MAX_RECONNECTION_DELAY: u64 = 60;
 
@@ -1062,10 +1061,6 @@ impl<S: MutinyStorage> Node<S> {
         log_info!(self.logger, "SUCCESS: generated invoice: {invoice}");
 
         Ok(invoice)
-    }
-
-    pub fn get_invoice(&self, invoice: &Bolt11Invoice) -> Result<MutinyInvoice, MutinyError> {
-        self.get_invoice_by_hash(invoice.payment_hash())
     }
 
     pub fn get_invoice_by_hash(&self, payment_hash: &Sha256) -> Result<MutinyInvoice, MutinyError> {
@@ -2294,7 +2289,7 @@ mod tests {
             _ => panic!("unexpected invoice description"),
         }
 
-        let from_storage = node.get_invoice(&invoice).unwrap();
+        let from_storage = node.get_invoice_by_hash(invoice.payment_hash()).unwrap();
         let by_hash = node.get_invoice_by_hash(invoice.payment_hash()).unwrap();
 
         assert_eq!(from_storage, by_hash);
@@ -2458,7 +2453,7 @@ mod wasm_test {
             _ => panic!("unexpected invoice description"),
         }
 
-        let from_storage = node.get_invoice(&invoice).unwrap();
+        let from_storage = node.get_invoice_by_hash(invoice.payment_hash()).unwrap();
         let by_hash = node.get_invoice_by_hash(invoice.payment_hash()).unwrap();
 
         assert_eq!(from_storage, by_hash);

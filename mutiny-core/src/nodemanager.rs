@@ -1,4 +1,3 @@
-use crate::lnurlauth::AuthManager;
 use crate::logging::LOGGING_KEY;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY};
@@ -23,6 +22,7 @@ use crate::{
 };
 use crate::{gossip::*, scorer::HubPreferentialScorer};
 use crate::{labels::LabelStorage, subscription::MutinySubscriptionClient};
+use crate::{lnurlauth::AuthManager, ActivityItem};
 use anyhow::anyhow;
 use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::{wallet::AddressIndex, FeeRate, LocalUtxo};
@@ -379,94 +379,7 @@ impl Ord for ChannelClosure {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub enum ActivityItem {
-    OnChain(TransactionDetails),
-    Lightning(Box<MutinyInvoice>),
-    ChannelClosed(ChannelClosure),
-}
-
-impl ActivityItem {
-    pub fn last_updated(&self) -> Option<u64> {
-        match self {
-            ActivityItem::OnChain(t) => match t.confirmation_time {
-                ConfirmationTime::Confirmed { time, .. } => Some(time),
-                ConfirmationTime::Unconfirmed { .. } => None,
-            },
-            ActivityItem::Lightning(i) => match i.status {
-                HTLCStatus::Succeeded => Some(i.last_updated),
-                HTLCStatus::Failed => Some(i.last_updated),
-                HTLCStatus::Pending | HTLCStatus::InFlight => None,
-            },
-            ActivityItem::ChannelClosed(c) => Some(c.timestamp),
-        }
-    }
-
-    pub fn labels(&self) -> Vec<String> {
-        match self {
-            ActivityItem::OnChain(t) => t.labels.clone(),
-            ActivityItem::Lightning(i) => i.labels.clone(),
-            ActivityItem::ChannelClosed(_) => vec![],
-        }
-    }
-
-    pub fn is_channel_open(&self) -> bool {
-        match self {
-            ActivityItem::OnChain(onchain) => {
-                onchain.labels.iter().any(|l| l.contains("LN Channel:"))
-            }
-            ActivityItem::Lightning(_) => false,
-            ActivityItem::ChannelClosed(_) => false,
-        }
-    }
-}
-
-impl PartialOrd for ActivityItem {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ActivityItem {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        // We want None to be greater than Some because those are pending transactions
-        // so those should be at the top of the list
-        let sort = match (self.last_updated(), other.last_updated()) {
-            (Some(self_time), Some(other_time)) => self_time.cmp(&other_time),
-            (Some(_), None) => core::cmp::Ordering::Less,
-            (None, Some(_)) => core::cmp::Ordering::Greater,
-            (None, None) => {
-                // if both are none, do lightning first
-                match (self, other) {
-                    (ActivityItem::Lightning(_), ActivityItem::OnChain(_)) => {
-                        core::cmp::Ordering::Greater
-                    }
-                    (ActivityItem::OnChain(_), ActivityItem::Lightning(_)) => {
-                        core::cmp::Ordering::Less
-                    }
-                    (ActivityItem::Lightning(l1), ActivityItem::Lightning(l2)) => {
-                        // compare lightning by expire time
-                        l1.expire.cmp(&l2.expire)
-                    }
-                    (ActivityItem::OnChain(o1), ActivityItem::OnChain(o2)) => {
-                        // compare onchain by confirmation time (which will be last seen for unconfirmed)
-                        o1.confirmation_time.cmp(&o2.confirmation_time)
-                    }
-                    _ => core::cmp::Ordering::Equal,
-                }
-            }
-        };
-
-        // if the sort is equal, sort by serialization so we have a stable sort
-        sort.then_with(|| {
-            serde_json::to_string(self)
-                .unwrap()
-                .cmp(&serde_json::to_string(other).unwrap())
-        })
-    }
-}
-
-pub struct MutinyBalance {
+pub struct NodeBalance {
     pub confirmed: u64,
     pub unconfirmed: u64,
     pub lightning: u64,
@@ -767,6 +680,19 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(node.clone())
     }
 
+    // New function to get a node by PublicKey or return the first node
+    pub(crate) async fn get_node_by_key_or_first(
+        &self,
+        pk: Option<&PublicKey>,
+    ) -> Result<Arc<Node<S>>, MutinyError> {
+        let nodes = self.nodes.lock().await;
+        let node = match pk {
+            Some(pubkey) => nodes.get(pubkey),
+            None => nodes.iter().next().map(|(_, node)| node),
+        };
+        node.cloned().ok_or(MutinyError::NotFound)
+    }
+
     /// Stops all of the nodes and background processes.
     /// Returns after node has been stopped.
     pub async fn stop(&self) -> Result<(), MutinyError> {
@@ -958,57 +884,6 @@ impl<S: MutinyStorage> NodeManager<S> {
             "Could not get wallet lock to get wallet balance"
         );
         Err(MutinyError::WalletOperationFailed)
-    }
-
-    /// Creates a BIP 21 invoice. This creates a new address and a lightning invoice.
-    /// The lightning invoice may return errors related to the LSP. Check the error and
-    /// fallback to `get_new_address` and warn the user that Lightning is not available.
-    ///
-    /// Errors that might be returned include:
-    ///
-    /// - [`MutinyError::LspGenericError`]: This is returned for various reasons, including if a
-    ///   request to the LSP server fails for any reason, or if the server returns
-    ///   a status other than 500 that can't be parsed into a `ProposalResponse`.
-    ///
-    /// - [`MutinyError::LspFundingError`]: Returned if the LSP server returns an error with
-    ///   a status of 500, indicating an "Internal Server Error", and a message
-    ///   stating "Cannot fund new channel at this time". This means that the LSP cannot support
-    ///   a new channel at this time.
-    ///
-    /// - [`MutinyError::LspAmountTooHighError`]: Returned if the LSP server returns an error with
-    ///   a status of 500, indicating an "Internal Server Error", and a message stating "Invoice
-    ///   amount is too high". This means that the LSP cannot support the amount that the user
-    ///   requested. The user should request a smaller amount from the LSP.
-    ///
-    /// - [`MutinyError::LspConnectionError`]: Returned if the LSP server returns an error with
-    ///   a status of 500, indicating an "Internal Server Error", and a message that starts with
-    ///   "Failed to connect to peer". This means that the LSP is not connected to our node.
-    ///
-    /// If the server returns a status of 500 with a different error message,
-    /// a [`MutinyError::LspGenericError`] is returned.
-    pub async fn create_bip21(
-        &self,
-        amount: Option<u64>,
-        labels: Vec<String>,
-    ) -> Result<MutinyBip21RawMaterials, MutinyError> {
-        // If we are in safe mode, we don't create invoices
-        let invoice = if self.safe_mode {
-            None
-        } else {
-            let inv = self.create_invoice(amount, labels.clone()).await?;
-            Some(inv.bolt11.ok_or(MutinyError::WalletOperationFailed)?)
-        };
-
-        let Ok(address) = self.get_new_address(labels.clone()) else {
-            return Err(MutinyError::WalletOperationFailed);
-        };
-
-        Ok(MutinyBip21RawMaterials {
-            address,
-            invoice,
-            btc_amount: amount.map(|amount| bitcoin::Amount::from_sat(amount).to_btc().to_string()),
-            labels,
-        })
     }
 
     pub async fn send_payjoin(
@@ -1250,7 +1125,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     /// Returns all the on-chain and lightning activity from the wallet.
-    pub async fn get_activity(&self) -> Result<Vec<ActivityItem>, MutinyError> {
+    pub(crate) async fn get_activity(&self) -> Result<Vec<ActivityItem>, MutinyError> {
         // todo add contacts to the activity
         let (lightning, closures) =
             futures_util::join!(self.list_invoices(), self.list_channel_closures());
@@ -1308,7 +1183,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let mut activity = vec![];
         for inv in label_item.invoices.iter() {
-            let ln = self.get_invoice(inv).await?;
+            let ln = self.get_invoice_by_hash(inv.payment_hash()).await?;
             // Only show paid and in-flight invoices
             match ln.status {
                 HTLCStatus::Succeeded | HTLCStatus::InFlight => {
@@ -1398,7 +1273,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// This includes both on-chain and lightning funds.
     ///
     /// This will not include any funds in an unconfirmed lightning channel.
-    pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyError> {
+    pub(crate) async fn get_balance(&self) -> Result<NodeBalance, MutinyError> {
         let onchain = if let Ok(wallet) = self.wallet.wallet.try_read() {
             wallet.get_balance()
         } else {
@@ -1433,7 +1308,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             .map(|bal| bal.claimable_amount_satoshis())
             .sum();
 
-        Ok(MutinyBalance {
+        Ok(NodeBalance {
             confirmed: onchain.confirmed + onchain.trusted_pending,
             unconfirmed: onchain.untrusted_pending + onchain.immature,
             lightning: lightning_msats / 1_000,
@@ -1623,75 +1498,54 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(peers)
     }
 
-    /// Attempts to connect to a peer from the selected node.
+    /// Attempts to connect to a peer using either a specified node or the first available node.
     pub async fn connect_to_peer(
         &self,
-        self_node_pubkey: &PublicKey,
+        self_node_pubkey: Option<&PublicKey>,
         connection_string: &str,
         label: Option<String>,
     ) -> Result<(), MutinyError> {
-        if let Some(node) = self.nodes.lock().await.get(self_node_pubkey) {
-            let connect_info = PubkeyConnectionInfo::new(connection_string)?;
-            let label_opt = label.filter(|s| !s.is_empty()); // filter out empty strings
-            let res = node.connect_peer(connect_info, label_opt).await;
-            match res {
-                Ok(_) => {
-                    log_info!(self.logger, "connected to peer: {connection_string}");
-                    return Ok(());
-                }
-                Err(e) => {
-                    log_error!(
-                        self.logger,
-                        "could not connect to peer: {connection_string} - {e}"
-                    );
-                    return Err(e);
-                }
-            };
-        }
+        let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
+        let connect_info = PubkeyConnectionInfo::new(connection_string)?;
+        let label_opt = label.filter(|s| !s.is_empty()); // filter out empty strings
+        let res = node.connect_peer(connect_info, label_opt).await;
 
-        log_error!(
-            self.logger,
-            "could not find internal node {self_node_pubkey}"
-        );
-        Err(MutinyError::NotFound)
+        match res {
+            Ok(_) => {
+                log_info!(self.logger, "Connected to peer: {connection_string}");
+                Ok(())
+            }
+            Err(e) => {
+                log_error!(
+                    self.logger,
+                    "Could not connect to peer: {connection_string} - {e}"
+                );
+                Err(e)
+            }
+        }
     }
 
-    /// Disconnects from a peer from the selected node.
+    /// Disconnects from a peer using either a specified node or the first available node.
     pub async fn disconnect_peer(
         &self,
-        self_node_pubkey: &PublicKey,
+        self_node_pubkey: Option<&PublicKey>,
         peer: PublicKey,
     ) -> Result<(), MutinyError> {
-        if let Some(node) = self.nodes.lock().await.get(self_node_pubkey) {
-            node.disconnect_peer(peer);
-            Ok(())
-        } else {
-            log_error!(
-                self.logger,
-                "could not find internal node {self_node_pubkey}"
-            );
-            Err(MutinyError::NotFound)
-        }
+        let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
+        node.disconnect_peer(peer);
+        Ok(())
     }
 
-    /// Deletes a peer from the selected node.
-    /// This will make it so that the node will not attempt to
-    /// reconnect to the peer.
+    /// Deletes a peer from either a specified node or the first available node.
+    /// This will prevent the node from attempting to reconnect to the peer.
     pub async fn delete_peer(
         &self,
-        self_node_pubkey: &PublicKey,
+        self_node_pubkey: Option<&PublicKey>,
         peer: &NodeId,
     ) -> Result<(), MutinyError> {
-        if let Some(node) = self.nodes.lock().await.get(self_node_pubkey) {
-            gossip::delete_peer_info(&self.storage, &node._uuid, peer)?;
-            Ok(())
-        } else {
-            log_error!(
-                self.logger,
-                "could not find internal node {self_node_pubkey}"
-            );
-            Err(MutinyError::NotFound)
-        }
+        let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
+        gossip::delete_peer_info(&self.storage, &node._uuid, peer)?;
+        Ok(())
     }
 
     /// Sets the label of a peer from the selected node.
@@ -1742,53 +1596,35 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(invoice.into())
     }
 
-    /// Pays a lightning invoice from the selected node.
+    /// Pays a lightning invoice from either a specified node or the first available node.
     /// An amount should only be provided if the invoice does not have an amount.
     /// The amount should be in satoshis.
-    pub async fn pay_invoice(
+    pub(crate) async fn pay_invoice(
         &self,
-        from_node: &PublicKey,
+        self_node_pubkey: Option<&PublicKey>,
         invoice: &Bolt11Invoice,
         amt_sats: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
-        if invoice.network() != self.network {
-            return Err(MutinyError::IncorrectNetwork(invoice.network()));
-        }
-
-        let node = self.get_node(from_node).await?;
+        let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
         node.pay_invoice_with_timeout(invoice, amt_sats, None, labels)
             .await
     }
 
-    /// Sends a spontaneous payment to a node from the selected node.
+    /// Sends a spontaneous payment to a node from either a specified node or the first available node.
     /// The amount should be in satoshis.
     pub async fn keysend(
         &self,
-        from_node: &PublicKey,
+        self_node_pubkey: Option<&PublicKey>,
         to_node: PublicKey,
         amt_sats: u64,
         message: Option<String>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
-        let node = self.get_node(from_node).await?;
+        let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
         log_debug!(self.logger, "Keysending to {to_node}");
         node.keysend_with_timeout(to_node, amt_sats, message, labels, None)
             .await
-    }
-
-    /// Decodes a lightning invoice into useful information.
-    /// Will return an error if the invoice is for a different network.
-    pub async fn decode_invoice(
-        &self,
-        invoice: Bolt11Invoice,
-        network: Option<Network>,
-    ) -> Result<MutinyInvoice, MutinyError> {
-        if invoice.network() != network.unwrap_or(self.network) {
-            return Err(MutinyError::IncorrectNetwork(invoice.network()));
-        }
-
-        Ok(invoice.into())
     }
 
     /// Calls upon a LNURL to get the parameters for it.
@@ -1831,7 +1667,6 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// This will fail if the LNURL is not a LNURL pay.
     pub async fn lnurl_pay(
         &self,
-        from_node: &PublicKey,
         lnurl: &LnUrl,
         amount_sats: u64,
         zap_npub: Option<XOnlyPublicKey>,
@@ -1879,7 +1714,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                         }
                     }
 
-                    self.pay_invoice(from_node, &invoice, None, labels).await
+                    self.pay_invoice(None, &invoice, None, labels).await
                 } else {
                     log_error!(self.logger, "LNURL return invoice with incorrect amount");
                     Err(MutinyError::LnUrlFailure)
@@ -1934,19 +1769,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Gets an invoice from the node manager.
     /// This includes sent and received invoices.
-    pub async fn get_invoice(&self, invoice: &Bolt11Invoice) -> Result<MutinyInvoice, MutinyError> {
-        let nodes = self.nodes.lock().await;
-        let inv_opt: Option<MutinyInvoice> =
-            nodes.iter().find_map(|(_, n)| n.get_invoice(invoice).ok());
-        match inv_opt {
-            Some(i) => Ok(i),
-            None => Err(MutinyError::NotFound),
-        }
-    }
-
-    /// Gets an invoice from the node manager.
-    /// This includes sent and received invoices.
-    pub async fn get_invoice_by_hash(
+    pub(crate) async fn get_invoice_by_hash(
         &self,
         hash: &sha256::Hash,
     ) -> Result<MutinyInvoice, MutinyError> {
@@ -1998,21 +1821,20 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(channels)
     }
 
-    /// Opens a channel from our selected node to the given pubkey.
+    /// Opens a channel from either a specified node or the first available node to the given pubkey.
     /// The amount is in satoshis.
     ///
     /// The node must be online and have a connection to the peer.
-    /// The wallet much have enough funds to open the channel.
+    /// The wallet must have enough funds to open the channel.
     pub async fn open_channel(
         &self,
-        from_node: &PublicKey,
+        self_node_pubkey: Option<&PublicKey>,
         to_pubkey: Option<PublicKey>,
         amount: u64,
         fee_rate: Option<f32>,
         user_channel_id: Option<u128>,
     ) -> Result<MutinyChannel, MutinyError> {
-        let node = self.get_node(from_node).await?;
-
+        let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
         let to_pubkey = match to_pubkey {
             Some(pubkey) => pubkey,
             None => node
@@ -2033,11 +1855,11 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         match found_channel {
             Some(channel) => Ok(channel.into()),
-            None => Err(MutinyError::ChannelCreationFailed), // what should we do here?
+            None => Err(MutinyError::ChannelCreationFailed),
         }
     }
 
-    /// Opens a channel from our selected node to the given pubkey.
+    /// Opens a channel from either a specified node or the first available node to the given pubkey.
     /// It will spend the given utxos in full to fund the channel.
     ///
     /// The node must be online and have a connection to the peer.
@@ -2045,12 +1867,11 @@ impl<S: MutinyStorage> NodeManager<S> {
     pub async fn sweep_utxos_to_channel(
         &self,
         user_chan_id: Option<u128>,
-        from_node: &PublicKey,
+        self_node_pubkey: Option<&PublicKey>,
         utxos: &[OutPoint],
         to_pubkey: Option<PublicKey>,
     ) -> Result<MutinyChannel, MutinyError> {
-        let node = self.get_node(from_node).await?;
-
+        let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
         let to_pubkey = match to_pubkey {
             Some(pubkey) => pubkey,
             None => node
@@ -2071,7 +1892,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         match found_channel {
             Some(channel) => Ok(channel.into()),
-            None => Err(MutinyError::ChannelCreationFailed), // what should we do here?
+            None => Err(MutinyError::ChannelCreationFailed),
         }
     }
 
@@ -2082,7 +1903,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     pub async fn sweep_all_to_channel(
         &self,
         user_chan_id: Option<u128>,
-        from_node: &PublicKey,
+        from_node: Option<&PublicKey>,
         to_pubkey: Option<PublicKey>,
     ) -> Result<MutinyChannel, MutinyError> {
         let utxos = self
@@ -2721,50 +2542,6 @@ mod tests {
             let retrieved_node = node_storage.nodes.get(&node_identity.uuid).unwrap();
             assert_eq!(1, retrieved_node.child_index);
         }
-    }
-
-    #[test]
-    async fn safe_mode_tests() {
-        let test_name = "safe_mode_tests";
-        log!("{}", test_name);
-
-        let pass = uuid::Uuid::new_v4().to_string();
-        let cipher = encryption_key_from_pass(&pass).unwrap();
-        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
-        let seed = generate_seed(12).expect("Failed to gen seed");
-        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
-        let c = MutinyWalletConfig::new(
-            xpriv,
-            #[cfg(target_arch = "wasm32")]
-            None,
-            Network::Regtest,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            true,
-        );
-        let c = c.with_safe_mode();
-
-        let nm = NodeManager::new(
-            c,
-            storage,
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(MutinyLogger::default()),
-        )
-        .await
-        .expect("node manager should initialize");
-
-        let bip21 = nm.create_bip21(None, vec![]).await.unwrap();
-        assert!(bip21.invoice.is_none());
-
-        let new_node = nm.new_node().await;
-        assert!(new_node.is_err());
     }
 
     #[test]

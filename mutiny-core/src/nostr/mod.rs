@@ -864,7 +864,10 @@ impl<S: MutinyStorage> NostrManager<S> {
 
             // check if the invoice has been paid, if so, return, otherwise continue
             // checking for response event
-            if let Ok(invoice) = node_manager.get_invoice(&bolt11).await {
+            if let Ok(invoice) = node_manager
+                .get_invoice_by_hash(bolt11.payment_hash())
+                .await
+            {
                 if invoice.paid() {
                     break;
                 }
