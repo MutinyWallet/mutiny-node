@@ -1,3 +1,4 @@
+use crate::messagehandler::MutinyMessageHandler;
 use crate::networking::socket::{schedule_descriptor_read, MutinySocketDescriptor};
 use crate::node::{NetworkGraph, OnionMessenger};
 use crate::storage::MutinyStorage;
@@ -10,8 +11,8 @@ use lightning::events::{MessageSendEvent, MessageSendEventsProvider};
 use lightning::ln::features::{InitFeatures, NodeFeatures};
 use lightning::ln::msgs;
 use lightning::ln::msgs::{LightningError, RoutingMessageHandler};
+use lightning::ln::peer_handler::PeerHandleError;
 use lightning::ln::peer_handler::PeerManager as LdkPeerManager;
-use lightning::ln::peer_handler::{IgnoringMessageHandler, PeerHandleError};
 use lightning::log_warn;
 use lightning::onion_message::{Destination, MessageRouter, OnionMessagePath};
 use lightning::routing::gossip::NodeId;
@@ -92,7 +93,7 @@ pub(crate) type PeerManagerImpl<S: MutinyStorage> = LdkPeerManager<
     Arc<GossipMessageHandler<S>>,
     Arc<OnionMessenger<S>>,
     Arc<MutinyLogger>,
-    IgnoringMessageHandler,
+    Arc<MutinyMessageHandler<S>>,
     Arc<PhantomKeysManager<S>>,
 >;
 

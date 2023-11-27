@@ -1,5 +1,8 @@
 use crate::labels::LabelStorage;
 use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
+use crate::messagehandler::MutinyMessageHandler;
+use crate::multiesplora::MultiEsploraClient;
+use crate::networking::socket::MutinySocketDescriptor;
 use crate::nodemanager::{ChannelClosure, LspConfig};
 use crate::peermanager::LspMessageRouter;
 use crate::utils::get_monitor_version;
@@ -67,6 +70,8 @@ use lightning_invoice::{
     utils::{create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice},
     Bolt11Invoice,
 };
+use lightning_liquidity::LiquidityManager as LDKLSPLiquidityManager;
+
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 use std::collections::HashMap;
@@ -103,11 +108,37 @@ pub(crate) type OnionMessenger<S: MutinyStorage> = LdkOnionMessenger<
     IgnoringMessageHandler,
 >;
 
+pub type SimpleArcLiquidityManager<SD, M, T, F, L, S> = LDKLSPLiquidityManager<
+    Arc<PhantomKeysManager<S>>,
+    Arc<M>,
+    Arc<T>,
+    Arc<F>,
+    Arc<Router>,
+    Arc<PhantomKeysManager<S>>,
+    Arc<L>,
+    SD,
+    Arc<GossipMessageHandler<S>>,
+    Arc<PhantomChannelManager<S>>,
+    Arc<OnionMessenger<S>>,
+    Arc<MutinyMessageHandler<S>>,
+    Arc<PhantomKeysManager<S>>,
+    Arc<dyn Filter + Send + Sync>,
+>;
+
+pub type LiquidityManager<S: MutinyStorage> = SimpleArcLiquidityManager<
+    MutinySocketDescriptor,
+    ChainMonitor<S>,
+    MutinyChain<S>,
+    MutinyFeeEstimator<S>,
+    MutinyLogger,
+    S,
+>;
+
 pub(crate) type MessageHandler<S: MutinyStorage> = LdkMessageHandler<
     Arc<PhantomChannelManager<S>>,
     Arc<GossipMessageHandler<S>>,
     Arc<OnionMessenger<S>>,
-    IgnoringMessageHandler,
+    Arc<MutinyMessageHandler<S>>,
 >;
 
 pub(crate) type ChainMonitor<S: MutinyStorage> = chainmonitor::ChainMonitor<
@@ -358,12 +389,24 @@ impl<S: MutinyStorage> Node<S> {
             logger: logger.clone(),
         });
 
+        let liquidity_manager = Arc::new(LiquidityManager::new(
+            keys_manager.clone(),
+            None,
+            channel_manager.clone(),
+            None,
+            None,
+        ));
+
+        let mutiny_message_handler = Arc::new(MutinyMessageHandler {
+            liquidity: liquidity_manager.clone(),
+        });
+
         // init peer manager
         let ln_msg_handler = MessageHandler {
             chan_handler: channel_manager.clone(),
             route_handler,
             onion_message_handler,
-            custom_message_handler: IgnoringMessageHandler {},
+            custom_message_handler: mutiny_message_handler,
         };
 
         let bump_tx_event_handler = Arc::new(BumpTransactionEventHandler::new(

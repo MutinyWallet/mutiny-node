@@ -400,6 +400,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-targets",
 ]
@@ -1095,6 +1096,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightning-liquidity"
+version = "0.1.0"
+source = "git+https://github.com/lightningdevkit/lightning-liquidity.git?rev=95cbc276ee4b970361334089bc6b20d0b86649b0#95cbc276ee4b970361334089bc6b20d0b86649b0"
+dependencies = [
+ "bitcoin 0.29.2",
+ "chrono",
+ "lightning",
+ "lightning-invoice",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lightning-rapid-gossip-sync"
 version = "0.0.118"
 source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=686a84236f54bf8d7270a5fbec07801e5281691f#686a84236f54bf8d7270a5fbec07801e5281691f"
@@ -1255,6 +1269,7 @@ dependencies = [
  "lightning",
  "lightning-background-processor",
  "lightning-invoice",
+ "lightning-liquidity",
  "lightning-rapid-gossip-sync",
  "lightning-transaction-sync",
  "lnurl-rs",
