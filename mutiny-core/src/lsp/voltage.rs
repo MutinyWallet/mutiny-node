@@ -192,7 +192,7 @@ impl Lsp for LspClient {
     }
 
     fn get_lsp_pubkey(&self) -> PublicKey {
-        self.pubkey.clone()
+        self.pubkey
     }
 
     fn get_lsp_connection_string(&self) -> String {

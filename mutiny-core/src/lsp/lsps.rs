@@ -231,7 +231,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
 
         self.liquidity_manager
             .lsps2_create_invoice(
-                self.pubkey.clone(),
+                self.pubkey,
                 Some(fee_request.amount_msat),
                 self.token.clone(),
                 fee_request.user_channel_id,
@@ -293,7 +293,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
 
         self.liquidity_manager
             .opening_fee_params_selected(
-                self.pubkey.clone(),
+                self.pubkey,
                 channel_info.channel_id,
                 channel_info.fee_params.clone(),
             )
@@ -307,7 +307,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
     }
 
     fn get_lsp_pubkey(&self) -> PublicKey {
-        self.pubkey.clone()
+        self.pubkey
     }
 
     fn get_lsp_connection_string(&self) -> String {
