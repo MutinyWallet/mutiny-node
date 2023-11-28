@@ -262,6 +262,7 @@ impl From<nodemanager::MutinyPeer> for MutinyPeer {
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
 pub struct MutinyChannel {
+    user_chan_id: String,
     pub balance: u64,
     pub size: u64,
     pub reserve: u64,
@@ -279,6 +280,11 @@ impl MutinyChannel {
     #[wasm_bindgen(getter)]
     pub fn value(&self) -> JsValue {
         JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn user_chan_id(&self) -> String {
+        self.user_chan_id.clone()
     }
 
     #[wasm_bindgen(getter)]
@@ -303,12 +309,33 @@ impl MutinyChannel {
 impl From<nodemanager::MutinyChannel> for MutinyChannel {
     fn from(m: nodemanager::MutinyChannel) -> Self {
         MutinyChannel {
+            user_chan_id: m.user_chan_id,
             balance: m.balance,
             size: m.size,
             reserve: m.reserve,
             inbound: m.inbound,
             outpoint: m.outpoint.map(|o| o.to_string()),
             peer: m.peer.to_hex(),
+            confirmations_required: m.confirmations_required,
+            confirmations: m.confirmations,
+            is_outbound: m.is_outbound,
+            is_usable: m.is_usable,
+        }
+    }
+}
+
+impl From<MutinyChannel> for nodemanager::MutinyChannel {
+    fn from(m: MutinyChannel) -> Self {
+        nodemanager::MutinyChannel {
+            user_chan_id: m.user_chan_id,
+            balance: m.balance,
+            size: m.size,
+            reserve: m.reserve,
+            inbound: m.inbound,
+            outpoint: m
+                .outpoint
+                .map(|o| OutPoint::from_str(&o).expect("Invalid outpoint")),
+            peer: PublicKey::from_str(&m.peer).expect("Invalid peer pubkey"),
             confirmations_required: m.confirmations_required,
             confirmations: m.confirmations,
             is_outbound: m.is_outbound,
