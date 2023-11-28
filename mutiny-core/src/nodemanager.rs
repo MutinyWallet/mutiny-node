@@ -11,8 +11,7 @@ use crate::{
     gossip,
     gossip::{fetch_updated_gossip, get_rgs_url},
     logging::MutinyLogger,
-    lsp::voltage::LspClient,
-    lsp::{deserialize_lsp_config, LspConfig},
+    lsp::{deserialize_lsp_config, AnyLsp, Lsp, LspConfig},
     node::{Node, PubkeyConnectionInfo, RapidGossipSync},
     onchain::get_esplora_url,
     onchain::OnChainWallet,
@@ -516,7 +515,7 @@ pub struct NodeManager<S: MutinyStorage> {
     pub(crate) nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node<S>>>>>,
     auth: AuthManager,
     lnurl_client: Arc<LnUrlClient>,
-    pub(crate) lsp_clients: Vec<LspClient>,
+    pub(crate) lsp_clients: Vec<AnyLsp>,
     pub(crate) subscription_client: Option<Arc<MutinySubscriptionClient>>,
     pub(crate) logger: Arc<MutinyLogger>,
     bitcoin_price_cache: Arc<Mutex<HashMap<String, (f32, Duration)>>>,
@@ -616,13 +615,15 @@ impl<S: MutinyStorage> NodeManager<S> {
         let gossip_sync = Arc::new(gossip_sync);
 
         // load lsp clients, if any
-        let lsp_clients: Vec<LspClient> = match c.lsp_url.clone() {
+        let lsp_clients: Vec<AnyLsp> = match c.lsp_url.clone() {
             // check if string is some and not an empty string
             // and safe_mode is not enabled
             Some(lsp_urls) if !lsp_urls.is_empty() && !c.safe_mode => {
                 let urls: Vec<&str> = lsp_urls.split(',').collect();
 
-                let futs = urls.into_iter().map(|url| LspClient::new(url.trim()));
+                let futs = urls
+                    .into_iter()
+                    .map(|url| AnyLsp::new_voltage_flow(url.trim()));
 
                 let results = futures::future::join_all(futs).await;
 
@@ -2021,12 +2022,11 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let to_pubkey = match to_pubkey {
             Some(pubkey) => pubkey,
-            None => {
-                node.lsp_client
-                    .as_ref()
-                    .ok_or(MutinyError::PubkeyInvalid)?
-                    .pubkey
-            }
+            None => node
+                .lsp_client
+                .as_ref()
+                .ok_or(MutinyError::PubkeyInvalid)?
+                .get_lsp_pubkey(),
         };
 
         let outpoint = node
@@ -2060,12 +2060,11 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let to_pubkey = match to_pubkey {
             Some(pubkey) => pubkey,
-            None => {
-                node.lsp_client
-                    .as_ref()
-                    .ok_or(MutinyError::PubkeyInvalid)?
-                    .pubkey
-            }
+            None => node
+                .lsp_client
+                .as_ref()
+                .ok_or(MutinyError::PubkeyInvalid)?
+                .get_lsp_pubkey(),
         };
 
         let outpoint = node
@@ -2550,9 +2549,9 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         // If we don't have an lsp saved we should pick a random
         // one from our client list and save it for next time
         let rand = rand::random::<usize>() % node_manager.lsp_clients.len();
-        Some(LspConfig::VoltageFlow(
-            node_manager.lsp_clients[rand].url.clone(),
-        ))
+        match node_manager.lsp_clients[rand] {
+            AnyLsp::VoltageFlow(ref client) => Some(LspConfig::VoltageFlow(client.url.clone())),
+        }
     };
 
     let next_node = NodeIndex {

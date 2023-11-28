@@ -17,8 +17,7 @@ use crate::{
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
     ldkstorage::{MutinyNodePersister, PhantomChannelManager},
     logging::MutinyLogger,
-    lsp::voltage::LspClient,
-    lsp::{FeeRequest, Lsp, LspConfig},
+    lsp::{AnyLsp, FeeRequest, Lsp, LspConfig},
     nodemanager::{MutinyInvoice, NodeIndex},
     onchain::OnChainWallet,
     peermanager::{GossipMessageHandler, PeerManagerImpl},
@@ -202,7 +201,7 @@ pub(crate) struct Node<S: MutinyStorage> {
     pub persister: Arc<MutinyNodePersister<S>>,
     wallet: Arc<OnChainWallet<S>>,
     pub(crate) logger: Arc<MutinyLogger>,
-    pub(crate) lsp_client: Option<LspClient>,
+    pub(crate) lsp_client: Option<AnyLsp>,
     pub(crate) sync_lock: Arc<Mutex<()>>,
     stop: Arc<AtomicBool>,
     pub skip_hodl_invoices: bool,
@@ -224,7 +223,7 @@ impl<S: MutinyStorage> Node<S> {
         wallet: Arc<OnChainWallet<S>>,
         network: Network,
         esplora: &AsyncClient,
-        lsp_clients: &[LspClient],
+        lsp_clients: &[AnyLsp],
         logger: Arc<MutinyLogger>,
         do_not_connect_peers: bool,
         empty_state: bool,
@@ -354,7 +353,7 @@ impl<S: MutinyStorage> Node<S> {
         }
 
         log_info!(logger, "creating lsp client");
-        let lsp_client: Option<LspClient> = match node_index.lsp {
+        let lsp_client: Option<AnyLsp> = match node_index.lsp {
             None => {
                 if lsp_clients.is_empty() {
                     log_info!(logger, "no lsp saved and no lsp clients available");
@@ -370,11 +369,13 @@ impl<S: MutinyStorage> Node<S> {
             Some(ref lsp) => lsp_clients
                 .iter()
                 .find(|c| match lsp {
-                    LspConfig::VoltageFlow(ref url) => url == &c.url,
+                    LspConfig::VoltageFlow(ref url) => match c {
+                        AnyLsp::VoltageFlow(ref client) => &client.url == url,
+                    },
                 })
                 .cloned(),
         };
-        let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.pubkey);
+        let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.get_lsp_pubkey());
         let message_router = Arc::new(LspMessageRouter::new(lsp_client_pubkey));
         let onion_message_handler = Arc::new(OnionMessenger::new(
             keys_manager.clone(),
@@ -762,10 +763,9 @@ impl<S: MutinyStorage> Node<S> {
     pub fn node_index(&self) -> NodeIndex {
         NodeIndex {
             child_index: self.child_index,
-            lsp: self
-                .lsp_client
-                .clone()
-                .map(|l| LspConfig::VoltageFlow(l.url)),
+            lsp: self.lsp_client.clone().map(|l| match l {
+                AnyLsp::VoltageFlow(ref client) => LspConfig::VoltageFlow(client.url.clone()),
+            }),
             archived: Some(false),
         }
     }
@@ -857,7 +857,7 @@ impl<S: MutinyStorage> Node<S> {
             // Needs amount over minimum if no channel
             let inbound_capacity_msat: u64 = self
                 .channel_manager
-                .list_channels_with_counterparty(&lsp.pubkey)
+                .list_channels_with_counterparty(&lsp.get_lsp_pubkey())
                 .iter()
                 .map(|c| c.inbound_capacity_msat)
                 .sum();
@@ -904,8 +904,11 @@ impl<S: MutinyStorage> Node<S> {
             .await?;
 
         if let Some(lsp) = self.lsp_client.as_ref() {
-            self.connect_peer(PubkeyConnectionInfo::new(&lsp.connection_string)?, None)
-                .await?;
+            self.connect_peer(
+                PubkeyConnectionInfo::new(&lsp.get_lsp_connection_string())?,
+                None,
+            )
+            .await?;
 
             let lsp_invoice = match lsp
                 .get_lsp_invoice(InvoiceRequest {
@@ -926,7 +929,7 @@ impl<S: MutinyStorage> Node<S> {
             }
 
             if lsp_invoice.payment_hash() != invoice.payment_hash()
-                || lsp_invoice.recover_payee_pub_key() != lsp.pubkey
+                || lsp_invoice.recover_payee_pub_key() != lsp.get_lsp_pubkey()
             {
                 return Err(MutinyError::InvoiceCreationFailed);
             }
@@ -1527,7 +1530,7 @@ impl<S: MutinyStorage> Node<S> {
         // if we are opening channel to LSP, turn off SCID alias until CLN is updated
         // LSP protects all invoice information anyways, so no UTXO leakage
         if let Some(lsp) = self.lsp_client.clone() {
-            if pubkey == lsp.pubkey {
+            if pubkey == lsp.get_lsp_pubkey() {
                 config.channel_handshake_config.negotiate_scid_privacy = false;
             }
         }
@@ -1630,7 +1633,7 @@ impl<S: MutinyStorage> Node<S> {
         // if we are opening channel to LSP, turn off SCID alias until CLN is updated
         // LSP protects all invoice information anyways, so no UTXO leakage
         if let Some(lsp) = self.lsp_client.clone() {
-            if pubkey == lsp.pubkey {
+            if pubkey == lsp.get_lsp_pubkey() {
                 config.channel_handshake_config.negotiate_scid_privacy = false;
             }
         }
@@ -1761,7 +1764,7 @@ async fn start_reconnection_handling<S: MutinyStorage>(
     fee_estimator: Arc<MutinyFeeEstimator<S>>,
     logger: &Arc<MutinyLogger>,
     uuid: String,
-    lsp_client: Option<&LspClient>,
+    lsp_client: Option<&AnyLsp>,
     stop: Arc<AtomicBool>,
     stopped_components: Arc<RwLock<Vec<bool>>>,
     skip_fee_estimates: bool,
@@ -1799,12 +1802,12 @@ async fn start_reconnection_handling<S: MutinyStorage>(
     utils::spawn(async move {
         // Now try to connect to the client's LSP
         if let Some(lsp) = lsp_client_copy {
-            let node_id = NodeId::from_pubkey(&lsp.pubkey);
+            let node_id = NodeId::from_pubkey(&lsp.get_lsp_pubkey());
 
             let connect_res = connect_peer_if_necessary(
                 #[cfg(target_arch = "wasm32")]
                 &websocket_proxy_addr_copy_proxy,
-                &PubkeyConnectionInfo::new(lsp.connection_string.as_str()).unwrap(),
+                &PubkeyConnectionInfo::new(lsp.get_lsp_connection_string().as_str()).unwrap(),
                 &storage_copy,
                 proxy_logger.clone(),
                 peer_man_proxy.clone(),
@@ -1825,7 +1828,7 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                 &storage_copy,
                 &uuid_copy,
                 &node_id,
-                &lsp.connection_string,
+                &lsp.get_lsp_connection_string(),
                 None,
             ) {
                 log_error!(proxy_logger, "could not save connection to lsp: {e}");

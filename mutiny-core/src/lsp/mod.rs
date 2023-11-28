@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use voltage::LspClient;
 
 pub mod lsps;
 pub mod voltage;
@@ -51,4 +52,46 @@ pub(crate) trait Lsp {
         -> Result<String, MutinyError>;
     fn get_lsp_pubkey(&self) -> PublicKey;
     fn get_lsp_connection_string(&self) -> String;
+}
+
+#[derive(Clone)]
+pub enum AnyLsp {
+    VoltageFlow(LspClient),
+}
+
+impl AnyLsp {
+    pub async fn new_voltage_flow(url: &str) -> Result<Self, MutinyError> {
+        Ok(Self::VoltageFlow(LspClient::new(url).await?))
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+impl Lsp for AnyLsp {
+    async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> Result<u64, MutinyError> {
+        match self {
+            AnyLsp::VoltageFlow(client) => client.get_lsp_fee_msat(fee_request).await,
+        }
+    }
+
+    async fn get_lsp_invoice(
+        &self,
+        invoice_request: InvoiceRequest,
+    ) -> Result<String, MutinyError> {
+        match self {
+            AnyLsp::VoltageFlow(client) => client.get_lsp_invoice(invoice_request).await,
+        }
+    }
+
+    fn get_lsp_pubkey(&self) -> PublicKey {
+        match self {
+            AnyLsp::VoltageFlow(client) => client.get_lsp_pubkey(),
+        }
+    }
+
+    fn get_lsp_connection_string(&self) -> String {
+        match self {
+            AnyLsp::VoltageFlow(client) => client.get_lsp_connection_string(),
+        }
+    }
 }
