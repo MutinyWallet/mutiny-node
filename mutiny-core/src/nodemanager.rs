@@ -2663,6 +2663,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
             false,
             true,
         );
@@ -2688,6 +2690,8 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Regtest,
+            None,
+            None,
             None,
             None,
             None,
@@ -2746,6 +2750,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
             false,
             true,
         );
@@ -2777,6 +2783,8 @@ mod tests {
             #[cfg(target_arch = "wasm32")]
             None,
             Network::Signet,
+            None,
+            None,
             None,
             None,
             None,

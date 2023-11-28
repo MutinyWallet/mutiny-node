@@ -86,6 +86,8 @@ impl MutinyWallet {
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
+        lsp_connection_string: Option<String>,
+        lsp_token: Option<String>,
         auth_url: Option<String>,
         subscription_url: Option<String>,
         storage_url: Option<String>,
@@ -111,6 +113,8 @@ impl MutinyWallet {
             user_esplora_url,
             user_rgs_url,
             lsp_url,
+            lsp_connection_string,
+            lsp_token,
             auth_url,
             subscription_url,
             storage_url,
@@ -140,6 +144,8 @@ impl MutinyWallet {
         user_esplora_url: Option<String>,
         user_rgs_url: Option<String>,
         lsp_url: Option<String>,
+        lsp_connection_string: Option<String>,
+        lsp_token: Option<String>,
         auth_url: Option<String>,
         subscription_url: Option<String>,
         storage_url: Option<String>,
@@ -220,6 +226,8 @@ impl MutinyWallet {
             user_esplora_url,
             user_rgs_url,
             lsp_url,
+            lsp_connection_string,
+            lsp_token,
             auth_client,
             subscription_url,
             scorer_url,
@@ -1621,6 +1629,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1651,6 +1661,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1664,6 +1676,8 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
+            None,
             None,
             None,
             None,
@@ -1712,6 +1726,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1724,6 +1740,8 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
+            None,
             None,
             None,
             None,
@@ -1779,6 +1797,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -1821,6 +1841,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -1839,6 +1861,8 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
+            None,
             None,
             None,
             None,
@@ -1872,6 +1896,8 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
+            None,
             None,
             None,
             None,
@@ -1946,6 +1972,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1987,6 +2015,8 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
+            None,
             None,
             None,
             None,
