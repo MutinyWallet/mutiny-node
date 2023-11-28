@@ -1,10 +1,16 @@
 use crate::error::MutinyError;
+use crate::keymanager::PhantomKeysManager;
+use crate::ldkstorage::PhantomChannelManager;
+use crate::logging::MutinyLogger;
+use crate::node::LiquidityManager;
 use crate::storage::MutinyStorage;
 use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
+use bitcoin::Network;
 use lsps::{LspsClient, LspsConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use voltage::LspClient;
 
 pub mod lsps;
@@ -14,6 +20,19 @@ pub mod voltage;
 pub enum LspConfig {
     VoltageFlow(String),
     LspsFlow(LspsConfig),
+}
+
+impl LspConfig {
+    pub fn new_voltage_flow(url: String) -> Self {
+        Self::VoltageFlow(url)
+    }
+
+    pub fn new_lsps_flow(connection_string: String, token: Option<String>) -> Self {
+        Self::LspsFlow(LspsConfig {
+            connection_string,
+            token,
+        })
+    }
 }
 
 pub fn deserialize_lsp_config<'de, D>(deserializer: D) -> Result<Option<LspConfig>, D::Error>
@@ -67,6 +86,27 @@ pub enum AnyLsp<S: MutinyStorage> {
 impl<S: MutinyStorage> AnyLsp<S> {
     pub async fn new_voltage_flow(url: &str) -> Result<Self, MutinyError> {
         Ok(Self::VoltageFlow(LspClient::new(url).await?))
+    }
+
+    pub fn new_lsps_flow(
+        connection_string: String,
+        token: Option<String>,
+        liquidity_manager: Arc<LiquidityManager<S>>,
+        channel_manager: Arc<PhantomChannelManager<S>>,
+        keys_manager: Arc<PhantomKeysManager<S>>,
+        network: Network,
+        logger: Arc<MutinyLogger>,
+    ) -> Result<Self, MutinyError> {
+        let lsps_client = LspsClient::new(
+            connection_string,
+            token,
+            liquidity_manager,
+            channel_manager,
+            keys_manager,
+            network,
+            logger,
+        )?;
+        Ok(Self::LspsFlow(lsps_client))
     }
 }
 

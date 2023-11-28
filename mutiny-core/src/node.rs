@@ -1,6 +1,6 @@
 use crate::labels::LabelStorage;
 use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
-use crate::lsp::InvoiceRequest;
+use crate::lsp::{InvoiceRequest, LspConfig};
 use crate::messagehandler::MutinyMessageHandler;
 use crate::multiesplora::MultiEsploraClient;
 use crate::networking::socket::MutinySocketDescriptor;
@@ -223,7 +223,7 @@ impl<S: MutinyStorage> Node<S> {
         wallet: Arc<OnChainWallet<S>>,
         network: Network,
         esplora: &AsyncClient,
-        lsp_clients: &[AnyLsp<S>],
+        lsp_configs: &[LspConfig],
         logger: Arc<MutinyLogger>,
         do_not_connect_peers: bool,
         empty_state: bool,
@@ -353,21 +353,48 @@ impl<S: MutinyStorage> Node<S> {
         }
 
         log_info!(logger, "creating lsp client");
-        let lsp_client: Option<AnyLsp<S>> = match node_index.lsp {
+        let lsp_config: Option<LspConfig> = match node_index.lsp {
             None => {
-                if lsp_clients.is_empty() {
+                if lsp_configs.is_empty() {
                     log_info!(logger, "no lsp saved and no lsp clients available");
                     None
                 } else {
                     log_info!(logger, "no lsp saved, picking random one");
                     // If we don't have an lsp saved we should pick a random
                     // one from our client list and save it for next time
-                    let rand = rand::random::<usize>() % lsp_clients.len();
-                    Some(lsp_clients[rand].clone())
+                    let rand = rand::random::<usize>() % lsp_configs.len();
+                    Some(lsp_configs[rand].clone())
                 }
             }
-            Some(ref lsp) => lsp_clients.iter().find(|c| c.get_config() == *lsp).cloned(),
+            Some(ref lsp) => lsp_configs.iter().find(|c| *c == lsp).cloned(),
         };
+
+        let liquidity_manager = Arc::new(LiquidityManager::new(
+            keys_manager.clone(),
+            None,
+            channel_manager.clone(),
+            None,
+            None,
+        ));
+
+        let mutiny_message_handler = Arc::new(MutinyMessageHandler {
+            liquidity: liquidity_manager.clone(),
+        });
+
+        let lsp_client = match lsp_config {
+            Some(LspConfig::VoltageFlow(url)) => Some(AnyLsp::new_voltage_flow(&url).await?),
+            Some(LspConfig::LspsFlow(lsps_config)) => Some(AnyLsp::new_lsps_flow(
+                lsps_config.connection_string.clone(),
+                lsps_config.token.clone(),
+                liquidity_manager.clone(),
+                channel_manager.clone(),
+                keys_manager.clone(),
+                network,
+                logger.clone(),
+            )?),
+            None => None,
+        };
+
         let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.get_lsp_pubkey());
         let message_router = Arc::new(LspMessageRouter::new(lsp_client_pubkey));
         let onion_message_handler = Arc::new(OnionMessenger::new(
@@ -383,18 +410,6 @@ impl<S: MutinyStorage> Node<S> {
             storage: persister.storage.clone(),
             network_graph: gossip_sync.network_graph().clone(),
             logger: logger.clone(),
-        });
-
-        let liquidity_manager = Arc::new(LiquidityManager::new(
-            keys_manager.clone(),
-            None,
-            channel_manager.clone(),
-            None,
-            None,
-        ));
-
-        let mutiny_message_handler = Arc::new(MutinyMessageHandler {
-            liquidity: liquidity_manager.clone(),
         });
 
         // init peer manager
