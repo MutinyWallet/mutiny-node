@@ -114,8 +114,19 @@ impl LspClient {
             http_client,
         })
     }
+}
 
-    pub(crate) async fn get_lsp_invoice(&self, bolt11: String) -> Result<String, MutinyError> {
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+impl Lsp for LspClient {
+    async fn get_lsp_invoice(
+        &self,
+        invoice_request: InvoiceRequest,
+    ) -> Result<String, MutinyError> {
+        let bolt11 = invoice_request
+            .bolt11
+            .ok_or(MutinyError::LspInvoiceRequired)?;
+
         let payload = ProposalRequest {
             bolt11,
             host: None,
@@ -162,10 +173,7 @@ impl LspClient {
         Err(MutinyError::LspGenericError)
     }
 
-    pub(crate) async fn get_lsp_fee_msat(
-        &self,
-        fee_request: FeeRequest,
-    ) -> Result<u64, MutinyError> {
+    async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> Result<u64, MutinyError> {
         let request = self
             .http_client
             .post(format!("{}{}", &self.url, FEE_PATH))
@@ -181,24 +189,6 @@ impl LspClient {
             .map_err(|_| MutinyError::LspGenericError)?;
 
         Ok(fee_response.fee_amount_msat)
-    }
-}
-
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
-impl Lsp for LspClient {
-    async fn get_lsp_invoice(
-        &self,
-        invoice_request: InvoiceRequest,
-    ) -> Result<String, MutinyError> {
-        let bolt11 = invoice_request
-            .bolt11
-            .ok_or(MutinyError::LspInvoiceRequired)?;
-        self.get_lsp_invoice(bolt11).await
-    }
-
-    async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> Result<u64, MutinyError> {
-        self.get_lsp_fee_msat(fee_request).await
     }
 
     fn get_lsp_pubkey(&self) -> PublicKey {

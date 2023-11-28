@@ -1,5 +1,6 @@
 use crate::labels::LabelStorage;
 use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
+use crate::lsp::InvoiceRequest;
 use crate::messagehandler::MutinyMessageHandler;
 use crate::multiesplora::MultiEsploraClient;
 use crate::networking::socket::MutinySocketDescriptor;
@@ -17,7 +18,7 @@ use crate::{
     ldkstorage::{MutinyNodePersister, PhantomChannelManager},
     logging::MutinyLogger,
     lsp::voltage::LspClient,
-    lsp::{FeeRequest, LspConfig},
+    lsp::{FeeRequest, Lsp, LspConfig},
     nodemanager::{MutinyInvoice, NodeIndex},
     onchain::OnChainWallet,
     peermanager::{GossipMessageHandler, PeerManagerImpl},
@@ -905,7 +906,14 @@ impl<S: MutinyStorage> Node<S> {
         if let Some(lsp) = self.lsp_client.as_ref() {
             self.connect_peer(PubkeyConnectionInfo::new(&lsp.connection_string)?, None)
                 .await?;
-            let lsp_invoice = match lsp.get_lsp_invoice(invoice.to_string()).await {
+
+            let lsp_invoice = match lsp
+                .get_lsp_invoice(InvoiceRequest {
+                    bolt11: Some(invoice.to_string()),
+                    user_channel_id,
+                })
+                .await
+            {
                 Ok(lsp_invoice_str) => Bolt11Invoice::from_str(&lsp_invoice_str)?,
                 Err(e) => {
                     log_error!(self.logger, "Failed to get invoice from LSP: {e}");
