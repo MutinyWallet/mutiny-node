@@ -15,7 +15,7 @@ use crate::{
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
     ldkstorage::{MutinyNodePersister, PhantomChannelManager},
     logging::MutinyLogger,
-    lspclient::LspClient,
+    lsp::voltage::LspClient,
     nodemanager::{MutinyInvoice, NodeIndex},
     onchain::OnChainWallet,
     peermanager::{GossipMessageHandler, PeerManagerImpl},
@@ -23,7 +23,7 @@ use crate::{
 };
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
-use crate::{lspclient::FeeRequest, storage::MutinyStorage};
+use crate::{lsp::voltage::FeeRequest, storage::MutinyStorage};
 use anyhow::{anyhow, Context};
 use bdk::FeeRate;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};

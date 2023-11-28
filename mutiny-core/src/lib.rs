@@ -21,7 +21,7 @@ pub mod labels;
 mod ldkstorage;
 pub mod lnurlauth;
 pub mod logging;
-mod lspclient;
+mod lsp;
 mod messagehandler;
 mod multiesplora;
 mod networking;

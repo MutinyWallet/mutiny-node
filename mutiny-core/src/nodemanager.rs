@@ -11,7 +11,7 @@ use crate::{
     gossip,
     gossip::{fetch_updated_gossip, get_rgs_url},
     logging::MutinyLogger,
-    lspclient::LspClient,
+    lsp::voltage::LspClient,
     node::{Node, PubkeyConnectionInfo, RapidGossipSync},
     onchain::get_esplora_url,
     onchain::OnChainWallet,
