@@ -4,6 +4,7 @@ use bitcoin::secp256k1::PublicKey;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod lsps;
 pub mod voltage;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -39,6 +40,7 @@ pub struct InvoiceRequest {
 pub struct FeeRequest {
     pub pubkey: String,
     pub amount_msat: u64,
+    pub user_channel_id: u128,
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]

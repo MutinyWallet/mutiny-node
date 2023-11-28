@@ -845,6 +845,8 @@ impl<S: MutinyStorage> Node<S> {
         labels: Vec<String>,
         route_hints: Option<Vec<PhantomRouteHints>>,
     ) -> Result<Bolt11Invoice, MutinyError> {
+        let user_channel_id: u128 = utils::now().as_secs().into();
+
         // the amount to create for the invoice whether or not there is an lsp
         let (amount_sat, lsp_fee_msat) = if let Some(lsp) = self.lsp_client.as_ref() {
             // LSP requires an amount:
@@ -872,6 +874,7 @@ impl<S: MutinyStorage> Node<S> {
                 .get_lsp_fee_msat(FeeRequest {
                     pubkey: self.pubkey.to_hex(),
                     amount_msat: amount_sat * 1000,
+                    user_channel_id,
                 })
                 .await?;
 
