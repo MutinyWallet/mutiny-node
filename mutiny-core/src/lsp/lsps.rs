@@ -11,6 +11,7 @@ use lightning::util::logger::Logger;
 use lightning_invoice::{Bolt11Invoice, InvoiceBuilder};
 use lightning_liquidity::events;
 use lightning_liquidity::jit_channel::{LSPS2Event, OpeningFeeParams};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -19,11 +20,17 @@ use crate::{
     keymanager::PhantomKeysManager,
     ldkstorage::PhantomChannelManager,
     logging::MutinyLogger,
-    lsp::{FeeRequest, InvoiceRequest, Lsp},
+    lsp::{FeeRequest, InvoiceRequest, Lsp, LspConfig},
     node::{parse_peer_info, LiquidityManager},
     storage::MutinyStorage,
     utils::{self, Mutex},
 };
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+pub struct LspsConfig {
+    pub connection_string: String,
+    pub token: Option<String>,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct JitChannelInfo {
@@ -305,5 +312,12 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
 
     fn get_lsp_connection_string(&self) -> String {
         self.connection_string.clone()
+    }
+
+    fn get_config(&self) -> LspConfig {
+        LspConfig::LspsFlow(LspsConfig {
+            connection_string: self.get_lsp_connection_string(),
+            token: self.token.clone(),
+        })
     }
 }

@@ -2,19 +2,13 @@ use crate::error::MutinyError;
 use crate::storage::MutinyStorage;
 use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
-use lsps::LspsClient;
+use lsps::{LspsClient, LspsConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use voltage::LspClient;
 
 pub mod lsps;
 pub mod voltage;
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
-pub struct LspsConfig {
-    pub connection_string: String,
-    pub token: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum LspConfig {
@@ -61,6 +55,7 @@ pub(crate) trait Lsp {
         -> Result<String, MutinyError>;
     fn get_lsp_pubkey(&self) -> PublicKey;
     fn get_lsp_connection_string(&self) -> String;
+    fn get_config(&self) -> LspConfig;
 }
 
 #[derive(Clone)]
@@ -106,6 +101,13 @@ impl<S: MutinyStorage> Lsp for AnyLsp<S> {
         match self {
             AnyLsp::VoltageFlow(client) => client.get_lsp_connection_string(),
             AnyLsp::LspsFlow(client) => client.get_lsp_connection_string(),
+        }
+    }
+
+    fn get_config(&self) -> LspConfig {
+        match self {
+            AnyLsp::VoltageFlow(client) => client.get_config(),
+            AnyLsp::LspsFlow(client) => client.get_config(),
         }
     }
 }

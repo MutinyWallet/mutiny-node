@@ -1,6 +1,6 @@
 use crate::labels::LabelStorage;
 use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
-use crate::lsp::{InvoiceRequest, LspsConfig};
+use crate::lsp::InvoiceRequest;
 use crate::messagehandler::MutinyMessageHandler;
 use crate::multiesplora::MultiEsploraClient;
 use crate::networking::socket::MutinySocketDescriptor;
@@ -17,7 +17,7 @@ use crate::{
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
     ldkstorage::{MutinyNodePersister, PhantomChannelManager},
     logging::MutinyLogger,
-    lsp::{AnyLsp, FeeRequest, Lsp, LspConfig},
+    lsp::{AnyLsp, FeeRequest, Lsp},
     nodemanager::{MutinyInvoice, NodeIndex},
     onchain::OnChainWallet,
     peermanager::{GossipMessageHandler, PeerManagerImpl},
@@ -366,22 +366,7 @@ impl<S: MutinyStorage> Node<S> {
                     Some(lsp_clients[rand].clone())
                 }
             }
-            Some(ref lsp) => lsp_clients
-                .iter()
-                .find(|c| match lsp {
-                    LspConfig::VoltageFlow(ref url) => match c {
-                        AnyLsp::VoltageFlow(ref client) => &client.url == url,
-                        _ => false,
-                    },
-                    LspConfig::LspsFlow(config) => match c {
-                        AnyLsp::LspsFlow(client) => {
-                            client.connection_string == config.connection_string
-                                && client.token == config.token
-                        }
-                        _ => false,
-                    },
-                })
-                .cloned(),
+            Some(ref lsp) => lsp_clients.iter().find(|c| c.get_config() == *lsp).cloned(),
         };
         let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.get_lsp_pubkey());
         let message_router = Arc::new(LspMessageRouter::new(lsp_client_pubkey));
@@ -771,13 +756,7 @@ impl<S: MutinyStorage> Node<S> {
     pub fn node_index(&self) -> NodeIndex {
         NodeIndex {
             child_index: self.child_index,
-            lsp: self.lsp_client.clone().map(|l| match l {
-                AnyLsp::VoltageFlow(ref client) => LspConfig::VoltageFlow(client.url.clone()),
-                AnyLsp::LspsFlow(client) => LspConfig::LspsFlow(LspsConfig {
-                    connection_string: client.connection_string,
-                    token: client.token,
-                }),
-            }),
+            lsp: self.lsp_client.as_ref().map(|l| l.get_config()),
             archived: Some(false),
         }
     }

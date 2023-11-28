@@ -1,4 +1,4 @@
-use crate::lsp::{FeeRequest, InvoiceRequest, Lsp};
+use crate::lsp::{FeeRequest, InvoiceRequest, Lsp, LspConfig};
 use crate::{error::MutinyError, utils};
 use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
@@ -197,5 +197,9 @@ impl Lsp for LspClient {
 
     fn get_lsp_connection_string(&self) -> String {
         self.connection_string.clone()
+    }
+
+    fn get_config(&self) -> LspConfig {
+        LspConfig::VoltageFlow(self.url.clone())
     }
 }

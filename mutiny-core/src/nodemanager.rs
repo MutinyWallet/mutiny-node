@@ -1,6 +1,5 @@
 use crate::lnurlauth::AuthManager;
 use crate::logging::LOGGING_KEY;
-use crate::lsp::LspsConfig;
 use crate::multiesplora::MultiEsploraClient;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY};
@@ -2551,13 +2550,7 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         // If we don't have an lsp saved we should pick a random
         // one from our client list and save it for next time
         let rand = rand::random::<usize>() % node_manager.lsp_clients.len();
-        match node_manager.lsp_clients[rand] {
-            AnyLsp::VoltageFlow(ref client) => Some(LspConfig::VoltageFlow(client.url.clone())),
-            AnyLsp::LspsFlow(ref client) => Some(LspConfig::LspsFlow(LspsConfig {
-                connection_string: client.connection_string.clone(),
-                token: client.token.clone(),
-            })),
-        }
+        Some(node_manager.lsp_clients[rand].get_config())
     };
 
     let next_node = NodeIndex {
