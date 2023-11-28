@@ -62,6 +62,56 @@ impl ActivityItem {
     }
 }
 
+use tsify::Tsify;
+
+#[derive(Tsify, Serialize, Deserialize)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub enum TestEnum {
+    Nope,
+    Yep,
+    Alright(u64),
+}
+
+#[derive(Tsify, Serialize, Deserialize)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct TestSerde {
+    pub kind: String,
+    pub num: Option<u64>,
+    pub kinds: TestEnum,
+    pub array_of_complex: Vec<Complex>,
+}
+
+#[derive(Tsify, Serialize, Deserialize)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct Complex {
+    pub a: u64,
+    pub b: u64,
+    pub c: TestEnum,
+}
+
+#[wasm_bindgen]
+pub fn test_serde_to_js() -> Result<TestSerde, JsValue> {
+    let example = TestSerde {
+        kind: "Hey".to_string(),
+        num: Some(1234),
+        kinds: TestEnum::Yep,
+        array_of_complex: vec![
+            Complex {
+                a: 123,
+                b: 456,
+                c: TestEnum::Alright(123),
+            },
+            Complex {
+                a: 789,
+                b: 999,
+                c: TestEnum::Nope,
+            },
+        ],
+    };
+
+    Ok(example)
+}
+
 impl From<nodemanager::ActivityItem> for ActivityItem {
     fn from(a: nodemanager::ActivityItem) -> Self {
         let kind = match a {
