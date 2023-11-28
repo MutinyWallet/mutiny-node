@@ -1,5 +1,7 @@
 use crate::lnurlauth::AuthManager;
 use crate::logging::LOGGING_KEY;
+use crate::lsp::LspsConfig;
+use crate::multiesplora::MultiEsploraClient;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY};
 use crate::utils::{sleep, spawn};
@@ -515,7 +517,7 @@ pub struct NodeManager<S: MutinyStorage> {
     pub(crate) nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node<S>>>>>,
     auth: AuthManager,
     lnurl_client: Arc<LnUrlClient>,
-    pub(crate) lsp_clients: Vec<AnyLsp>,
+    pub(crate) lsp_clients: Vec<AnyLsp<S>>,
     pub(crate) subscription_client: Option<Arc<MutinySubscriptionClient>>,
     pub(crate) logger: Arc<MutinyLogger>,
     bitcoin_price_cache: Arc<Mutex<HashMap<String, (f32, Duration)>>>,
@@ -615,7 +617,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         let gossip_sync = Arc::new(gossip_sync);
 
         // load lsp clients, if any
-        let lsp_clients: Vec<AnyLsp> = match c.lsp_url.clone() {
+        let lsp_clients: Vec<AnyLsp<S>> = match c.lsp_url.clone() {
             // check if string is some and not an empty string
             // and safe_mode is not enabled
             Some(lsp_urls) if !lsp_urls.is_empty() && !c.safe_mode => {
@@ -2551,6 +2553,10 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         let rand = rand::random::<usize>() % node_manager.lsp_clients.len();
         match node_manager.lsp_clients[rand] {
             AnyLsp::VoltageFlow(ref client) => Some(LspConfig::VoltageFlow(client.url.clone())),
+            AnyLsp::LspsFlow(ref client) => Some(LspConfig::LspsFlow(LspsConfig {
+                connection_string: client.connection_string.clone(),
+                token: client.token.clone(),
+            })),
         }
     };
 

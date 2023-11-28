@@ -1,6 +1,6 @@
 use crate::labels::LabelStorage;
 use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
-use crate::lsp::InvoiceRequest;
+use crate::lsp::{InvoiceRequest, LspsConfig};
 use crate::messagehandler::MutinyMessageHandler;
 use crate::multiesplora::MultiEsploraClient;
 use crate::networking::socket::MutinySocketDescriptor;
@@ -201,7 +201,7 @@ pub(crate) struct Node<S: MutinyStorage> {
     pub persister: Arc<MutinyNodePersister<S>>,
     wallet: Arc<OnChainWallet<S>>,
     pub(crate) logger: Arc<MutinyLogger>,
-    pub(crate) lsp_client: Option<AnyLsp>,
+    pub(crate) lsp_client: Option<AnyLsp<S>>,
     pub(crate) sync_lock: Arc<Mutex<()>>,
     stop: Arc<AtomicBool>,
     pub skip_hodl_invoices: bool,
@@ -223,7 +223,7 @@ impl<S: MutinyStorage> Node<S> {
         wallet: Arc<OnChainWallet<S>>,
         network: Network,
         esplora: &AsyncClient,
-        lsp_clients: &[AnyLsp],
+        lsp_clients: &[AnyLsp<S>],
         logger: Arc<MutinyLogger>,
         do_not_connect_peers: bool,
         empty_state: bool,
@@ -353,7 +353,7 @@ impl<S: MutinyStorage> Node<S> {
         }
 
         log_info!(logger, "creating lsp client");
-        let lsp_client: Option<AnyLsp> = match node_index.lsp {
+        let lsp_client: Option<AnyLsp<S>> = match node_index.lsp {
             None => {
                 if lsp_clients.is_empty() {
                     log_info!(logger, "no lsp saved and no lsp clients available");
@@ -371,6 +371,14 @@ impl<S: MutinyStorage> Node<S> {
                 .find(|c| match lsp {
                     LspConfig::VoltageFlow(ref url) => match c {
                         AnyLsp::VoltageFlow(ref client) => &client.url == url,
+                        _ => false,
+                    },
+                    LspConfig::LspsFlow(config) => match c {
+                        AnyLsp::LspsFlow(client) => {
+                            client.connection_string == config.connection_string
+                                && client.token == config.token
+                        }
+                        _ => false,
                     },
                 })
                 .cloned(),
@@ -765,6 +773,10 @@ impl<S: MutinyStorage> Node<S> {
             child_index: self.child_index,
             lsp: self.lsp_client.clone().map(|l| match l {
                 AnyLsp::VoltageFlow(ref client) => LspConfig::VoltageFlow(client.url.clone()),
+                AnyLsp::LspsFlow(client) => LspConfig::LspsFlow(LspsConfig {
+                    connection_string: client.connection_string,
+                    token: client.token,
+                }),
             }),
             archived: Some(false),
         }
@@ -1764,7 +1776,7 @@ async fn start_reconnection_handling<S: MutinyStorage>(
     fee_estimator: Arc<MutinyFeeEstimator<S>>,
     logger: &Arc<MutinyLogger>,
     uuid: String,
-    lsp_client: Option<&AnyLsp>,
+    lsp_client: Option<&AnyLsp<S>>,
     stop: Arc<AtomicBool>,
     stopped_components: Arc<RwLock<Vec<bool>>>,
     skip_fee_estimates: bool,

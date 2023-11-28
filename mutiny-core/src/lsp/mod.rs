@@ -1,6 +1,8 @@
 use crate::error::MutinyError;
+use crate::storage::MutinyStorage;
 use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
+use lsps::LspsClient;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use voltage::LspClient;
@@ -8,9 +10,16 @@ use voltage::LspClient;
 pub mod lsps;
 pub mod voltage;
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+pub struct LspsConfig {
+    pub connection_string: String,
+    pub token: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum LspConfig {
     VoltageFlow(String),
+    LspsFlow(LspsConfig),
 }
 
 pub fn deserialize_lsp_config<'de, D>(deserializer: D) -> Result<Option<LspConfig>, D::Error>
@@ -55,11 +64,12 @@ pub(crate) trait Lsp {
 }
 
 #[derive(Clone)]
-pub enum AnyLsp {
+pub enum AnyLsp<S: MutinyStorage> {
     VoltageFlow(LspClient),
+    LspsFlow(LspsClient<S>),
 }
 
-impl AnyLsp {
+impl<S: MutinyStorage> AnyLsp<S> {
     pub async fn new_voltage_flow(url: &str) -> Result<Self, MutinyError> {
         Ok(Self::VoltageFlow(LspClient::new(url).await?))
     }
@@ -67,10 +77,11 @@ impl AnyLsp {
 
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
-impl Lsp for AnyLsp {
+impl<S: MutinyStorage> Lsp for AnyLsp<S> {
     async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> Result<u64, MutinyError> {
         match self {
             AnyLsp::VoltageFlow(client) => client.get_lsp_fee_msat(fee_request).await,
+            AnyLsp::LspsFlow(client) => client.get_lsp_fee_msat(fee_request).await,
         }
     }
 
@@ -80,18 +91,21 @@ impl Lsp for AnyLsp {
     ) -> Result<String, MutinyError> {
         match self {
             AnyLsp::VoltageFlow(client) => client.get_lsp_invoice(invoice_request).await,
+            AnyLsp::LspsFlow(client) => client.get_lsp_invoice(invoice_request).await,
         }
     }
 
     fn get_lsp_pubkey(&self) -> PublicKey {
         match self {
             AnyLsp::VoltageFlow(client) => client.get_lsp_pubkey(),
+            AnyLsp::LspsFlow(client) => client.get_lsp_pubkey(),
         }
     }
 
     fn get_lsp_connection_string(&self) -> String {
         match self {
             AnyLsp::VoltageFlow(client) => client.get_lsp_connection_string(),
+            AnyLsp::LspsFlow(client) => client.get_lsp_connection_string(),
         }
     }
 }
