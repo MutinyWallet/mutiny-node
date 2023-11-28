@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use lightning_liquidity::LSPS_MESSAGE_TYPE_ID;
-
 use bitcoin::secp256k1::PublicKey;
 use lightning::io::{Error, Read};
 use lightning::ln::features::{InitFeatures, NodeFeatures};
@@ -68,18 +66,13 @@ impl<S: MutinyStorage> CustomMessageReader for MutinyMessageHandler<S> {
         message_type: u16,
         buffer: &mut R,
     ) -> Result<Option<Self::CustomMessage>, DecodeError> {
-        match message_type {
-            LSPS_MESSAGE_TYPE_ID => {
-                match <LiquidityManager<S> as CustomMessageReader>::read(
-                    &self.liquidity,
-                    message_type,
-                    buffer,
-                )? {
-                    None => Ok(None),
-                    Some(message) => Ok(Some(MutinyMessage::Liquidity(message))),
-                }
-            }
-            _ => Ok(None),
+        match <LiquidityManager<S> as CustomMessageReader>::read(
+            &self.liquidity,
+            message_type,
+            buffer,
+        )? {
+            None => Ok(None),
+            Some(message) => Ok(Some(MutinyMessage::Liquidity(message))),
         }
     }
 }

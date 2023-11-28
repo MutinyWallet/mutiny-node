@@ -3,7 +3,6 @@ use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
 use crate::lsp::{InvoiceRequest, LspConfig};
 use crate::messagehandler::MutinyMessageHandler;
 use crate::multiesplora::MultiEsploraClient;
-use crate::networking::socket::MutinySocketDescriptor;
 use crate::nodemanager::ChannelClosure;
 use crate::peermanager::LspMessageRouter;
 use crate::storage::MutinyStorage;
@@ -109,30 +108,11 @@ pub(crate) type OnionMessenger<S: MutinyStorage> = LdkOnionMessenger<
     IgnoringMessageHandler,
 >;
 
-pub type SimpleArcLiquidityManager<SD, M, T, F, L, S> = LDKLSPLiquidityManager<
+pub type LiquidityManager<S> = LDKLSPLiquidityManager<
     Arc<PhantomKeysManager<S>>,
-    Arc<M>,
-    Arc<T>,
-    Arc<F>,
-    Arc<Router>,
-    Arc<PhantomKeysManager<S>>,
-    Arc<L>,
-    SD,
-    Arc<GossipMessageHandler<S>>,
     Arc<PhantomChannelManager<S>>,
-    Arc<OnionMessenger<S>>,
-    Arc<MutinyMessageHandler<S>>,
-    Arc<PhantomKeysManager<S>>,
+    Arc<PeerManagerImpl<S>>,
     Arc<dyn Filter + Send + Sync>,
->;
-
-pub type LiquidityManager<S: MutinyStorage> = SimpleArcLiquidityManager<
-    MutinySocketDescriptor,
-    ChainMonitor<S>,
-    MutinyChain<S>,
-    MutinyFeeEstimator<S>,
-    MutinyLogger,
-    S,
 >;
 
 pub(crate) type MessageHandler<S: MutinyStorage> = LdkMessageHandler<

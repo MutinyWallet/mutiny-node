@@ -10,7 +10,7 @@ use lightning::routing::router::{RouteHint, RouteHintHop};
 use lightning::util::logger::Logger;
 use lightning_invoice::{Bolt11Invoice, InvoiceBuilder};
 use lightning_liquidity::events;
-use lightning_liquidity::jit_channel::{LSPS2Event, OpeningFeeParams};
+use lightning_liquidity::lsps2::{LSPS2Event, OpeningFeeParams};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -230,7 +230,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
         );
 
         self.liquidity_manager
-            .jit_channel_create_invoice(
+            .lsps2_create_invoice(
                 self.pubkey.clone(),
                 Some(fee_request.amount_msat),
                 self.token.clone(),
