@@ -3,8 +3,9 @@ use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
 use crate::messagehandler::MutinyMessageHandler;
 use crate::multiesplora::MultiEsploraClient;
 use crate::networking::socket::MutinySocketDescriptor;
-use crate::nodemanager::{ChannelClosure, LspConfig};
+use crate::nodemanager::ChannelClosure;
 use crate::peermanager::LspMessageRouter;
+use crate::storage::MutinyStorage;
 use crate::utils::get_monitor_version;
 use crate::{
     chain::MutinyChain,
@@ -16,6 +17,7 @@ use crate::{
     ldkstorage::{MutinyNodePersister, PhantomChannelManager},
     logging::MutinyLogger,
     lsp::voltage::LspClient,
+    lsp::{FeeRequest, LspConfig},
     nodemanager::{MutinyInvoice, NodeIndex},
     onchain::OnChainWallet,
     peermanager::{GossipMessageHandler, PeerManagerImpl},
@@ -23,7 +25,6 @@ use crate::{
 };
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
-use crate::{lsp::voltage::FeeRequest, storage::MutinyStorage};
 use anyhow::{anyhow, Context};
 use bdk::FeeRate;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};

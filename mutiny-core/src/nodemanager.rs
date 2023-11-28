@@ -12,6 +12,7 @@ use crate::{
     gossip::{fetch_updated_gossip, get_rgs_url},
     logging::MutinyLogger,
     lsp::voltage::LspClient,
+    lsp::{deserialize_lsp_config, LspConfig},
     node::{Node, PubkeyConnectionInfo, RapidGossipSync},
     onchain::get_esplora_url,
     onchain::OnChainWallet,
@@ -70,29 +71,6 @@ pub struct NodeStorage {
     pub nodes: HashMap<String, NodeIndex>,
     #[serde(default)]
     pub version: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum LspConfig {
-    VoltageFlow(String),
-}
-
-fn deserialize_lsp_config<'de, D>(deserializer: D) -> Result<Option<LspConfig>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let v: Option<Value> = Option::deserialize(deserializer)?;
-    match v {
-        Some(Value::String(s)) => Ok(Some(LspConfig::VoltageFlow(s))),
-        Some(Value::Object(_)) => LspConfig::deserialize(v.unwrap())
-            .map(Some)
-            .map_err(|e| serde::de::Error::custom(format!("invalid lsp config: {e}"))),
-        Some(Value::Null) => Ok(None),
-        Some(x) => Err(serde::de::Error::custom(format!(
-            "invalid lsp config: {x:?}"
-        ))),
-        None => Ok(None),
-    }
 }
 
 // This is the NodeIndex reference that is saved to the DB

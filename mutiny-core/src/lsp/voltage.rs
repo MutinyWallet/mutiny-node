@@ -1,8 +1,9 @@
+use crate::lsp::{FeeRequest, InvoiceRequest, Lsp};
+use crate::{error::MutinyError, utils};
+use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-
-use crate::{error::MutinyError, utils};
 
 #[derive(Clone, Debug)]
 pub(crate) struct LspClient {
@@ -50,12 +51,6 @@ pub struct ProposalRequest {
 #[derive(Serialize, Deserialize)]
 pub struct ProposalResponse {
     pub jit_bolt11: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct FeeRequest {
-    pub pubkey: String,
-    pub amount_msat: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -186,5 +181,31 @@ impl LspClient {
             .map_err(|_| MutinyError::LspGenericError)?;
 
         Ok(fee_response.fee_amount_msat)
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+impl Lsp for LspClient {
+    async fn get_lsp_invoice(
+        &self,
+        invoice_request: InvoiceRequest,
+    ) -> Result<String, MutinyError> {
+        let bolt11 = invoice_request
+            .bolt11
+            .ok_or(MutinyError::LspInvoiceRequired)?;
+        self.get_lsp_invoice(bolt11).await
+    }
+
+    async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> Result<u64, MutinyError> {
+        self.get_lsp_fee_msat(fee_request).await
+    }
+
+    fn get_lsp_pubkey(&self) -> PublicKey {
+        self.pubkey.clone()
+    }
+
+    fn get_lsp_connection_string(&self) -> String {
+        self.connection_string.clone()
     }
 }

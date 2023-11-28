@@ -62,6 +62,9 @@ pub enum MutinyJsError {
     /// LSP indicated it was not connected to the client node.
     #[error("Failed to have a connection to the LSP node.")]
     LspConnectionError,
+    /// LSP required an invoice and none was provided.
+    #[error("Failed to provide an invoice to the LSP.")]
+    LspInvoiceRequired,
     /// Subscription Client Not Configured
     #[error("Subscription Client Not Configured")]
     SubscriptionClientNotConfigured,
@@ -174,6 +177,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::LspGenericError => MutinyJsError::LspGenericError,
             MutinyError::LspFundingError => MutinyJsError::LspFundingError,
             MutinyError::LspConnectionError => MutinyJsError::LspConnectionError,
+            MutinyError::LspInvoiceRequired => MutinyJsError::LspInvoiceRequired,
             MutinyError::RoutingFailed => MutinyJsError::RoutingFailed,
             MutinyError::PeerInfoParseFailed => MutinyJsError::PeerInfoParseFailed,
             MutinyError::ChannelCreationFailed => MutinyJsError::ChannelCreationFailed,
