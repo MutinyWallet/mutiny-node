@@ -42,9 +42,6 @@ pub(crate) struct JitChannelInfo {
 pub(crate) struct GetInfoResponse {
     pub jit_channel_id: u128,
     pub opening_fee_params_menu: Vec<OpeningFeeParams>,
-    pub min_payment_size_msat: u64,
-    pub max_payment_size_msat: u64,
-    pub user_channel_id: u128,
 }
 
 #[derive(Clone)]
@@ -103,8 +100,6 @@ impl<S: MutinyStorage> LspsClient<S> {
                     events::Event::LSPS2(LSPS2Event::GetInfoResponse {
                         jit_channel_id,
                         opening_fee_params_menu,
-                        min_payment_size_msat,
-                        max_payment_size_msat,
                         user_channel_id,
                         ..
                     }) => {
@@ -118,9 +113,6 @@ impl<S: MutinyStorage> LspsClient<S> {
                             if let Err(_e) = fee_response_sender.send(GetInfoResponse {
                                 jit_channel_id,
                                 opening_fee_params_menu,
-                                min_payment_size_msat,
-                                max_payment_size_msat,
-                                user_channel_id,
                             }) {
                                 // log error
                             }
