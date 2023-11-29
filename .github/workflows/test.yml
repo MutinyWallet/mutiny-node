@@ -227,7 +227,6 @@ jobs:
 
       - name: Run cargo clippy
         run: cargo clippy --all-features --tests --package mutiny-core --target=${{ matrix.target }} -- -D warnings
-        continue-on-error: true
 
       - name: Run cargo test
         run: cargo test --all-features --package mutiny-core --target=${{ matrix.target }}
@@ -274,7 +273,6 @@ jobs:
 
       - name: Run cargo clippy
         run: cargo clippy --all-features --tests --package mutiny-core --target=${{ matrix.target }} -- -D warnings
-        continue-on-error: true
 
       - name: Run cargo test
         run: cargo test --all-features --package mutiny-core --target=${{ matrix.target }}
