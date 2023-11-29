@@ -141,6 +141,15 @@ pub enum MutinyJsError {
     /// Cannot change password to the same password
     #[error("Cannot change password to the same password.")]
     SamePassword,
+    /// Payjoin request creation failed.
+    #[error("Failed to create payjoin request.")]
+    PayjoinCreateRequest,
+    /// Payjoin response validation failed.
+    #[error("Failed to validate payjoin response.")]
+    PayjoinValidateResponse,
+    /// Payjoin configuration error
+    #[error("Payjoin configuration failed.")]
+    PayjoinConfigError,
     /// Unknown error.
     #[error("Unknown Error")]
     UnknownError,
@@ -194,6 +203,9 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::InvalidArgumentsError => MutinyJsError::InvalidArgumentsError,
             MutinyError::LspAmountTooHighError => MutinyJsError::LspAmountTooHighError,
             MutinyError::NetworkMismatch => MutinyJsError::NetworkMismatch,
+            MutinyError::PayjoinConfigError => MutinyJsError::PayjoinConfigError,
+            MutinyError::PayjoinCreateRequest => MutinyJsError::PayjoinCreateRequest,
+            MutinyError::PayjoinValidateResponse(_) => MutinyJsError::PayjoinValidateResponse,
         }
     }
 }

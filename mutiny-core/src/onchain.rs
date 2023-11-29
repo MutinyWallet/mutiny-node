@@ -12,12 +12,12 @@ use bdk::{FeeRate, LocalUtxo, SignOptions, TransactionDetails, Wallet};
 use bdk_esplora::EsploraAsyncExt;
 use bitcoin::consensus::serialize;
 use bitcoin::hashes::hex::ToHex;
-use bitcoin::psbt::PartiallySignedTransaction;
+use bitcoin::psbt::{Input, PartiallySignedTransaction};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::{Address, Network, OutPoint, Script, Transaction, Txid};
 use lightning::events::bump_transaction::{Utxo, WalletSource};
 use lightning::util::logger::Logger;
-use lightning::{log_debug, log_error, log_info, log_warn};
+use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 
 use crate::error::MutinyError;
 use crate::fees::MutinyFeeEstimator;
@@ -476,6 +476,59 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         self.broadcast_transaction(raw_transaction).await?;
         log_debug!(self.logger, "Transaction broadcast! TXID: {txid}");
         Ok(txid)
+    }
+
+    pub async fn send_payjoin(
+        &self,
+        mut original_psbt: PartiallySignedTransaction,
+        mut proposal_psbt: PartiallySignedTransaction,
+        labels: Vec<String>,
+    ) -> Result<Transaction, MutinyError> {
+        let wallet = self.wallet.try_read()?;
+
+        // add original psbt input map data in place so BDK knows which scripts to sign,
+        // proposal_psbt only contains the sender input outpoints, not scripts, which BDK
+        // does not look up
+        fn input_pairs(
+            psbt: &mut PartiallySignedTransaction,
+        ) -> Box<dyn Iterator<Item = (&bitcoin::TxIn, &mut Input)> + '_> {
+            Box::new(psbt.unsigned_tx.input.iter().zip(&mut psbt.inputs))
+        }
+
+        let mut original_inputs = input_pairs(&mut original_psbt).peekable();
+
+        for (proposed_txin, proposed_psbtin) in input_pairs(&mut proposal_psbt) {
+            log_trace!(
+                self.logger,
+                "Proposed txin: {:?}",
+                proposed_txin.previous_output
+            );
+            if let Some((original_txin, original_psbtin)) = original_inputs.peek() {
+                log_trace!(
+                    self.logger,
+                    "Original txin: {:?}",
+                    original_txin.previous_output
+                );
+                log_trace!(self.logger, "Original psbtin: {original_psbtin:?}");
+                if proposed_txin.previous_output == original_txin.previous_output {
+                    proposed_psbtin.witness_utxo = original_psbtin.witness_utxo.clone();
+                    proposed_psbtin.non_witness_utxo = original_psbtin.non_witness_utxo.clone();
+                    original_inputs.next();
+                }
+            }
+        }
+
+        log_trace!(self.logger, "Augmented PSBT: {proposal_psbt:?}");
+        // sign and finalize payjoin
+        let result = wallet.sign(&mut proposal_psbt, SignOptions::default());
+        log_trace!(self.logger, "Sign result: {result:?}");
+        result?;
+        drop(wallet);
+
+        self.label_psbt(&proposal_psbt, labels)?;
+        let payjoin = proposal_psbt.extract_tx();
+
+        Ok(payjoin)
     }
 
     pub fn create_sweep_psbt(

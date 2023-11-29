@@ -40,6 +40,7 @@ use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
 use nostr::key::XOnlyPublicKey;
 use nostr::prelude::FromBech32;
+use payjoin::UriExt;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{
@@ -447,6 +448,28 @@ impl MutinyWallet {
             .inner
             .node_manager
             .send_to_address(send_to, amount, labels, fee_rate)
+            .await?
+            .to_string())
+    }
+
+    #[wasm_bindgen]
+    pub async fn send_payjoin(
+        &self,
+        payjoin_uri: String,
+        amount: u64, /* override the uri amount if desired */
+        labels: Vec<String>,
+        fee_rate: Option<f32>,
+    ) -> Result<String, MutinyJsError> {
+        // I know walia parses `pj=` and `pjos=` but payjoin::Uri parses the whole bip21 uri
+        let pj_uri = payjoin::Uri::try_from(payjoin_uri.as_str())
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?
+            .assume_checked()
+            .check_pj_supported()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        Ok(self
+            .inner
+            .node_manager
+            .send_payjoin(pj_uri, amount, labels, fee_rate)
             .await?
             .to_string())
     }
