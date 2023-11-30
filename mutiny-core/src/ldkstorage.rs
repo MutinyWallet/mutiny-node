@@ -4,7 +4,6 @@ use crate::fees::MutinyFeeEstimator;
 use crate::gossip::PROB_SCORER_KEY;
 use crate::keymanager::PhantomKeysManager;
 use crate::logging::MutinyLogger;
-use crate::multiesplora::MultiEsploraClient;
 use crate::node::{default_user_config, ChainMonitor};
 use crate::node::{NetworkGraph, Router};
 use crate::nodemanager::ChannelClosure;
@@ -16,6 +15,7 @@ use anyhow::anyhow;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::Network;
 use bitcoin::{BlockHash, Transaction};
+use esplora_client::AsyncClient;
 use futures::{try_join, TryFutureExt};
 use futures_util::lock::Mutex;
 use lightning::chain::chainmonitor::{MonitorUpdateId, Persist};
@@ -116,7 +116,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         spawn(async move {
             // Sleep before persisting to give chance for the manager to be persisted
             sleep(50).await;
-            match persist_monitor(&storage, &key, &object, Some(version), &logger).await {
+            match persist_monitor(storage, key, object, Some(version), logger.clone()).await {
                 Ok(()) => {
                     log_debug!(logger, "Persisted channel monitor: {update_id:?}");
 
@@ -204,7 +204,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         keys_manager: Arc<PhantomKeysManager<S>>,
         router: Arc<Router>,
         channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
-        esplora: &MultiEsploraClient,
+        esplora: &AsyncClient,
     ) -> Result<ReadChannelManager<S>, MutinyError> {
         log_debug!(mutiny_logger, "Reading channel manager from storage");
         let key = self.get_key(CHANNEL_MANAGER_KEY);
@@ -314,7 +314,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         keys_manager: Arc<PhantomKeysManager<S>>,
         router: Arc<Router>,
         channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
-        esplora: &MultiEsploraClient,
+        esplora: &AsyncClient,
     ) -> Result<ReadChannelManager<S>, MutinyError> {
         // if regtest, we don't need to get the tip hash and can
         // just use genesis, this also lets us use regtest in tests
@@ -652,7 +652,7 @@ impl<S: MutinyStorage>
     ) -> Result<(), lightning::io::Error> {
         let scorer_str = scorer.encode().to_hex();
         self.storage
-            .set_data(PROB_SCORER_KEY, scorer_str, None)
+            .set_data(PROB_SCORER_KEY.to_string(), scorer_str, None)
             .map_err(|_| lightning::io::ErrorKind::Other.into())
     }
 }
@@ -720,13 +720,13 @@ pub struct MonitorUpdateIdentifier {
 }
 
 pub(crate) async fn persist_monitor(
-    storage: &impl MutinyStorage,
-    key: &str,
-    object: &Vec<u8>,
+    storage: impl MutinyStorage,
+    key: String,
+    object: Vec<u8>,
     version: Option<u32>,
-    logger: &MutinyLogger,
+    logger: Arc<MutinyLogger>,
 ) -> Result<(), lightning::io::Error> {
-    let res = storage.set_data_async(key, object, version).await;
+    let res = storage.set_data_async(key.clone(), object, version).await;
 
     res.map_err(|e| {
         match e {
@@ -743,9 +743,9 @@ pub(crate) async fn persist_monitor(
 
 #[cfg(test)]
 mod test {
+    use crate::node::scoring_params;
     use crate::onchain::OnChainWallet;
     use crate::storage::MemoryStorage;
-    use crate::{esplora::EsploraSyncClient, node::scoring_params};
     use crate::{
         event::{HTLCStatus, MillisatAmount},
         scorer::HubPreferentialScorer,
@@ -760,6 +760,7 @@ mod test {
     use lightning::routing::router::DefaultRouter;
     use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
     use lightning::sign::EntropySource;
+    use lightning_transaction_sync::EsploraSyncClient;
     use std::str::FromStr;
     use std::sync::atomic::AtomicBool;
     use uuid::Uuid;
@@ -922,8 +923,7 @@ mod test {
         let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
 
         let esplora_server_url = "https://mutinynet.com/api/".to_string();
-        let esplora_client = Arc::new(Builder::new(&esplora_server_url).build_async().unwrap());
-        let esplora = Arc::new(MultiEsploraClient::new(vec![esplora_client]));
+        let esplora = Arc::new(Builder::new(&esplora_server_url).build_async().unwrap());
         let fees = Arc::new(MutinyFeeEstimator::new(
             persister.storage.clone(),
             esplora.clone(),

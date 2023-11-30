@@ -1,11 +1,9 @@
 use crate::labels::LabelStorage;
 use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
-use crate::multiesplora::MultiEsploraClient;
 use crate::nodemanager::{ChannelClosure, LspConfig};
 use crate::peermanager::LspMessageRouter;
 use crate::utils::get_monitor_version;
 use crate::{
-    background::process_events_async,
     chain::MutinyChain,
     error::{MutinyError, MutinyStorageError},
     event::{EventHandler, HTLCStatus, MillisatAmount, PaymentInfo},
@@ -17,7 +15,7 @@ use crate::{
     lspclient::LspClient,
     nodemanager::{MutinyInvoice, NodeIndex},
     onchain::OnChainWallet,
-    peermanager::{GossipMessageHandler, PeerManager, PeerManagerImpl},
+    peermanager::{GossipMessageHandler, PeerManagerImpl},
     utils::{self, sleep},
 };
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
@@ -30,6 +28,7 @@ use bitcoin::secp256k1::rand;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint};
 use core::time::Duration;
+use esplora_client::AsyncClient;
 use futures_util::lock::Mutex;
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
 use lightning::ln::channelmanager::ChannelDetails;
@@ -62,6 +61,7 @@ use lightning::{
     routing::scoring::ProbabilisticScoringFeeParameters,
     util::config::ChannelConfig,
 };
+use lightning_background_processor::process_events_async;
 use lightning_invoice::payment::PaymentError;
 use lightning_invoice::{
     utils::{create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice},
@@ -160,7 +160,7 @@ pub(crate) struct Node<S: MutinyStorage> {
     pub child_index: u32,
     stopped_components: Arc<RwLock<Vec<bool>>>,
     pub pubkey: PublicKey,
-    pub peer_manager: Arc<dyn PeerManager>,
+    pub peer_manager: Arc<PeerManagerImpl<S>>,
     pub keys_manager: Arc<PhantomKeysManager<S>>,
     pub channel_manager: Arc<PhantomChannelManager<S>>,
     pub chain_monitor: Arc<ChainMonitor<S>>,
@@ -190,7 +190,7 @@ impl<S: MutinyStorage> Node<S> {
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
         wallet: Arc<OnChainWallet<S>>,
         network: Network,
-        esplora: &MultiEsploraClient,
+        esplora: &AsyncClient,
         lsp_clients: &[LspClient],
         logger: Arc<MutinyLogger>,
         do_not_connect_peers: bool,
@@ -491,7 +491,9 @@ impl<S: MutinyStorage> Node<S> {
         let background_stopped_components = stopped_components.clone();
         utils::spawn(async move {
             loop {
-                let gs = crate::background::GossipSync::rapid(background_gossip_sync.clone());
+                let gs = lightning_background_processor::GossipSync::rapid(
+                    background_gossip_sync.clone(),
+                );
                 let ev = background_event_handler.clone();
                 if let Err(e) = process_events_async(
                     background_persister.clone(),
@@ -605,7 +607,7 @@ impl<S: MutinyStorage> Node<S> {
                         "Retrying to persist monitor for outpoint: {funding_txo:?}"
                     );
 
-                    match retry_chain_monitor.get_monitor(funding_txo) {
+                    let data_opt = match retry_chain_monitor.get_monitor(funding_txo) {
                         Ok(monitor) => {
                             let key = retry_persister.get_monitor_key(&funding_txo);
                             let object = monitor.encode();
@@ -619,35 +621,42 @@ impl<S: MutinyStorage> Node<S> {
                                 update_id as u32
                             };
 
-                            let res = persist_monitor(
-                                &retry_persister.storage,
-                                &key,
-                                &object,
-                                Some(version),
-                                &retry_logger,
-                            )
-                            .await;
+                            Some((key, object, version))
+                        }
+                        Err(_) => {
+                            log_error!(
+                                retry_logger,
+                                "Failed to get monitor for outpoint: {funding_txo:?}"
+                            );
+                            None
+                        }
+                    };
 
-                            match res {
-                                Ok(_) => {
-                                    for id in update_ids {
-                                        if let Err(e) = retry_chain_monitor
-                                            .channel_monitor_updated(funding_txo, id)
-                                        {
-                                            log_error!(retry_logger, "Error notifying chain monitor of channel monitor update: {e:?}");
-                                        }
+                    if let Some((key, object, version)) = data_opt {
+                        let res = persist_monitor(
+                            retry_persister.storage.clone(),
+                            key,
+                            object,
+                            Some(version),
+                            retry_logger.clone(),
+                        )
+                        .await;
+
+                        match res {
+                            Ok(_) => {
+                                for id in update_ids {
+                                    if let Err(e) = retry_chain_monitor
+                                        .channel_monitor_updated(funding_txo, id)
+                                    {
+                                        log_error!(retry_logger, "Error notifying chain monitor of channel monitor update: {e:?}");
                                     }
                                 }
-                                Err(e) => log_error!(
+                            }
+                            Err(e) => log_error!(
                                     retry_logger,
                                     "Failed to persist monitor for outpoint: {funding_txo:?}, error: {e:?}",
                                 ),
-                            }
                         }
-                        Err(_) => log_error!(
-                            retry_logger,
-                            "Failed to get monitor for outpoint: {funding_txo:?}"
-                        ),
                     }
                 }
 
@@ -1701,7 +1710,7 @@ async fn start_reconnection_handling<S: MutinyStorage>(
     storage: &S,
     node_pubkey: PublicKey,
     #[cfg(target_arch = "wasm32")] websocket_proxy_addr: String,
-    peer_man: Arc<dyn PeerManager>,
+    peer_man: Arc<PeerManagerImpl<S>>,
     fee_estimator: Arc<MutinyFeeEstimator<S>>,
     logger: &Arc<MutinyLogger>,
     uuid: String,
@@ -1819,7 +1828,7 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                 .filter(|(n, _)| {
                     !current_connections
                         .iter()
-                        .any(|c| &NodeId::from_pubkey(c) == n)
+                        .any(|(c, _)| &NodeId::from_pubkey(c) == n)
                 })
                 .collect();
 

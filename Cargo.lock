@@ -906,6 +906,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyper-rustls"
+version = "0.24.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec3efd23720e2049821a693cbc7e65ea87c72f1c58ff2f9522ff332b1491e590"
+dependencies = [
+ "futures-util",
+ "http",
+ "hyper",
+ "rustls",
+ "tokio",
+ "tokio-rustls",
+]
+
+[[package]]
 name = "hyper-tls"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1059,16 +1073,26 @@ checksum = "89d92a4743f9a61002fae18374ed11e7973f530cb3a3255fb354818118b2203c"
 [[package]]
 name = "lightning"
 version = "0.0.118"
-source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=a9925126ea3b27b91e0e804e2e2dd8ae29815218#a9925126ea3b27b91e0e804e2e2dd8ae29815218"
+source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=686a84236f54bf8d7270a5fbec07801e5281691f#686a84236f54bf8d7270a5fbec07801e5281691f"
 dependencies = [
  "bitcoin 0.29.2",
  "musig2",
 ]
 
 [[package]]
+name = "lightning-background-processor"
+version = "0.0.118"
+source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=686a84236f54bf8d7270a5fbec07801e5281691f#686a84236f54bf8d7270a5fbec07801e5281691f"
+dependencies = [
+ "bitcoin 0.29.2",
+ "lightning",
+ "lightning-rapid-gossip-sync",
+]
+
+[[package]]
 name = "lightning-invoice"
 version = "0.26.0"
-source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=a9925126ea3b27b91e0e804e2e2dd8ae29815218#a9925126ea3b27b91e0e804e2e2dd8ae29815218"
+source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=686a84236f54bf8d7270a5fbec07801e5281691f#686a84236f54bf8d7270a5fbec07801e5281691f"
 dependencies = [
  "bech32",
  "bitcoin 0.29.2",
@@ -1082,10 +1106,23 @@ dependencies = [
 [[package]]
 name = "lightning-rapid-gossip-sync"
 version = "0.0.118"
-source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=a9925126ea3b27b91e0e804e2e2dd8ae29815218#a9925126ea3b27b91e0e804e2e2dd8ae29815218"
+source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=686a84236f54bf8d7270a5fbec07801e5281691f#686a84236f54bf8d7270a5fbec07801e5281691f"
 dependencies = [
  "bitcoin 0.29.2",
  "lightning",
+]
+
+[[package]]
+name = "lightning-transaction-sync"
+version = "0.0.118"
+source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=686a84236f54bf8d7270a5fbec07801e5281691f#686a84236f54bf8d7270a5fbec07801e5281691f"
+dependencies = [
+ "bdk-macros",
+ "bitcoin 0.29.2",
+ "esplora-client",
+ "futures",
+ "lightning",
+ "reqwest",
 ]
 
 [[package]]
@@ -1226,8 +1263,10 @@ dependencies = [
  "js-sys",
  "jwt-compact",
  "lightning",
+ "lightning-background-processor",
  "lightning-invoice",
  "lightning-rapid-gossip-sync",
+ "lightning-transaction-sync",
  "lnurl-rs",
  "log",
  "mockall",
@@ -1255,6 +1294,7 @@ name = "mutiny-wasm"
 version = "0.4.39"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bip39",
  "bitcoin 0.29.2",
  "console_error_panic_hook",
@@ -1699,6 +1739,7 @@ dependencies = [
  "http",
  "http-body",
  "hyper",
+ "hyper-rustls",
  "hyper-tls",
  "ipnet",
  "js-sys",
@@ -1708,33 +1749,37 @@ dependencies = [
  "once_cell",
  "percent-encoding",
  "pin-project-lite",
+ "rustls",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "system-configuration",
  "tokio",
  "tokio-native-tls",
+ "tokio-rustls",
  "tokio-socks",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "webpki-roots",
  "winreg",
 ]
 
 [[package]]
 name = "rexie"
-version = "0.4.2"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fef172ff9cdf146cdc934e28cdeb137517bf954fb75e6ee8987dd44b58f351b1"
+checksum = "d34618a20b14cebebc63f8b1c5228116e7379765e8f1b7a9f66b5920babd8595"
 dependencies = [
- "console_error_panic_hook",
  "js-sys",
  "num-traits",
  "thiserror",
  "tokio",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
@@ -1790,6 +1835,15 @@ dependencies = [
  "ring",
  "rustls-webpki",
  "sct",
+]
+
+[[package]]
+name = "rustls-pemfile"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c74cae0a4cf6ccbbf5f359f08efdf8ee7e1dc532573bf0db71968cb56b1448c"
+dependencies = [
+ "base64 0.21.5",
 ]
 
 [[package]]
