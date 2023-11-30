@@ -1158,12 +1158,20 @@ impl MutinyWallet {
         Ok(JsValue::from_serde(&contacts)?)
     }
 
-    pub fn get_contact(&self, label: String) -> Result<Option<TagItem>, MutinyJsError> {
+    pub fn get_tag_item(&self, label: String) -> Result<Option<TagItem>, MutinyJsError> {
         Ok(self
             .inner
             .node_manager
             .get_contact(&label)?
             .map(|c| (label, c).into()))
+    }
+
+    pub fn get_contact(&self, label: String) -> Result<Option<Contact>, MutinyJsError> {
+        Ok(self
+            .inner
+            .node_manager
+            .get_contact(label)?
+            .map(|c| c.into()))
     }
 
     /// Create a new contact from an existing label and returns the new identifying label
