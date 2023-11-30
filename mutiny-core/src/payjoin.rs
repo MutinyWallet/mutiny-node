@@ -1,4 +1,10 @@
+use std::collections::HashMap;
+
+use crate::error::MutinyError;
+use crate::storage::MutinyStorage;
+use hex_conservative::DisplayHex;
 use once_cell::sync::Lazy;
+use payjoin::receive::v2::Enrolled;
 use payjoin::OhttpKeys;
 use url::Url;
 
@@ -10,6 +16,34 @@ pub(crate) static OHTTP_RELAYS: [Lazy<Url>; 3] = [
 
 pub(crate) static PAYJOIN_DIR: Lazy<Url> =
     Lazy::new(|| Url::parse("https://payjo.in").expect("Invalid URL"));
+
+pub trait PayjoinStorage {
+    fn get_payjoin(&self, id: &[u8; 33]) -> Result<Option<Enrolled>, MutinyError>;
+    fn get_payjoins(&self) -> Result<Vec<Enrolled>, MutinyError>;
+    fn persist_payjoin(&self, session: Enrolled) -> Result<(), MutinyError>;
+}
+
+const PAYJOIN_KEY_PREFIX: &str = "payjoin/";
+
+fn get_payjoin_key(id: &[u8; 33]) -> String {
+    format!("{PAYJOIN_KEY_PREFIX}{}", id.as_hex())
+}
+
+impl<S: MutinyStorage> PayjoinStorage for S {
+    fn get_payjoin(&self, id: &[u8; 33]) -> Result<Option<Enrolled>, MutinyError> {
+        let sessions = self.get_data(get_payjoin_key(id))?;
+        Ok(sessions)
+    }
+
+    fn get_payjoins(&self) -> Result<Vec<Enrolled>, MutinyError> {
+        let map: HashMap<String, Enrolled> = self.scan(PAYJOIN_KEY_PREFIX, None)?;
+        Ok(map.values().map(|v| v.to_owned()).collect())
+    }
+
+    fn persist_payjoin(&self, session: Enrolled) -> Result<(), MutinyError> {
+        self.set_data(get_payjoin_key(&session.pubkey()), session, None)
+    }
+}
 
 pub async fn fetch_ohttp_keys(
     _ohttp_relay: Url,

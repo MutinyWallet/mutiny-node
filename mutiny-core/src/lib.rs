@@ -48,6 +48,7 @@ mod test_utils;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
+use crate::payjoin::PayjoinStorage;
 use crate::storage::{
     list_payment_info, persist_payment_info, update_nostr_contact_list, IndexItem, MutinyStorage,
     DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX,
@@ -1119,6 +1120,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // when we restart, gen a new session id
         self.node_manager = Arc::new(nm_builder.build().await?);
         NodeManager::start_sync(self.node_manager.clone());
+        NodeManager::resume_payjoins(self.node_manager.clone());
 
         Ok(())
     }
@@ -1513,6 +1515,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             let enrolled = enroller
                 .process_res(ohttp_response.as_ref(), context)
                 .map_err(|_| MutinyError::PayjoinCreateRequest)?;
+            self.node_manager
+                .storage
+                .persist_payjoin(enrolled.clone())?;
             let pj_uri = enrolled.fallback_target();
             log_debug!(self.logger, "{pj_uri}");
             let wallet = self.node_manager.wallet.clone();

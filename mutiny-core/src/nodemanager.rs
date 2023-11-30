@@ -3,6 +3,7 @@ use crate::event::HTLCStatus;
 use crate::labels::LabelStorage;
 use crate::ldkstorage::CHANNEL_CLOSURE_PREFIX;
 use crate::logging::LOGGING_KEY;
+use crate::payjoin::PayjoinStorage;
 use crate::utils::{sleep, spawn};
 use crate::ActivityItem;
 use crate::MutinyInvoice;
@@ -626,6 +627,19 @@ impl<S: MutinyStorage> NodeManager<S> {
         }
 
         Ok(())
+    }
+
+    /// Starts a background task to poll payjoin sessions to attempt receiving.
+    pub(crate) fn resume_payjoins(nm: Arc<NodeManager<S>>) {
+        let all = nm.storage.get_payjoins().unwrap_or_default();
+        for payjoin in all {
+            let wallet = nm.wallet.clone();
+            let stop = nm.stop.clone();
+            utils::spawn(async move {
+                let pj_txid = Self::receive_payjoin(wallet, stop, payjoin).await.unwrap();
+                log::info!("Received payjoin txid: {}", pj_txid);
+            });
+        }
     }
 
     /// Creates a background process that will sync the wallet with the blockchain.
