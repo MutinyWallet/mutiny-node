@@ -2,7 +2,7 @@ use crate::auth::MutinyAuthClient;
 use crate::labels::LabelStorage;
 use crate::ldkstorage::CHANNEL_CLOSURE_PREFIX;
 use crate::logging::LOGGING_KEY;
-use crate::payjoin::Error as PayjoinError;
+use crate::payjoin::{Error as PayjoinError, PayjoinStorage, RecvSession};
 use crate::utils::{sleep, spawn};
 use crate::MutinyInvoice;
 use crate::MutinyWalletConfig;
@@ -581,6 +581,14 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(())
     }
 
+    /// Starts a background task to poll payjoin sessions to attempt receiving.
+    pub(crate) fn resume_payjoins(nm: Arc<NodeManager<S>>) {
+        let all = nm.storage.list_recv_sessions().unwrap_or_default();
+        for payjoin in all {
+            nm.clone().spawn_payjoin_receiver(payjoin);
+        }
+    }
+
     /// Creates a background process that will sync the wallet with the blockchain.
     /// This will also update the fee estimates every 10 minutes.
     pub fn start_sync(nm: Arc<NodeManager<S>>) {
@@ -772,12 +780,13 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(txid)
     }
 
-    pub fn spawn_payjoin_receiver(&self, enrolled: Enrolled) {
+    pub fn spawn_payjoin_receiver(&self, session: RecvSession) {
         let logger = self.logger.clone();
         let stop = self.stop.clone();
+        let storage = Arc::new(self.storage.clone());
         let wallet = self.wallet.clone();
         utils::spawn(async move {
-            match Self::receive_payjoin(wallet, stop, enrolled).await {
+            match Self::receive_payjoin(wallet, stop, storage, session).await {
                 Ok(txid) => log_info!(logger, "Received payjoin txid: {txid}"),
                 Err(e) => log_error!(logger, "Error receiving payjoin: {e}"),
             };
@@ -788,13 +797,14 @@ impl<S: MutinyStorage> NodeManager<S> {
     async fn receive_payjoin(
         wallet: Arc<OnChainWallet<S>>,
         stop: Arc<AtomicBool>,
-        mut enrolled: payjoin::receive::v2::Enrolled,
+        storage: Arc<S>,
+        mut session: crate::payjoin::RecvSession,
     ) -> Result<Txid, MutinyError> {
         let http_client = reqwest::Client::builder()
             .build()
             .map_err(PayjoinError::Reqwest)?;
         let proposal: payjoin::receive::v2::UncheckedProposal =
-            Self::poll_for_fallback_psbt(stop, &http_client, &mut enrolled).await?;
+            Self::poll_for_fallback_psbt(stop, storage, &http_client, &mut session).await?;
         let original_tx = proposal.extract_tx_to_schedule_broadcast();
         let mut payjoin_proposal = match wallet
             .process_payjoin_proposal(proposal)
@@ -827,14 +837,20 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     async fn poll_for_fallback_psbt(
         stop: Arc<AtomicBool>,
+        storage: Arc<S>,
         client: &reqwest::Client,
-        enroller: &mut payjoin::receive::v2::Enrolled,
+        session: &mut crate::payjoin::RecvSession,
     ) -> Result<payjoin::receive::v2::UncheckedProposal, PayjoinError> {
         loop {
             if stop.load(Ordering::Relaxed) {
                 return Err(crate::payjoin::Error::Shutdown);
             }
-            let (req, context) = enroller.extract_req()?;
+
+            if session.expiry < utils::now() {
+                let _ = storage.delete_recv_session(&session.enrolled.pubkey());
+                return Err(crate::payjoin::Error::SessionExpired);
+            }
+            let (req, context) = session.enrolled.extract_req()?;
             let ohttp_response = client
                 .post(req.url)
                 .header("Content-Type", "message/ohttp-req")
@@ -842,7 +858,9 @@ impl<S: MutinyStorage> NodeManager<S> {
                 .send()
                 .await?;
             let ohttp_response = ohttp_response.bytes().await?;
-            let proposal = enroller.process_res(ohttp_response.as_ref(), context)?;
+            let proposal = session
+                .enrolled
+                .process_res(ohttp_response.as_ref(), context)?;
             match proposal {
                 Some(proposal) => return Ok(proposal),
                 None => utils::sleep(5000).await,
