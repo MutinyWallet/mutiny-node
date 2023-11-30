@@ -635,8 +635,11 @@ impl<S: MutinyStorage> NodeManager<S> {
         for payjoin in all {
             let wallet = nm.wallet.clone();
             let stop = nm.stop.clone();
+            let storage = Arc::new(nm.storage.clone());
             utils::spawn(async move {
-                let pj_txid = Self::receive_payjoin(wallet, stop, payjoin).await.unwrap();
+                let pj_txid = Self::receive_payjoin(wallet, stop, storage, payjoin)
+                    .await
+                    .unwrap();
                 log::info!("Received payjoin txid: {}", pj_txid);
             });
         }
@@ -810,11 +813,12 @@ impl<S: MutinyStorage> NodeManager<S> {
     pub async fn receive_payjoin(
         wallet: Arc<OnChainWallet<S>>,
         stop: Arc<AtomicBool>,
-        mut enrolled: payjoin::receive::v2::Enrolled,
+        storage: Arc<S>,
+        mut session: crate::payjoin::Session,
     ) -> Result<Txid, crate::payjoin::Error> {
         let http_client = reqwest::Client::builder().build()?;
         let proposal: payjoin::receive::v2::UncheckedProposal =
-            Self::poll_for_fallback_psbt(stop, &http_client, &mut enrolled).await?;
+            Self::poll_for_fallback_psbt(stop, storage, &http_client, &mut session).await?;
         let mut payjoin_proposal = wallet.process_payjoin_proposal(proposal).unwrap();
 
         let (req, ohttp_ctx) = payjoin_proposal.extract_v2_req()?;
@@ -832,14 +836,20 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     async fn poll_for_fallback_psbt(
         stop: Arc<AtomicBool>,
+        storage: Arc<S>,
         client: &reqwest::Client,
-        enroller: &mut payjoin::receive::v2::Enrolled,
+        session: &mut crate::payjoin::Session,
     ) -> Result<payjoin::receive::v2::UncheckedProposal, crate::payjoin::Error> {
         loop {
             if stop.load(Ordering::Relaxed) {
                 return Err(crate::payjoin::Error::Shutdown);
             }
-            let (req, context) = enroller.extract_req()?;
+
+            if session.expiry < utils::now() {
+                let _ = storage.delete_payjoin(&session.enrolled.pubkey());
+                return Err(crate::payjoin::Error::SessionExpired);
+            }
+            let (req, context) = session.enrolled.extract_req()?;
             let ohttp_response = client
                 .post(req.url)
                 .header("Content-Type", "message/ohttp-req")
@@ -847,7 +857,9 @@ impl<S: MutinyStorage> NodeManager<S> {
                 .send()
                 .await?;
             let ohttp_response = ohttp_response.bytes().await?;
-            let proposal = enroller.process_res(ohttp_response.as_ref(), context)?;
+            let proposal = session
+                .enrolled
+                .process_res(ohttp_response.as_ref(), context)?;
             match proposal {
                 Some(proposal) => return Ok(proposal),
                 None => utils::sleep(5000).await,
