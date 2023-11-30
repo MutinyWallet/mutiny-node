@@ -14,6 +14,7 @@ use lightning_liquidity::lsps2::{LSPS2Event, OpeningFeeParams};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::{
     error::MutinyError,
@@ -23,7 +24,7 @@ use crate::{
     lsp::{FeeRequest, InvoiceRequest, Lsp, LspConfig},
     node::{parse_peer_info, LiquidityManager},
     storage::MutinyStorage,
-    utils::{self, Mutex},
+    utils,
 };
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -278,17 +279,17 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
                 .insert(invoice_request.user_channel_id, pending_buy_request_sender);
         }
 
-        let channel_info = self.pending_channel_info.lock().unwrap();
-        let channel_info = channel_info
-            .get(&invoice_request.user_channel_id)
-            .ok_or(MutinyError::LspGenericError)?;
+        let (channel_id, fee_params) = {
+            let channel_info = self.pending_channel_info.lock().unwrap();
+            let channel_info = channel_info
+                .get(&invoice_request.user_channel_id)
+                .ok_or(MutinyError::LspGenericError)?;
+
+            (channel_info.channel_id, channel_info.fee_params.clone())
+        };
 
         self.liquidity_manager
-            .opening_fee_params_selected(
-                self.pubkey,
-                channel_info.channel_id,
-                channel_info.fee_params.clone(),
-            )
+            .opening_fee_params_selected(self.pubkey, channel_id, fee_params)
             .map_err(|_| MutinyError::LspGenericError)?;
 
         let invoice = pending_buy_request_receiver

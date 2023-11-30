@@ -1,6 +1,5 @@
 use crate::lnurlauth::AuthManager;
 use crate::logging::LOGGING_KEY;
-use crate::multiesplora::MultiEsploraClient;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY};
 use crate::utils::{sleep, spawn};

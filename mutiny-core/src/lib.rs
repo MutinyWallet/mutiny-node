@@ -23,7 +23,6 @@ pub mod lnurlauth;
 pub mod logging;
 mod lsp;
 mod messagehandler;
-mod multiesplora;
 mod networking;
 mod node;
 pub mod nodemanager;

@@ -2,7 +2,6 @@ use crate::labels::LabelStorage;
 use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
 use crate::lsp::{InvoiceRequest, LspConfig};
 use crate::messagehandler::MutinyMessageHandler;
-use crate::multiesplora::MultiEsploraClient;
 use crate::nodemanager::ChannelClosure;
 use crate::peermanager::LspMessageRouter;
 use crate::storage::MutinyStorage;
