@@ -9,14 +9,10 @@
 )]
 extern crate core;
 
-// background file is mostly an LDK copy paste
-mod background;
-
 pub mod auth;
 mod chain;
 pub mod encrypt;
 pub mod error;
-pub mod esplora;
 mod event;
 mod fees;
 mod gossip;
@@ -26,7 +22,6 @@ mod ldkstorage;
 pub mod lnurlauth;
 pub mod logging;
 mod lspclient;
-mod multiesplora;
 mod networking;
 mod node;
 pub mod nodemanager;
@@ -160,7 +155,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     return Err(MutinyError::NetworkMismatch);
                 }
             }
-            None => storage.set_data(EXPECTED_NETWORK_KEY, config.network, None)?,
+            None => storage.set_data(EXPECTED_NETWORK_KEY.to_string(), config.network, None)?,
         }
 
         let node_manager =
@@ -626,8 +621,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         S::clear().await?;
         storage.start().await?;
         storage.insert_mnemonic(m)?;
-        storage.set_data(NEED_FULL_SYNC_KEY, true, None)?;
-        storage.set_data(DEVICE_ID_KEY, device_id, None)?;
+        storage.set_data(NEED_FULL_SYNC_KEY.to_string(), true, None)?;
+        storage.set_data(DEVICE_ID_KEY.to_string(), device_id, None)?;
         Ok(())
     }
 }

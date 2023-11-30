@@ -1,4 +1,5 @@
 use anyhow::anyhow;
+use async_trait::async_trait;
 use bip39::Mnemonic;
 use gloo_utils::format::JsValueSerdeExt;
 use lightning::util::logger::Logger;
@@ -24,6 +25,13 @@ use wasm_bindgen_futures::spawn_local;
 pub(crate) const WALLET_DATABASE_NAME: &str = "wallet";
 pub(crate) const WALLET_OBJECT_STORE_NAME: &str = "wallet_store";
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RexieContainer(Option<Rexie>);
+
+// These are okay because we never actually send across threads in the browser
+unsafe impl Send for RexieContainer {}
+unsafe impl Sync for RexieContainer {}
+
 #[derive(Clone)]
 pub struct IndexedDbStorage {
     pub(crate) password: Option<String>,
@@ -32,7 +40,7 @@ pub struct IndexedDbStorage {
     /// This is used to avoid having to read from IndexedDB on every get.
     /// This is a RwLock because we want to be able to read from it without blocking
     memory: Arc<RwLock<HashMap<String, Value>>>,
-    pub(crate) indexed_db: Arc<RwLock<Option<Rexie>>>,
+    pub(crate) indexed_db: Arc<RwLock<RexieContainer>>,
     vss: Option<Arc<MutinyVssClient>>,
     logger: Arc<MutinyLogger>,
 }
@@ -44,7 +52,8 @@ impl IndexedDbStorage {
         vss: Option<Arc<MutinyVssClient>>,
         logger: Arc<MutinyLogger>,
     ) -> Result<IndexedDbStorage, MutinyError> {
-        let indexed_db = Arc::new(RwLock::new(Some(Self::build_indexed_db_database().await?)));
+        let idx = Self::build_indexed_db_database().await?;
+        let indexed_db = Arc::new(RwLock::new(RexieContainer(Some(idx))));
         let password = password.filter(|p| !p.is_empty());
 
         let map = Self::read_all(
@@ -129,7 +138,7 @@ impl IndexedDbStorage {
     }
 
     async fn save_to_indexed_db(
-        indexed_db: &Arc<RwLock<Option<Rexie>>>,
+        indexed_db: &Arc<RwLock<RexieContainer>>,
         key: &str,
         data: &Value,
     ) -> Result<(), MutinyError> {
@@ -141,8 +150,8 @@ impl IndexedDbStorage {
         let tx = indexed_db
             .try_write()
             .map_err(|e| MutinyError::read_err(e.into()))
-            .and_then(|mut indexed_db_lock| {
-                if let Some(indexed_db) = &mut *indexed_db_lock {
+            .and_then(|indexed_db_lock| {
+                if let Some(indexed_db) = &indexed_db_lock.0 {
                     indexed_db
                         .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)
                         .map_err(|e| {
@@ -173,7 +182,7 @@ impl IndexedDbStorage {
     }
 
     async fn delete_from_indexed_db(
-        indexed_db: &Arc<RwLock<Option<Rexie>>>,
+        indexed_db: &Arc<RwLock<RexieContainer>>,
         keys: &[String],
     ) -> Result<(), MutinyError> {
         let tx = indexed_db
@@ -182,8 +191,8 @@ impl IndexedDbStorage {
                 error!("Failed to acquire indexed db lock: {e}");
                 MutinyError::read_err(e.into())
             })
-            .and_then(|mut indexed_db_lock| {
-                if let Some(indexed_db) = &mut *indexed_db_lock {
+            .and_then(|indexed_db_lock| {
+                if let Some(indexed_db) = &indexed_db_lock.0 {
                     indexed_db
                         .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadWrite)
                         .map_err(|e| {
@@ -219,7 +228,7 @@ impl IndexedDbStorage {
     }
 
     pub(crate) async fn read_all(
-        indexed_db: &Arc<RwLock<Option<Rexie>>>,
+        indexed_db: &Arc<RwLock<RexieContainer>>,
         password: Option<String>,
         cipher: Option<Cipher>,
         vss: Option<&MutinyVssClient>,
@@ -230,7 +239,7 @@ impl IndexedDbStorage {
                 .try_read()
                 .map_err(|e| MutinyError::read_err(e.into()))
                 .and_then(|indexed_db_lock| {
-                    if let Some(indexed_db) = &*indexed_db_lock {
+                    if let Some(indexed_db) = &indexed_db_lock.0 {
                         indexed_db
                             .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadOnly)
                             .map_err(|e| {
@@ -460,6 +469,7 @@ fn used_once(key: &str) -> bool {
     }
 }
 
+#[async_trait(?Send)]
 impl MutinyStorage for IndexedDbStorage {
     fn password(&self) -> Option<&str> {
         self.password.as_deref()
@@ -473,11 +483,10 @@ impl MutinyStorage for IndexedDbStorage {
         self.vss.clone()
     }
 
-    fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
+    fn set<T>(&self, key: String, value: T) -> Result<(), MutinyError>
     where
         T: Serialize,
     {
-        let key = key.as_ref().to_string();
         let data = serde_json::to_value(value).map_err(|e| MutinyError::PersistenceFailed {
             source: MutinyStorageError::SerdeError { source: e },
         })?;
@@ -505,11 +514,10 @@ impl MutinyStorage for IndexedDbStorage {
         Ok(())
     }
 
-    async fn set_async<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
+    async fn set_async<T>(&self, key: String, value: T) -> Result<(), MutinyError>
     where
         T: Serialize,
     {
-        let key = key.as_ref().to_string();
         let data = serde_json::to_value(value).map_err(|e| MutinyError::PersistenceFailed {
             source: MutinyStorageError::SerdeError { source: e },
         })?;
@@ -588,8 +596,10 @@ impl MutinyStorage for IndexedDbStorage {
     }
 
     async fn start(&mut self) -> Result<(), MutinyError> {
-        let indexed_db = if self.indexed_db.try_read()?.is_none() {
-            Arc::new(RwLock::new(Some(Self::build_indexed_db_database().await?)))
+        let indexed_db = if self.indexed_db.try_read()?.0.is_none() {
+            Arc::new(RwLock::new(RexieContainer(Some(
+                Self::build_indexed_db_database().await?,
+            ))))
         } else {
             self.indexed_db.clone()
         };
@@ -610,14 +620,14 @@ impl MutinyStorage for IndexedDbStorage {
 
     fn stop(&self) {
         if let Ok(mut indexed_db_lock) = self.indexed_db.try_write() {
-            if let Some(indexed_db) = indexed_db_lock.take() {
+            if let Some(indexed_db) = indexed_db_lock.0.take() {
                 indexed_db.close();
             }
         }
     }
 
     fn connected(&self) -> Result<bool, MutinyError> {
-        Ok(self.indexed_db.try_read()?.is_some())
+        Ok(self.indexed_db.try_read()?.0.is_some())
     }
 
     fn scan_keys(&self, prefix: &str, suffix: Option<&str>) -> Result<Vec<String>, MutinyError> {
@@ -748,7 +758,7 @@ mod tests {
         let test_name = "test_get_set_delete";
         log!("{test_name}");
 
-        let key = "test_key";
+        let key = "test_key".to_string();
         let value = "test_value";
 
         let logger = Arc::new(MutinyLogger::default());
@@ -758,31 +768,31 @@ mod tests {
             .await
             .unwrap();
 
-        let result: Option<String> = storage.get(key).unwrap();
+        let result: Option<String> = storage.get(&key).unwrap();
         assert_eq!(result, None);
 
-        storage.set(key, value).unwrap();
+        storage.set(key.clone(), value).unwrap();
 
-        let result: Option<String> = storage.get(key).unwrap();
+        let result: Option<String> = storage.get(&key).unwrap();
         assert_eq!(result, Some(value.to_string()));
 
         // wait for the storage to be persisted
         sleep(1_000).await;
         // reload and check again
         storage.reload_from_indexed_db().await.unwrap();
-        let result: Option<String> = storage.get(key).unwrap();
+        let result: Option<String> = storage.get(&key).unwrap();
         assert_eq!(result, Some(value.to_string()));
 
-        storage.delete(&[key]).unwrap();
+        storage.delete(&[key.clone()]).unwrap();
 
-        let result: Option<String> = storage.get(key).unwrap();
+        let result: Option<String> = storage.get(&key).unwrap();
         assert_eq!(result, None);
 
         // wait for the storage to be persisted
         sleep(1_000).await;
         // reload and check again
         storage.reload_from_indexed_db().await.unwrap();
-        let result: Option<String> = storage.get(key).unwrap();
+        let result: Option<String> = storage.get(&key).unwrap();
         assert_eq!(result, None);
 
         // clear the storage to clean up
@@ -825,7 +835,7 @@ mod tests {
         let test_name = "test_clear";
         log!("{test_name}");
 
-        let key = "test_key";
+        let key = "test_key".to_string();
         let value = "test_value";
 
         let logger = Arc::new(MutinyLogger::default());
@@ -835,7 +845,7 @@ mod tests {
             .await
             .unwrap();
 
-        storage.set(key, value).unwrap();
+        storage.set(key.clone(), value).unwrap();
 
         IndexedDbStorage::clear().await.unwrap();
 
@@ -901,7 +911,9 @@ mod tests {
             .await
             .unwrap();
         let seed = generate_seed(12).unwrap();
-        storage.set_data(MNEMONIC_KEY, seed, None).unwrap();
+        storage
+            .set_data(MNEMONIC_KEY.to_string(), seed, None)
+            .unwrap();
         // wait for the storage to be persisted
         utils::sleep(1_000).await;
 

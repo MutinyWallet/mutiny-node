@@ -1,5 +1,5 @@
 [workspace]
-resolver="2"
+resolver = "2"
 
 members = [
     "mutiny-core",
@@ -15,6 +15,8 @@ opt-level = "z"
 opt-level = "z"
 
 [patch.crates-io]
-lightning = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "a9925126ea3b27b91e0e804e2e2dd8ae29815218" }
-lightning-invoice = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "a9925126ea3b27b91e0e804e2e2dd8ae29815218" }
-lightning-rapid-gossip-sync = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "a9925126ea3b27b91e0e804e2e2dd8ae29815218" }
+lightning = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "686a84236f54bf8d7270a5fbec07801e5281691f" }
+lightning-invoice = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "686a84236f54bf8d7270a5fbec07801e5281691f" }
+lightning-rapid-gossip-sync = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "686a84236f54bf8d7270a5fbec07801e5281691f" }
+lightning-background-processor = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "686a84236f54bf8d7270a5fbec07801e5281691f" }
+lightning-transaction-sync  = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "686a84236f54bf8d7270a5fbec07801e5281691f" }

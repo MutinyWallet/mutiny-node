@@ -140,7 +140,8 @@ impl<S: MutinyStorage> NostrManager<S> {
                 .iter()
                 .map(|x| x.profile.clone())
                 .collect::<Vec<_>>();
-            self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+            self.storage
+                .set_data(NWC_STORAGE_KEY.to_string(), profiles, None)?;
         }
 
         Ok(())
@@ -175,7 +176,8 @@ impl<S: MutinyStorage> NostrManager<S> {
                 .iter()
                 .map(|x| x.profile.clone())
                 .collect::<Vec<_>>();
-            self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+            self.storage
+                .set_data(NWC_STORAGE_KEY.to_string(), profiles, None)?;
         }
 
         Ok(())
@@ -200,7 +202,8 @@ impl<S: MutinyStorage> NostrManager<S> {
                 .iter()
                 .map(|x| x.profile.clone())
                 .collect::<Vec<_>>();
-            self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+            self.storage
+                .set_data(NWC_STORAGE_KEY.to_string(), profiles, None)?;
         }
 
         Ok(nwc_profile)
@@ -242,7 +245,8 @@ impl<S: MutinyStorage> NostrManager<S> {
                 .iter()
                 .map(|x| x.profile.clone())
                 .collect::<Vec<_>>();
-            self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+            self.storage
+                .set_data(NWC_STORAGE_KEY.to_string(), profiles, None)?;
         }
 
         Ok(nwc_profile)
@@ -309,7 +313,8 @@ impl<S: MutinyStorage> NostrManager<S> {
                 .iter()
                 .map(|x| x.profile.clone())
                 .collect::<Vec<_>>();
-            self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+            self.storage
+                .set_data(NWC_STORAGE_KEY.to_string(), profiles, None)?;
         }
 
         Ok(nwc.nwc_profile())
@@ -470,7 +475,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         // remove from storage
         pending.retain(|x| x.invoice.payment_hash() != &hash);
         self.storage
-            .set_data(PENDING_NWC_EVENTS_KEY, pending, None)?;
+            .set_data(PENDING_NWC_EVENTS_KEY.to_string(), pending, None)?;
 
         Ok(event_id)
     }
@@ -508,7 +513,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         invoices.retain(|x| x.invoice.payment_hash() != &hash);
 
         self.storage
-            .set_data(PENDING_NWC_EVENTS_KEY, invoices, None)?;
+            .set_data(PENDING_NWC_EVENTS_KEY.to_string(), invoices, None)?;
 
         Ok(())
     }
@@ -578,7 +583,8 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         // need to define the type here, otherwise it will be ambiguous
         let empty: Vec<PendingNwcInvoice> = vec![];
-        self.storage.set_data(PENDING_NWC_EVENTS_KEY, empty, None)?;
+        self.storage
+            .set_data(PENDING_NWC_EVENTS_KEY.to_string(), empty, None)?;
 
         Ok(())
     }
@@ -599,7 +605,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         invoices.dedup();
 
         self.storage
-            .set_data(PENDING_NWC_EVENTS_KEY, invoices, None)?;
+            .set_data(PENDING_NWC_EVENTS_KEY.to_string(), invoices, None)?;
 
         Ok(())
     }
@@ -639,7 +645,8 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let profiles = vec.iter().map(|x| x.profile.clone()).collect::<Vec<_>>();
 
-        self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+        self.storage
+            .set_data(NWC_STORAGE_KEY.to_string(), profiles, None)?;
 
         Ok(())
     }
@@ -652,7 +659,8 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let profiles = vec.iter().map(|x| x.profile.clone()).collect::<Vec<_>>();
 
-        self.storage.set_data(NWC_STORAGE_KEY, profiles, None)?;
+        self.storage
+            .set_data(NWC_STORAGE_KEY.to_string(), profiles, None)?;
 
         Ok(())
     }
@@ -1001,7 +1009,7 @@ mod test {
                 .collect::<Vec<_>>();
             nostr_manager
                 .storage
-                .set_data(NWC_STORAGE_KEY, profiles, None)
+                .set_data(NWC_STORAGE_KEY.to_string(), profiles, None)
                 .unwrap();
         }
         // now read it and make sure the NWC URI is still correct
@@ -1130,7 +1138,7 @@ mod test {
         // add dummy to storage
         nostr_manager
             .storage
-            .set_data(PENDING_NWC_EVENTS_KEY, vec![inv.clone()], None)
+            .set_data(PENDING_NWC_EVENTS_KEY.to_string(), vec![inv.clone()], None)
             .unwrap();
 
         let pending = nostr_manager.get_pending_nwc_invoices().unwrap();

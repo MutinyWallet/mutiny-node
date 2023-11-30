@@ -1,10 +1,10 @@
-use crate::esplora::TxSyncError;
 use aes::cipher::block_padding::UnpadError;
 use bitcoin::Network;
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning_invoice::payment::PaymentError;
 use lightning_invoice::ParseOrSemanticError;
 use lightning_rapid_gossip_sync::GraphSyncError;
+use lightning_transaction_sync::TxSyncError;
 use std::string::FromUtf8Error;
 use thiserror::Error;
 

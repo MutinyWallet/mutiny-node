@@ -161,18 +161,20 @@ impl<'a, S: Writeable> Writeable for MutexGuard<'a, S> {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 pub fn spawn<F>(future: F)
 where
-    F: core::future::Future<Output = ()> + 'static,
+    F: future::Future<Output = ()> + 'static,
 {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        tokio::task::LocalSet::new().spawn_local(future);
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        wasm_bindgen_futures::spawn_local(future);
-    }
+    wasm_bindgen_futures::spawn_local(future);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn spawn<F>(future: F)
+where
+    F: future::Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(future);
 }
 
 /// Returns the version of a channel monitor from a serialized version

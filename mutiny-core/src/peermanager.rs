@@ -41,7 +41,7 @@ use tokio::net::TcpStream;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::networking::tcp_socket::TcpSocketDescriptor;
 
-pub trait PeerManager {
+pub trait PeerManager: Send + Sync + 'static {
     fn get_peer_node_ids(&self) -> Vec<PublicKey>;
 
     fn new_outbound_connection(
@@ -336,12 +336,12 @@ impl MessageRouter for LspMessageRouter {
     }
 }
 
-pub(crate) async fn connect_peer_if_necessary<S: MutinyStorage>(
+pub(crate) async fn connect_peer_if_necessary<S: MutinyStorage, P: PeerManager>(
     #[cfg(target_arch = "wasm32")] websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
     storage: &S,
     logger: Arc<MutinyLogger>,
-    peer_manager: Arc<dyn PeerManager>,
+    peer_manager: Arc<P>,
     fee_estimator: Arc<MutinyFeeEstimator<S>>,
     stop: Arc<AtomicBool>,
 ) -> Result<(), MutinyError> {
@@ -377,11 +377,11 @@ pub(crate) async fn connect_peer_if_necessary<S: MutinyStorage>(
     }
 }
 
-async fn connect_peer(
+async fn connect_peer<P: PeerManager>(
     #[cfg(target_arch = "wasm32")] websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
     logger: Arc<MutinyLogger>,
-    peer_manager: Arc<dyn PeerManager>,
+    peer_manager: Arc<P>,
     stop: Arc<AtomicBool>,
 ) -> Result<(), MutinyError> {
     let (mut descriptor, socket_addr_opt) = match peer_connection_info.connection_type {
