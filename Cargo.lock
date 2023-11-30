@@ -1098,7 +1098,7 @@ dependencies = [
 [[package]]
 name = "lightning-liquidity"
 version = "0.1.0"
-source = "git+https://github.com/lightningdevkit/lightning-liquidity.git?rev=95cbc276ee4b970361334089bc6b20d0b86649b0#95cbc276ee4b970361334089bc6b20d0b86649b0"
+source = "git+https://github.com/lightningdevkit/lightning-liquidity.git?rev=e00d917a8bb17e29493497538c7a4dda00bef151#e00d917a8bb17e29493497538c7a4dda00bef151"
 dependencies = [
  "bitcoin 0.29.2",
  "chrono",
