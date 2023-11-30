@@ -181,7 +181,12 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
             (Some(i), None) => {
                 let node = self.get_node(&node.pubkey).await?;
 
-                if node.peer_manager.get_peer_node_ids().contains(&i) {
+                if node
+                    .peer_manager
+                    .get_peer_node_ids()
+                    .iter()
+                    .any(|x| x.0 == i)
+                {
                     i
                 } else {
                     return Err(MutinyError::Other(anyhow!(

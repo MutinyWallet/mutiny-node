@@ -1,6 +1,5 @@
 use crate::lnurlauth::AuthManager;
 use crate::logging::LOGGING_KEY;
-use crate::multiesplora::MultiEsploraClient;
 use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY};
 use crate::utils::{sleep, spawn};
@@ -8,7 +7,6 @@ use crate::MutinyWalletConfig;
 use crate::{
     chain::MutinyChain,
     error::MutinyError,
-    esplora::EsploraSyncClient,
     fees::MutinyFeeEstimator,
     gossip,
     gossip::{fetch_updated_gossip, get_rgs_url},
@@ -36,7 +34,7 @@ use bitcoin::secp256k1::{rand, PublicKey};
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use core::time::Duration;
-use esplora_client::Builder;
+use esplora_client::{AsyncClient, Builder};
 use futures::{future::join_all, lock::Mutex};
 use lightning::chain::Confirm;
 use lightning::events::ClosureReason;
@@ -48,6 +46,7 @@ use lightning::sign::{NodeSigner, Recipient};
 use lightning::util::logger::*;
 use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
+use lightning_transaction_sync::EsploraSyncClient;
 use lnurl::lnurl::LnUrl;
 use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use nostr::key::XOnlyPublicKey;
@@ -528,7 +527,7 @@ pub struct NodeManager<S: MutinyStorage> {
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
     user_rgs_url: Option<String>,
-    esplora: Arc<MultiEsploraClient>,
+    esplora: Arc<AsyncClient>,
     pub(crate) wallet: Arc<OnChainWallet<S>>,
     gossip_sync: Arc<RapidGossipSync>,
     scorer: Arc<utils::Mutex<HubPreferentialScorer>>,
@@ -600,17 +599,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         });
 
         let esplora_server_url = get_esplora_url(c.network, c.user_esplora_url);
-        let esplora_clients = {
-            // esplora_server_url is a space separated list of urls
-            let urls = esplora_server_url.split(' ').collect::<Vec<_>>();
-            let mut clients = Vec::with_capacity(urls.len());
-            for url in urls {
-                let client = Builder::new(url).build_async()?;
-                clients.push(Arc::new(client));
-            }
-            clients
-        };
-        let esplora = MultiEsploraClient::new(esplora_clients);
+        let esplora = Builder::new(&esplora_server_url).build_async()?;
         let tx_sync = Arc::new(EsploraSyncClient::from_client(
             esplora.clone(),
             logger.clone(),
@@ -1502,10 +1491,10 @@ impl<S: MutinyStorage> NodeManager<S> {
             .collect::<Vec<_>>();
         let _locks = join_all(futs).await;
 
-        let confirmables: Vec<&(dyn Confirm)> = nodes
+        let confirmables: Vec<&(dyn Confirm + Send + Sync)> = nodes
             .iter()
             .flat_map(|(_, node)| {
-                let vec: Vec<&(dyn Confirm)> =
+                let vec: Vec<&(dyn Confirm + Send + Sync)> =
                     vec![node.channel_manager.deref(), node.chain_monitor.deref()];
                 vec
             })
@@ -2277,7 +2266,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         // get peers we are connected to
         let connected_peers: Vec<PublicKey> = nodes
             .iter()
-            .flat_map(|(_, n)| n.peer_manager.get_peer_node_ids())
+            .flat_map(|(_, n)| n.peer_manager.get_peer_node_ids().into_iter().map(|x| x.0))
             .collect();
 
         // correctly set is_connected
@@ -2502,7 +2491,8 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         // delete the bdk keychain store
         self.storage.delete(&[KEYCHAIN_STORE_KEY])?;
-        self.storage.set_data(NEED_FULL_SYNC_KEY, true, None)?;
+        self.storage
+            .set_data(NEED_FULL_SYNC_KEY.to_string(), true, None)?;
 
         // shut back down after reading if it was already closed
         if needs_db_connection {

@@ -4,6 +4,7 @@ use crate::ldkstorage::CHANNEL_MANAGER_KEY;
 use crate::nodemanager::{NodeStorage, DEVICE_LOCK_INTERVAL_SECS};
 use crate::utils::{now, spawn};
 use crate::vss::{MutinyVssClient, VssKeyValueItem};
+use async_trait::async_trait;
 use bdk::chain::{Append, PersistBackend};
 use bip39::Mnemonic;
 use lightning::log_error;
@@ -97,7 +98,9 @@ impl DeviceLock {
     }
 }
 
-pub trait MutinyStorage: Clone + Sized + 'static {
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
     /// Get the password used to encrypt the storage
     fn password(&self) -> Option<&str>;
 
@@ -108,27 +111,22 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     fn vss_client(&self) -> Option<Arc<MutinyVssClient>>;
 
     /// Set a value in the storage, the value will already be encrypted if needed
-    fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
+    fn set<T>(&self, key: String, value: T) -> Result<(), MutinyError>
     where
         T: Serialize;
 
     /// Set a value in the storage, the value will already be encrypted if needed
     /// This is an async version of set, it is not required to implement this
     /// If this is not implemented, the default implementation will just call set
-    async fn set_async<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
+    async fn set_async<T>(&self, key: String, value: T) -> Result<(), MutinyError>
     where
-        T: Serialize,
+        T: Serialize + Send,
     {
         self.set(key, value)
     }
 
     /// Set a value in the storage, the function will encrypt the value if needed
-    fn set_data<T>(
-        &self,
-        key: impl AsRef<str>,
-        value: T,
-        version: Option<u32>,
-    ) -> Result<(), MutinyError>
+    fn set_data<T>(&self, key: String, value: T, version: Option<u32>) -> Result<(), MutinyError>
     where
         T: Serialize,
     {
@@ -138,7 +136,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
 
         if let (Some(vss), Some(version)) = (self.vss_client(), version) {
             let item = VssKeyValueItem {
-                key: key.as_ref().to_string(),
+                key: key.clone(),
                 value: data.clone(),
                 version,
             };
@@ -149,7 +147,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
             });
         }
 
-        let json: Value = encrypt_value(key.as_ref(), data, self.cipher())?;
+        let json: Value = encrypt_value(&key, data, self.cipher())?;
 
         self.set(key, json)
     }
@@ -157,12 +155,12 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     /// Set a value in the storage, the function will encrypt the value if needed
     async fn set_data_async<T>(
         &self,
-        key: impl AsRef<str>,
+        key: String,
         value: T,
         version: Option<u32>,
     ) -> Result<(), MutinyError>
     where
-        T: Serialize,
+        T: Serialize + Send,
     {
         let data = serde_json::to_value(value).map_err(|e| MutinyError::PersistenceFailed {
             source: MutinyStorageError::SerdeError { source: e },
@@ -171,16 +169,17 @@ pub trait MutinyStorage: Clone + Sized + 'static {
         // encrypt value in async block so it can be done in parallel
         // with the VSS call
         let local_data = data.clone();
+        let key_clone = key.clone();
         let local_fut = async {
-            let json: Value = encrypt_value(key.as_ref(), local_data, self.cipher())?;
-            self.set_async(key.as_ref(), json).await
+            let json: Value = encrypt_value(key_clone.clone(), local_data, self.cipher())?;
+            self.set_async(key_clone, json).await
         };
 
         // save to VSS if it is enabled
         let vss_fut = async {
             if let (Some(vss), Some(version)) = (self.vss_client(), version) {
                 let item = VssKeyValueItem {
-                    key: key.as_ref().to_string(),
+                    key,
                     value: data,
                     version,
                 };
@@ -209,7 +208,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
         match self.get(&key)? {
             None => Ok(None),
             Some(value) => {
-                let json: Value = decrypt_value(&key, value, self.password())?;
+                let json: Value = decrypt_value(key, value, self.password())?;
                 let data: T = serde_json::from_value(json)?;
                 Ok(Some(data))
             }
@@ -242,7 +241,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
         let mut map = HashMap::with_capacity(keys.len());
 
         for key in keys {
-            let kv = self.get_data::<T>(&key)?;
+            let kv = self.get_data::<T>(key.clone())?;
             if let Some(v) = kv {
                 map.insert(key, v);
             }
@@ -253,7 +252,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
 
     /// Insert a mnemonic into the storage
     fn insert_mnemonic(&self, mnemonic: Mnemonic) -> Result<Mnemonic, MutinyError> {
-        self.set_data(MNEMONIC_KEY, &mnemonic, None)?;
+        self.set_data(MNEMONIC_KEY.to_string(), &mnemonic, None)?;
         Ok(mnemonic)
     }
 
@@ -285,8 +284,8 @@ pub trait MutinyStorage: Clone + Sized + 'static {
 
         // decrypt all of the values
         let mut values: HashMap<String, Value> = HashMap::new();
-        for key in keys.iter() {
-            let value = self.get_data(key)?;
+        for key in keys {
+            let value = self.get_data(&key)?;
             if let Some(v) = value {
                 values.insert(key.to_owned(), v);
             }
@@ -301,7 +300,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
         self.change_password(new, new_cipher)?;
 
         // encrypt all of the values
-        for (key, value) in values.iter() {
+        for (key, value) in values {
             self.set_data(key, value, None)?;
         }
 
@@ -324,7 +323,8 @@ pub trait MutinyStorage: Clone + Sized + 'static {
             let lock = DeviceLock { time: 0, device };
             // still update the version so it is written to VSS
             let time = now().as_secs() as u32;
-            self.set_data(DEVICE_LOCK_KEY, lock, Some(time))?;
+            self.set_data_async(DEVICE_LOCK_KEY.to_string(), lock, Some(time))
+                .await?;
         }
 
         Ok(())
@@ -342,7 +342,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     /// Inserts the node indexes into storage
     fn insert_nodes(&self, nodes: NodeStorage) -> Result<(), MutinyError> {
         let version = Some(nodes.version);
-        self.set_data(NODES_KEY, nodes, version)
+        self.set_data(NODES_KEY.to_string(), nodes, version)
     }
 
     /// Get the current fee estimates from storage
@@ -354,7 +354,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     /// Inserts the fee estimates into storage
     /// The key is block target, the value is the fee in satoshis per byte
     fn insert_fee_estimates(&self, fees: HashMap<String, f64>) -> Result<(), MutinyError> {
-        self.set_data(FEE_ESTIMATES_KEY, fees, None)
+        self.set_data(FEE_ESTIMATES_KEY.to_string(), fees, None)
     }
 
     /// Get the current bitcoin price cache from storage
@@ -364,7 +364,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
 
     /// Inserts the bitcoin price cache into storage
     fn insert_bitcoin_price_cache(&self, prices: HashMap<String, f32>) -> Result<(), MutinyError> {
-        self.set_data(BITCOIN_PRICE_CACHE_KEY, prices, None)
+        self.set_data(BITCOIN_PRICE_CACHE_KEY.to_string(), prices, None)
     }
 
     fn has_done_first_sync(&self) -> Result<bool, MutinyError> {
@@ -373,7 +373,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
     }
 
     fn set_done_first_sync(&self) -> Result<(), MutinyError> {
-        self.set_data(FIRST_SYNC_KEY, true, None)
+        self.set_data(FIRST_SYNC_KEY.to_string(), true, None)
     }
 
     fn get_device_id(&self) -> Result<String, MutinyError> {
@@ -381,7 +381,7 @@ pub trait MutinyStorage: Clone + Sized + 'static {
             Some(id) => Ok(id),
             None => {
                 let new_id = Uuid::new_v4().to_string();
-                self.set_data(DEVICE_ID_KEY, &new_id, None)?;
+                self.set_data(DEVICE_ID_KEY.to_string(), &new_id, None)?;
                 Ok(new_id)
             }
         }
@@ -401,7 +401,8 @@ pub trait MutinyStorage: Clone + Sized + 'static {
 
         let time = now().as_secs() as u32;
         let lock = DeviceLock { time, device };
-        self.set_data_async(DEVICE_LOCK_KEY, lock, Some(time)).await
+        self.set_data_async(DEVICE_LOCK_KEY.to_string(), lock, Some(time))
+            .await
     }
 
     async fn fetch_device_lock(&self) -> Result<Option<DeviceLock>, MutinyError>;
@@ -454,6 +455,8 @@ impl Default for MemoryStorage {
     }
 }
 
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl MutinyStorage for MemoryStorage {
     fn password(&self) -> Option<&str> {
         self.password.as_deref()
@@ -467,11 +470,10 @@ impl MutinyStorage for MemoryStorage {
         self.vss_client.clone()
     }
 
-    fn set<T>(&self, key: impl AsRef<str>, value: T) -> Result<(), MutinyError>
+    fn set<T>(&self, key: String, value: T) -> Result<(), MutinyError>
     where
         T: Serialize,
     {
-        let key = key.as_ref().to_string();
         let data = serde_json::to_value(value).map_err(|e| MutinyError::PersistenceFailed {
             source: MutinyStorageError::SerdeError { source: e },
         })?;
@@ -503,15 +505,13 @@ impl MutinyStorage for MemoryStorage {
     }
 
     fn delete(&self, keys: &[impl AsRef<str>]) -> Result<(), MutinyError> {
-        let keys: Vec<String> = keys.iter().map(|k| k.as_ref().to_string()).collect();
-
         let mut map = self
             .memory
             .try_write()
             .map_err(|e| MutinyError::write_err(e.into()))?;
 
         for key in keys {
-            map.remove(&key);
+            map.remove(key.as_ref());
         }
 
         Ok(())
@@ -566,6 +566,8 @@ impl MutinyStorage for MemoryStorage {
 }
 
 // Dummy implementation for testing or if people want to ignore persistence
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl MutinyStorage for () {
     fn password(&self) -> Option<&str> {
         None
@@ -579,7 +581,7 @@ impl MutinyStorage for () {
         None
     }
 
-    fn set<T>(&self, _key: impl AsRef<str>, _value: T) -> Result<(), MutinyError>
+    fn set<T>(&self, _key: String, _value: T) -> Result<(), MutinyError>
     where
         T: Serialize,
     {
@@ -593,7 +595,7 @@ impl MutinyStorage for () {
         Ok(None)
     }
 
-    fn delete(&self, _keys: &[impl AsRef<str>]) -> Result<(), MutinyError> {
+    fn delete(&self, _: &[impl AsRef<str>]) -> Result<(), MutinyError> {
         Ok(())
     }
 
@@ -650,9 +652,12 @@ where
         match self.0.get_data::<K>(KEYCHAIN_STORE_KEY)? {
             Some(mut keychain_store) => {
                 keychain_store.append(changeset.clone());
-                self.0.set_data(KEYCHAIN_STORE_KEY, keychain_store, None)
+                self.0
+                    .set_data(KEYCHAIN_STORE_KEY.to_string(), keychain_store, None)
             }
-            None => self.0.set_data(KEYCHAIN_STORE_KEY, changeset, None),
+            None => self
+                .0
+                .set_data(KEYCHAIN_STORE_KEY.to_string(), changeset, None),
         }
     }
 

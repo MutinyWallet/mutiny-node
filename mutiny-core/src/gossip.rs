@@ -132,7 +132,7 @@ fn write_gossip_data(
     _network_graph: &NetworkGraph,
 ) -> Result<(), MutinyError> {
     // Save the last sync timestamp
-    storage.set_data(GOSSIP_SYNC_TIME_KEY, last_sync_timestamp, None)?;
+    storage.set_data(GOSSIP_SYNC_TIME_KEY.to_string(), last_sync_timestamp, None)?;
 
     // Save the network graph
     // skip for now, we don't read it currently

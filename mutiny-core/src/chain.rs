@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use crate::esplora::EsploraSyncClient;
 use bitcoin::{Script, Transaction, Txid};
 use lightning::chain::chaininterface::BroadcasterInterface;
 use lightning::chain::{Filter, WatchedOutput};
 use lightning::log_warn;
 use lightning::util::logger::Logger;
+use lightning_transaction_sync::EsploraSyncClient;
 
 use crate::logging::MutinyLogger;
 use crate::onchain::OnChainWallet;

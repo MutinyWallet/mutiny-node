@@ -7,7 +7,8 @@ use std::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use futures::lock::Mutex;
 
-#[async_trait(?Send)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait SimpleWebSocket {
     async fn new(url: String) -> Result<Self, Box<dyn std::error::Error>>
     where
@@ -62,7 +63,7 @@ pub struct WebSocketImpl {
     >,
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 #[cfg(not(target_arch = "wasm32"))]
 impl SimpleWebSocket for WebSocketImpl {
     async fn new(url: String) -> Result<Self, Box<dyn std::error::Error>> {

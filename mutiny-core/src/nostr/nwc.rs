@@ -364,7 +364,7 @@ impl NostrWalletConnect {
 
             nostr_manager
                 .storage
-                .set_data(PENDING_NWC_EVENTS_KEY, current, None)?;
+                .set_data(PENDING_NWC_EVENTS_KEY.to_string(), current, None)?;
         }
 
         Ok(())
@@ -1373,7 +1373,7 @@ mod wasm_test {
         };
         storage
             .set_data(
-                PENDING_NWC_EVENTS_KEY,
+                PENDING_NWC_EVENTS_KEY.to_string(),
                 vec![expired, unexpired.clone()],
                 None,
             )

@@ -19,6 +19,7 @@ crate-type = ["cdylib"]
 mutiny-core = { path = "../mutiny-core" }
 
 anyhow = "1.0"
+async-trait = "0.1.68"
 wasm-bindgen = "0.2.88"
 wasm-bindgen-futures = "0.4.38"
 serde = { version = "^1.0", features = ["derive"] }
@@ -32,7 +33,7 @@ lnurl-rs = { version = "0.3.1", default-features = false }
 nostr = { version = "0.24.0", default-features = false }
 wasm-logger = "0.2.0"
 log = "0.4.17"
-rexie = "0.4"
+rexie = "0.5.0"
 gloo-utils = { version = "0.1.6", features = ["serde"] }
 web-sys = { version = "0.3.60", features = ["console"] }
 bip39 = { version = "2.0.0" }

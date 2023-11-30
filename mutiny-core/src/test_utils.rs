@@ -70,12 +70,9 @@ pub(crate) async fn create_node<S: MutinyStorage>(storage: S) -> Node<S> {
     ))));
 
     let esplora_server_url = get_esplora_url(network, None);
-    let client = Arc::new(
-        esplora_client::Builder::new(&esplora_server_url)
-            .build_async()
-            .unwrap(),
-    );
-    let esplora = MultiEsploraClient::new(vec![client]);
+    let esplora = esplora_client::Builder::new(&esplora_server_url)
+        .build_async()
+        .unwrap();
     let tx_sync = Arc::new(EsploraSyncClient::from_client(
         esplora.clone(),
         logger.clone(),
@@ -180,6 +177,7 @@ use bitcoin::{util::bip32::ExtendedPrivKey, Network};
 use lightning::ln::PaymentSecret;
 use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
 use lightning_invoice::{Bolt11Invoice, InvoiceBuilder};
+use lightning_transaction_sync::EsploraSyncClient;
 #[allow(unused_imports)]
 pub(crate) use log;
 use nostr::nips::nip47::*;
@@ -191,10 +189,8 @@ use uuid::Uuid;
 
 use crate::auth::MutinyAuthClient;
 use crate::chain::MutinyChain;
-use crate::esplora::EsploraSyncClient;
 use crate::fees::MutinyFeeEstimator;
 use crate::logging::MutinyLogger;
-use crate::multiesplora::MultiEsploraClient;
 use crate::node::{NetworkGraph, Node, RapidGossipSync};
 use crate::nodemanager::NodeIndex;
 use crate::onchain::{get_esplora_url, OnChainWallet};

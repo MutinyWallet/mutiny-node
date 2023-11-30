@@ -1,3 +1,4 @@
+use crate::logging::MutinyLogger;
 use crate::utils;
 use crate::{error::MutinyError, peermanager::PeerManager};
 use futures::{pin_mut, select, FutureExt};
@@ -56,10 +57,10 @@ impl peer_handler::SocketDescriptor for MutinySocketDescriptor {
     }
 }
 
-pub fn schedule_descriptor_read(
+pub fn schedule_descriptor_read<P: PeerManager>(
     mut descriptor: MutinySocketDescriptor,
-    peer_manager: Arc<dyn PeerManager>,
-    logger: Arc<dyn Logger>,
+    peer_manager: Arc<P>,
+    logger: Arc<MutinyLogger>,
     stop: Arc<AtomicBool>,
 ) {
     log_trace!(logger, "scheduling descriptor reader");

@@ -191,7 +191,7 @@ impl<S: MutinyStorage> LabelStorage for S {
         // update the labels map
         let mut address_labels = self.get_address_labels()?;
         address_labels.insert(address.to_string(), labels.clone());
-        self.set_data(ADDRESS_LABELS_MAP_KEY, address_labels, None)?;
+        self.set_data(ADDRESS_LABELS_MAP_KEY.to_string(), address_labels, None)?;
 
         // update the label items
         let now = crate::utils::now().as_secs();
@@ -240,7 +240,7 @@ impl<S: MutinyStorage> LabelStorage for S {
         // update the labels map
         let mut invoice_labels = self.get_invoice_labels()?;
         invoice_labels.insert(invoice.clone(), labels.clone());
-        self.set_data(INVOICE_LABELS_MAP_KEY, invoice_labels, None)?;
+        self.set_data(INVOICE_LABELS_MAP_KEY.to_string(), invoice_labels, None)?;
 
         // update the label items
         let now = crate::utils::now().as_secs();
@@ -329,7 +329,7 @@ impl<S: MutinyStorage> LabelStorage for S {
                         updated.insert(addr, new_labels);
                     }
                 }
-                self.set_data(ADDRESS_LABELS_MAP_KEY, updated, None)?;
+                self.set_data(ADDRESS_LABELS_MAP_KEY.to_string(), updated, None)?;
 
                 // replace label in invoice_labels with new uuid
                 let invoice_labels = self.get_invoice_labels()?;
@@ -346,7 +346,7 @@ impl<S: MutinyStorage> LabelStorage for S {
                         updated.insert(inv, new_labels);
                     }
                 }
-                self.set_data(INVOICE_LABELS_MAP_KEY, updated, None)?;
+                self.set_data(INVOICE_LABELS_MAP_KEY.to_string(), updated, None)?;
 
                 // create the contact
                 let key = get_contact_key(&id);
@@ -607,7 +607,7 @@ mod tests {
         let storage = MemoryStorage::default();
         let labels_map = create_test_address_labels_map();
         storage
-            .set_data(ADDRESS_LABELS_MAP_KEY, labels_map.clone(), None)
+            .set_data(ADDRESS_LABELS_MAP_KEY.to_string(), labels_map.clone(), None)
             .unwrap();
 
         let result = storage.get_address_labels();
@@ -622,7 +622,7 @@ mod tests {
         let storage = MemoryStorage::default();
         let labels_map = create_test_invoice_labels_map();
         storage
-            .set_data(INVOICE_LABELS_MAP_KEY, labels_map.clone(), None)
+            .set_data(INVOICE_LABELS_MAP_KEY.to_string(), labels_map.clone(), None)
             .unwrap();
 
         let result = storage.get_invoice_labels();

@@ -22,8 +22,8 @@ test:
 [linux]
 test:
     cargo test -p mutiny-core --target=x86_64-unknown-linux-gnu
-    WASM_BINDGEN_TEST_TIMEOUT=120 wasm-pack test --headless --chrome ./mutiny-core
-    WASM_BINDGEN_TEST_TIMEOUT=120 wasm-pack test --headless --chrome ./mutiny-wasm
+    WASM_BINDGEN_TEST_TIMEOUT=120 wasm-pack test --headless --firefox ./mutiny-core
+    WASM_BINDGEN_TEST_TIMEOUT=120 wasm-pack test --headless --firefox ./mutiny-wasm
 
 test-nix:
     cargo test -p mutiny-core --target=aarch64-unknown-linux-gnu
