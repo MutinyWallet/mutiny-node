@@ -11,6 +11,7 @@ extern crate core;
 
 pub mod auth;
 mod chain;
+mod dlc;
 pub mod encrypt;
 pub mod error;
 pub mod event;
@@ -40,13 +41,18 @@ pub mod vss;
 #[cfg(test)]
 mod test_utils;
 
+use crate::dlc::DlcHandler;
+pub use crate::dlc::{DLC_CONTRACT_KEY_PREFIX, DLC_KEY_INDEX_KEY};
 use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
+use crate::labels::LabelItem;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
+use crate::nostr::dlc::DlcMessageType;
 use crate::storage::{
     list_payment_info, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY,
 };
+use crate::utils::parse_profile_metadata;
 use crate::{auth::MutinyAuthClient, logging::MutinyLogger};
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{
@@ -66,9 +72,13 @@ use crate::{
     subscription::MutinySubscriptionClient,
 };
 use crate::{nostr::NostrManager, utils::sleep};
+pub use ::dlc as rust_dlc;
+pub use ::dlc_manager;
+pub use ::dlc_messages;
 use ::nostr::key::XOnlyPublicKey;
 use ::nostr::nips::nip57;
 use ::nostr::prelude::ZapRequestData;
+use ::nostr::secp256k1::Parity;
 use ::nostr::{JsonUtil, Kind};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
@@ -78,6 +88,14 @@ use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::Network;
+use dlc_manager::contract::contract_input::{ContractInput, ContractInputInfo, OracleInput};
+use dlc_manager::contract::enum_descriptor::EnumDescriptor;
+use dlc_manager::contract::{Contract, ContractDescriptor};
+use dlc_manager::{ContractId, Storage};
+use dlc_messages::oracle_msgs::EventDescriptor;
+pub use dlc_messages::oracle_msgs::{OracleAnnouncement, OracleAttestation};
+use dlc_messages::Message;
+use esplora_client::OutputStatus;
 use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::{pin_mut, select, FutureExt};
 use lightning::ln::PaymentHash;
@@ -93,8 +111,6 @@ use std::{collections::HashMap, sync::atomic::AtomicBool};
 use std::{str::FromStr, sync::atomic::Ordering};
 use uuid::Uuid;
 
-use crate::labels::LabelItem;
-use crate::utils::parse_profile_metadata;
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 
@@ -528,6 +544,50 @@ impl MutinyWalletConfigBuilder {
     }
 }
 
+pub fn create_contract_input(
+    collateral: u64,
+    descriptor: EnumDescriptor,
+    announcement: OracleAnnouncement,
+    fee_rate: u64,
+) -> Result<ContractInput, MutinyError> {
+    match announcement.oracle_event.event_descriptor {
+        EventDescriptor::EnumEvent(e) => {
+            if e.outcomes
+                != descriptor
+                    .outcome_payouts
+                    .iter()
+                    .map(|x| x.outcome.clone())
+                    .collect::<Vec<_>>()
+            {
+                return Err(MutinyError::InvalidArgumentsError);
+            }
+        }
+        EventDescriptor::DigitDecompositionEvent(_) => unimplemented!("digit decomposition"),
+    }
+    let contract_info = ContractInputInfo {
+        contract_descriptor: ContractDescriptor::Enum(descriptor),
+        oracles: OracleInput {
+            public_keys: vec![announcement.oracle_public_key],
+            event_id: announcement.oracle_event.event_id,
+            threshold: 1,
+        },
+    };
+
+    let input = ContractInput {
+        offer_collateral: collateral,
+        accept_collateral: collateral,
+        fee_rate,
+        contract_infos: vec![contract_info],
+    };
+
+    input.validate().map_err(|e| {
+        log::error!("Error validating contract input: {e}");
+        MutinyError::DLCManagerError
+    })?;
+
+    Ok(input)
+}
+
 #[derive(Clone)]
 pub struct MutinyWalletConfig {
     xprivkey: ExtendedPrivKey,
@@ -659,11 +719,59 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         nm_builder.with_logger(logger.clone());
         let node_manager = Arc::new(nm_builder.build().await?);
 
+        let dlc = Arc::new(DlcHandler::new(
+            node_manager.wallet.clone(),
+            node_manager.logger.clone(),
+        )?);
+
         NodeManager::start_sync(node_manager.clone());
+
+        // DLC syncing
+        let esplora = node_manager.esplora.clone();
+        let dlc_clone = dlc.clone();
+        let dlc_stop = node_manager.stop.clone();
+        utils::spawn(async move {
+            loop {
+                if dlc_stop.load(Ordering::Relaxed) {
+                    break;
+                };
+
+                let mut dlc = dlc_clone.manager.lock().await;
+                if let Err(e) = dlc.periodic_check(false) {
+                    log_error!(dlc_clone.logger, "Error checking DLCs: {e:?}");
+                } else {
+                    log_info!(dlc_clone.logger, "DLCs synced!");
+                }
+                drop(dlc);
+
+                // check if any of the contracts have been closed
+                let to_watch = dlc_clone.outputs_to_watch().unwrap_or_default();
+                for (outpoint, contract) in to_watch {
+                    // if it has been spent, find the close tx and process it
+                    if let Ok(Some(OutputStatus {
+                        txid: Some(txid), ..
+                    })) = esplora
+                        .get_output_status(&outpoint.txid, outpoint.vout as u64)
+                        .await
+                    {
+                        if let Ok(Some(tx)) = esplora.get_tx(&txid).await {
+                            let mut dlc = dlc_clone.manager.lock().await;
+                            // for now just put 6 confirmations
+                            if let Err(e) = dlc.on_counterparty_close(&contract, tx, 6) {
+                                log_error!(dlc_clone.logger, "Error processing close tx: {e:?}");
+                            }
+                        }
+                    }
+                }
+
+                sleep(60_000).await;
+            }
+        });
 
         // create nostr manager
         let nostr = Arc::new(NostrManager::from_mnemonic(
             self.xprivkey,
+            dlc.clone(),
             self.storage.clone(),
             logger.clone(),
             stop.clone(),
@@ -718,6 +826,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             lnurl_client,
             subscription_client,
             auth,
+            dlc,
             stop,
             logger,
             network,
@@ -749,7 +858,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         };
 
         // start the nostr wallet connect background process
-        mw.start_nostr_wallet_connect().await;
+        mw.start_nostr().await;
 
         // start the federation background processor
         mw.start_fedimint_background_checker().await;
@@ -773,6 +882,7 @@ pub struct MutinyWallet<S: MutinyStorage> {
     lnurl_client: Arc<LnUrlClient>,
     auth: AuthManager,
     subscription_client: Option<Arc<MutinySubscriptionClient>>,
+    pub dlc: Arc<DlcHandler<S>>,
     pub stop: Arc<AtomicBool>,
     pub logger: Arc<MutinyLogger>,
     network: Network,
@@ -798,8 +908,148 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(())
     }
 
-    /// Starts a background process that will watch for nostr wallet connect events
-    pub(crate) async fn start_nostr_wallet_connect(&self) {
+    /// Sends a DLC offer to the given pubkey over Nostr.
+    pub async fn send_dlc_offer(
+        &self,
+        contract_input: &ContractInput,
+        oracle_announcement: OracleAnnouncement,
+        pubkey: XOnlyPublicKey,
+    ) -> Result<ContractId, MutinyError> {
+        // make sure we aren't sending an offer to ourselves
+        if pubkey == self.nostr.dlc_handler.public_key() {
+            return Err(MutinyError::InvalidArgumentsError);
+        }
+
+        let mut dlc = self.dlc.manager.lock().await;
+        let counter_party = PublicKey::from_slice(&pubkey.public_key(Parity::Even).serialize())
+            .expect("converting pubkey between crates should not fail");
+        let msg = dlc
+            .send_offer_with_announcements(
+                contract_input,
+                counter_party,
+                vec![vec![oracle_announcement]],
+            )
+            .map_err(|e| {
+                log_error!(self.node_manager.logger, "Error sending DLC offer: {e}");
+                e
+            })?;
+
+        let client = Client::new(&self.nostr.primary_key);
+        client
+            .add_relay(&self.nostr.dlc_handler.relay)
+            .await
+            .expect("Failed to add relay");
+        client.connect().await;
+
+        let contract_id = ContractId::from(msg.temporary_contract_id);
+
+        let event = self.nostr.dlc_handler.create_wire_msg_event(
+            pubkey,
+            None,
+            DlcMessageType::Normal(Message::Offer(msg)),
+        )?;
+        client.send_event(event).await?;
+
+        client.disconnect().await?;
+
+        Ok(contract_id)
+    }
+
+    /// Accepts a DLC offer with the given contract id. This in irrevocable and will in lock in the DLC unless it fails.
+    ///
+    /// This only sends the accept message, it does not guarantee that the counterparty will also sign the DLC.
+    pub async fn accept_dlc_offer(&self, contract_id: [u8; 32]) -> Result<(), MutinyError> {
+        let contract_id = ContractId::from(contract_id);
+        let mut dlc = self.dlc.manager.lock().await;
+        let (_, pubkey, msg) = dlc.accept_contract_offer(&contract_id)?;
+
+        let client = Client::new(&self.nostr.primary_key);
+        client
+            .add_relay(&self.nostr.dlc_handler.relay)
+            .await
+            .expect("Failed to add relay");
+        client.connect().await;
+
+        let xonly = XOnlyPublicKey::from_slice(&pubkey.x_only_public_key().0.serialize())
+            .expect("converting pubkey between crates should not fail");
+        let event = self.nostr.dlc_handler.create_wire_msg_event(
+            xonly,
+            None,
+            DlcMessageType::Normal(Message::Accept(msg)),
+        )?;
+        client.send_event(event).await?;
+
+        client.disconnect().await?;
+
+        Ok(())
+    }
+
+    /// Rejects a DLC offer with the given contract id. This will delete the DLC from the wallet.
+    /// This is only possible if the DLC is in the Offered state or in a failed state, otherwise it will return an error.
+    pub async fn reject_dlc_offer(&self, contract_id: [u8; 32]) -> Result<(), MutinyError> {
+        let contract_id = ContractId::from(contract_id);
+        let dlc = self.dlc.manager.lock().await;
+        if let Some(contract) = dlc.get_store().get_contract(&contract_id)? {
+            // Only delete the contract if it's an offer or failed,
+            // otherwise we can't reject it without risking losing funds.
+            match contract {
+                Contract::Offered(_) => {
+                    dlc.get_store().delete_contract(&contract_id)?;
+                    return Ok(());
+                }
+                Contract::FailedAccept(_) | Contract::FailedSign(_) => {
+                    // if we failed to accept or sign, we can delete the contract
+                    dlc.get_store().delete_contract(&contract_id)?;
+                    return Ok(());
+                }
+                _ => {
+                    log_error!(
+                        self.node_manager.logger,
+                        "Cannot reject a contract that is active"
+                    );
+                    // todo probably want a more explicit error
+                    return Err(MutinyError::DLCManagerError);
+                }
+            }
+        }
+
+        Err(MutinyError::NotFound)
+    }
+
+    /// Closes the DLC with the given contract id. If the oracle attestations are valid, this will broadcast the
+    /// corresponding closing transaction. If the oracle attestations are not valid, this will return an error.
+    pub async fn close_dlc(
+        &self,
+        contract_id: [u8; 32],
+        attestation: OracleAttestation,
+    ) -> Result<Contract, MutinyError> {
+        let contract_id = ContractId::from(contract_id);
+        let mut dlc = self.dlc.manager.lock().await;
+        let contract = dlc
+            .close_confirmed_contract(&contract_id, vec![(0, attestation)])
+            .map_err(|e| {
+                log_error!(self.node_manager.logger, "Error closing DLC: {e}");
+                e
+            })?;
+
+        Ok(contract)
+    }
+
+    /// Lists all of the DLCs in the wallet, including offered, active, and failed.
+    pub async fn list_dlcs(&self) -> Result<Vec<Contract>, MutinyError> {
+        let dlc = self.dlc.manager.lock().await;
+        let mut contracts = dlc.get_store().get_contracts()?;
+        contracts.sort_by_key(|c| c.get_id());
+        Ok(contracts)
+    }
+
+    /// The wallet's nostr key it uses to send and receive DLC offers.
+    pub fn get_dlc_key(&self) -> XOnlyPublicKey {
+        self.nostr.dlc_handler.public_key()
+    }
+
+    /// Starts a background process that will watch for nostr wallet connect & dlc events
+    pub(crate) async fn start_nostr(&self) {
         let nostr = self.nostr.clone();
         let logger = self.logger.clone();
         let stop = self.stop.clone();
@@ -809,14 +1059,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 if stop.load(Ordering::Relaxed) {
                     break;
                 };
-
-                // if we have no relays, then there are no nwc profiles enabled
-                // wait 10 seconds and see if we do again
-                let relays = nostr.get_relays();
-                if relays.is_empty() {
-                    utils::sleep(10_000).await;
-                    continue;
-                }
 
                 // clear in-active profiles, we used to have disabled and archived profiles
                 // but now we just delete profiles
@@ -845,8 +1087,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     .expect("Failed to add relays");
                 client.connect().await;
 
+                // subscribe to NWC events
                 let mut last_filters = nostr.get_nwc_filters();
                 client.subscribe(last_filters.clone()).await;
+
+                // subscribe to DLC wire messages
+                client
+                    .subscribe(vec![nostr.dlc_handler.create_wire_msg_filter()])
+                    .await;
 
                 // handle NWC requests
                 let mut notifications = client.notifications();
@@ -871,17 +1119,33 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         notification = read_fut => {
                             match notification {
                                 Ok(RelayPoolNotification::Event { event, .. }) => {
-                                    if event.kind == Kind::WalletConnectRequest && event.verify().is_ok() {
-                                        match nostr.handle_nwc_request(event, &self_clone).await {
-                                            Ok(Some(event)) => {
-                                                if let Err(e) = client.send_event(event).await {
-                                                    log_warn!(logger, "Error sending NWC event: {e}");
+                                    if event.verify().is_ok() {
+                                        match event.kind {
+                                            Kind::WalletConnectRequest => {
+                                                match nostr.handle_nwc_request(event, &self_clone).await {
+                                                    Ok(Some(event)) => {
+                                                        if let Err(e) = client.send_event(event).await {
+                                                            log_warn!(logger, "Error sending NWC event: {e}");
+                                                        }
+                                                    }
+                                                    Ok(None) => {} // no response
+                                                    Err(e) => {
+                                                        log_error!(logger, "Error handling NWC request: {e}");
+                                                    }
                                                 }
                                             }
-                                            Ok(None) => {} // no response
-                                            Err(e) => {
-                                                log_error!(logger, "Error handling NWC request: {e}");
+                                            Kind::Ephemeral(28_888) => {
+                                                match nostr.dlc_handler.handle_dlc_wire_event(event).await {
+                                                    Err(e) => log_error!(logger, "Error handling DLC wire event: {e}"),
+                                                    Ok(None) => {},
+                                                    Ok(Some(event)) => {
+                                                        if let Err(e) = client.send_event(event).await {
+                                                            log_warn!(logger, "Error sending NWC event: {e}");
+                                                        }
+                                                    }
+                                                }
                                             }
+                                            _ => log_warn!(logger, "Received unexpected Nostr event: {event:?}"),
                                         }
                                     }
                                 },

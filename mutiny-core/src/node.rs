@@ -855,7 +855,7 @@ pub(crate) struct Node<S: MutinyStorage> {
     pub fee_estimator: Arc<MutinyFeeEstimator<S>>,
     network: Network,
     pub persister: Arc<MutinyNodePersister<S>>,
-    wallet: Arc<OnChainWallet<S>>,
+    pub(crate) wallet: Arc<OnChainWallet<S>>,
     pub(crate) logger: Arc<MutinyLogger>,
     pub(crate) lsp_client: Option<AnyLsp<S>>,
     pub(crate) sync_lock: Arc<Mutex<()>>,

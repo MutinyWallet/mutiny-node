@@ -1,15 +1,16 @@
 use crate::error::MutinyError;
+use bitcoin::hashes::hex::FromHex;
 use bitcoin::Network;
 use core::cell::{RefCell, RefMut};
 use core::ops::{Deref, DerefMut};
 use core::time::Duration;
+use dlc_messages::oracle_msgs::{OracleAnnouncement, OracleAttestation};
 use futures::{
     future::{self, Either},
     pin_mut,
 };
 use lightning::routing::scoring::{LockableScore, ScoreLookUp, ScoreUpdate};
-use lightning::util::ser::Writeable;
-use lightning::util::ser::Writer;
+use lightning::util::ser::{Readable, Writeable, Writer};
 use nostr::key::XOnlyPublicKey;
 use nostr::nips::nip05;
 use nostr::{Event, FromBech32, JsonUtil, Metadata};
@@ -219,6 +220,22 @@ pub fn get_monitor_version(bytes: &[u8]) -> u64 {
     // first two bytes are the version
     // next 8 bytes are the version number
     u64::from_be_bytes(bytes[2..10].try_into().unwrap())
+}
+
+/// Parses a hex string into an oracle announcement.
+pub fn oracle_announcement_from_hex(hex: &str) -> Result<OracleAnnouncement, MutinyError> {
+    let bytes: Vec<u8> = FromHex::from_hex(hex).map_err(|_| MutinyError::InvalidArgumentsError)?;
+    let mut cursor = lightning::io::Cursor::new(bytes);
+
+    OracleAnnouncement::read(&mut cursor).map_err(|_| MutinyError::InvalidArgumentsError)
+}
+
+/// Parses a hex string into an oracle attestation.
+pub fn oracle_attestation_from_hex(hex: &str) -> Result<OracleAttestation, MutinyError> {
+    let bytes: Vec<u8> = FromHex::from_hex(hex).map_err(|_| MutinyError::InvalidArgumentsError)?;
+    let mut cursor = lightning::io::Cursor::new(bytes);
+
+    OracleAttestation::read(&mut cursor).map_err(|_| MutinyError::InvalidArgumentsError)
 }
 
 #[cfg(not(test))]

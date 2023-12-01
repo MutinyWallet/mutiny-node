@@ -1,3 +1,5 @@
+use crate::MutinyJsError;
+use ::nostr::key::XOnlyPublicKey;
 use ::nostr::ToBech32;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
@@ -6,6 +8,8 @@ use gloo_utils::format::JsValueSerdeExt;
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
+use mutiny_core::dlc_manager::contract;
+use mutiny_core::dlc_messages::oracle_msgs::EventDescriptor;
 use mutiny_core::event::HTLCStatus;
 use mutiny_core::labels::Contact as MutinyContact;
 use mutiny_core::nostr::nwc::SpendingConditions;
@@ -1091,5 +1095,261 @@ impl TryFrom<nostr::nwc::BudgetPeriod> for BudgetPeriod {
             nostr::nwc::BudgetPeriod::Year => Ok(Self::Year),
             nostr::nwc::BudgetPeriod::Seconds(_) => Err(()),
         }
+    }
+}
+
+/// An announcement from an oracle of what are the possible outcomes of an event
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[wasm_bindgen]
+pub struct OracleAnnouncement {
+    public_key: String,
+    event_id: String,
+    pub event_maturity_epoch: u32,
+    outcomes: Vec<String>, // todo this only works with Enum Events, fine for now
+}
+
+#[wasm_bindgen]
+impl OracleAnnouncement {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn public_key(&self) -> String {
+        self.public_key.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn event_id(&self) -> String {
+        self.event_id.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn outcomes(&self) -> Vec<String> {
+        self.outcomes.clone()
+    }
+}
+
+impl TryFrom<mutiny_core::OracleAnnouncement> for OracleAnnouncement {
+    type Error = MutinyJsError;
+
+    fn try_from(a: mutiny_core::OracleAnnouncement) -> Result<Self, MutinyJsError> {
+        let outcomes = match a.oracle_event.event_descriptor {
+            EventDescriptor::EnumEvent(e) => e.outcomes,
+            EventDescriptor::DigitDecompositionEvent(_) => {
+                return Err(MutinyJsError::InvalidArgumentsError)
+            }
+        };
+
+        Ok(OracleAnnouncement {
+            public_key: a.oracle_public_key.to_hex(),
+            event_id: a.oracle_event.event_id,
+            event_maturity_epoch: a.oracle_event.event_maturity_epoch,
+            outcomes,
+        })
+    }
+}
+
+/// An attestation from an oracle of what the outcome of an event was
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[wasm_bindgen]
+pub struct OracleAttestation {
+    public_key: String,
+    outcomes: Vec<String>,
+}
+
+#[wasm_bindgen]
+impl OracleAttestation {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn public_key(&self) -> String {
+        self.public_key.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn outcomes(&self) -> Vec<String> {
+        self.outcomes.clone()
+    }
+}
+
+impl From<mutiny_core::OracleAttestation> for OracleAttestation {
+    fn from(a: mutiny_core::OracleAttestation) -> Self {
+        OracleAttestation {
+            public_key: a.oracle_public_key.to_hex(),
+            outcomes: a.outcomes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[wasm_bindgen]
+pub struct Contract {
+    id: String,
+    state: String,
+    counter_party: String,
+    pub cet_locktime: u32,
+    pub is_offer_party: Option<bool>,
+    funding_txid: Option<String>,
+    closing_txid: Option<String>,
+}
+
+impl From<contract::Contract> for Contract {
+    fn from(value: contract::Contract) -> Self {
+        let state = match value {
+            contract::Contract::Offered(_) => "Offered",
+            contract::Contract::Accepted(_) => "Accepted",
+            contract::Contract::Signed(_) => "Signed",
+            contract::Contract::Confirmed(_) => "Confirmed",
+            contract::Contract::PreClosed(_) => "PreClosed",
+            contract::Contract::Closed(_) => "Closed",
+            contract::Contract::Refunded(_) => "Refunded",
+            contract::Contract::FailedAccept(_) => "FailedAccept",
+            contract::Contract::FailedSign(_) => "FailedSign",
+            contract::Contract::Rejected(_) => "Rejected",
+        }
+        .to_string();
+
+        let cet_locktime = match &value {
+            contract::Contract::Offered(x) => x.cet_locktime,
+            contract::Contract::Accepted(x) => x.offered_contract.cet_locktime,
+            contract::Contract::Signed(x) => x.accepted_contract.offered_contract.cet_locktime,
+            contract::Contract::Confirmed(x) => x.accepted_contract.offered_contract.cet_locktime,
+            contract::Contract::PreClosed(x) => {
+                x.signed_contract
+                    .accepted_contract
+                    .offered_contract
+                    .cet_locktime
+            }
+            contract::Contract::Closed(x) => x
+                .signed_cet
+                .as_ref()
+                .map(|x| x.lock_time.0)
+                .unwrap_or_default(),
+            contract::Contract::Refunded(x) => x.accepted_contract.offered_contract.cet_locktime,
+            contract::Contract::FailedAccept(x) => x.offered_contract.cet_locktime,
+            contract::Contract::FailedSign(x) => x.accepted_contract.offered_contract.cet_locktime,
+            contract::Contract::Rejected(x) => x.cet_locktime,
+        };
+
+        let is_offer_party = match &value {
+            contract::Contract::Offered(x) => Some(x.is_offer_party),
+            contract::Contract::Accepted(x) => Some(x.offered_contract.is_offer_party),
+            contract::Contract::Signed(x) => {
+                Some(x.accepted_contract.offered_contract.is_offer_party)
+            }
+            contract::Contract::Confirmed(x) => {
+                Some(x.accepted_contract.offered_contract.is_offer_party)
+            }
+            contract::Contract::PreClosed(x) => Some(
+                x.signed_contract
+                    .accepted_contract
+                    .offered_contract
+                    .is_offer_party,
+            ),
+            contract::Contract::Closed(_) => None,
+            contract::Contract::Refunded(x) => {
+                Some(x.accepted_contract.offered_contract.is_offer_party)
+            }
+            contract::Contract::FailedAccept(x) => Some(x.offered_contract.is_offer_party),
+            contract::Contract::FailedSign(x) => {
+                Some(x.accepted_contract.offered_contract.is_offer_party)
+            }
+            contract::Contract::Rejected(x) => Some(x.is_offer_party),
+        };
+
+        let funding_txid: Option<String> = match &value {
+            contract::Contract::Offered(_) => None,
+            contract::Contract::Accepted(_) => None,
+            contract::Contract::Signed(x) => {
+                Some(x.accepted_contract.dlc_transactions.fund.txid().to_hex())
+            }
+            contract::Contract::Confirmed(x) => {
+                Some(x.accepted_contract.dlc_transactions.fund.txid().to_hex())
+            }
+            contract::Contract::PreClosed(x) => Some(
+                x.signed_contract
+                    .accepted_contract
+                    .dlc_transactions
+                    .fund
+                    .txid()
+                    .to_hex(),
+            ),
+            contract::Contract::Closed(x) => x
+                .signed_cet
+                .as_ref()
+                .map(|t| t.input[0].previous_output.txid.to_hex()),
+            contract::Contract::Refunded(x) => {
+                Some(x.accepted_contract.dlc_transactions.fund.txid().to_hex())
+            }
+            contract::Contract::FailedAccept(_) => None,
+            contract::Contract::FailedSign(_) => None,
+            contract::Contract::Rejected(_) => None,
+        };
+
+        let closing_txid: Option<String> = match &value {
+            contract::Contract::Offered(_) => None,
+            contract::Contract::Accepted(_) => None,
+            contract::Contract::Signed(_) => None,
+            contract::Contract::Confirmed(_) => None,
+            contract::Contract::PreClosed(x) => Some(x.signed_cet.txid().to_hex()),
+            contract::Contract::Closed(x) => x.signed_cet.as_ref().map(|t| t.txid().to_hex()),
+            contract::Contract::Refunded(x) => {
+                Some(x.accepted_contract.dlc_transactions.refund.txid().to_hex())
+            }
+            contract::Contract::FailedAccept(_) => None,
+            contract::Contract::FailedSign(_) => None,
+            contract::Contract::Rejected(_) => None,
+        };
+
+        let counter_party = {
+            let xonly = value.get_counter_party_id().x_only_public_key().0;
+            XOnlyPublicKey::from_slice(&xonly.serialize())
+                .unwrap()
+                .to_bech32()
+                .unwrap()
+        };
+
+        Contract {
+            id: value.get_id().to_hex(),
+            state,
+            counter_party,
+            cet_locktime,
+            is_offer_party,
+            funding_txid,
+            closing_txid,
+        }
+    }
+}
+
+#[wasm_bindgen]
+impl Contract {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> String {
+        self.id.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn counter_party(&self) -> String {
+        self.counter_party.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn funding_txid(&self) -> Option<String> {
+        self.funding_txid.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn closing_txid(&self) -> Option<String> {
+        self.closing_txid.clone()
     }
 }

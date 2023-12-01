@@ -32,13 +32,14 @@ const FULL_SYNC_STOP_GAP: usize = 150;
 
 #[derive(Clone)]
 pub struct OnChainWallet<S: MutinyStorage> {
+    pub(crate) xprivkey: ExtendedPrivKey,
     pub wallet: Arc<RwLock<Wallet<OnChainStorage<S>>>>,
     pub(crate) storage: S,
     pub network: Network,
     pub blockchain: Arc<AsyncClient>,
     pub fees: Arc<MutinyFeeEstimator<S>>,
     pub(crate) stop: Arc<AtomicBool>,
-    logger: Arc<MutinyLogger>,
+    pub(crate) logger: Arc<MutinyLogger>,
 }
 
 impl<S: MutinyStorage> OnChainWallet<S> {
@@ -63,6 +64,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         )?;
 
         Ok(OnChainWallet {
+            xprivkey,
             wallet: Arc::new(RwLock::new(wallet)),
             storage: db,
             network,

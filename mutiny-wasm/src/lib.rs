@@ -34,7 +34,10 @@ use mutiny_core::lnurlauth::AuthManager;
 use mutiny_core::nostr::nip49::NIP49URI;
 use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
 use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
-use mutiny_core::utils::{now, parse_npub, parse_npub_or_nip05, sleep};
+use mutiny_core::utils::{
+    now, oracle_announcement_from_hex, oracle_attestation_from_hex, parse_npub,
+    parse_npub_or_nip05, sleep,
+};
 use mutiny_core::vss::MutinyVssClient;
 use mutiny_core::{encrypt::encryption_key_from_pass, InvoiceHandler, MutinyWalletConfigBuilder};
 use mutiny_core::{labels::Contact, MutinyWalletBuilder};
@@ -43,6 +46,8 @@ use mutiny_core::{
     nodemanager::{create_lsp_config, NodeManager},
 };
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
+use nostr::key::XOnlyPublicKey;
+use nostr::prelude::FromBech32;
 use nostr::ToBech32;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -1582,6 +1587,90 @@ impl MutinyWallet {
         Ok(())
     }
 
+    /// Sends a DLC offer to the given pubkey over Nostr.
+    #[wasm_bindgen]
+    pub async fn send_dlc_offer(
+        &self,
+        collateral: u64,
+        descriptor: &JsValue, /* EnumDescriptor */
+        oracle_announcement: String,
+        npub_str: String,
+    ) -> Result<String, MutinyJsError> {
+        let oracle_announcement = oracle_announcement_from_hex(&oracle_announcement)?;
+        let descriptor: mutiny_core::dlc_manager::contract::enum_descriptor::EnumDescriptor =
+            descriptor.into_serde().map_err(|e| {
+                log::error!("Error: {e:?}");
+                log::error!("Descriptor: {descriptor:?}");
+                MutinyJsError::InvalidArgumentsError
+            })?;
+
+        let fee_rate = self.inner.node_manager.estimate_fee_normal();
+        let contract_input = mutiny_core::create_contract_input(
+            collateral,
+            descriptor,
+            oracle_announcement.clone(),
+            fee_rate as u64,
+        )?;
+        let pubkey = XOnlyPublicKey::from_bech32(&npub_str)?;
+        let res = self
+            .inner
+            .send_dlc_offer(&contract_input, oracle_announcement, pubkey)
+            .await?;
+
+        Ok(res.to_hex())
+    }
+
+    /// Accepts a DLC offer with the given contract id. This in irrevocable and will in lock in the DLC unless it fails.
+    ///
+    /// This only sends the accept message, it does not guarantee that the counterparty will also sign the DLC.
+    #[wasm_bindgen]
+    pub async fn accept_dlc_offer(&self, contract_id: String) -> Result<(), MutinyJsError> {
+        let contract_id: [u8; 32] = FromHex::from_hex(&contract_id)?;
+        self.inner.accept_dlc_offer(contract_id).await?;
+
+        Ok(())
+    }
+
+    /// Rejects a DLC offer with the given contract id. This will delete the DLC from the wallet.
+    /// This is only possible if the DLC is in the Offered state or in a failed state, otherwise it will return an error.
+    #[wasm_bindgen]
+    pub async fn reject_dlc_offer(&self, contract_id: String) -> Result<(), MutinyJsError> {
+        let contract_id: [u8; 32] = FromHex::from_hex(&contract_id)?;
+        self.inner.reject_dlc_offer(contract_id).await?;
+
+        Ok(())
+    }
+
+    /// Closes the DLC with the given contract id. If the oracle attestations are valid, this will broadcast the
+    /// corresponding closing transaction. If the oracle attestations are not valid, this will return an error.
+    #[wasm_bindgen]
+    pub async fn close_dlc(
+        &self,
+        contract_id: String,
+        attestation: String,
+    ) -> Result<(), MutinyJsError> {
+        let contract_id: [u8; 32] = FromHex::from_hex(&contract_id)?;
+        let attestation = oracle_attestation_from_hex(&attestation)?;
+        self.inner.close_dlc(contract_id, attestation).await?;
+
+        Ok(())
+    }
+
+    /// Lists all of the DLCs in the wallet, including offered, active, and failed.
+    #[wasm_bindgen]
+    pub async fn list_dlcs(&self) -> Result<JsValue /* Contract */, MutinyJsError> {
+        let dlcs = self.inner.list_dlcs().await?;
+
+        let ret: Vec<models::Contract> = dlcs.into_iter().map(|d| d.into()).collect();
+        Ok(JsValue::from_serde(&ret)?)
+    }
+
+    /// The wallet's nostr key it uses to send and receive DLC offers.
+    #[wasm_bindgen]
+    pub fn get_dlc_key(&self) -> String {
+        self.inner.get_dlc_key().to_bech32().unwrap()
+    }
+
     /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.
     #[wasm_bindgen]
     pub async fn reset_router(&self) -> Result<(), MutinyJsError> {
@@ -1704,6 +1793,24 @@ impl MutinyWallet {
     pub async fn hexpub_to_npub(npub: String) -> Result<String, MutinyJsError> {
         let npub = parse_npub_or_nip05(&npub).await?;
         Ok(npub.to_bech32().expect("bech32"))
+    }
+
+    /// Decodes an oracle announcement from hex into a wasm object
+    #[wasm_bindgen]
+    pub fn decode_oracle_announcement(
+        announcement: String,
+    ) -> Result<OracleAnnouncement, MutinyJsError> {
+        let announcement = oracle_announcement_from_hex(&announcement)?;
+        announcement.try_into()
+    }
+
+    /// Decodes an oracle attestation from hex into a wasm object
+    #[wasm_bindgen]
+    pub fn decode_oracle_attestation(
+        attestation: String,
+    ) -> Result<OracleAttestation, MutinyJsError> {
+        let attestation = oracle_attestation_from_hex(&attestation)?;
+        Ok(attestation.into())
     }
 }
 

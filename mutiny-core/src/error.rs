@@ -504,3 +504,15 @@ impl From<payjoin::send::ResponseError> for MutinyError {
         Self::PayjoinResponse(e)
     }
 }
+
+impl From<dlc::Error> for MutinyError {
+    fn from(_e: dlc::Error) -> Self {
+        Self::DLCManagerError
+    }
+}
+
+impl From<dlc_manager::error::Error> for MutinyError {
+    fn from(_e: dlc_manager::error::Error) -> Self {
+        Self::DLCManagerError
+    }
+}

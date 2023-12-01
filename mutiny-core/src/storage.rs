@@ -89,6 +89,16 @@ pub struct VersionedValue {
     pub value: Value,
 }
 
+impl VersionedValue {
+    pub fn get_value<T>(&self) -> Result<T, MutinyError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let value: T = serde_json::from_value(self.value.clone())?;
+        Ok(value)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceLock {
     pub time: u32,

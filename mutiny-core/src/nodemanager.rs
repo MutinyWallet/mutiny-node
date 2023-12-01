@@ -504,7 +504,7 @@ pub struct NodeManager<S: MutinyStorage> {
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
     user_rgs_url: Option<String>,
-    esplora: Arc<AsyncClient>,
+    pub(crate) esplora: Arc<AsyncClient>,
     pub(crate) wallet: Arc<OnChainWallet<S>>,
     gossip_sync: Arc<RapidGossipSync>,
     scorer: Arc<utils::Mutex<HubPreferentialScorer>>,
