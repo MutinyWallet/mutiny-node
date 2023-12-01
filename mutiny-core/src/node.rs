@@ -793,7 +793,7 @@ impl<S: MutinyStorage> Node<S> {
         route_hints: Option<Vec<PhantomRouteHints>>,
     ) -> Result<Bolt11Invoice, MutinyError> {
         // the amount to create for the invoice whether or not there is an lsp
-        let (amount_sat, lsp_fee_msat) = if let Some(lsp) = self.lsp_client.as_ref() {
+        let (amount_sat, lsp_fee) = if let Some(lsp) = self.lsp_client.as_ref() {
             // LSP requires an amount:
             let amount_sat = amount_sat.ok_or(MutinyError::BadAmountError)?;
 
@@ -815,7 +815,7 @@ impl<S: MutinyStorage> Node<S> {
             }
 
             // check the fee from the LSP
-            let lsp_fee_msat = lsp
+            let lsp_fee = lsp
                 .get_lsp_fee_msat(FeeRequest {
                     pubkey: self.pubkey.to_hex(),
                     amount_msat: amount_sat * 1000,
@@ -823,7 +823,7 @@ impl<S: MutinyStorage> Node<S> {
                 .await?;
 
             // Convert the fee from msat to sat for comparison and subtraction
-            let lsp_fee_sat = lsp_fee_msat / 1000;
+            let lsp_fee_sat = lsp_fee.fee_amount_msat / 1000;
 
             // Ensure that the fee is less than the amount being requested.
             // If it isn't, we don't subtract it.
@@ -837,10 +837,12 @@ impl<S: MutinyStorage> Node<S> {
                 amount_sat
             };
 
-            (Some(amount_minus_fee), Some(lsp_fee_msat))
+            (Some(amount_minus_fee), Some(lsp_fee))
         } else {
             (amount_sat, None)
         };
+
+        let lsp_fee_msat = lsp_fee.as_ref().map(|l| l.fee_amount_msat);
 
         let invoice = self
             .create_internal_invoice(amount_sat, lsp_fee_msat, labels, route_hints)
@@ -849,7 +851,13 @@ impl<S: MutinyStorage> Node<S> {
         if let Some(lsp) = self.lsp_client.as_ref() {
             self.connect_peer(PubkeyConnectionInfo::new(&lsp.connection_string)?, None)
                 .await?;
-            let lsp_invoice = match lsp.get_lsp_invoice(invoice.to_string()).await {
+            let lsp_invoice = match lsp
+                .get_lsp_invoice(
+                    invoice.to_string(),
+                    lsp_fee.expect("should have gotten a fee id").id,
+                )
+                .await
+            {
                 Ok(lsp_invoice_str) => Bolt11Invoice::from_str(&lsp_invoice_str)?,
                 Err(e) => {
                     log_error!(self.logger, "Failed to get invoice from LSP: {e}");
