@@ -92,18 +92,31 @@ pub struct MutinyBalance {
     pub confirmed: u64,
     pub unconfirmed: u64,
     pub lightning: u64,
+    pub federation: u64,
     pub force_close: u64,
 }
 
 impl MutinyBalance {
-    fn new(ln_balance: NodeBalance) -> Self {
+    fn new(ln_balance: NodeBalance, federation_balance: u64) -> Self {
         Self {
             confirmed: ln_balance.confirmed,
             unconfirmed: ln_balance.unconfirmed,
             lightning: ln_balance.lightning,
+            federation: federation_balance,
             force_close: ln_balance.force_close,
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+pub struct FederationBalance {
+    pub identity: FederationIdentity,
+    pub balance: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+pub struct FederationBalances {
+    pub balances: Vec<FederationBalance>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -636,11 +649,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Gets the current balance of the wallet.
-    /// This includes both on-chain and lightning funds.
+    /// This includes both on-chain, lightning funds, and federations.
     ///
     /// This will not include any funds in an unconfirmed lightning channel.
     pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyError> {
-        Ok(MutinyBalance::new(self.node_manager.get_balance().await?))
+        let ln_balance = self.node_manager.get_balance().await?;
+        let federation_balance = self.get_total_federation_balance().await?;
+
+        Ok(MutinyBalance::new(ln_balance, federation_balance))
     }
 
     /// Get the sorted activity list for lightning payments, channels, and txs.
@@ -978,7 +994,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let mut federations_guard = self.federations.lock().await;
 
         if let Some(fedimint_client) = federations_guard.get(&federation_id) {
-            let uuid = &fedimint_client._uuid;
+            let uuid = &fedimint_client.uuid;
 
             let mut federation_storage_guard = self.federation_storage.lock().await;
 
@@ -995,6 +1011,41 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         Ok(())
+    }
+
+    pub async fn get_total_federation_balance(&self) -> Result<u64, MutinyError> {
+        let federation_ids = self.list_federations().await?;
+        let mut total_balance = 0;
+
+        let federations = self.federations.lock().await;
+        for fed_id in federation_ids {
+            let balance = federations
+                .get(&fed_id)
+                .ok_or(MutinyError::NotFound)?
+                .get_balance()
+                .await?;
+
+            total_balance += balance;
+        }
+
+        Ok(total_balance)
+    }
+
+    pub async fn get_federation_balances(&self) -> Result<FederationBalances, MutinyError> {
+        let federation_lock = self.federations.lock().await;
+
+        let federation_ids = self.list_federations().await?;
+        let mut balances = Vec::with_capacity(federation_ids.len());
+        for fed_id in federation_ids {
+            let fedimint_client = federation_lock.get(&fed_id).ok_or(MutinyError::NotFound)?;
+
+            let balance = fedimint_client.get_balance().await?;
+            let identity = fedimint_client.get_mutiny_federation_identity().await;
+
+            balances.push(FederationBalance { identity, balance });
+        }
+
+        Ok(FederationBalances { balances })
     }
 }
 

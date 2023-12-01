@@ -403,6 +403,7 @@ pub struct MutinyBalance {
     pub confirmed: u64,
     pub unconfirmed: u64,
     pub lightning: u64,
+    pub federation: u64,
     pub force_close: u64,
 }
 
@@ -420,7 +421,78 @@ impl From<mutiny_core::MutinyBalance> for MutinyBalance {
             confirmed: m.confirmed,
             unconfirmed: m.unconfirmed,
             lightning: m.lightning,
+            federation: m.federation,
             force_close: m.force_close,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[wasm_bindgen]
+pub struct FederationBalance {
+    identity: FederationIdentity,
+    balance: u64,
+}
+
+#[wasm_bindgen]
+impl FederationBalance {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn identity_uuid(&self) -> String {
+        self.identity.uuid.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn identity_federation_id(&self) -> String {
+        self.identity.federation_id.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn balance(&self) -> u64 {
+        self.balance
+    }
+}
+
+impl From<mutiny_core::FederationBalance> for FederationBalance {
+    fn from(core_balance: mutiny_core::FederationBalance) -> Self {
+        FederationBalance {
+            identity: core_balance.identity.into(),
+            balance: core_balance.balance,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[wasm_bindgen]
+pub struct FederationBalances {
+    balances: Vec<FederationBalance>,
+}
+
+#[wasm_bindgen]
+impl FederationBalances {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn balances(&self) -> Vec<FederationBalance> {
+        self.balances.clone()
+    }
+}
+
+impl From<mutiny_core::FederationBalances> for FederationBalances {
+    fn from(core_balances: mutiny_core::FederationBalances) -> Self {
+        FederationBalances {
+            balances: core_balances
+                .balances
+                .into_iter()
+                .map(FederationBalance::from)
+                .collect(),
         }
     }
 }

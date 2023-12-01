@@ -85,6 +85,7 @@ pub struct FederationStorage {
 
 // This is the FederationIdentity that refer to a specific federation
 // Used for public facing identification.
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct FederationIdentity {
     pub uuid: String,
     pub federation_id: FederationId,
@@ -96,10 +97,14 @@ pub struct FederationIndex {
     pub federation_code: InviteCode,
 }
 
+pub struct FedimintBalance {
+    pub amount: u64,
+}
+
 // TODO remove
 #[allow(dead_code)]
 pub(crate) struct FederationClient<S: MutinyStorage> {
-    pub(crate) _uuid: String,
+    pub(crate) uuid: String,
     pub(crate) federation_index: FederationIndex,
     pub(crate) federation_code: InviteCode,
     pub(crate) fedimint_client: ClientArc,
@@ -153,7 +158,7 @@ impl<S: MutinyStorage> FederationClient<S> {
             .await?;
 
         Ok(FederationClient {
-            _uuid: uuid,
+            uuid,
             federation_index: federation_index.clone(),
             federation_code,
             fedimint_client,
@@ -175,7 +180,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         Ok(invoice.into())
     }
 
-    /// Get the balance of this fedimint client in sats
+    /// Get the balance of this federation client in sats
     pub(crate) async fn get_balance(&self) -> Result<u64, MutinyError> {
         Ok(self.fedimint_client.get_balance().await.msats / 1_000)
     }
@@ -253,6 +258,13 @@ impl<S: MutinyStorage> FederationClient<S> {
         }
 
         Ok(inv)
+    }
+
+    pub async fn get_mutiny_federation_identity(&self) -> FederationIdentity {
+        FederationIdentity {
+            uuid: self.uuid.clone(),
+            federation_id: self.fedimint_client.federation_id(),
+        }
     }
 }
 

@@ -1038,6 +1038,12 @@ impl MutinyWallet {
             .await?)
     }
 
+    /// Gets the current balances of each federation.
+    #[wasm_bindgen]
+    pub async fn get_federation_balances(&self) -> Result<FederationBalances, MutinyJsError> {
+        Ok(self.inner.get_federation_balances().await?.into())
+    }
+
     /// Initiates a redshift
     #[wasm_bindgen]
     pub async fn init_redshift(
