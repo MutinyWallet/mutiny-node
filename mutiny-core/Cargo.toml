@@ -22,6 +22,7 @@ bdk_esplora = { version = "=0.3.0", default-features = false, features = ["std",
 bdk_chain = { version = "=0.5.0", features = ["std"] }
 bdk-macros = "0.6.0"
 getrandom = { version = "0.2" }
+itertools = "0.11.0"
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
 uuid = { version = "1.1.2", features = ["v4"] }

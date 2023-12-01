@@ -30,6 +30,7 @@ use lnurl::lnurl::LnUrl;
 use mutiny_core::auth::MutinyAuthClient;
 use mutiny_core::encrypt::encryption_key_from_pass;
 use mutiny_core::lnurlauth::AuthManager;
+use mutiny_core::nostr::nip49::NIP49URI;
 use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
 use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::redshift::RedshiftRecipient;
@@ -1157,12 +1158,20 @@ impl MutinyWallet {
         Ok(JsValue::from_serde(&contacts)?)
     }
 
-    pub fn get_contact(&self, label: String) -> Result<Option<TagItem>, MutinyJsError> {
+    pub fn get_tag_item(&self, label: String) -> Result<Option<TagItem>, MutinyJsError> {
         Ok(self
             .inner
             .node_manager
             .get_contact(&label)?
             .map(|c| (label, c).into()))
+    }
+
+    pub fn get_contact(&self, label: String) -> Result<Option<Contact>, MutinyJsError> {
+        Ok(self
+            .inner
+            .node_manager
+            .get_contact(label)?
+            .map(|c| c.into()))
     }
 
     /// Create a new contact from an existing label and returns the new identifying label
@@ -1287,6 +1296,64 @@ impl MutinyWallet {
             .into())
     }
 
+    /// Approves a nostr wallet auth request.
+    /// Creates a new NWC profile and saves to storage.
+    /// This will also broadcast the info event to the relay.
+    pub async fn approve_nostr_wallet_auth(
+        &self,
+        name: String,
+        uri: String,
+    ) -> Result<NwcProfile, MutinyJsError> {
+        let uri = NIP49URI::from_str(&uri).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        log::info!("Approving NWC auth request: {uri}");
+        let profile = self
+            .inner
+            .nostr
+            .approve_nostr_wallet_auth(
+                ProfileType::Normal { name },
+                uri,
+                None,
+                NwcProfileTag::General,
+            )
+            .await?;
+
+        Ok(profile.into())
+    }
+
+    /// Approves a nostr wallet auth request.
+    /// Creates a new NWC profile and saves to storage.
+    /// This will also broadcast the info event to the relay.
+    pub async fn approve_nostr_wallet_auth_with_budget(
+        &self,
+        name: String,
+        uri: String,
+        budget: u64,
+        period: BudgetPeriod,
+    ) -> Result<NwcProfile, MutinyJsError> {
+        let uri = NIP49URI::from_str(&uri).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        log::info!("Approving NWC auth request: {uri}");
+
+        let budget = BudgetedSpendingConditions {
+            budget,
+            period: period.into(),
+            payments: vec![],
+            single_max: None,
+        };
+
+        let profile = self
+            .inner
+            .nostr
+            .approve_nostr_wallet_auth(
+                ProfileType::Normal { name },
+                uri,
+                Some(budget),
+                NwcProfileTag::General,
+            )
+            .await?;
+
+        Ok(profile.into())
+    }
+
     /// Deletes a nostr wallet connect profile
     #[wasm_bindgen]
     pub async fn delete_nwc_profile(&self, profile_index: u32) -> Result<(), MutinyJsError> {
@@ -1358,9 +1425,9 @@ impl MutinyWallet {
 
     /// Get nostr wallet connect URI
     #[wasm_bindgen]
-    pub fn get_nwc_uri(&self, index: u32) -> Result<String, MutinyJsError> {
+    pub fn get_nwc_uri(&self, index: u32) -> Result<Option<String>, MutinyJsError> {
         match self.inner.nostr.get_nwc_uri(index) {
-            Ok(uri) => Ok(uri.to_string()),
+            Ok(uri) => Ok(uri.map(|u| u.to_string())),
             Err(e) => Err(e.into()),
         }
     }

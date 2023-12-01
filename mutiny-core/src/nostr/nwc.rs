@@ -1,6 +1,7 @@
 use crate::error::MutinyError;
 use crate::event::HTLCStatus;
 use crate::node::LnNode;
+use crate::nostr::nip49::NIP49Confirmation;
 use crate::nostr::NostrManager;
 use crate::storage::MutinyStorage;
 use crate::utils;
@@ -165,6 +166,8 @@ impl fmt::Display for NwcProfileTag {
 pub(crate) struct Profile {
     pub name: String,
     pub index: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_key: Option<XOnlyPublicKey>,
     pub relay: String,
     pub enabled: Option<bool>,
     /// Archived profiles will not be displayed
@@ -178,6 +181,8 @@ pub(crate) struct Profile {
     pub child_key_index: Option<u32>,
     #[serde(default)]
     pub tag: NwcProfileTag,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 impl Profile {
@@ -202,7 +207,7 @@ pub(crate) struct NostrWalletConnect {
     /// Client key used for Nostr Wallet Connect.
     /// Mutiny will never use this key but it will be given to the client
     /// in the connect URI.
-    client_key: Keys,
+    pub(crate) client_key: Keys,
     /// Server key used for Nostr Wallet Connect.
     /// The nostr client will use this key to encrypt messages to the wallet.
     /// Mutiny will use this key to decrypt messages from the nostr client.
@@ -216,13 +221,17 @@ impl NostrWalletConnect {
         xprivkey: ExtendedPrivKey,
         profile: Profile,
     ) -> Result<NostrWalletConnect, MutinyError> {
-        let key_derivation_index = if let Some(s) = profile.child_key_index {
-            s
-        } else {
-            profile.index
-        };
-        let (client_key, server_key) =
+        let key_derivation_index = profile.child_key_index.unwrap_or(profile.index);
+
+        let (derived_client_key, server_key) =
             NostrManager::<()>::derive_nwc_keys(context, xprivkey, key_derivation_index)?;
+
+        // if the profile has a client key, we should use that instead of the derived one, that means
+        // that the profile was created from NWA
+        let client_key = match profile.client_key {
+            Some(client_key) => Keys::from_public_key(client_key),
+            None => derived_client_key,
+        };
 
         Ok(Self {
             client_key,
@@ -231,13 +240,20 @@ impl NostrWalletConnect {
         })
     }
 
-    pub fn get_nwc_uri(&self) -> anyhow::Result<NostrWalletConnectURI> {
-        let uri = NostrWalletConnectURI::new(
-            self.server_key.public_key(),
-            self.profile.relay.parse()?,
-            self.client_key.secret_key().unwrap(),
-            None,
-        )?;
+    pub fn get_nwc_uri(&self) -> anyhow::Result<Option<NostrWalletConnectURI>> {
+        let uri = self
+            .client_key
+            .secret_key()
+            .ok()
+            .map(|sk| {
+                NostrWalletConnectURI::new(
+                    self.server_key.public_key(),
+                    self.profile.relay.parse()?,
+                    sk,
+                    None,
+                )
+            })
+            .transpose()?;
 
         Ok(uri)
     }
@@ -264,14 +280,45 @@ impl NostrWalletConnect {
         Ok(info)
     }
 
+    /// Create Nostr Wallet Auth Confirmation event
+    pub fn create_auth_confirmation_event(
+        &self,
+        secret: String,
+        commands: Vec<Method>,
+    ) -> anyhow::Result<Option<Event>> {
+        // skip non-NWA profiles
+        if self.profile.client_key.is_none() {
+            return Ok(None);
+        }
+
+        let json = NIP49Confirmation {
+            secret,
+            commands,
+            relay: Some(self.profile.relay.clone()),
+        };
+        let content = encrypt(
+            &self.server_key.secret_key()?,
+            &self.client_pubkey(),
+            serde_json::to_string(&json)?,
+        )?;
+        let d_tag = Tag::Identifier(self.client_pubkey().to_hex());
+        let event = EventBuilder::new(Kind::ParameterizedReplaceable(33194), content, &[d_tag])
+            .to_event(&self.server_key)?;
+        Ok(Some(event))
+    }
+
     pub(crate) async fn pay_nwc_invoice(
         &self,
         node: &impl LnNode,
         invoice: &Bolt11Invoice,
     ) -> Result<Response, MutinyError> {
-        let labels = vec![self.profile.name.clone()];
+        let label = self
+            .profile
+            .label
+            .clone()
+            .unwrap_or(self.profile.name.clone());
         match node
-            .pay_invoice_with_timeout(invoice, None, None, labels)
+            .pay_invoice_with_timeout(invoice, None, None, vec![label])
             .await
         {
             Ok(inv) => {
@@ -689,16 +736,18 @@ impl NostrWalletConnect {
         NwcProfile {
             name: self.profile.name.clone(),
             index: self.profile.index,
+            client_key: self.profile.client_key,
             relay: self.profile.relay.clone(),
             enabled: self.profile.enabled,
             archived: self.profile.archived,
             nwc_uri: self
                 .get_nwc_uri()
                 .expect("failed to get nwc uri")
-                .to_string(),
+                .map(|uri| uri.to_string()),
             spending_conditions: self.profile.spending_conditions.clone(),
             child_key_index: self.profile.child_key_index,
             tag: self.profile.tag,
+            label: self.profile.label.clone(),
         }
     }
 }
@@ -708,16 +757,24 @@ impl NostrWalletConnect {
 pub struct NwcProfile {
     pub name: String,
     pub index: u32,
+    /// Public Key given in a Nostr Wallet Auth URI.
+    /// This will only be defined for profiles created through Nostr Wallet Auth.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_key: Option<XOnlyPublicKey>,
     pub relay: String,
     pub enabled: Option<bool>,
     pub archived: Option<bool>,
-    pub nwc_uri: String,
+    /// Nostr Wallet Connect URI
+    /// This will only be defined for profiles created manually.
+    pub nwc_uri: Option<String>,
     #[serde(default)]
     pub spending_conditions: SpendingConditions,
     #[serde(default)]
     pub child_key_index: Option<u32>,
     #[serde(default)]
     pub tag: NwcProfileTag,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 impl NwcProfile {
@@ -725,12 +782,14 @@ impl NwcProfile {
         Profile {
             name: self.name.clone(),
             index: self.index,
+            client_key: self.client_key,
             relay: self.relay.clone(),
             archived: self.archived,
             enabled: self.enabled,
             spending_conditions: self.spending_conditions.clone(),
             child_key_index: self.child_key_index,
             tag: self.tag,
+            label: self.label.clone(),
         }
     }
 }
@@ -1102,7 +1161,7 @@ mod wasm_test {
 
         let secp = Secp256k1::new();
         let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
-        let uri = nwc.get_nwc_uri().unwrap();
+        let uri = nwc.get_nwc_uri().unwrap().unwrap();
 
         // test hodl invoice
         let invoice = create_dummy_invoice(Some(10_000), Network::Regtest, Some(ONE_KEY))
@@ -1146,7 +1205,7 @@ mod wasm_test {
 
         let secp = Secp256k1::new();
         let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
-        let uri = nwc.get_nwc_uri().unwrap();
+        let uri = nwc.get_nwc_uri().unwrap().unwrap();
 
         // test wrong kind
         let event = {
@@ -1357,7 +1416,7 @@ mod wasm_test {
 
         let secp = Secp256k1::new();
         let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
-        let uri = nwc.get_nwc_uri().unwrap();
+        let uri = nwc.get_nwc_uri().unwrap().unwrap();
 
         // test failed payment goes to pending, we have no channels so it will fail
         let (invoice, _) = create_dummy_invoice(Some(10), Network::Regtest, None);
@@ -1436,7 +1495,7 @@ mod wasm_test {
 
         let secp = Secp256k1::new();
         let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
-        let uri = nwc.get_nwc_uri().unwrap();
+        let uri = nwc.get_nwc_uri().unwrap().unwrap();
 
         // test successful payment
         let event = create_nwc_request(&uri, invoice.to_string());

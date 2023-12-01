@@ -923,8 +923,9 @@ pub struct NwcProfile {
     /// Require approval before sending a payment
     pub require_approval: bool,
     spending_conditions: SpendingConditions,
-    nwc_uri: String,
+    nwc_uri: Option<String>,
     tag: String,
+    label: Option<String>,
 }
 
 impl Serialize for NwcProfile {
@@ -941,6 +942,7 @@ impl Serialize for NwcProfile {
             "spending_conditions": json!(self.spending_conditions),
             "nwc_uri": self.nwc_uri,
             "tag": self.tag,
+            "label": self.label,
             "budget_amount": self.budget_amount(),
             "budget_period": self.budget_period(),
             "budget_remaining": self.budget_remaining(),
@@ -980,13 +982,18 @@ impl NwcProfile {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn nwc_uri(&self) -> String {
+    pub fn nwc_uri(&self) -> Option<String> {
         self.nwc_uri.clone()
     }
 
     #[wasm_bindgen(getter)]
     pub fn tag(&self) -> String {
         self.tag.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn label(&self) -> Option<String> {
+        self.label.clone()
     }
 
     #[wasm_bindgen(getter)]
@@ -1046,7 +1053,8 @@ impl NwcProfile {
     #[wasm_bindgen(getter)]
     pub fn url_suffix(&self) -> Option<String> {
         if let SpendingConditions::SingleUse(ref cond) = self.spending_conditions {
-            let encoded = urlencoding::encode(&self.nwc_uri);
+            let encoded =
+                urlencoding::encode(self.nwc_uri.as_ref().expect("single use must have uri"));
             Some(format!(
                 "/gift?amount={}&nwc_uri={}",
                 cond.amount_sats, encoded
@@ -1080,6 +1088,7 @@ impl From<nostr::nwc::NwcProfile> for NwcProfile {
             spending_conditions: value.spending_conditions,
             nwc_uri: value.nwc_uri,
             tag: value.tag.to_string(),
+            label: value.label,
         }
     }
 }
