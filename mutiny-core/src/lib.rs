@@ -178,7 +178,7 @@ pub struct Plan {
     pub amount_sat: u64,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize)]
 pub struct MutinyBalance {
     pub confirmed: u64,
     pub unconfirmed: u64,
@@ -712,6 +712,36 @@ pub struct MutinyWalletConfig {
     skip_device_lock: bool,
     pub safe_mode: bool,
     skip_hodl_invoices: bool,
+}
+
+impl MutinyWalletConfig {
+    pub fn new(
+        xprivkey: ExtendedPrivKey,
+        network: Network,
+        esplora: Option<String>,
+        rgs: Option<String>,
+        lsp: Option<String>,
+    ) -> MutinyWalletConfig {
+        MutinyWalletConfig {
+            xprivkey,
+            #[cfg(target_arch = "wasm32")]
+            websocket_proxy_addr: None,
+            network,
+            user_esplora_url: esplora,
+            user_rgs_url: rgs,
+            lsp_url: lsp,
+            lsp_token: None,
+            lsp_connection_string: None,
+            auth_client: None,
+            subscription_url: None,
+            scorer_url: None,
+            primal_url: None,
+            do_not_connect_peers: false,
+            skip_device_lock: false,
+            safe_mode: false,
+            skip_hodl_invoices: true,
+        }
+    }
 }
 
 pub struct MutinyWalletBuilder<S: MutinyStorage> {
