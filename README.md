@@ -110,5 +110,4 @@ You'll want the pubkey you're connecting to, the IP address of bore (this could 
 ### Publishing
 
 The `mutiny-core` rust library and `mutiny-wasm` typescript packages are published when new github releases are created. Just bump both of those cargo.toml package numbers and [create release](https://github.com/MutinyWallet/mutiny-node/releases/new)
-just publish
-```
+just publish.
