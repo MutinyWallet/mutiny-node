@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::psbt::PsbtUtils;
 use bdk::template::DescriptorTemplateOut;
-use bdk::wallet::AddressIndex;
+use bdk::wallet::{AddressIndex, Update};
 use bdk::{FeeRate, LocalUtxo, SignOptions, TransactionDetails, Wallet};
 use bdk_esplora::EsploraAsyncExt;
 use bitcoin::consensus::serialize;
@@ -96,6 +96,41 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         Ok(())
     }
 
+    /// Tries to commit a wallet update, returns true if successful.
+    fn try_commit_update(&self, update: Update) -> Result<bool, MutinyError> {
+        // get wallet lock for writing and apply the update
+        match self.wallet.try_write() {
+            Ok(mut wallet) => match wallet.apply_update(update) {
+                Ok(changed) => {
+                    // commit the changes if there were any
+                    if changed {
+                        wallet.commit()?;
+                    }
+
+                    Ok(true)
+                }
+                Err(e) => {
+                    // failed to apply wallet update
+                    log_error!(self.logger, "Could not apply wallet update: {e}");
+                    Err(MutinyError::Other(anyhow!("Could not apply update: {e}")))
+                }
+            },
+            Err(e) => {
+                // if we can't get the lock, we just return and try again later
+                log_error!(
+                    self.logger,
+                    "Could not get wallet lock: {e}, retrying in 250ms"
+                );
+
+                if self.stop.load(Ordering::Relaxed) {
+                    return Err(MutinyError::NotRunning);
+                };
+
+                Ok(false)
+            }
+        }
+    }
+
     pub async fn sync(&self) -> Result<(), MutinyError> {
         // get first wallet lock that only needs to read
         let (checkpoints, spks, txids) = {
@@ -135,37 +170,14 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             .scan(&checkpoints, spks, txids, core::iter::empty(), 20, 5)
             .await?;
 
-        // get new wallet lock for writing and apply the update
         for _ in 0..10 {
-            match self.wallet.try_write() {
-                Ok(mut wallet) => match wallet.apply_update(update) {
-                    Ok(changed) => {
-                        // commit the changes if there were any
-                        if changed {
-                            wallet.commit()?;
-                        }
+            let successful = self.try_commit_update(update.clone())?;
 
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        // failed to apply wallet update
-                        log_error!(self.logger, "Could not apply wallet update: {e}");
-                        return Err(MutinyError::Other(anyhow!("Could not apply update: {e}")));
-                    }
-                },
-                Err(e) => {
-                    // if we can't get the lock, we just return and try again later
-                    log_error!(
-                        self.logger,
-                        "Could not get wallet lock: {e}, retrying in 250ms"
-                    );
-
-                    if self.stop.load(Ordering::Relaxed) {
-                        return Err(MutinyError::NotRunning);
-                    };
-
-                    sleep(250).await;
-                }
+            if successful {
+                return Ok(());
+            } else {
+                // if we can't get the lock, sleep for 250ms and try again
+                sleep(250).await;
             }
         }
 
@@ -199,37 +211,14 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             )
             .await?;
 
-        // get new wallet lock for writing and apply the update
         for _ in 0..10 {
-            match self.wallet.try_write() {
-                Ok(mut wallet) => match wallet.apply_update(update) {
-                    Ok(changed) => {
-                        // commit the changes if there were any
-                        if changed {
-                            wallet.commit()?;
-                        }
+            let successful = self.try_commit_update(update.clone())?;
 
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        // failed to apply wallet update
-                        log_error!(self.logger, "Could not apply wallet update: {e}");
-                        return Err(MutinyError::Other(anyhow!("Could not apply update: {e}")));
-                    }
-                },
-                Err(e) => {
-                    // if we can't get the lock, we just return and try again later
-                    log_error!(
-                        self.logger,
-                        "Could not get wallet lock: {e}, retrying in 250ms"
-                    );
-
-                    if self.stop.load(Ordering::Relaxed) {
-                        return Err(MutinyError::NotRunning);
-                    };
-
-                    sleep(250).await;
-                }
+            if successful {
+                return Ok(());
+            } else {
+                // if we can't get the lock, sleep for 250ms and try again
+                sleep(250).await;
             }
         }
 

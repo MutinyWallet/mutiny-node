@@ -605,7 +605,7 @@ impl<S: MutinyStorage> Node<S> {
                         "Retrying to persist monitor for outpoint: {funding_txo:?}"
                     );
 
-                    match retry_chain_monitor.get_monitor(funding_txo) {
+                    let data_opt = match retry_chain_monitor.get_monitor(funding_txo) {
                         Ok(monitor) => {
                             let key = retry_persister.get_monitor_key(&funding_txo);
                             let object = monitor.encode();
@@ -619,35 +619,42 @@ impl<S: MutinyStorage> Node<S> {
                                 update_id as u32
                             };
 
-                            let res = persist_monitor(
-                                &retry_persister.storage,
-                                &key,
-                                &object,
-                                Some(version),
-                                &retry_logger,
-                            )
-                            .await;
+                            Some((key, object, version))
+                        }
+                        Err(_) => {
+                            log_error!(
+                                retry_logger,
+                                "Failed to get monitor for outpoint: {funding_txo:?}"
+                            );
+                            None
+                        }
+                    };
 
-                            match res {
-                                Ok(_) => {
-                                    for id in update_ids {
-                                        if let Err(e) = retry_chain_monitor
-                                            .channel_monitor_updated(funding_txo, id)
-                                        {
-                                            log_error!(retry_logger, "Error notifying chain monitor of channel monitor update: {e:?}");
-                                        }
+                    if let Some((key, object, version)) = data_opt {
+                        let res = persist_monitor(
+                            &retry_persister.storage,
+                            &key,
+                            &object,
+                            Some(version),
+                            &retry_logger,
+                        )
+                        .await;
+
+                        match res {
+                            Ok(_) => {
+                                for id in update_ids {
+                                    if let Err(e) = retry_chain_monitor
+                                        .channel_monitor_updated(funding_txo, id)
+                                    {
+                                        log_error!(retry_logger, "Error notifying chain monitor of channel monitor update: {e:?}");
                                     }
                                 }
-                                Err(e) => log_error!(
+                            }
+                            Err(e) => log_error!(
                                     retry_logger,
                                     "Failed to persist monitor for outpoint: {funding_txo:?}, error: {e:?}",
                                 ),
-                            }
                         }
-                        Err(_) => log_error!(
-                            retry_logger,
-                            "Failed to get monitor for outpoint: {funding_txo:?}"
-                        ),
                     }
                 }
 
