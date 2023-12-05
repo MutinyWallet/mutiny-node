@@ -353,11 +353,19 @@ pub(crate) async fn connect_peer_if_necessary<S: MutinyStorage, P: PeerManager>(
         Ok(())
     } else {
         // make sure we have the device lock before connecting
-        // otherwise we could cause force closes
+        // otherwise we could cause force closes.
+        // If we didn't have the lock last, we need to panic because
+        // the state could have changed.
         if let Some(lock) = storage.fetch_device_lock().await? {
             let id = storage.get_device_id()?;
-            if lock.is_locked(&id) {
-                return Err(MutinyError::AlreadyRunning);
+            if !lock.is_last_locker(&id) {
+                log_warn!(
+                    logger,
+                    "Lock has changed (remote: {}, local: {})! Aborting since state could be outdated",
+                    lock.device,
+                    id
+                );
+                panic!("Lock has changed! Aborting since state could be outdated")
             }
         }
 
