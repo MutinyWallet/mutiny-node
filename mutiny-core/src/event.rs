@@ -2,6 +2,7 @@ use crate::fees::MutinyFeeEstimator;
 use crate::keymanager::PhantomKeysManager;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::logging::MutinyLogger;
+use crate::lsp::{AnyLsp, Lsp};
 use crate::node::BumpTxEventHandler;
 use crate::nodemanager::ChannelClosure;
 use crate::onchain::OnChainWallet;
@@ -85,7 +86,7 @@ pub struct EventHandler<S: MutinyStorage> {
     keys_manager: Arc<PhantomKeysManager<S>>,
     persister: Arc<MutinyNodePersister<S>>,
     bump_tx_event_handler: Arc<BumpTxEventHandler<S>>,
-    lsp_client_pubkey: Option<PublicKey>,
+    lsp_client: Option<AnyLsp<S>>,
     logger: Arc<MutinyLogger>,
 }
 
@@ -98,7 +99,7 @@ impl<S: MutinyStorage> EventHandler<S> {
         keys_manager: Arc<PhantomKeysManager<S>>,
         persister: Arc<MutinyNodePersister<S>>,
         bump_tx_event_handler: Arc<BumpTxEventHandler<S>>,
-        lsp_client_pubkey: Option<PublicKey>,
+        lsp_client: Option<AnyLsp<S>>,
         logger: Arc<MutinyLogger>,
     ) -> Self {
         Self {
@@ -106,7 +107,7 @@ impl<S: MutinyStorage> EventHandler<S> {
             fee_estimator,
             wallet,
             keys_manager,
-            lsp_client_pubkey,
+            lsp_client,
             persister,
             bump_tx_event_handler,
             logger,
@@ -224,9 +225,23 @@ impl<S: MutinyStorage> EventHandler<S> {
                 payment_hash,
                 purpose,
                 amount_msat,
+                counterparty_skimmed_fee_msat,
                 ..
             } => {
                 log_debug!(self.logger, "EVENT: PaymentReceived received payment from payment hash {} of {amount_msat} millisatoshis to {receiver_node_id:?}", payment_hash.0.to_hex());
+
+                let expected_skimmed_fee_msat = self
+                    .lsp_client
+                    .as_ref()
+                    .map(|lsp_client| {
+                        lsp_client.get_expected_skimmed_fee_msat(payment_hash, amount_msat)
+                    })
+                    .unwrap_or(0);
+
+                if counterparty_skimmed_fee_msat > expected_skimmed_fee_msat {
+                    log_error!(self.logger, "ERROR: Payment with hash {} skimmed a fee of {} millisatoshis when we expected a fee of {} millisatoshis", payment_hash, counterparty_skimmed_fee_msat, expected_skimmed_fee_msat);
+                    return;
+                }
 
                 if let Some(payment_preimage) = match purpose {
                     PaymentPurpose::InvoicePayment {
@@ -376,7 +391,12 @@ impl<S: MutinyStorage> EventHandler<S> {
                     Err(e) => log_debug!(self.logger, "EVENT: OpenChannelRequest error: {e:?}"),
                 };
 
-                if self.lsp_client_pubkey.as_ref() != Some(&counterparty_node_id) {
+                let lsp_pubkey = self
+                    .lsp_client
+                    .as_ref()
+                    .map(|client| client.get_lsp_pubkey());
+
+                if lsp_pubkey.as_ref() != Some(&counterparty_node_id) {
                     // did not match the lsp pubkey, normal open
                     let result = self.channel_manager.accept_inbound_channel(
                         &temporary_channel_id,

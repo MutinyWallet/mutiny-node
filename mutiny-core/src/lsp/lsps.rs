@@ -4,6 +4,7 @@ use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::Network;
 use futures::channel::oneshot;
 use lightning::ln::channelmanager::MIN_FINAL_CLTV_EXPIRY_DELTA;
+use lightning::ln::PaymentHash;
 use lightning::log_debug;
 use lightning::routing::gossip::RoutingFees;
 use lightning::routing::router::{RouteHint, RouteHintHop};
@@ -45,6 +46,11 @@ pub(crate) struct GetInfoResponse {
     pub opening_fee_params_menu: Vec<OpeningFeeParams>,
 }
 
+pub(crate) struct PendingPaymentInfo {
+    pub expected_fee_msat: Option<u64>,
+    pub fee_params: OpeningFeeParams,
+}
+
 #[derive(Clone)]
 pub struct LspsClient<S: MutinyStorage> {
     pub pubkey: PublicKey,
@@ -58,6 +64,7 @@ pub struct LspsClient<S: MutinyStorage> {
     pending_fee_requests: Arc<Mutex<HashMap<u128, oneshot::Sender<GetInfoResponse>>>>,
     pending_buy_requests: Arc<Mutex<HashMap<u128, oneshot::Sender<Bolt11Invoice>>>>,
     pending_channel_info: Arc<Mutex<HashMap<u128, JitChannelInfo>>>,
+    pending_payments: Arc<Mutex<HashMap<PaymentHash, PendingPaymentInfo>>>,
 }
 
 impl<S: MutinyStorage> LspsClient<S> {
@@ -84,6 +91,7 @@ impl<S: MutinyStorage> LspsClient<S> {
             pending_fee_requests: Arc::new(Mutex::new(HashMap::new())),
             pending_buy_requests: Arc::new(Mutex::new(HashMap::new())),
             pending_channel_info: Arc::new(Mutex::new(HashMap::new())),
+            pending_payments: Arc::new(Mutex::new(HashMap::new())),
         };
 
         let events_client = client.clone();
@@ -229,11 +237,15 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
                 self.token.clone(),
                 fee_request.user_channel_id,
             )
-            .map_err(|_| MutinyError::LspGenericError)?;
+            .map_err(|e| {
+                log_debug!(self.logger, "error creating lsps2 invoice: {:?}", e);
+                MutinyError::LspGenericError
+            })?;
 
-        let get_info_response = pending_fee_request_receiver
-            .await
-            .map_err(|_| MutinyError::LspGenericError)?;
+        let get_info_response = pending_fee_request_receiver.await.map_err(|e| {
+            log_debug!(self.logger, "error receiving get info response: {:?}", e);
+            MutinyError::LspGenericError
+        })?;
 
         let fee_params = get_info_response.opening_fee_params_menu[0].clone();
 
@@ -289,12 +301,36 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
         };
 
         self.liquidity_manager
-            .opening_fee_params_selected(self.pubkey, channel_id, fee_params)
+            .opening_fee_params_selected(self.pubkey, channel_id, fee_params.clone())
             .map_err(|_| MutinyError::LspGenericError)?;
 
         let invoice = pending_buy_request_receiver
             .await
             .map_err(|_| MutinyError::LspGenericError)?;
+
+        let payment_hash = PaymentHash(invoice.payment_hash().clone().into_inner());
+        let payment_amount = invoice.amount_milli_satoshis();
+
+        let expected_fee_msat = payment_amount
+            .map(|payment_amount| {
+                compute_opening_fee(
+                    payment_amount,
+                    fee_params.min_fee_msat,
+                    fee_params.proportional.into(),
+                )
+            })
+            .flatten();
+
+        {
+            let mut pending_payments = self.pending_payments.lock().unwrap();
+            pending_payments.insert(
+                payment_hash,
+                PendingPaymentInfo {
+                    expected_fee_msat,
+                    fee_params,
+                },
+            );
+        }
 
         Ok(invoice.to_string())
     }
@@ -312,5 +348,21 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             connection_string: self.get_lsp_connection_string(),
             token: self.token.clone(),
         })
+    }
+
+    fn get_expected_skimmed_fee_msat(&self, payment_hash: PaymentHash, payment_size: u64) -> u64 {
+        let mut pending_payments = self.pending_payments.lock().unwrap();
+        let pending_payment = pending_payments.get_mut(&payment_hash).unwrap();
+
+        if let Some(expected_fee_msat) = pending_payment.expected_fee_msat {
+            return expected_fee_msat;
+        }
+
+        compute_opening_fee(
+            payment_size,
+            pending_payment.fee_params.min_fee_msat,
+            pending_payment.fee_params.proportional.into(),
+        )
+        .unwrap_or(0)
     }
 }

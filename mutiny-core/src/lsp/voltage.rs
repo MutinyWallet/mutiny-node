@@ -2,6 +2,7 @@ use crate::lsp::{FeeRequest, InvoiceRequest, Lsp, LspConfig};
 use crate::{error::MutinyError, utils};
 use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
+use lightning::ln::PaymentHash;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -201,5 +202,9 @@ impl Lsp for LspClient {
 
     fn get_config(&self) -> LspConfig {
         LspConfig::VoltageFlow(self.url.clone())
+    }
+
+    fn get_expected_skimmed_fee_msat(&self, _payment_hash: PaymentHash, _payment_size: u64) -> u64 {
+        0
     }
 }

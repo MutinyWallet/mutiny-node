@@ -69,7 +69,9 @@ use lightning_invoice::{
     utils::{create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice},
     Bolt11Invoice,
 };
-use lightning_liquidity::LiquidityManager as LDKLSPLiquidityManager;
+use lightning_liquidity::{
+    JITChannelsConfig, LiquidityManager as LDKLSPLiquidityManager, LiquidityProviderConfig,
+};
 
 #[cfg(test)]
 use mockall::{automock, predicate::*};
@@ -350,7 +352,13 @@ impl<S: MutinyStorage> Node<S> {
 
         let liquidity_manager = Arc::new(LiquidityManager::new(
             keys_manager.clone(),
-            None,
+            Some(LiquidityProviderConfig {
+                lsps2_config: Some(JITChannelsConfig {
+                    promise_secret: [0; 32],
+                    min_payment_size_msat: 0,
+                    max_payment_size_msat: 9999999999,
+                }),
+            }),
             channel_manager.clone(),
             None,
             None,
@@ -414,7 +422,7 @@ impl<S: MutinyStorage> Node<S> {
             keys_manager.clone(),
             persister.clone(),
             bump_tx_event_handler,
-            lsp_client_pubkey,
+            lsp_client.clone(),
             logger.clone(),
         );
 
@@ -913,8 +921,9 @@ impl<S: MutinyStorage> Node<S> {
                 return Err(MutinyError::IncorrectNetwork(invoice.network()));
             }
 
-            if lsp_invoice.payment_hash() != invoice.payment_hash()
-                || lsp_invoice.recover_payee_pub_key() != lsp.get_lsp_pubkey()
+            if matches!(lsp, AnyLsp::VoltageFlow(_))
+                && (lsp_invoice.payment_hash() != invoice.payment_hash()
+                    || lsp_invoice.recover_payee_pub_key() != lsp.get_lsp_pubkey())
             {
                 return Err(MutinyError::InvoiceCreationFailed);
             }
@@ -2000,6 +2009,7 @@ pub(crate) fn default_user_config() -> UserConfig {
             max_dust_htlc_exposure: MaxDustHTLCExposure::FixedLimitMsat(
                 21_000_000 * 100_000_000 * 1_000,
             ),
+            accept_underpaying_htlcs: true,
             ..Default::default()
         },
         ..Default::default()

@@ -7,6 +7,7 @@ use crate::storage::MutinyStorage;
 use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
+use lightning::ln::PaymentHash;
 use lsps::{LspsClient, LspsConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -74,6 +75,7 @@ pub(crate) trait Lsp {
         -> Result<String, MutinyError>;
     fn get_lsp_pubkey(&self) -> PublicKey;
     fn get_lsp_connection_string(&self) -> String;
+    fn get_expected_skimmed_fee_msat(&self, payment_hash: PaymentHash, payment_size: u64) -> u64;
     fn get_config(&self) -> LspConfig;
 }
 
@@ -148,6 +150,17 @@ impl<S: MutinyStorage> Lsp for AnyLsp<S> {
         match self {
             AnyLsp::VoltageFlow(client) => client.get_config(),
             AnyLsp::LspsFlow(client) => client.get_config(),
+        }
+    }
+
+    fn get_expected_skimmed_fee_msat(&self, payment_hash: PaymentHash, payment_size: u64) -> u64 {
+        match self {
+            AnyLsp::VoltageFlow(client) => {
+                client.get_expected_skimmed_fee_msat(payment_hash, payment_size)
+            }
+            AnyLsp::LspsFlow(client) => {
+                client.get_expected_skimmed_fee_msat(payment_hash, payment_size)
+            }
         }
     }
 }
