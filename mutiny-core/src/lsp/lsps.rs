@@ -365,17 +365,20 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
 
     fn get_expected_skimmed_fee_msat(&self, payment_hash: PaymentHash, payment_size: u64) -> u64 {
         let mut pending_payments = self.pending_payments.lock().unwrap();
-        let pending_payment = pending_payments.get_mut(&payment_hash).unwrap();
 
-        if let Some(expected_fee_msat) = pending_payment.expected_fee_msat {
-            return expected_fee_msat;
+        if let Some(pending_payment) = pending_payments.get_mut(&payment_hash) {
+            if let Some(expected_fee_msat) = pending_payment.expected_fee_msat {
+                return expected_fee_msat;
+            }
+
+            compute_opening_fee(
+                payment_size,
+                pending_payment.fee_params.min_fee_msat,
+                pending_payment.fee_params.proportional.into(),
+            )
+            .unwrap_or(0)
+        } else {
+            0
         }
-
-        compute_opening_fee(
-            payment_size,
-            pending_payment.fee_params.min_fee_msat,
-            pending_payment.fee_params.proportional.into(),
-        )
-        .unwrap_or(0)
     }
 }
