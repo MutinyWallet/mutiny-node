@@ -47,7 +47,7 @@ AR=/opt/homebrew/opt/llvm/bin/llvm-ar CC=/opt/homebrew/opt/llvm/bin/clang
 
 ### Dependencies
 
-- [rust](https://www.rust-lang.org/) (specifically, nightly: `rustup toolchain install nightly` and `rustup target add wasm32-unknown-unknown --toolchain nightly`)
+- [rust](https://www.rust-lang.org/) (specifically, nightly: `rustup toolchain install nightly-2023-10-24` and `rustup target add wasm32-unknown-unknown --toolchain nightly`)
 
 - [node](https://nodejs.org/en/)
 
