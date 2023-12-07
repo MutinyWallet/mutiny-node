@@ -5,35 +5,61 @@ use crate::{
     nodemanager::MutinyInvoice,
     onchain::coin_type_from_network,
     storage::MutinyStorage,
-    HTLCStatus,
+    utils::sleep,
+    ActivityItem, HTLCStatus, DEFAULT_PAYMENT_TIMEOUT,
 };
 use bip39::Mnemonic;
-use bitcoin::{secp256k1::Secp256k1, util::bip32::ExtendedPrivKey};
 use bitcoin::{
+    hashes::{hex::ToHex, sha256},
+    secp256k1::Secp256k1,
+    util::bip32::ExtendedPrivKey,
     util::bip32::{ChildNumber, DerivationPath},
     Network,
 };
 use fedimint_bip39::Bip39RootSecretStrategy;
 use fedimint_client::{
     derivable_secret::DerivableSecret,
+    oplog::{OperationLogEntry, UpdateStreamOrOutcome},
     secret::{get_default_client_secret, RootSecretStrategy},
     ClientArc, FederationInfo,
 };
-use fedimint_core::{api::InviteCode, config::FederationId, db::mem_impl::MemDatabase, Amount};
-use fedimint_ln_client::{
-    InternalPayState, LightningClientInit, LightningClientModule, LnPayState, LnReceiveState,
+use fedimint_core::{
+    api::InviteCode,
+    config::FederationId,
+    core::OperationId,
+    db::mem_impl::MemDatabase,
+    module::CommonModuleInit,
+    task::{MaybeSend, MaybeSync},
+    Amount,
 };
+use fedimint_ln_client::{
+    InternalPayState, LightningClientInit, LightningClientModule, LightningOperationMeta,
+    LightningOperationMetaVariant, LnPayState, LnReceiveState,
+};
+use fedimint_ln_common::LightningCommonInit;
 use fedimint_mint_client::MintClientInit;
 use fedimint_wallet_client::WalletClientInit;
-use futures_util::StreamExt;
-use lightning::util::logger::Logger;
-use lightning::{log_debug, log_info};
+use futures::future::{self};
+use futures_util::{pin_mut, stream, StreamExt};
+use lightning::{log_debug, log_info, log_warn, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    fmt::Debug,
     sync::{atomic::AtomicBool, Arc, RwLock},
 };
+
+// The amount of time in milliseconds to wait for
+// checking the status of a fedimint payment. This
+// is to work around their stream status checking
+// when wanting just the current status.
+const FEDIMINT_STATUS_TIMEOUT_CHECK_MS: u64 = 30;
+
+// The maximum amount of operations we try to pull
+// from fedimint when we need to search through
+// their internal list.
+const FEDIMINT_OPERATIONS_LIST_MAX: usize = 100;
 
 impl From<LnReceiveState> for HTLCStatus {
     fn from(state: LnReceiveState) -> Self {
@@ -185,6 +211,86 @@ impl<S: MutinyStorage> FederationClient<S> {
         Ok(self.fedimint_client.get_balance().await.msats / 1_000)
     }
 
+    pub async fn get_activity(&self) -> Result<Vec<ActivityItem>, MutinyError> {
+        let operations = self
+            .fedimint_client
+            .operation_log()
+            .list_operations(FEDIMINT_OPERATIONS_LIST_MAX, None)
+            .await;
+
+        let lightning_module = Arc::new(
+            self.fedimint_client
+                .get_first_module::<LightningClientModule>(),
+        );
+
+        let activity_stream = stream::iter(operations.into_iter());
+
+        let activity_items = activity_stream
+            .then(move |(key, entry)| {
+                let logger = self.logger.clone();
+                let lightning_module = Arc::clone(&lightning_module);
+                async move {
+                    if entry.operation_module_kind() == LightningCommonInit::KIND.as_str() {
+                        Some(
+                            handle_ln_meta(logger, &entry, key.operation_id, &lightning_module)
+                                .await,
+                        )
+                    } else {
+                        log_warn!(
+                            logger,
+                            "Unsupported module: {}",
+                            entry.operation_module_kind()
+                        );
+                        None
+                    }
+                }
+            })
+            .filter_map(|item| async move { item })
+            .collect::<Vec<ActivityItem>>()
+            .await;
+
+        Ok(activity_items)
+    }
+
+    pub async fn get_invoice_by_hash(
+        &self,
+        hash: &sha256::Hash,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        let operations = self
+            .fedimint_client
+            .operation_log()
+            .list_operations(FEDIMINT_OPERATIONS_LIST_MAX, None)
+            .await;
+
+        let lightning_module = self
+            .fedimint_client
+            .get_first_module::<LightningClientModule>();
+
+        for (key, entry) in operations {
+            if entry.operation_module_kind() == LightningCommonInit::KIND.as_str() {
+                if let Some(invoice) = extract_invoice_from_entry(
+                    self.logger.clone(),
+                    &entry,
+                    hash,
+                    key.operation_id,
+                    &lightning_module,
+                )
+                .await
+                {
+                    return Ok(invoice);
+                }
+            } else {
+                log_warn!(
+                    self.logger,
+                    "Unsupported module: {}",
+                    entry.operation_module_kind()
+                );
+            }
+        }
+
+        Err(MutinyError::NotFound)
+    }
+
     pub(crate) async fn pay_invoice(
         &self,
         invoice: Bolt11Invoice,
@@ -196,68 +302,48 @@ impl<S: MutinyStorage> FederationClient<S> {
             .pay_bolt11_invoice(invoice.clone(), ())
             .await?;
 
-        let mut inv: MutinyInvoice = invoice.clone().into();
-        match outgoing_payment.payment_type {
+        // Subscribe and process outcome based on payment type
+        let inv = match outgoing_payment.payment_type {
             fedimint_ln_client::PayType::Internal(pay_id) => {
-                // TODO merge the two as much as we can
-                let pay_outcome = lightning_module
-                    .subscribe_internal_pay(pay_id)
-                    .await
-                    .map_err(|_| MutinyError::ConnectionFailed)?;
-
-                match pay_outcome {
-                    fedimint_client::oplog::UpdateStreamOrOutcome::UpdateStream(mut s) => {
-                        log_debug!(
-                            self.logger,
-                            "waiting for update stream on payment: {}",
-                            pay_id
-                        );
-                        while let Some(outcome) = s.next().await {
-                            log_info!(self.logger, "Outcome: {outcome:?}");
-                            inv.status = outcome.into();
-
-                            if matches!(inv.status, HTLCStatus::Failed | HTLCStatus::Succeeded) {
-                                break;
-                            }
-                        }
+                match lightning_module.subscribe_internal_pay(pay_id).await {
+                    Ok(o) => {
+                        process_outcome(
+                            o,
+                            process_pay_state_internal,
+                            invoice.clone(),
+                            true,
+                            DEFAULT_PAYMENT_TIMEOUT * 1_000,
+                            Arc::clone(&self.logger),
+                        )
+                        .await
                     }
-                    fedimint_client::oplog::UpdateStreamOrOutcome::Outcome(o) => {
-                        log_info!(self.logger, "Outcome: {o:?}");
-                        inv.status = o.into();
-                    }
+                    Err(_) => invoice.clone().into(),
                 }
             }
             fedimint_ln_client::PayType::Lightning(pay_id) => {
-                let pay_outcome = lightning_module
-                    .subscribe_ln_pay(pay_id)
-                    .await
-                    .map_err(|_| MutinyError::ConnectionFailed)?;
-
-                match pay_outcome {
-                    fedimint_client::oplog::UpdateStreamOrOutcome::UpdateStream(mut s) => {
-                        log_debug!(
-                            self.logger,
-                            "waiting for update stream on payment: {}",
-                            pay_id
-                        );
-                        while let Some(outcome) = s.next().await {
-                            log_info!(self.logger, "Outcome: {outcome:?}");
-                            inv.status = outcome.into();
-
-                            if matches!(inv.status, HTLCStatus::Failed | HTLCStatus::Succeeded) {
-                                break;
-                            }
-                        }
+                match lightning_module.subscribe_ln_pay(pay_id).await {
+                    Ok(o) => {
+                        process_outcome(
+                            o,
+                            process_pay_state_ln,
+                            invoice.clone(),
+                            false,
+                            DEFAULT_PAYMENT_TIMEOUT * 1_000,
+                            Arc::clone(&self.logger),
+                        )
+                        .await
                     }
-                    fedimint_client::oplog::UpdateStreamOrOutcome::Outcome(o) => {
-                        log_info!(self.logger, "Outcome: {o:?}");
-                        inv.status = o.into();
-                    }
+                    Err(_) => invoice.clone().into(),
                 }
             }
-        }
+        };
 
-        Ok(inv)
+        match inv.status {
+            HTLCStatus::Succeeded => Ok(inv),
+            HTLCStatus::Failed => Err(MutinyError::RoutingFailed),
+            HTLCStatus::Pending => Err(MutinyError::PaymentTimeout),
+            HTLCStatus::InFlight => Err(MutinyError::PaymentTimeout),
+        }
     }
 
     pub async fn get_mutiny_federation_identity(&self) -> FederationIdentity {
@@ -296,6 +382,191 @@ fn create_federation_secret(
 pub(crate) fn mnemonic_from_xpriv(xpriv: ExtendedPrivKey) -> Result<Mnemonic, MutinyError> {
     let mnemonic = Mnemonic::from_entropy(&xpriv.private_key.secret_bytes())?;
     Ok(mnemonic)
+}
+
+async fn extract_invoice_from_entry(
+    logger: Arc<MutinyLogger>,
+    entry: &OperationLogEntry,
+    hash: &sha256::Hash,
+    operation_id: OperationId,
+    lightning_module: &LightningClientModule,
+) -> Option<MutinyInvoice> {
+    let lightning_meta: LightningOperationMeta = entry.meta();
+
+    match lightning_meta.variant {
+        LightningOperationMetaVariant::Pay(pay_meta) => {
+            if pay_meta.invoice.payment_hash() == hash {
+                match lightning_module.subscribe_ln_pay(operation_id).await {
+                    Ok(o) => Some(
+                        process_outcome(
+                            o,
+                            process_pay_state_ln,
+                            pay_meta.invoice,
+                            false,
+                            FEDIMINT_STATUS_TIMEOUT_CHECK_MS,
+                            logger,
+                        )
+                        .await,
+                    ),
+                    Err(_) => Some(pay_meta.invoice.into()),
+                }
+            } else {
+                None
+            }
+        }
+        LightningOperationMetaVariant::Receive { invoice, .. } => {
+            if invoice.payment_hash() == hash {
+                match lightning_module.subscribe_ln_receive(operation_id).await {
+                    Ok(o) => Some(
+                        process_outcome(
+                            o,
+                            process_receive_state,
+                            invoice,
+                            true,
+                            FEDIMINT_STATUS_TIMEOUT_CHECK_MS,
+                            logger,
+                        )
+                        .await,
+                    ),
+                    Err(_) => Some(invoice.into()),
+                }
+            } else {
+                None
+            }
+        }
+    }
+}
+
+async fn handle_ln_meta(
+    logger: Arc<MutinyLogger>,
+    entry: &OperationLogEntry,
+    operation_id: OperationId,
+    lightning_module: &LightningClientModule,
+) -> ActivityItem {
+    let lightning_meta: LightningOperationMeta = entry.meta();
+
+    let invoice = match lightning_meta.variant {
+        LightningOperationMetaVariant::Pay(pay_meta) => {
+            match lightning_module.subscribe_ln_pay(operation_id).await {
+                Ok(o) => {
+                    process_outcome(
+                        o,
+                        process_pay_state_ln,
+                        pay_meta.invoice,
+                        false,
+                        FEDIMINT_STATUS_TIMEOUT_CHECK_MS,
+                        logger,
+                    )
+                    .await
+                }
+                Err(_) => pay_meta.invoice.into(),
+            }
+        }
+        LightningOperationMetaVariant::Receive { invoice, .. } => {
+            match lightning_module.subscribe_ln_receive(operation_id).await {
+                Ok(o) => {
+                    process_outcome(
+                        o,
+                        process_receive_state,
+                        invoice,
+                        true,
+                        FEDIMINT_STATUS_TIMEOUT_CHECK_MS,
+                        logger,
+                    )
+                    .await
+                }
+                Err(_) => invoice.into(),
+            }
+        }
+    };
+
+    ActivityItem::Lightning(Box::new(invoice))
+}
+
+fn process_pay_state_internal(pay_state: InternalPayState) -> (HTLCStatus, Option<String>) {
+    let status: HTLCStatus = pay_state.clone().into();
+
+    let p = if let InternalPayState::Preimage(preimage) = pay_state {
+        Some(preimage.0.to_hex())
+    } else {
+        None
+    };
+
+    (status, p)
+}
+
+fn process_pay_state_ln(pay_state: LnPayState) -> (HTLCStatus, Option<String>) {
+    let status: HTLCStatus = pay_state.clone().into();
+
+    let p = if let LnPayState::Success { ref preimage } = pay_state {
+        Some(preimage.to_string())
+    } else {
+        None
+    };
+
+    (status, p)
+}
+
+fn process_receive_state(receive_state: LnReceiveState) -> (HTLCStatus, Option<String>) {
+    let status: HTLCStatus = receive_state.into();
+    (status, None)
+}
+
+async fn process_outcome<U, F>(
+    stream_or_outcome: UpdateStreamOrOutcome<U>,
+    process_fn: F,
+    invoice: Bolt11Invoice,
+    inbound: bool,
+    timeout: u64,
+    logger: Arc<MutinyLogger>,
+) -> MutinyInvoice
+where
+    U: Into<HTLCStatus>
+        + Clone
+        + Serialize
+        + DeserializeOwned
+        + Debug
+        + MaybeSend
+        + MaybeSync
+        + 'static,
+    F: Fn(U) -> (HTLCStatus, Option<String>) + Copy,
+{
+    let mut invoice: MutinyInvoice = invoice.into();
+    invoice.inbound = inbound;
+
+    match stream_or_outcome {
+        UpdateStreamOrOutcome::Outcome(outcome) => {
+            invoice.status = outcome.into();
+            log_debug!(logger, "Outcome received: {}", invoice.status);
+        }
+        UpdateStreamOrOutcome::UpdateStream(mut s) => {
+            let timeout_future = sleep(timeout as i32);
+            pin_mut!(timeout_future);
+
+            while let future::Either::Left((outcome_option, _)) =
+                future::select(s.next(), &mut timeout_future).await
+            {
+                if let Some(outcome) = outcome_option {
+                    let (status, preimage) = process_fn(outcome);
+                    invoice.status = status;
+                    invoice.preimage = preimage;
+
+                    if matches!(invoice.status, HTLCStatus::Succeeded | HTLCStatus::Failed) {
+                        break;
+                    }
+                } else {
+                    log_debug!(
+                        logger,
+                        "Timeout reached, exiting loop for payment {}",
+                        invoice.payment_hash
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
+    invoice
 }
 
 #[cfg(test)]

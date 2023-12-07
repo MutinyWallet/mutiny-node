@@ -1166,9 +1166,6 @@ impl<S: MutinyStorage> NodeManager<S> {
             activity.push(ActivityItem::ChannelClosed(chan));
         }
 
-        // Newest first
-        activity.sort_by(|a, b| b.cmp(a));
-
         Ok(activity)
     }
 

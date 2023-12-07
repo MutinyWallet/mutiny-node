@@ -560,14 +560,27 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 if balance >= send_msat / 1_000 {
                     // Try to pay the invoice using the federation
                     let payment_result = fedimint_client.pay_invoice(inv.clone()).await;
-                    if payment_result.is_ok() {
-                        return payment_result;
+                    match payment_result {
+                        Ok(r) => return Ok(r),
+                        Err(e) => match e {
+                            MutinyError::PaymentTimeout => return Err(e),
+                            MutinyError::RoutingFailed => {
+                                log_debug!(
+                                    self.logger,
+                                    "could not make payment through federation: {e}"
+                                );
+                                continue;
+                            }
+                            _ => {
+                                log_warn!(self.logger, "unhandled error: {e}")
+                            }
+                        },
                     }
                 }
+                // If payment fails or invoice amount is None or balance is not sufficient, continue to next federation
             }
-            // If payment fails or invoice amount is None or balance is not sufficient, continue to next federation
+            // If federation client is not found, continue to next federation
         }
-        // If federation client is not found, continue to next federation
 
         // If no federation could pay the invoice, fall back to using node_manager for payment
         self.node_manager
@@ -661,7 +674,20 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     /// Get the sorted activity list for lightning payments, channels, and txs.
     pub async fn get_activity(&self) -> Result<Vec<ActivityItem>, MutinyError> {
-        self.node_manager.get_activity().await
+        // Get activities from node manager
+        let mut activities = self.node_manager.get_activity().await?;
+
+        // Directly iterate over federation clients to get their activities
+        let federations = self.federations.lock().await;
+        for (_fed_id, federation) in federations.iter() {
+            let federation_activities = federation.get_activity().await?;
+            activities.extend(federation_activities);
+        }
+
+        // Sort all activities, newest first
+        activities.sort_by(|a, b| b.cmp(a));
+
+        Ok(activities)
     }
 
     /// Gets an invoice.
@@ -676,7 +702,20 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         &self,
         hash: &sha256::Hash,
     ) -> Result<MutinyInvoice, MutinyError> {
-        self.node_manager.get_invoice_by_hash(hash).await
+        // First, try to find the invoice in the node manager
+        if let Ok(invoice) = self.node_manager.get_invoice_by_hash(hash).await {
+            return Ok(invoice);
+        }
+
+        // If not found in node manager, search in federations
+        let federations = self.federations.lock().await;
+        for (_fed_id, federation) in federations.iter() {
+            if let Ok(invoice) = federation.get_invoice_by_hash(hash).await {
+                return Ok(invoice);
+            }
+        }
+
+        Err(MutinyError::NotFound)
     }
 
     /// Checks whether or not the user is subscribed to Mutiny+.
