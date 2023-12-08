@@ -7,6 +7,7 @@ jobs:
   check_formatting:
     name: Check Formatting
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v3
 
@@ -38,6 +39,7 @@ jobs:
   website:
     name: Build WASM binary
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
@@ -70,6 +72,7 @@ jobs:
   browser_tests:
     name: Browser Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       RUSTUP_TOOLCHAIN: nightly-2023-10-24
       WASM_BINDGEN_TEST_TIMEOUT: 240
@@ -111,6 +114,7 @@ jobs:
   wasm_checks:
     name: Rust Wasm Checks
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
@@ -142,6 +146,7 @@ jobs:
 
   core_tests_linux:
     name: Core Tests on Linux
+    timeout-minutes: 60
     runs-on: ubuntu-latest
 
     strategy:
@@ -191,6 +196,7 @@ jobs:
   core_tests_mac:
     name: Core Tests on macOS
     runs-on: macos-latest
+    timeout-minutes: 60
 
     strategy:
       fail-fast: false
@@ -236,6 +242,7 @@ jobs:
   core_tests_windows:
     name: Core Tests on Windows
     runs-on: windows-latest
+    timeout-minutes: 60
 
     strategy:
       fail-fast: false
