@@ -4,6 +4,7 @@ use crate::{
     logging::MutinyLogger,
     nodemanager::MutinyInvoice,
     onchain::coin_type_from_network,
+    sql::glue::GlueDB,
     storage::MutinyStorage,
     utils::sleep,
     ActivityItem, HTLCStatus, DEFAULT_PAYMENT_TIMEOUT,
@@ -19,6 +20,7 @@ use bitcoin::{
 use fedimint_bip39::Bip39RootSecretStrategy;
 use fedimint_client::{
     derivable_secret::DerivableSecret,
+    get_config_from_db,
     oplog::{OperationLogEntry, UpdateStreamOrOutcome},
     secret::{get_default_client_secret, RootSecretStrategy},
     ClientArc, FederationInfo,
@@ -27,7 +29,6 @@ use fedimint_core::{
     api::InviteCode,
     config::FederationId,
     core::OperationId,
-    db::mem_impl::MemDatabase,
     module::CommonModuleInit,
     task::{MaybeSend, MaybeSync},
     Amount,
@@ -151,6 +152,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         federation_code: InviteCode,
         xprivkey: ExtendedPrivKey,
         storage: S,
+        g: GlueDB,
         network: Network,
         logger: Arc<MutinyLogger>,
         stop: Arc<AtomicBool>,
@@ -169,10 +171,17 @@ impl<S: MutinyStorage> FederationClient<S> {
         client_builder.with_module(WalletClientInit(None));
         client_builder.with_module(MintClientInit);
         client_builder.with_module(LightningClientInit);
-        client_builder.with_database(MemDatabase::new().into()); // TODO not in memory
+
+        let db = g
+            .new_fedimint_client_db(federation_info.federation_id().to_string())
+            .await?
+            .into();
+        if get_config_from_db(&db).await.is_none() {
+            client_builder.with_federation_info(federation_info.clone());
+        }
+
+        client_builder.with_database(db);
         client_builder.with_primary_module(1);
-        client_builder
-            .with_federation_info(FederationInfo::from_invite_code(federation_code.clone()).await?);
 
         let secret = create_federation_secret(xprivkey, network)?;
 
@@ -183,6 +192,7 @@ impl<S: MutinyStorage> FederationClient<S> {
             ))
             .await?;
 
+        log_debug!(logger, "Built fedimint client");
         Ok(FederationClient {
             uuid,
             federation_index: federation_index.clone(),

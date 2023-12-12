@@ -33,6 +33,7 @@ mod onchain;
 mod peermanager;
 pub mod redshift;
 pub mod scorer;
+pub mod sql;
 pub mod storage;
 mod subscription;
 pub mod utils;
@@ -46,7 +47,6 @@ pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
-use crate::federation::{FederationClient, FederationIdentity, FederationIndex, FederationStorage};
 use crate::logging::LOGGING_KEY;
 use crate::nodemanager::{
     ChannelClosure, MutinyBip21RawMaterials, MutinyInvoice, TransactionDetails,
@@ -59,8 +59,10 @@ use crate::storage::{MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FU
 use crate::{auth::MutinyAuthClient, logging::MutinyLogger};
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{
+    federation::{FederationClient, FederationIdentity, FederationIndex, FederationStorage},
     labels::{get_contact_key, Contact, LabelStorage},
     nodemanager::NodeBalance,
+    sql::glue::GlueDB,
 };
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{nostr::NostrManager, utils::sleep};
@@ -281,6 +283,7 @@ impl MutinyWalletConfig {
 pub struct MutinyWallet<S: MutinyStorage> {
     pub config: MutinyWalletConfig,
     pub storage: S,
+    glue_db: GlueDB,
     pub node_manager: Arc<NodeManager<S>>,
     pub nostr: Arc<NostrManager<S>>,
     pub federation_storage: Arc<Mutex<FederationStorage>>,
@@ -330,9 +333,17 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             node_manager.logger.clone(),
         )?);
 
+        // create gluedb storage
+        let glue_db = GlueDB::new(
+            #[cfg(target_arch = "wasm32")]
+            None,
+            logger.clone(),
+        )
+        .await?;
+
         // create federation library
         let (federation_storage, federations) =
-            create_federations(&storage, &config, &logger, stop.clone()).await?;
+            create_federations(&storage, &config, glue_db.clone(), &logger, stop.clone()).await?;
         let federation_storage = Arc::new(Mutex::new(federation_storage));
         let federations = federations;
 
@@ -346,6 +357,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let mw = Self {
             config,
             storage,
+            glue_db,
             node_manager,
             nostr,
             federation_storage,
@@ -1008,6 +1020,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         create_new_federation(
             self.config.xprivkey,
             self.storage.clone(),
+            self.glue_db.clone(),
             self.config.network,
             self.logger.clone(),
             self.federation_storage.clone(),
@@ -1091,6 +1104,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 async fn create_federations<S: MutinyStorage>(
     storage: &S,
     c: &MutinyWalletConfig,
+    g: GlueDB,
     logger: &Arc<MutinyLogger>,
     stop: Arc<AtomicBool>,
 ) -> Result<
@@ -1110,6 +1124,7 @@ async fn create_federations<S: MutinyStorage>(
             federation_item.1.federation_code.clone(),
             c.xprivkey,
             storage.clone(),
+            g.clone(),
             c.network,
             logger.clone(),
             stop.clone(),
@@ -1129,6 +1144,7 @@ async fn create_federations<S: MutinyStorage>(
 pub(crate) async fn create_new_federation<S: MutinyStorage>(
     xprivkey: ExtendedPrivKey,
     storage: S,
+    g: GlueDB,
     network: Network,
     logger: Arc<MutinyLogger>,
     federation_storage: Arc<Mutex<FederationStorage>>,
@@ -1174,6 +1190,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         federation_code,
         xprivkey,
         storage.clone(),
+        g.clone(),
         network,
         logger.clone(),
         stop,
