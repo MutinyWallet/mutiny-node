@@ -630,19 +630,13 @@ impl<S: MutinyStorage> NodeManager<S> {
                         None
                     }
                 }
-                (Some(lsp_url), Some(lsp_connection_string)) => {
-                    // if both are set, for now default to voltage
-                    if !c.safe_mode {
-                        if !lsp_url.is_empty() {
-                            Some(LspConfig::new_voltage_flow(lsp_url))
-                        } else if !lsp_connection_string.is_empty() {
-                            Some(LspConfig::new_lsps(lsp_connection_string, c.lsp_token))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
+                (Some(_), Some(_)) => {
+                    // both shouldn't be set, surface error
+                    log_error!(
+                        logger,
+                        "Both lsp_url and lsp_connection_string should not be set."
+                    );
+                    return Err(MutinyError::InvalidArgumentsError);
                 }
                 (None, None) => None,
             };
