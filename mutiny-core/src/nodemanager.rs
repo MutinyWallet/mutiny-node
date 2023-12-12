@@ -30,7 +30,7 @@ use bitcoin::blockdata::script;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::psbt::PartiallySignedTransaction;
-use bitcoin::secp256k1::{rand, PublicKey};
+use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use core::time::Duration;
@@ -515,7 +515,7 @@ pub struct NodeManager<S: MutinyStorage> {
     pub(crate) nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node<S>>>>>,
     auth: AuthManager,
     lnurl_client: Arc<LnUrlClient>,
-    pub(crate) lsp_configs: Vec<LspConfig>,
+    pub(crate) lsp_config: Option<LspConfig>,
     pub(crate) subscription_client: Option<Arc<MutinySubscriptionClient>>,
     pub(crate) logger: Arc<MutinyLogger>,
     bitcoin_price_cache: Arc<Mutex<HashMap<String, (f32, Duration)>>>,
@@ -614,33 +614,38 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let gossip_sync = Arc::new(gossip_sync);
 
-        // load voltage flow configs, if any
-        let mut lsp_configs: Vec<LspConfig> = match c.lsp_url.clone() {
-            // check if string is some and not an empty string
-            // and safe_mode is not enabled
-            Some(lsp_urls) if !lsp_urls.is_empty() && !c.safe_mode => lsp_urls
-                .split(',')
-                .map(|s| LspConfig::new_voltage_flow(s.trim().to_string()))
-                .collect(),
-            _ => Vec::new(),
-        };
-
-        // load lsps flow configs, if any
-        if let Some(lsp_connection_string) = c.lsp_connection_string.clone() {
-            if !lsp_connection_string.is_empty() && !c.safe_mode {
-                let lsp_connection_strings: Vec<&str> = lsp_connection_string.split(',').collect();
-                let lsp_token = c.lsp_token.unwrap_or_default();
-                let lsp_tokens: Vec<&str> = lsp_token.split(',').collect();
-
-                for (index, connection_string) in lsp_connection_strings.into_iter().enumerate() {
-                    let lsp_token = lsp_tokens.get(index).map(|t| t.to_string());
-                    lsp_configs.push(LspConfig::new_lsps(
-                        connection_string.to_string(),
-                        lsp_token,
-                    ));
+        let lsp_config: Option<LspConfig> =
+            match (c.lsp_url.clone(), c.lsp_connection_string.clone()) {
+                (Some(lsp_url), None) => {
+                    if !lsp_url.is_empty() && !c.safe_mode {
+                        Some(LspConfig::new_voltage_flow(lsp_url))
+                    } else {
+                        None
+                    }
                 }
-            }
-        }
+                (None, Some(lsp_connection_string)) => {
+                    if !lsp_connection_string.is_empty() && !c.safe_mode {
+                        Some(LspConfig::new_lsps(lsp_connection_string, c.lsp_token))
+                    } else {
+                        None
+                    }
+                }
+                (Some(lsp_url), Some(lsp_connection_string)) => {
+                    // if both are set, for now default to voltage
+                    if !c.safe_mode {
+                        if !lsp_url.is_empty() {
+                            Some(LspConfig::new_voltage_flow(lsp_url))
+                        } else if !lsp_connection_string.is_empty() {
+                            Some(LspConfig::new_lsps(lsp_connection_string, c.lsp_token))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                (None, None) => None,
+            };
 
         let node_storage = storage.get_nodes()?;
 
@@ -671,7 +676,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                     wallet.clone(),
                     c.network,
                     &esplora,
-                    &lsp_configs,
+                    lsp_config.clone(),
                     logger.clone(),
                     c.do_not_connect_peers,
                     false,
@@ -756,7 +761,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             esplora,
             auth,
             lnurl_client,
-            lsp_configs,
+            lsp_config,
             subscription_client,
             logger,
             bitcoin_price_cache: Arc::new(Mutex::new(price_cache)),
@@ -1722,7 +1727,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
-        let use_phantom = nodes.len() > 1 && self.lsp_configs.is_empty();
+        let use_phantom = nodes.len() > 1 && self.lsp_config.is_none();
         if nodes.len() == 0 {
             return Err(MutinyError::InvoiceCreationFailed);
         }
@@ -2539,19 +2544,7 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
     // Create and save a new node using the next child index
     let next_node_uuid = Uuid::new_v4().to_string();
 
-    let lsp = if node_manager.lsp_configs.is_empty() {
-        log_info!(
-            node_manager.logger,
-            "no lsp saved and no lsp clients available"
-        );
-        None
-    } else {
-        log_info!(node_manager.logger, "no lsp saved, picking random one");
-        // If we don't have an lsp saved we should pick a random
-        // one from our client list and save it for next time
-        let rand = rand::random::<usize>() % node_manager.lsp_configs.len();
-        Some(node_manager.lsp_configs[rand].clone())
-    };
+    let lsp = node_manager.lsp_config.clone();
 
     let next_node = NodeIndex {
         child_index: next_node_index,
@@ -2580,7 +2573,7 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         node_manager.wallet.clone(),
         node_manager.network,
         &node_manager.esplora,
-        &node_manager.lsp_configs,
+        node_manager.lsp_config.clone(),
         node_manager.logger.clone(),
         node_manager.do_not_connect_peers,
         false,

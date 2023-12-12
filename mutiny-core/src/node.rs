@@ -26,7 +26,6 @@ use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
 use anyhow::{anyhow, Context};
 use bdk::FeeRate;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
-use bitcoin::secp256k1::rand;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint};
 use core::time::Duration;
@@ -204,7 +203,7 @@ impl<S: MutinyStorage> Node<S> {
         wallet: Arc<OnChainWallet<S>>,
         network: Network,
         esplora: &AsyncClient,
-        lsp_configs: &[LspConfig],
+        lsp_config: Option<LspConfig>,
         logger: Arc<MutinyLogger>,
         do_not_connect_peers: bool,
         empty_state: bool,
@@ -336,18 +335,18 @@ impl<S: MutinyStorage> Node<S> {
         log_info!(logger, "creating lsp client");
         let lsp_config: Option<LspConfig> = match node_index.lsp {
             None => {
-                if lsp_configs.is_empty() {
-                    log_info!(logger, "no lsp saved and no lsp clients available");
-                    None
+                log_info!(logger, "no lsp saved, using configured one if present");
+                lsp_config
+            }
+            Some(ref lsp) => {
+                if lsp_config.as_ref() == Some(lsp) {
+                    log_info!(logger, "lsp config matches saved lsp config");
+                    lsp_config
                 } else {
-                    log_info!(logger, "no lsp saved, picking random one");
-                    // If we don't have an lsp saved we should pick a random
-                    // one from our client list and save it for next time
-                    let rand = rand::random::<usize>() % lsp_configs.len();
-                    Some(lsp_configs[rand].clone())
+                    log_info!(logger, "lsp config does not match saved lsp config");
+                    None
                 }
             }
-            Some(ref lsp) => lsp_configs.iter().find(|c| *c == lsp).cloned(),
         };
 
         let stop = Arc::new(AtomicBool::new(false));

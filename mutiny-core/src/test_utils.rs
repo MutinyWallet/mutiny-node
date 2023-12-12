@@ -111,7 +111,7 @@ pub(crate) async fn create_node<S: MutinyStorage>(storage: S) -> Node<S> {
         wallet,
         network,
         &esplora,
-        &[],
+        None,
         logger,
         false,
         false,
