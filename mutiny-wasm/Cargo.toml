@@ -34,7 +34,7 @@ nostr = { version = "0.24.0", default-features = false }
 wasm-logger = "0.2.0"
 log = "0.4.17"
 rexie = "0.5.0"
-gloo-utils = { version = "0.1.6", features = ["serde"] }
+gloo-utils = { version = "0.2.0", features = ["serde"] }
 web-sys = { version = "0.3.60", features = ["console"] }
 bip39 = { version = "2.0.0" }
 getrandom = { version = "0.2", features = ["js"] }
