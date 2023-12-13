@@ -1,6 +1,4 @@
-use crate::error::MutinyJsError;
 use ::nostr::key::XOnlyPublicKey;
-use ::nostr::prelude::{FromBech32, ToBech32};
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, OutPoint};
@@ -11,7 +9,6 @@ use lnurl::lnurl::LnUrl;
 use mutiny_core::labels::Contact as MutinyContact;
 use mutiny_core::nostr::nwc::SpendingConditions;
 use mutiny_core::redshift::{RedshiftRecipient, RedshiftStatus};
-use mutiny_core::utils::now;
 use mutiny_core::*;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::json;
@@ -35,7 +32,7 @@ pub struct ActivityItem {
     pub amount_sats: Option<u64>,
     pub inbound: bool,
     pub(crate) labels: Vec<String>,
-    pub(crate) contacts: Vec<Contact>,
+    pub(crate) contacts: Vec<TagItem>,
     pub last_updated: Option<u64>,
 }
 
@@ -57,7 +54,7 @@ impl ActivityItem {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn contacts(&self) -> Vec<Contact> {
+    pub fn contacts(&self) -> Vec<TagItem> {
         self.contacts.clone()
     }
 }
@@ -698,6 +695,8 @@ pub struct TagItem {
     ln_address: Option<LightningAddress>,
     #[serde(skip_serializing_if = "Option::is_none")]
     lnurl: Option<LnUrl>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_url: Option<String>,
     /// Epoch time in seconds when this tag was last used
     pub last_used_time: u64,
 }
@@ -751,6 +750,11 @@ impl TagItem {
     pub fn lnurl(&self) -> Option<String> {
         self.lnurl.clone().map(|a| a.to_string())
     }
+
+    #[wasm_bindgen(getter)]
+    pub fn image_url(&self) -> Option<String> {
+        self.image_url.clone()
+    }
 }
 
 impl From<(String, MutinyContact)> for TagItem {
@@ -766,6 +770,7 @@ impl From<(String, MutinyContact)> for TagItem {
             npub,
             ln_address: contact.ln_address,
             lnurl: contact.lnurl,
+            image_url: contact.image_url,
             last_used_time: contact.last_used,
         }
     }
@@ -781,133 +786,10 @@ impl From<labels::TagItem> for TagItem {
                 npub: None,
                 ln_address: None,
                 lnurl: None,
+                image_url: None,
                 last_used_time: item.last_used_time,
             },
             labels::TagItem::Contact(contact) => contact.into(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
-#[wasm_bindgen]
-pub struct Contact {
-    name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    npub: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ln_address: Option<LightningAddress>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    lnurl: Option<LnUrl>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    image_url: Option<String>,
-    pub last_used: u64,
-}
-
-impl PartialOrd for Contact {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Contact {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        // sort last used time in descending order
-        // then sort by name
-        other
-            .last_used
-            .cmp(&self.last_used)
-            .then(self.name.cmp(&other.name))
-    }
-}
-
-#[wasm_bindgen]
-impl Contact {
-    #[wasm_bindgen(constructor)]
-    pub fn new(
-        name: String,
-        npub: Option<String>,
-        ln_address: Option<String>,
-        lnurl: Option<String>,
-        image_url: Option<String>,
-    ) -> Result<Contact, MutinyJsError> {
-        // Convert the parameters into the types expected by the struct
-        let ln_address = ln_address
-            .map(|s| LightningAddress::from_str(&s))
-            .transpose()?;
-        let lnurl = lnurl.map(|s| LnUrl::from_str(&s)).transpose()?;
-
-        Ok(Contact {
-            name,
-            npub,
-            ln_address,
-            lnurl,
-            image_url,
-            last_used: now().as_secs(),
-        })
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn value(&self) -> JsValue {
-        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn name(&self) -> String {
-        self.name.clone()
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn npub(&self) -> Option<String> {
-        self.npub.clone()
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn ln_address(&self) -> Option<String> {
-        self.ln_address.clone().map(|a| a.to_string())
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn lnurl(&self) -> Option<String> {
-        self.lnurl.clone().map(|a| a.to_string())
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn image_url(&self) -> Option<String> {
-        self.image_url.clone().map(|a| a.to_string())
-    }
-}
-
-impl From<Contact> for MutinyContact {
-    fn from(c: Contact) -> Self {
-        let npub = c.npub.and_then(|n| XOnlyPublicKey::from_bech32(n).ok());
-        let npub = npub.map(|a| bitcoin::XOnlyPublicKey::from_slice(&a.serialize()).unwrap());
-        MutinyContact {
-            name: c.name,
-            npub,
-            ln_address: c.ln_address,
-            lnurl: c.lnurl,
-            archived: Some(false),
-            image_url: c.image_url,
-            last_used: c.last_used,
-        }
-    }
-}
-
-impl From<MutinyContact> for Contact {
-    fn from(c: MutinyContact) -> Self {
-        let npub = c.npub.and_then(|a| {
-            XOnlyPublicKey::from_slice(&a.serialize())
-                .unwrap()
-                .to_bech32()
-                .ok()
-        });
-        Contact {
-            name: c.name,
-            npub,
-            ln_address: c.ln_address,
-            lnurl: c.lnurl,
-            image_url: c.image_url,
-            last_used: c.last_used,
         }
     }
 }
