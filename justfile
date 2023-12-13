@@ -7,6 +7,9 @@ link:
 login:
     wasm-pack login --scope=@mutinywallet
 
+dev: 
+    wasm-pack build ./mutiny-wasm --weak-refs --target web --scope mutinywallet -- --features console_error_panic_hook
+
 release:
     wasm-pack build ./mutiny-wasm --release --weak-refs --target web --scope mutinywallet
 
