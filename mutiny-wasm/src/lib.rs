@@ -26,16 +26,18 @@ use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
 use lightning::routing::gossip::NodeId;
 use lightning_invoice::Bolt11Invoice;
+use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
 use mutiny_core::auth::MutinyAuthClient;
 use mutiny_core::encrypt::encryption_key_from_pass;
+use mutiny_core::labels::Contact;
 use mutiny_core::lnurlauth::AuthManager;
 use mutiny_core::nostr::nip49::NIP49URI;
 use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
 use mutiny_core::redshift::RedshiftManager;
 use mutiny_core::redshift::RedshiftRecipient;
 use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
-use mutiny_core::utils::sleep;
+use mutiny_core::utils::{now, sleep};
 use mutiny_core::vss::MutinyVssClient;
 use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
@@ -1005,7 +1007,8 @@ impl MutinyWallet {
             // find labels that have a contact and add them to the item
             for label in a.labels.iter() {
                 if let Some(contact) = contacts.get(label) {
-                    a.contacts.push(Contact::from(contact.clone()));
+                    a.contacts
+                        .push(TagItem::from((label.clone(), contact.clone())));
                 }
             }
             // remove labels that have a contact to prevent duplicates
@@ -1034,7 +1037,8 @@ impl MutinyWallet {
             // find labels that have a contact and add them to the item
             for a_label in a.labels.iter() {
                 if label == *a_label {
-                    a.contacts.push(Contact::from(contact.clone()));
+                    a.contacts
+                        .push(TagItem::from((a_label.clone(), contact.clone())));
                 }
             }
             // remove labels that have the contact to prevent duplicates
@@ -1140,24 +1144,24 @@ impl MutinyWallet {
             .set_invoice_labels(invoice, labels)?)
     }
 
-    pub fn get_contacts(&self) -> Result<JsValue /* Map<String, Contact>*/, MutinyJsError> {
+    pub fn get_contacts(&self) -> Result<JsValue /* Map<String, TagItem>*/, MutinyJsError> {
         Ok(JsValue::from_serde(
             &self
                 .inner
                 .node_manager
                 .get_contacts()?
                 .into_iter()
-                .map(|(k, v)| (k, v.into()))
-                .collect::<HashMap<String, Contact>>(),
+                .map(|(k, v)| (k.clone(), (k, v).into()))
+                .collect::<HashMap<String, TagItem>>(),
         )?)
     }
 
-    pub fn get_contacts_sorted(&self) -> Result<JsValue /* Map<String, Contact>*/, MutinyJsError> {
-        let mut contacts: Vec<Contact> = self
+    pub fn get_contacts_sorted(&self) -> Result<JsValue /* Vec<TagItem>*/, MutinyJsError> {
+        let mut contacts: Vec<TagItem> = self
             .inner
             .node_manager
             .get_contacts()?
-            .into_values()
+            .into_iter()
             .map(|v| v.into())
             .collect();
 
@@ -1174,36 +1178,88 @@ impl MutinyWallet {
             .map(|c| (label, c).into()))
     }
 
-    pub fn get_contact(&self, label: String) -> Result<Option<Contact>, MutinyJsError> {
-        Ok(self
-            .inner
-            .node_manager
-            .get_contact(label)?
-            .map(|c| c.into()))
-    }
-
     /// Create a new contact from an existing label and returns the new identifying label
     pub fn create_contact_from_label(
         &self,
         label: String,
-        contact: Contact,
+        name: String,
+        npub: Option<String>,
+        ln_address: Option<String>,
+        lnurl: Option<String>,
+        image_url: Option<String>,
     ) -> Result<String, MutinyJsError> {
+        let contact = Contact {
+            name,
+            npub: npub
+                .map(|n| bitcoin::XOnlyPublicKey::from_str(&n))
+                .transpose()?,
+            ln_address: ln_address
+                .map(|l| LightningAddress::from_str(&l))
+                .transpose()?,
+            lnurl: lnurl.map(|l| LnUrl::from_str(&l)).transpose()?,
+            image_url,
+            archived: None,
+            last_used: now().as_secs(),
+        };
+
         Ok(self
             .inner
             .node_manager
-            .create_contact_from_label(label, contact.into())?)
+            .create_contact_from_label(label, contact)?)
     }
 
-    pub fn create_new_contact(&self, contact: Contact) -> Result<String, MutinyJsError> {
-        Ok(self.inner.node_manager.create_new_contact(contact.into())?)
+    pub fn create_new_contact(
+        &self,
+        name: String,
+        npub: Option<String>,
+        ln_address: Option<String>,
+        lnurl: Option<String>,
+        image_url: Option<String>,
+    ) -> Result<String, MutinyJsError> {
+        let contact = Contact {
+            name,
+            npub: npub
+                .map(|n| bitcoin::XOnlyPublicKey::from_str(&n))
+                .transpose()?,
+            ln_address: ln_address
+                .map(|l| LightningAddress::from_str(&l))
+                .transpose()?,
+            lnurl: lnurl.map(|l| LnUrl::from_str(&l)).transpose()?,
+            image_url,
+            archived: None,
+            last_used: now().as_secs(),
+        };
+        Ok(self.inner.node_manager.create_new_contact(contact)?)
     }
 
     pub fn archive_contact(&self, id: String) -> Result<(), MutinyJsError> {
         Ok(self.inner.node_manager.archive_contact(id)?)
     }
 
-    pub fn edit_contact(&self, id: String, contact: Contact) -> Result<(), MutinyJsError> {
-        Ok(self.inner.node_manager.edit_contact(id, contact.into())?)
+    pub fn edit_contact(
+        &self,
+        id: String,
+        name: String,
+        npub: Option<String>,
+        ln_address: Option<String>,
+        lnurl: Option<String>,
+        image_url: Option<String>,
+    ) -> Result<(), MutinyJsError> {
+        let contact = Contact {
+            name,
+            npub: npub
+                .map(|n| bitcoin::XOnlyPublicKey::from_str(&n))
+                .transpose()?,
+            ln_address: ln_address
+                .map(|l| LightningAddress::from_str(&l))
+                .transpose()?,
+            lnurl: lnurl.map(|l| LnUrl::from_str(&l)).transpose()?,
+            image_url,
+            archived: None,
+            last_used: now().as_secs(),
+        };
+
+        Ok(self.inner.node_manager.edit_contact(id, contact)?)
     }
 
     pub fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyJsError> {
