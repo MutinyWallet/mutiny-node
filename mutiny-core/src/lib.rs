@@ -45,6 +45,7 @@ pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
 use crate::auth::MutinyAuthClient;
 use crate::labels::{get_contact_key, Contact, LabelStorage};
+use crate::logging::LOGGING_KEY;
 use crate::nostr::nwc::{
     BudgetPeriod, BudgetedSpendingConditions, NwcProfileTag, SpendingConditions,
 };
@@ -619,12 +620,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Should refresh or restart afterwards. Wallet should be stopped.
     pub async fn restore_mnemonic(mut storage: S, m: Mnemonic) -> Result<(), MutinyError> {
         let device_id = storage.get_device_id()?;
+        let logs: Option<Vec<String>> = storage.get_data(LOGGING_KEY)?;
         storage.stop();
         S::clear().await?;
         storage.start().await?;
         storage.insert_mnemonic(m)?;
         storage.set_data(NEED_FULL_SYNC_KEY.to_string(), true, None)?;
         storage.set_data(DEVICE_ID_KEY.to_string(), device_id, None)?;
+        storage.set_data(LOGGING_KEY.to_string(), logs, None)?;
         Ok(())
     }
 }
