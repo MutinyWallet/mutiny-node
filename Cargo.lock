@@ -1275,7 +1275,6 @@ dependencies = [
  "nostr-sdk",
  "payjoin",
  "pbkdf2",
- "proc-macro2",
  "reqwest",
  "serde",
  "serde_json",

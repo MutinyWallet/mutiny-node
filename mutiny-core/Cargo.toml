@@ -54,9 +54,6 @@ futures = "0.3.25"
 thiserror = "1.0"
 anyhow = "1.0"
 
-# explict dep due to nightly - https://github.com/rust-lang/rust/issues/113152
-proc-macro2 = "1.0.64"
-
 [dev-dependencies]
 wasm-bindgen-test = "0.3.33"
 mockall = "0.11.2"
