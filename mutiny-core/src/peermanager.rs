@@ -5,7 +5,7 @@ use crate::{error::MutinyError, fees::MutinyFeeEstimator};
 use crate::{gossip, ldkstorage::PhantomChannelManager, logging::MutinyLogger};
 use crate::{gossip::read_peer_info, node::PubkeyConnectionInfo};
 use crate::{keymanager::PhantomKeysManager, node::ConnectionType};
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::{PublicKey, Signing};
 use lightning::events::{MessageSendEvent, MessageSendEventsProvider};
 use lightning::ln::features::{InitFeatures, NodeFeatures};
 use lightning::ln::msgs;
@@ -13,7 +13,9 @@ use lightning::ln::msgs::{LightningError, RoutingMessageHandler};
 use lightning::ln::peer_handler::PeerManager as LdkPeerManager;
 use lightning::ln::peer_handler::{IgnoringMessageHandler, PeerHandleError};
 use lightning::log_warn;
-use lightning::onion_message::{Destination, MessageRouter, OnionMessagePath};
+use lightning::onion_message::{
+    DefaultMessageRouter, Destination, MessageRouter, OnionMessagePath,
+};
 use lightning::routing::gossip::NodeId;
 use lightning::util::logger::Logger;
 use lightning::{
@@ -32,6 +34,9 @@ use crate::networking::proxy::WsProxy;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::time;
 
+use bitcoin::key::{Secp256k1, Verification};
+use lightning::blinded_path::BlindedPath;
+use lightning::sign::EntropySource;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
@@ -297,16 +302,22 @@ impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
 /// We just assume they are connected to us or the LSP.
 pub struct LspMessageRouter {
     intermediate_nodes: Vec<PublicKey>,
+    inner: DefaultMessageRouter<Arc<NetworkGraph>, Arc<MutinyLogger>>,
 }
 
 impl LspMessageRouter {
-    pub fn new(lsp_pubkey: Option<PublicKey>) -> Self {
+    pub fn new(lsp_pubkey: Option<PublicKey>, network_graph: Arc<NetworkGraph>) -> Self {
         let intermediate_nodes = match lsp_pubkey {
             Some(pubkey) => vec![pubkey],
             None => vec![],
         };
 
-        Self { intermediate_nodes }
+        let inner = DefaultMessageRouter::new(network_graph);
+
+        Self {
+            intermediate_nodes,
+            inner,
+        }
     }
 }
 
@@ -326,13 +337,26 @@ impl MessageRouter for LspMessageRouter {
             Ok(OnionMessagePath {
                 intermediate_nodes: vec![],
                 destination,
+                first_node_addresses: None,
             })
         } else {
             Ok(OnionMessagePath {
                 intermediate_nodes: self.intermediate_nodes.clone(),
                 destination,
+                first_node_addresses: None,
             })
         }
+    }
+
+    fn create_blinded_paths<ES: EntropySource + ?Sized, T: Signing + Verification>(
+        &self,
+        recipient: PublicKey,
+        peers: Vec<PublicKey>,
+        entropy_source: &ES,
+        secp_ctx: &Secp256k1<T>,
+    ) -> Result<Vec<BlindedPath>, ()> {
+        self.inner
+            .create_blinded_paths(recipient, peers, entropy_source, secp_ctx)
     }
 }
 

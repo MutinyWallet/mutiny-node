@@ -11,15 +11,14 @@ use crate::nostr::nwc::{
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
 use crate::{utils, HTLCStatus};
-use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
+use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{PublicKey, Secp256k1, Signing};
-use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use futures::{pin_mut, select, FutureExt};
 use futures_util::lock::Mutex;
 use lightning::util::logger::Logger;
 use lightning::{log_error, log_warn};
-use nostr::key::SecretKey;
 use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
 use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
@@ -306,8 +305,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             Some(identity) => {
                 let contacts = self.storage.get_contacts()?;
                 contacts.into_iter().find_map(|(id, c)| {
-                    // compare by to_hex because of different types across rust-bitcoin versions
-                    if c.npub.map(|x| x.to_hex()) == Some(identity.to_hex()) {
+                    if c.npub == Some(identity) {
                         Some(id)
                     } else {
                         None
@@ -837,7 +835,7 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let filter = Filter::new()
             .kind(Kind::WalletConnectResponse)
-            .author(nwc.public_key.to_hex())
+            .author(hex::encode(nwc.public_key.serialize()))
             .pubkey(secret.public_key())
             .event(request_event.id);
 
@@ -973,9 +971,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         let path = DerivationPath::from_str(&format!("m/44'/1237'/{account}'/{chain}/{index}"))?;
         let key = xprivkey.derive_priv(context, &path)?;
 
-        // just converting to nostr secret key, unwrap is safe
-        let secret_key = SecretKey::from_slice(&key.private_key.secret_bytes()).unwrap();
-        Ok(Keys::new(secret_key))
+        Ok(Keys::new(key.private_key))
     }
 
     /// Creates a new NostrManager
@@ -1041,7 +1037,7 @@ mod test {
     use super::*;
     use crate::storage::MemoryStorage;
     use bip39::Mnemonic;
-    use bitcoin::util::bip32::ExtendedPrivKey;
+    use bitcoin::bip32::ExtendedPrivKey;
     use bitcoin::Network;
     use futures::executor::block_on;
     use lightning_invoice::Bolt11Invoice;

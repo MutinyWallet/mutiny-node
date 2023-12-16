@@ -16,11 +16,11 @@ use crate::error::MutinyJsError;
 use crate::indexed_db::IndexedDbStorage;
 use crate::models::*;
 use bip39::Mnemonic;
+use bitcoin::bip32::ExtendedPrivKey;
 use bitcoin::consensus::deserialize;
-use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
@@ -41,7 +41,6 @@ use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
 use nostr::key::XOnlyPublicKey;
 use nostr::prelude::FromBech32;
-use payjoin::UriExt;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{
@@ -463,9 +462,6 @@ impl MutinyWallet {
     ) -> Result<String, MutinyJsError> {
         // I know walia parses `pj=` and `pjos=` but payjoin::Uri parses the whole bip21 uri
         let pj_uri = payjoin::Uri::try_from(payjoin_uri.as_str())
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?
-            .assume_checked()
-            .check_pj_supported()
             .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
@@ -507,7 +503,7 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .estimate_tx_fee(addr, amount, fee_rate)?)
+            .estimate_tx_fee(addr.assume_checked(), amount, fee_rate)?)
     }
 
     /// Estimates the onchain fee for a transaction sweep our on-chain balance
@@ -523,7 +519,7 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .estimate_sweep_tx_fee(addr, fee_rate)?)
+            .estimate_sweep_tx_fee(addr.assume_checked(), fee_rate)?)
     }
 
     /// Estimates the onchain fee for a opening a lightning channel.
@@ -562,7 +558,7 @@ impl MutinyWallet {
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
         let address = Address::from_str(&address)?;
         Ok(JsValue::from_serde(
-            &self.inner.node_manager.check_address(&address).await?,
+            &self.inner.node_manager.check_address(address).await?,
         )?)
     }
 
@@ -672,7 +668,7 @@ impl MutinyWallet {
         peer: String,
     ) -> Result<(), MutinyJsError> {
         let self_node_pubkey = PublicKey::from_str(&self_node_pubkey)?;
-        let peer = NodeId::from_str(&peer)?;
+        let peer = NodeId::from_str(&peer).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
@@ -683,7 +679,8 @@ impl MutinyWallet {
     /// Sets the label of a peer from the selected node.
     #[wasm_bindgen]
     pub fn label_peer(&self, node_id: String, label: Option<String>) -> Result<(), MutinyJsError> {
-        let node_id = NodeId::from_str(&node_id)?;
+        let node_id =
+            NodeId::from_str(&node_id).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         self.inner.node_manager.label_peer(&node_id, label)?;
         Ok(())
     }
@@ -1106,7 +1103,7 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .set_address_labels(address, labels)?)
+            .set_address_labels(address.assume_checked(), labels)?)
     }
 
     pub fn get_invoice_labels(
@@ -1646,7 +1643,7 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn npub_to_hexpub(npub: String) -> Result<String, MutinyJsError> {
         let npub = XOnlyPublicKey::from_bech32(npub)?;
-        Ok(npub.to_hex())
+        Ok(npub.to_string())
     }
 }
 

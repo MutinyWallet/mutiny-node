@@ -6,9 +6,9 @@ use crate::nostr::NostrManager;
 use crate::storage::MutinyStorage;
 use crate::utils;
 use anyhow::anyhow;
-use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::bip32::ExtendedPrivKey;
+use bitcoin::hashes::hex::FromHex;
 use bitcoin::secp256k1::{Secp256k1, Signing, ThirtyTwoByteHash};
-use bitcoin::util::bip32::ExtendedPrivKey;
 use chrono::{DateTime, Datelike, Duration, NaiveDateTime, Utc};
 use core::fmt;
 use lightning::util::logger::Logger;
@@ -73,7 +73,7 @@ impl BudgetedSpendingConditions {
         let payment = TrackedPayment {
             time,
             amt: invoice.amount_milli_satoshis().unwrap_or_default() / 1_000,
-            hash: invoice.payment_hash().to_hex(),
+            hash: hex::encode(invoice.payment_hash()),
         };
 
         self.payments.push(payment);
@@ -81,7 +81,7 @@ impl BudgetedSpendingConditions {
 
     pub fn remove_payment(&mut self, invoice: &Bolt11Invoice) {
         self.payments
-            .retain(|p| p.hash != invoice.payment_hash().to_hex());
+            .retain(|p| p.hash != hex::encode(invoice.payment_hash()));
     }
 
     fn clean_old_payments(&mut self, now: DateTime<Utc>) {
@@ -301,7 +301,7 @@ impl NostrWalletConnect {
             &self.client_pubkey(),
             serde_json::to_string(&json)?,
         )?;
-        let d_tag = Tag::Identifier(self.client_pubkey().to_hex());
+        let d_tag = Tag::Identifier(hex::encode(self.client_pubkey().serialize()));
         let event = EventBuilder::new(Kind::ParameterizedReplaceable(33194), content, &[d_tag])
             .to_event(&self.server_key)?;
         Ok(Some(event))
@@ -445,7 +445,7 @@ impl NostrWalletConnect {
             if node.skip_hodl_invoices() {
                 // Skip potential hodl invoices as they can cause force closes
                 if utils::HODL_INVOICE_NODES
-                    .contains(&invoice.recover_payee_pub_key().to_hex().as_str())
+                    .contains(&invoice.recover_payee_pub_key().to_string().as_str())
                 {
                     log_warn!(
                         node.logger(),
@@ -514,7 +514,7 @@ impl NostrWalletConnect {
                                             // and track if the payment settles or not. If it does not
                                             // we can try again later.
                                             single_use.payment_hash =
-                                                Some(invoice.payment_hash().to_hex());
+                                                Some(hex::encode(invoice.payment_hash().into_32()));
                                             self.profile.spending_conditions =
                                                 SpendingConditions::SingleUse(single_use);
                                             needs_save = true;
@@ -1108,7 +1108,7 @@ mod wasm_test {
     use crate::storage::MemoryStorage;
     use crate::test_utils::{create_dummy_invoice, create_node, create_nwc_request};
     use bitcoin::hashes::Hash;
-    use bitcoin::secp256k1::ONE_KEY;
+    use bitcoin::key::constants::ONE;
     use bitcoin::Network;
     use nostr::key::SecretKey;
     use std::sync::Arc;
@@ -1164,7 +1164,8 @@ mod wasm_test {
         let uri = nwc.get_nwc_uri().unwrap().unwrap();
 
         // test hodl invoice
-        let invoice = create_dummy_invoice(Some(10_000), Network::Regtest, Some(ONE_KEY))
+        let sk = SecretKey::from_slice(&ONE).unwrap();
+        let invoice = create_dummy_invoice(Some(10_000), Network::Regtest, Some(sk))
             .0
             .to_string();
         let event = create_nwc_request(&uri, invoice.clone());
@@ -1268,7 +1269,8 @@ mod wasm_test {
         check_no_pending_invoices(&storage);
 
         // test hodl invoice
-        let invoice = create_dummy_invoice(Some(10_000), Network::Regtest, Some(ONE_KEY))
+        let sk = SecretKey::from_slice(&ONE).unwrap();
+        let invoice = create_dummy_invoice(Some(10_000), Network::Regtest, Some(sk))
             .0
             .to_string();
         let event = create_nwc_request(&uri, invoice);
@@ -1296,7 +1298,7 @@ mod wasm_test {
             last_update: utils::now().as_secs(),
         };
         node.persister
-            .persist_payment_info(invoice.payment_hash().as_inner(), &payment_info, false)
+            .persist_payment_info(invoice.payment_hash().as_byte_array(), &payment_info, false)
             .unwrap();
         let event = create_nwc_request(&uri, invoice.to_string());
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
@@ -1316,7 +1318,7 @@ mod wasm_test {
             last_update: utils::now().as_secs(),
         };
         node.persister
-            .persist_payment_info(invoice.payment_hash().as_inner(), &payment_info, false)
+            .persist_payment_info(invoice.payment_hash().as_byte_array(), &payment_info, false)
             .unwrap();
         let event = create_nwc_request(&uri, invoice.to_string());
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
@@ -1467,7 +1469,7 @@ mod wasm_test {
             .once()
             .returning(move |inv, _, _, _| {
                 let mut mutiny_invoice: MutinyInvoice = inv.clone().into();
-                mutiny_invoice.preimage = Some(preimage.to_hex());
+                mutiny_invoice.preimage = Some(hex::encode(preimage));
                 mutiny_invoice.status = HTLCStatus::Succeeded;
                 mutiny_invoice.last_updated = utils::now().as_secs();
                 mutiny_invoice.fees_paid = Some(0);
@@ -1512,7 +1514,7 @@ mod wasm_test {
 
         match response.result {
             Some(ResponseResult::PayInvoice(PayInvoiceResponseResult { preimage: pre })) => {
-                assert_eq!(pre, preimage.to_hex());
+                assert_eq!(pre, hex::encode(preimage));
             }
             _ => panic!("wrong response"),
         }
@@ -1521,7 +1523,7 @@ mod wasm_test {
             SpendingConditions::Budget(budget) => {
                 assert_eq!(budget.payments.len(), 1);
                 assert_eq!(budget.payments[0].amt, amount_msats / 1_000);
-                assert_eq!(budget.payments[0].hash, invoice.payment_hash().to_hex());
+                assert_eq!(budget.payments[0].hash, hex::encode(invoice.payment_hash()));
             }
             _ => panic!("wrong spending conditions"),
         }

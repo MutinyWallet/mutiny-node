@@ -57,8 +57,8 @@ use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
 use ::nostr::{Event, Kind, Metadata};
 use bip39::Mnemonic;
+use bitcoin::bip32::ExtendedPrivKey;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::Network;
 use futures::{pin_mut, select, FutureExt};
 use lightning::{log_debug, util::logger::Logger};
@@ -524,8 +524,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         for (id, contact) in contacts {
             if let Some(npub) = contact.npub {
-                // need to convert to nostr::XOnlyPublicKey
-                let npub = XOnlyPublicKey::from_slice(&npub.serialize()).unwrap();
                 if let Some(meta) = metadata.get(&npub) {
                     let updated = contact.update_with_metadata(meta.clone());
                     self.storage.edit_contact(id, updated)?;
@@ -535,8 +533,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         for (npub, meta) in metadata {
-            // need to convert from nostr::XOnlyPublicKey
-            let npub = bitcoin::XOnlyPublicKey::from_slice(&npub.serialize()).unwrap();
             let contact = Contact::create_from_metadata(npub, meta);
 
             if contact.name.is_empty() {
@@ -638,7 +634,7 @@ mod tests {
         encrypt::encryption_key_from_pass, generate_seed, nodemanager::NodeManager, MutinyWallet,
         MutinyWalletConfig,
     };
-    use bitcoin::util::bip32::ExtendedPrivKey;
+    use bitcoin::bip32::ExtendedPrivKey;
     use bitcoin::Network;
 
     use crate::test_utils::*;
@@ -784,7 +780,7 @@ mod tests {
             .await
             .expect("mutiny wallet should initialize");
         let seed = mw.node_manager.xprivkey;
-        assert!(!seed.private_key.is_empty());
+        assert!(!seed.private_key.secret_bytes().is_empty());
 
         // create a second mw and make sure it has a different seed
         let pass = uuid::Uuid::new_v4().to_string();

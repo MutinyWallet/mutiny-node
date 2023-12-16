@@ -5,13 +5,14 @@ use crate::onchain::OnChainWallet;
 use crate::storage::MutinyStorage;
 use bdk::wallet::AddressIndex;
 use bip39::Mnemonic;
+use bitcoin::absolute::LockTime;
 use bitcoin::bech32::u5;
+use bitcoin::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::RecoverableSignature;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, Signing};
-use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
-use bitcoin::{PackedLockTime, Script, Transaction, TxOut};
+use bitcoin::{ScriptBuf, Transaction, TxOut};
 use lightning::ln::msgs::{DecodeError, UnsignedGossipMessage};
 use lightning::ln::script::ShutdownScript;
 use lightning::log_warn;
@@ -59,7 +60,7 @@ impl<S: MutinyStorage> PhantomKeysManager<S> {
         descriptors: &[&SpendableOutputDescriptor],
         outputs: Vec<TxOut>,
         feerate_sat_per_1000_weight: u32,
-        locktime: Option<PackedLockTime>,
+        locktime: Option<LockTime>,
         secp_ctx: &Secp256k1<C>,
     ) -> Result<Transaction, ()> {
         let address = {
@@ -149,7 +150,7 @@ impl<S: MutinyStorage> NodeSigner for PhantomKeysManager<S> {
 }
 
 impl<S: MutinyStorage> SignerProvider for PhantomKeysManager<S> {
-    type Signer = InMemorySigner;
+    type EcdsaSigner = InMemorySigner;
 
     fn generate_channel_keys_id(
         &self,
@@ -165,16 +166,16 @@ impl<S: MutinyStorage> SignerProvider for PhantomKeysManager<S> {
         &self,
         channel_value_satoshis: u64,
         channel_keys_id: [u8; 32],
-    ) -> Self::Signer {
+    ) -> Self::EcdsaSigner {
         self.inner
             .derive_channel_signer(channel_value_satoshis, channel_keys_id)
     }
 
-    fn read_chan_signer(&self, reader: &[u8]) -> Result<Self::Signer, DecodeError> {
+    fn read_chan_signer(&self, reader: &[u8]) -> Result<Self::EcdsaSigner, DecodeError> {
         self.inner.read_chan_signer(reader)
     }
 
-    fn get_destination_script(&self) -> Result<Script, ()> {
+    fn get_destination_script(&self, _channel_keys_id: [u8; 32]) -> Result<ScriptBuf, ()> {
         let mut wallet = self.wallet.wallet.try_write().map_err(|_| ())?;
         Ok(wallet
             .get_address(AddressIndex::New)
@@ -265,7 +266,7 @@ mod tests {
     use crate::onchain::OnChainWallet;
     use crate::storage::MemoryStorage;
     use bip39::Mnemonic;
-    use bitcoin::util::bip32::ExtendedPrivKey;
+    use bitcoin::bip32::ExtendedPrivKey;
     use bitcoin::Network;
     use esplora_client::Builder;
     use std::str::FromStr;

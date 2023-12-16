@@ -18,6 +18,7 @@ pub(crate) fn min_lightning_amount(network: Network) -> u64 {
     match network {
         Network::Bitcoin => 100_000,
         Network::Testnet | Network::Signet | Network::Regtest => 10_000,
+        net => panic!("Got unknown network: {net}!"),
     }
 }
 

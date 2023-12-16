@@ -23,9 +23,9 @@ use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
 use crate::{lspclient::FeeRequest, storage::MutinyStorage};
 use anyhow::{anyhow, Context};
 use bdk::FeeRate;
-use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
-use bitcoin::secp256k1::rand;
-use bitcoin::util::bip32::ExtendedPrivKey;
+use bitcoin::bip32::ExtendedPrivKey;
+use bitcoin::hashes::sha256::Hash as Sha256;
+use bitcoin::secp256k1::{rand, ThirtyTwoByteHash};
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint};
 use core::time::Duration;
 use esplora_client::AsyncClient;
@@ -62,7 +62,6 @@ use lightning::{
     util::config::ChannelConfig,
 };
 use lightning_background_processor::process_events_async;
-use lightning_invoice::payment::PaymentError;
 use lightning_invoice::{
     utils::{create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice},
     Bolt11Invoice,
@@ -250,7 +249,7 @@ impl<S: MutinyStorage> Node<S> {
         let network_graph = gossip_sync.network_graph().clone();
 
         let router: Arc<Router> = Arc::new(DefaultRouter::new(
-            network_graph,
+            network_graph.clone(),
             logger.clone(),
             keys_manager.clone().get_secure_random_bytes(),
             scorer.clone(),
@@ -306,14 +305,14 @@ impl<S: MutinyStorage> Node<S> {
                         log_debug!(
                             logger,
                             "changed default config for channel: {}",
-                            channel.channel_id.to_hex()
+                            channel.channel_id.to_string()
                         )
                     }
                     Err(e) => {
                         log_error!(
                             logger,
                             "error changing default config for channel: {} - {e:?}",
-                            channel.channel_id.to_hex()
+                            channel.channel_id.to_string()
                         )
                     }
                 };
@@ -342,7 +341,10 @@ impl<S: MutinyStorage> Node<S> {
                 .cloned(),
         };
         let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.pubkey);
-        let message_router = Arc::new(LspMessageRouter::new(lsp_client_pubkey));
+        let message_router = Arc::new(LspMessageRouter::new(
+            lsp_client_pubkey,
+            network_graph.clone(),
+        ));
         let onion_message_handler = Arc::new(OnionMessenger::new(
             keys_manager.clone(),
             keys_manager.clone(),
@@ -354,7 +356,7 @@ impl<S: MutinyStorage> Node<S> {
 
         let route_handler = Arc::new(GossipMessageHandler {
             storage: persister.storage.clone(),
-            network_graph: gossip_sync.network_graph().clone(),
+            network_graph: network_graph.clone(),
             logger: logger.clone(),
         });
 
@@ -396,7 +398,7 @@ impl<S: MutinyStorage> Node<S> {
             let mut chain_listener_channel_monitors = Vec::new();
             for (blockhash, channel_monitor) in read_channel_manager.channel_monitors.drain(..) {
                 // Get channel monitor ready to sync
-                channel_monitor.load_outputs_to_watch(&chain);
+                channel_monitor.load_outputs_to_watch(&chain, &logger);
 
                 let outpoint = channel_monitor.get_funding_txo().0;
                 chain_listener_channel_monitors.push((
@@ -512,6 +514,7 @@ impl<S: MutinyStorage> Node<S> {
                         })
                     },
                     true,
+                    || Some(utils::now()),
                 )
                 .await
                 {
@@ -521,14 +524,12 @@ impl<S: MutinyStorage> Node<S> {
                 if background_stop.load(Ordering::Relaxed) {
                     log_debug!(
                         background_logger,
-                        "stopping background component for node: {}",
-                        pubkey.to_hex(),
+                        "stopping background component for node: {pubkey}",
                     );
                     stop_component(&background_stopped_components);
                     log_debug!(
                         background_logger,
-                        "stopped background component for node: {}",
-                        pubkey.to_hex()
+                        "stopped background component for node: {pubkey}"
                     );
                     break;
                 }
@@ -826,7 +827,7 @@ impl<S: MutinyStorage> Node<S> {
             // check the fee from the LSP
             let lsp_fee = lsp
                 .get_lsp_fee_msat(FeeRequest {
-                    pubkey: self.pubkey.to_hex(),
+                    pubkey: hex::encode(self.pubkey.serialize()),
                     amount_msat: amount_sat * 1000,
                 })
                 .await?;
@@ -941,7 +942,7 @@ impl<S: MutinyStorage> Node<S> {
                 self.logger.clone(),
                 self.network.into(),
                 Some(40),
-                crate::utils::now(),
+                utils::now(),
             ),
         };
         let invoice = invoice_res.map_err(|e| {
@@ -949,8 +950,8 @@ impl<S: MutinyStorage> Node<S> {
             MutinyError::InvoiceCreationFailed
         })?;
 
-        let last_update = crate::utils::now().as_secs();
-        let payment_hash = PaymentHash(invoice.payment_hash().into_inner());
+        let last_update = utils::now().as_secs();
+        let payment_hash = PaymentHash(invoice.payment_hash().into_32());
         let payment_info = PaymentInfo {
             preimage: None,
             secret: Some(invoice.payment_secret().0),
@@ -992,7 +993,7 @@ impl<S: MutinyStorage> Node<S> {
 
         MutinyInvoice::from(
             payment_info,
-            PaymentHash(payment_hash.into_inner()),
+            PaymentHash(payment_hash.into_32()),
             inbound,
             labels,
         )
@@ -1061,10 +1062,11 @@ impl<S: MutinyStorage> Node<S> {
         &self,
         payment_hash: &bitcoin::hashes::sha256::Hash,
     ) -> Result<(PaymentInfo, bool), MutinyError> {
+        let payment_hash = payment_hash.into_32();
         // try inbound first
         if let Some(payment_info) =
             self.persister
-                .read_payment_info(payment_hash.as_inner(), true, &self.logger)
+                .read_payment_info(&payment_hash, true, &self.logger)
         {
             return Ok((payment_info, true));
         }
@@ -1072,7 +1074,7 @@ impl<S: MutinyStorage> Node<S> {
         // if no inbound check outbound
         match self
             .persister
-            .read_payment_info(payment_hash.as_inner(), false, &self.logger)
+            .read_payment_info(&payment_hash, false, &self.logger)
         {
             Some(payment_info) => Ok((payment_info, false)),
             None => Err(MutinyError::InvoiceInvalid),
@@ -1091,11 +1093,11 @@ impl<S: MutinyStorage> Node<S> {
         amt_sats: Option<u64>,
         labels: Vec<String>,
     ) -> Result<(PaymentId, PaymentHash), MutinyError> {
-        let payment_hash = invoice.payment_hash().as_inner();
+        let payment_hash = invoice.payment_hash().into_32();
 
         if self
             .persister
-            .read_payment_info(payment_hash, false, &self.logger)
+            .read_payment_info(&payment_hash, false, &self.logger)
             .is_some_and(|p| p.status != HTLCStatus::Failed)
         {
             return Err(MutinyError::NonUniquePaymentHash);
@@ -1103,7 +1105,7 @@ impl<S: MutinyStorage> Node<S> {
 
         if self
             .persister
-            .read_payment_info(payment_hash, true, &self.logger)
+            .read_payment_info(&payment_hash, true, &self.logger)
             .is_some_and(|p| p.status != HTLCStatus::Failed)
         {
             return Err(MutinyError::NonUniquePaymentHash);
@@ -1140,6 +1142,13 @@ impl<S: MutinyStorage> Node<S> {
                 break;
             }
             sleep(1_000).await;
+        }
+
+        // check if the invoice is expired
+        let now = utils::now();
+        if invoice.would_expire(now) {
+            log_warn!(self.logger, "Tried to pay expired invoice!");
+            return Err(MutinyError::InvoiceInvalid);
         }
 
         let (pay_result, amt_msat) = if invoice.amount_milli_satoshis().is_none() {
@@ -1183,7 +1192,7 @@ impl<S: MutinyStorage> Node<S> {
         };
 
         self.persister
-            .persist_payment_info(payment_hash, &payment_info, false)?;
+            .persist_payment_info(&payment_hash, &payment_info, false)?;
 
         match pay_result {
             Ok(id) => Ok((id, PaymentHash(payment_hash.to_owned()))),
@@ -1199,7 +1208,7 @@ impl<S: MutinyStorage> Node<S> {
 
                 payment_info.status = HTLCStatus::Failed;
                 self.persister
-                    .persist_payment_info(payment_hash, &payment_info, false)?;
+                    .persist_payment_info(&payment_hash, &payment_info, false)?;
 
                 Err(map_sending_failure(error, amt_msat, &current_channels))
             }
@@ -1211,9 +1220,9 @@ impl<S: MutinyStorage> Node<S> {
         &self,
         invoice: &Bolt11Invoice,
         amount_msats: u64,
-    ) -> Result<PaymentId, PaymentError> {
-        let payment_id = PaymentId(invoice.payment_hash().into_inner());
-        let payment_hash = PaymentHash((*invoice.payment_hash()).into_inner());
+    ) -> Result<PaymentId, RetryableSendFailure> {
+        let payment_id = PaymentId(invoice.payment_hash().into_32());
+        let payment_hash = PaymentHash((*invoice.payment_hash()).into_32());
         let mut recipient_onion = RecipientOnionFields::secret_only(*invoice.payment_secret());
         recipient_onion.payment_metadata = invoice.payment_metadata().cloned();
         let mut payment_params = PaymentParameters::from_node_id(
@@ -1242,7 +1251,7 @@ impl<S: MutinyStorage> Node<S> {
             Self::retry_strategy(),
         ) {
             Ok(()) => Ok(payment_id),
-            Err(e) => Err(PaymentError::Sending(e)),
+            Err(e) => Err(e),
         }
     }
 
@@ -1347,7 +1356,7 @@ impl<S: MutinyStorage> Node<S> {
             Self::retry_strategy(),
         );
 
-        let payment_hash = PaymentHash(Sha256::hash(&preimage.0).into_inner());
+        let payment_hash = PaymentHash(Sha256::hash(&preimage.0).into_32());
 
         let last_update = utils::now().as_secs();
         let mut payment_info = PaymentInfo {
@@ -1375,11 +1384,7 @@ impl<S: MutinyStorage> Node<S> {
                 self.persister
                     .persist_payment_info(&payment_hash.0, &payment_info, false)?;
                 let current_channels = self.channel_manager.list_channels();
-                Err(map_sending_failure(
-                    PaymentError::Sending(error),
-                    amt_msats,
-                    &current_channels,
-                ))
+                Err(map_sending_failure(error, amt_msats, &current_channels))
             }
         }
     }
@@ -1401,7 +1406,7 @@ impl<S: MutinyStorage> Node<S> {
             self.init_keysend_payment(to_node, amt_sats, message, labels.clone(), payment_id)?;
 
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
-        let payment_hash = PaymentHash(pay.payment_hash.into_inner());
+        let payment_hash = PaymentHash(pay.payment_hash.into_32());
 
         self.await_payment(payment_id, payment_hash, timeout, labels)
             .await
@@ -1510,6 +1515,7 @@ impl<S: MutinyStorage> Node<S> {
             amount_sat,
             0,
             user_channel_id,
+            None,
             Some(config),
         ) {
             Ok(_) => {
@@ -1606,6 +1612,7 @@ impl<S: MutinyStorage> Node<S> {
             channel_value_satoshis,
             0,
             user_channel_id,
+            None,
             Some(config),
         ) {
             Ok(_) => {
@@ -1662,14 +1669,14 @@ pub(crate) fn decay_params() -> ProbabilisticScoringDecayParameters {
 }
 
 fn map_sending_failure(
-    error: PaymentError,
+    error: RetryableSendFailure,
     amt_msat: u64,
     current_channels: &[ChannelDetails],
 ) -> MutinyError {
     // If the payment failed because of a route not found, check if the amount was
     // valid and return the correct error
     match error {
-        PaymentError::Sending(RetryableSendFailure::RouteNotFound) => {
+        RetryableSendFailure::RouteNotFound => {
             // If the amount was greater than our balance, return an InsufficientBalance error
             let ln_balance: u64 = current_channels.iter().map(|c| c.balance_msat).sum();
             if amt_msat > ln_balance {
@@ -1697,11 +1704,8 @@ fn map_sending_failure(
 
             MutinyError::RoutingFailed
         }
-        PaymentError::Invoice(_) => MutinyError::InvoiceInvalid,
-        PaymentError::Sending(RetryableSendFailure::PaymentExpired) => MutinyError::InvoiceInvalid,
-        PaymentError::Sending(RetryableSendFailure::DuplicatePayment) => {
-            MutinyError::NonUniquePaymentHash
-        }
+        RetryableSendFailure::PaymentExpired => MutinyError::InvoiceInvalid,
+        RetryableSendFailure::DuplicatePayment => MutinyError::NonUniquePaymentHash,
     }
 }
 
@@ -1800,15 +1804,13 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                 if stop.load(Ordering::Relaxed) {
                     log_debug!(
                         connect_logger,
-                        "stopping connection component and disconnecting peers for node: {}",
-                        node_pubkey.to_hex(),
+                        "stopping connection component and disconnecting peers for node: {node_pubkey}"
                     );
                     connect_peer_man.disconnect_all_peers();
                     stop_component(&stopped_components);
                     log_debug!(
                         connect_logger,
-                        "stopped connection component and disconnected peers for node: {}",
-                        node_pubkey.to_hex(),
+                        "stopped connection component and disconnected peers for node: {node_pubkey}"
                     );
                     return;
                 }
@@ -2063,28 +2065,6 @@ mod tests {
     fn test_map_sending_failure() {
         let amt_msat = 1_000_000;
 
-        // test simple cases
-        assert_eq!(
-            map_sending_failure(PaymentError::Invoice(""), amt_msat, &[]),
-            MutinyError::InvoiceInvalid
-        );
-        assert_eq!(
-            map_sending_failure(
-                PaymentError::Sending(RetryableSendFailure::PaymentExpired),
-                amt_msat,
-                &[]
-            ),
-            MutinyError::InvoiceInvalid
-        );
-        assert_eq!(
-            map_sending_failure(
-                PaymentError::Sending(RetryableSendFailure::DuplicatePayment),
-                amt_msat,
-                &[]
-            ),
-            MutinyError::NonUniquePaymentHash
-        );
-
         let mut channel_details = ChannelDetails {
             channel_id: ChannelId::new_zero(),
             counterparty: ChannelCounterparty {
@@ -2124,7 +2104,7 @@ mod tests {
 
         assert_eq!(
             map_sending_failure(
-                PaymentError::Sending(RetryableSendFailure::RouteNotFound),
+                RetryableSendFailure::RouteNotFound,
                 amt_msat,
                 &[channel_details.clone()]
             ),
@@ -2133,7 +2113,7 @@ mod tests {
 
         assert_eq!(
             map_sending_failure(
-                PaymentError::Sending(RetryableSendFailure::RouteNotFound),
+                RetryableSendFailure::RouteNotFound,
                 amt_msat,
                 &[channel_details.clone()]
             ),
@@ -2145,7 +2125,7 @@ mod tests {
         channel_details.unspendable_punishment_reserve = Some(20);
         assert_eq!(
             map_sending_failure(
-                PaymentError::Sending(RetryableSendFailure::RouteNotFound),
+                RetryableSendFailure::RouteNotFound,
                 amt_msat,
                 &[channel_details.clone()]
             ),
@@ -2156,7 +2136,7 @@ mod tests {
         channel_details.unspendable_punishment_reserve = Some(0);
         assert_eq!(
             map_sending_failure(
-                PaymentError::Sending(RetryableSendFailure::RouteNotFound),
+                RetryableSendFailure::RouteNotFound,
                 amt_msat,
                 &[channel_details.clone()]
             ),
@@ -2167,7 +2147,7 @@ mod tests {
         channel_details.next_outbound_htlc_limit_msat = amt_msat + 10;
         assert_eq!(
             map_sending_failure(
-                PaymentError::Sending(RetryableSendFailure::RouteNotFound),
+                RetryableSendFailure::RouteNotFound,
                 amt_msat,
                 &[channel_details.clone()]
             ),
@@ -2179,7 +2159,7 @@ mod tests {
     async fn test_create_node() {
         let storage = MemoryStorage::default();
         let node = create_node(storage).await;
-        assert!(!node.pubkey.to_hex().is_empty());
+        assert!(!node.pubkey.serialize().is_empty());
     }
 
     #[tokio::test]
@@ -2331,7 +2311,6 @@ mod wasm_test {
     use crate::storage::MemoryStorage;
     use crate::test_utils::create_node;
     use crate::HTLCStatus;
-    use bitcoin::hashes::hex::ToHex;
     use lightning::ln::channelmanager::PaymentId;
     use lightning::ln::PaymentHash;
     use lightning_invoice::Bolt11InvoiceDescription;
@@ -2343,7 +2322,7 @@ mod wasm_test {
     async fn test_create_node() {
         let storage = MemoryStorage::default();
         let node = create_node(storage).await;
-        assert!(!node.pubkey.to_hex().is_empty());
+        assert!(!node.pubkey.serialize().is_empty());
     }
 
     #[test]

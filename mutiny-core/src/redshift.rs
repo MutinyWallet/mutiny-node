@@ -4,7 +4,8 @@ use crate::storage::MutinyStorage;
 use crate::utils::sleep;
 use crate::{utils, HTLCStatus};
 use anyhow::anyhow;
-use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::address::NetworkUnchecked;
+use bitcoin::hashes::hex::FromHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, OutPoint};
 use lightning::{log_debug, log_error, log_info};
@@ -61,7 +62,7 @@ pub enum RedshiftRecipient {
     ///
     /// If this is None, an address will be generated
     /// by the KeysManager.
-    OnChain(Option<Address>),
+    OnChain(Option<Address<NetworkUnchecked>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -113,7 +114,7 @@ pub trait RedshiftStorage {
 const REDSHIFT_KEY_PREFIX: &str = "redshift/";
 
 fn get_redshift_key(id: &[u8; 16]) -> String {
-    format!("{REDSHIFT_KEY_PREFIX}{}", id.to_hex())
+    format!("{REDSHIFT_KEY_PREFIX}{}", hex::encode(id))
 }
 
 impl<S: MutinyStorage> RedshiftStorage for S {
@@ -254,7 +255,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
         log_info!(
             &self.logger,
             "Attempting payments for redshift {}",
-            rs.id.to_hex()
+            hex::encode(rs.id)
         );
 
         // get the node making the payment
@@ -312,7 +313,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
                 log_debug!(
                     self.logger,
                     "Waiting for pending payment to complete for redshift {}: {hex}",
-                    rs.id.to_hex(),
+                    hex::encode(rs.id),
                 );
                 let payment_hash: [u8; 32] = FromHex::from_hex(hex).expect("invalid hex");
 
@@ -363,7 +364,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
             log_debug!(
                 &self.logger,
                 "Looping through payments for redshift {}: sats={}",
-                rs.id.to_hex(),
+                hex::encode(rs.id),
                 local_max_sats,
             );
             // keep trying until the amount is too small to send through
@@ -371,7 +372,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
                 log_debug!(
                     &self.logger,
                     "Local max amount is less than min for redshift {}: sats={}",
-                    rs.id.to_hex(),
+                    hex::encode(rs.id),
                     local_max_sats,
                 );
                 // if no payments were made, consider it a fail
@@ -379,7 +380,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
                     log_error!(
                         &self.logger,
                         "No payments were made for redshift {}: sats={}",
-                        rs.id.to_hex(),
+                        hex::encode(rs.id),
                         local_max_sats,
                     );
                     rs.fail("no payments were made".to_string());
@@ -391,7 +392,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
             log_debug!(
                 &self.logger,
                 "Getting an invoice for redshift {}: sats={}",
-                rs.id.to_hex(),
+                hex::encode(rs.id),
                 local_max_sats,
             );
 
@@ -408,7 +409,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
                     log_debug!(
                         &self.logger,
                         "Could not get an invoice, trying again for redshift {}",
-                        rs.id.to_hex(),
+                        hex::encode(rs.id),
                     );
                     sleep(1000).await;
                     continue;
@@ -418,10 +419,10 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
             log_debug!(
                 &self.logger,
                 "created invoice: {}",
-                invoice.payment_hash().to_hex()
+                hex::encode(invoice.payment_hash())
             );
 
-            let label = format!("Redshift: {}", rs.id.to_hex());
+            let label = format!("Redshift: {}", hex::encode(rs.id));
             // make attempts to pay it
             match sending_node
                 .pay_invoice_with_timeout(&invoice, None, None, vec![label])
@@ -453,7 +454,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
                     // if the payment timed out, save the pending payment hash
                     // and wait for it to finish
                     if matches!(e, MutinyError::PaymentTimeout) {
-                        rs.pending_payment = Some(invoice.payment_hash().to_hex());
+                        rs.pending_payment = Some(hex::encode(invoice.payment_hash()));
                         self.storage.persist_redshift(rs.clone())?;
                     } else {
                         log_error!(&self.logger, "could not pay: {e}");
@@ -468,7 +469,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
         log_debug!(
             &self.logger,
             "Redshift {} completed with status: {:?}",
-            rs.id.to_hex(),
+            hex::encode(rs.id),
             rs.status
         );
 
@@ -503,7 +504,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
                         log_error!(
                             &self.logger,
                             "no receiving node for redshift {}, cannot close channels",
-                            rs.id.to_hex()
+                            hex::encode(rs.id)
                         );
                         return Err(MutinyError::Other(anyhow!(
                             "No receiving node for on-chain redshift"
@@ -519,8 +520,13 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
                 for c in receiving_node.channel_manager.list_channels() {
                     if let Some(funding_txo) = c.funding_txo {
                         let channel_outpoint = funding_txo.into_bitcoin_outpoint();
-                        self.close_channel(&channel_outpoint, addr.to_owned(), false, false)
-                            .await?;
+                        self.close_channel(
+                            &channel_outpoint,
+                            addr.to_owned().map(|a| a.assume_checked()),
+                            false,
+                            false,
+                        )
+                        .await?;
                         channel_outpoints.push(channel_outpoint);
                     }
                 }

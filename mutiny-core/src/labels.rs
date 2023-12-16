@@ -1,7 +1,9 @@
 use crate::error::MutinyError;
 use crate::nodemanager::NodeManager;
 use crate::storage::MutinyStorage;
-use bitcoin::{Address, XOnlyPublicKey};
+use bitcoin::address::NetworkUnchecked;
+use bitcoin::key::XOnlyPublicKey;
+use bitcoin::Address;
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
@@ -19,7 +21,7 @@ const CONTACT_PREFIX: &str = "contact/";
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, Ord, PartialEq, PartialOrd, Hash, Default)]
 pub struct LabelItem {
     /// List of addresses that have this label
-    pub addresses: Vec<Address>,
+    pub addresses: Vec<Address<NetworkUnchecked>>,
     /// List of invoices that have this label
     pub invoices: Vec<Bolt11Invoice>,
     /// Epoch time in seconds when this label was last used
@@ -192,6 +194,10 @@ impl<S: MutinyStorage> LabelStorage for S {
         let mut address_labels = self.get_address_labels()?;
         address_labels.insert(address.to_string(), labels.clone());
         self.set_data(ADDRESS_LABELS_MAP_KEY.to_string(), address_labels, None)?;
+
+        // need to convert to unchecked network so it can go into the hashmap
+        let address: Address<NetworkUnchecked> =
+            Address::from_str(&address.to_string()).expect("must be valid");
 
         // update the label items
         let now = crate::utils::now().as_secs();
@@ -680,7 +686,7 @@ mod tests {
 
         let storage = MemoryStorage::default();
 
-        let address = Address::from_str(ADDRESS).unwrap();
+        let address = Address::from_str(ADDRESS).unwrap().assume_checked();
         let labels = vec!["label1".to_string(), "label2".to_string()];
 
         let result = storage.set_address_labels(address.clone(), labels.clone());
@@ -816,7 +822,7 @@ mod tests {
 
         let storage = MemoryStorage::default();
 
-        let address = Address::from_str(ADDRESS).unwrap();
+        let address = Address::from_str(ADDRESS).unwrap().assume_checked();
         let invoice = Bolt11Invoice::from_str(INVOICE).unwrap();
         let label = "test_label".to_string();
         let other_label = "other_label".to_string();
@@ -840,7 +846,13 @@ mod tests {
         let label_item = storage.get_label(&new_label).unwrap();
         assert!(label_item.is_some());
         assert_eq!(label_item.clone().unwrap().invoices, vec![invoice]);
-        assert_eq!(label_item.unwrap().addresses, vec![address]);
+        let addresses = label_item
+            .unwrap()
+            .addresses
+            .into_iter()
+            .map(|a| a.assume_checked())
+            .collect::<Vec<_>>();
+        assert_eq!(addresses, vec![address]);
 
         // check we properly converted the old label to a new label
         // check we also kept the other label
@@ -922,7 +934,7 @@ mod tests {
         assert_eq!(contact.last_used, 0);
         let id = storage.create_new_contact(contact.clone()).unwrap();
 
-        let address = Address::from_str(ADDRESS).unwrap();
+        let address = Address::from_str(ADDRESS).unwrap().assume_checked();
 
         storage
             .set_address_labels(address, vec![id.clone()])

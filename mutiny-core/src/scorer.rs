@@ -1,4 +1,5 @@
 use crate::{logging::MutinyLogger, node::NetworkGraph};
+use lightning::routing::router::CandidateRouteHop;
 use lightning::{
     routing::{
         gossip::NodeId,
@@ -10,6 +11,7 @@ use lightning::{
     },
     util::ser::{Writeable, Writer},
 };
+use std::time::Duration;
 use std::{collections::HashSet, str::FromStr, sync::Arc};
 
 const HUB_BASE_DISCOUNT_PENALTY_MSAT: u64 = 100_000;
@@ -290,8 +292,11 @@ impl HubPreferentialScorer {
         }
     }
 
-    fn is_preferred_hub(&self, node_id: &NodeId) -> bool {
-        self.preferred_hubs_set.contains(node_id)
+    fn is_preferred_hub(&self, node_id: Option<NodeId>) -> bool {
+        match node_id {
+            None => false,
+            Some(ref node_id) => self.preferred_hubs_set.contains(node_id),
+        }
     }
 }
 
@@ -300,16 +305,17 @@ impl ScoreLookUp for HubPreferentialScorer {
 
     fn channel_penalty_msat(
         &self,
-        short_channel_id: u64,
-        source: &NodeId,
-        target: &NodeId,
+        candidate: &CandidateRouteHop,
         usage: ChannelUsage,
         score_params: &Self::ScoreParams,
     ) -> u64 {
         // normal penalty from the inner scorer
-        let mut penalty =
-            self.inner
-                .channel_penalty_msat(short_channel_id, source, target, usage, score_params);
+        let mut penalty = self
+            .inner
+            .channel_penalty_msat(candidate, usage, score_params);
+
+        let source = Some(candidate.source());
+        let target = candidate.target();
 
         let hub_to_hub_min_penalty = (score_params.base_penalty_msat as f64 * 0.5) as u64;
         let entering_highway_min_penalty = (score_params.base_penalty_msat as f64 * 0.7) as u64;
@@ -341,20 +347,32 @@ impl ScoreLookUp for HubPreferentialScorer {
 }
 
 impl ScoreUpdate for HubPreferentialScorer {
-    fn payment_path_failed(&mut self, path: &Path, short_channel_id: u64) {
-        self.inner.payment_path_failed(path, short_channel_id)
+    fn payment_path_failed(
+        &mut self,
+        path: &Path,
+        short_channel_id: u64,
+        duration_since_epoch: Duration,
+    ) {
+        self.inner
+            .payment_path_failed(path, short_channel_id, duration_since_epoch)
     }
 
-    fn payment_path_successful(&mut self, path: &Path) {
-        self.inner.payment_path_successful(path)
+    fn payment_path_successful(&mut self, path: &Path, duration_since_epoch: Duration) {
+        self.inner
+            .payment_path_successful(path, duration_since_epoch)
     }
 
-    fn probe_failed(&mut self, path: &Path, short_channel_id: u64) {
-        self.inner.probe_failed(path, short_channel_id)
+    fn probe_failed(&mut self, path: &Path, short_channel_id: u64, duration_since_epoch: Duration) {
+        self.inner
+            .probe_failed(path, short_channel_id, duration_since_epoch)
     }
 
-    fn probe_successful(&mut self, path: &Path) {
-        self.inner.probe_successful(path)
+    fn probe_successful(&mut self, path: &Path, duration_since_epoch: Duration) {
+        self.inner.probe_successful(path, duration_since_epoch)
+    }
+
+    fn time_passed(&mut self, duration_since_epoch: Duration) {
+        self.inner.time_passed(duration_since_epoch)
     }
 }
 

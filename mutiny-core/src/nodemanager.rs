@@ -26,12 +26,12 @@ use crate::{labels::LabelStorage, subscription::MutinySubscriptionClient};
 use anyhow::anyhow;
 use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::{wallet::AddressIndex, FeeRate, LocalUtxo};
+use bitcoin::address::NetworkUnchecked;
+use bitcoin::bip32::ExtendedPrivKey;
 use bitcoin::blockdata::script;
-use bitcoin::hashes::hex::ToHex;
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::psbt::PartiallySignedTransaction;
 use bitcoin::secp256k1::{rand, PublicKey};
-use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use core::time::Duration;
 use esplora_client::{AsyncClient, Builder};
@@ -44,6 +44,7 @@ use lightning::ln::{ChannelId, PaymentHash};
 use lightning::routing::gossip::NodeId;
 use lightning::sign::{NodeSigner, Recipient};
 use lightning::util::logger::*;
+use lightning::util::ser::Writeable;
 use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lightning_transaction_sync::EsploraSyncClient;
@@ -51,7 +52,6 @@ use lnurl::lnurl::LnUrl;
 use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use nostr::key::XOnlyPublicKey;
 use nostr::{EventBuilder, Keys, Kind, Tag, TagKind};
-use payjoin::{PjUri, PjUriExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -119,7 +119,7 @@ pub struct NodeIdentity {
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct MutinyBip21RawMaterials {
-    pub address: Address,
+    pub address: Address<NetworkUnchecked>,
     pub invoice: Option<Bolt11Invoice>,
     pub btc_amount: Option<String>,
     pub labels: Vec<String>,
@@ -151,10 +151,11 @@ impl From<Bolt11Invoice> for MutinyInvoice {
     fn from(value: Bolt11Invoice) -> Self {
         let description = match value.description() {
             Bolt11InvoiceDescription::Direct(a) => {
-                if a.is_empty() {
+                let str = a.clone().into_inner().0;
+                if str.is_empty() {
                     None
                 } else {
-                    Some(a.to_string())
+                    Some(str)
                 }
             }
             Bolt11InvoiceDescription::Hash(_) => None,
@@ -210,7 +211,7 @@ impl MutinyInvoice {
                     labels,
                     amount_sats,
                     payee_pubkey: i.payee_pubkey,
-                    preimage: i.preimage.map(|p| p.to_hex()),
+                    preimage: i.preimage.map(hex::encode),
                     fees_paid: i.fee_paid_msat.map(|f| f / 1_000),
                     ..invoice.into()
                 })
@@ -218,8 +219,8 @@ impl MutinyInvoice {
             None => {
                 let amount_sats: Option<u64> = i.amt_msat.0.map(|s| s / 1_000);
                 let fees_paid = i.fee_paid_msat.map(|f| f / 1_000);
-                let preimage = i.preimage.map(|p| p.to_hex());
-                let payment_hash = sha256::Hash::from_inner(payment_hash.0);
+                let preimage = i.preimage.map(hex::encode);
+                let payment_hash = sha256::Hash::from_byte_array(payment_hash.0);
                 let invoice = MutinyInvoice {
                     bolt11: None,
                     description: None,
@@ -284,7 +285,7 @@ pub struct MutinyChannel {
 impl From<&ChannelDetails> for MutinyChannel {
     fn from(c: &ChannelDetails) -> Self {
         MutinyChannel {
-            user_chan_id: c.user_channel_id.to_hex(),
+            user_chan_id: hex::encode(c.user_channel_id.encode()),
             balance: c.next_outbound_htlc_limit_msat / 1_000,
             size: c.channel_value_satoshis,
             reserve: ((c.outbound_capacity_msat - c.next_outbound_htlc_limit_msat) / 1_000)
@@ -345,20 +346,6 @@ impl Ord for TransactionDetails {
                 ConfirmationTime::Unconfirmed { last_seen: a },
                 ConfirmationTime::Unconfirmed { last_seen: b },
             ) => a.cmp(&b).then_with(|| self.txid.cmp(&other.txid)),
-        }
-    }
-}
-
-impl From<bdk::TransactionDetails> for TransactionDetails {
-    fn from(t: bdk::TransactionDetails) -> Self {
-        TransactionDetails {
-            transaction: t.transaction,
-            txid: t.txid,
-            received: t.received,
-            sent: t.sent,
-            fee: t.fee,
-            confirmation_time: t.confirmation_time,
-            labels: vec![],
         }
     }
 }
@@ -803,14 +790,10 @@ impl<S: MutinyStorage> NodeManager<S> {
         let node_futures = nodes.iter().map(|(_, n)| async {
             match n.stop().await {
                 Ok(_) => {
-                    log_debug!(self.logger, "stopped node: {}", n.pubkey.to_hex())
+                    log_debug!(self.logger, "stopped node: {}", n.pubkey)
                 }
                 Err(e) => {
-                    log_error!(
-                        self.logger,
-                        "failed to stop node {}: {e}",
-                        n.pubkey.to_hex()
-                    )
+                    log_error!(self.logger, "failed to stop node {}: {e}", n.pubkey)
                 }
             }
         });
@@ -1031,6 +1014,8 @@ impl<S: MutinyStorage> NodeManager<S> {
             return Err(MutinyError::WalletOperationFailed);
         };
 
+        let address =
+            Address::from_str(address.to_string().as_str()).expect("just converting types");
         Ok(MutinyBip21RawMaterials {
             address,
             invoice,
@@ -1041,33 +1026,34 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     pub async fn send_payjoin(
         &self,
-        uri: PjUri<'_>,
+        uri: payjoin::Uri<'_, NetworkUnchecked>,
         amount: u64,
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
+        let uri = uri
+            .require_network(self.network)
+            .map_err(|_| MutinyError::IncorrectNetwork(self.network))?;
+
         let address = Address::from_str(&uri.address.to_string())
-            .map_err(|_| MutinyError::PayjoinConfigError)?;
+            .map_err(|_| MutinyError::PayjoinConfigError)?
+            .assume_checked();
         let original_psbt = self.wallet.create_signed_psbt(address, amount, fee_rate)?;
 
-        let payout_scripts = std::iter::once(uri.address.script_pubkey());
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
         } else {
             let sat_per_kwu = self.fee_estimator.get_normal_fee_rate();
             FeeRate::from_sat_per_kwu(sat_per_kwu as f32)
         };
-        let fee_rate = payjoin::bitcoin::FeeRate::from_sat_per_kwu(fee_rate.sat_per_kwu() as u64);
-        let original_psbt = payjoin::bitcoin::psbt::PartiallySignedTransaction::from_str(
-            &original_psbt.to_string(),
-        )
-        .map_err(|_| MutinyError::PayjoinConfigError)?;
-        let pj_params =
-            payjoin::send::Configuration::recommended(&original_psbt, payout_scripts, fee_rate)
-                .map_err(|_| MutinyError::PayjoinConfigError)?;
+        let fee_rate = bitcoin::FeeRate::from_sat_per_kwu(fee_rate.sat_per_kwu() as u64);
+        let original_psbt = PartiallySignedTransaction::from_str(&original_psbt.to_string())
+            .map_err(|_| MutinyError::PayjoinConfigError)?;
 
         log_debug!(self.logger, "Creating payjoin request");
-        let (req, ctx) = uri.create_pj_request(original_psbt.clone(), pj_params)?;
+        let builder = payjoin::send::RequestBuilder::from_psbt_and_uri(original_psbt.clone(), uri)?;
+        let req_ctx = builder.build_recommended(fee_rate)?;
+        let (req, ctx) = req_ctx.extract_v1()?;
 
         let client = Client::builder()
             .build()
@@ -1093,12 +1079,6 @@ impl<S: MutinyStorage> NodeManager<S> {
             e
         })?;
 
-        // convert to pdk types
-        let original_psbt = PartiallySignedTransaction::from_str(&original_psbt.to_string())
-            .map_err(|_| MutinyError::PayjoinConfigError)?;
-        let proposal_psbt = PartiallySignedTransaction::from_str(&proposal_psbt.to_string())
-            .map_err(|_| MutinyError::PayjoinConfigError)?;
-
         log_debug!(self.logger, "Sending payjoin..");
         let tx = self
             .wallet
@@ -1116,14 +1096,14 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// If a fee rate is not provided, one will be used from the fee estimator.
     pub async fn send_to_address(
         &self,
-        send_to: Address,
+        send_to: Address<NetworkUnchecked>,
         amount: u64,
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        if !send_to.is_valid_for_network(self.network) {
-            return Err(MutinyError::IncorrectNetwork(send_to.network));
-        }
+        let send_to = send_to
+            .require_network(self.network)
+            .map_err(|_| MutinyError::IncorrectNetwork(self.network))?;
 
         self.wallet.send(send_to, amount, labels, fee_rate).await
     }
@@ -1134,13 +1114,13 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// If a fee rate is not provided, one will be used from the fee estimator.
     pub async fn sweep_wallet(
         &self,
-        send_to: Address,
+        send_to: Address<NetworkUnchecked>,
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        if !send_to.is_valid_for_network(self.network) {
-            return Err(MutinyError::IncorrectNetwork(send_to.network));
-        }
+        let send_to = send_to
+            .require_network(self.network)
+            .map_err(|_| MutinyError::IncorrectNetwork(self.network))?;
 
         self.wallet.sweep(send_to, labels, fee_rate).await
     }
@@ -1180,7 +1160,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         // Dummy p2wsh script for the channel output
         let script = script::Builder::new()
             .push_int(0)
-            .push_slice(&[0; 32])
+            .push_slice([0; 32])
             .into_script();
         self.wallet.estimate_tx_fee(script, amount, fee_rate)
     }
@@ -1194,7 +1174,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         // Dummy p2wsh script for the channel output
         let script = script::Builder::new()
             .push_int(0)
-            .push_slice(&[0; 32])
+            .push_slice([0; 32])
             .into_script();
         self.wallet.estimate_sweep_tx_fee(script, fee_rate)
     }
@@ -1205,11 +1185,11 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// This should be used to check if a payment has been made to an address.
     pub async fn check_address(
         &self,
-        address: &Address,
+        address: Address<NetworkUnchecked>,
     ) -> Result<Option<TransactionDetails>, MutinyError> {
-        if !address.is_valid_for_network(self.network) {
-            return Err(MutinyError::IncorrectNetwork(address.network));
-        }
+        let address = address
+            .require_network(self.network)
+            .map_err(|_| MutinyError::IncorrectNetwork(self.network))?;
 
         let script = address.payload.script_pubkey();
         let txs = self.esplora.scripthash_txs(&script, None).await?;
@@ -1372,7 +1352,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     fn add_onchain_labels(
         &self,
         address_labels: &HashMap<String, Vec<String>>,
-        tx: bdk::TransactionDetails,
+        tx: TransactionDetails,
     ) -> TransactionDetails {
         // find the first output address that has a label
         let labels = tx
@@ -1390,10 +1370,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             })
             .unwrap_or_default();
 
-        TransactionDetails {
-            labels,
-            ..tx.into()
-        }
+        TransactionDetails { labels, ..tx }
     }
 
     /// Lists all the on-chain transactions in the wallet.
@@ -1412,7 +1389,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Gets the details of a specific on-chain transaction.
     pub fn get_transaction(&self, txid: Txid) -> Result<Option<TransactionDetails>, MutinyError> {
-        match self.wallet.get_transaction(txid, true)? {
+        match self.wallet.get_transaction(txid)? {
             Some(tx) => {
                 let address_labels = self.get_address_labels()?;
                 let tx_details = self.add_onchain_labels(&address_labels, tx);
@@ -2167,8 +2144,8 @@ impl<S: MutinyStorage> NodeManager<S> {
                             log_error!(
                                 self.logger,
                                 "had an error force closing channel {} with node {} : {e:?}",
-                                &channel.channel_id.to_hex(),
-                                &channel.counterparty.node_id.to_hex()
+                                &channel.channel_id,
+                                &channel.counterparty.node_id,
                             );
                             MutinyError::ChannelClosingFailed
                         })?;
@@ -2182,8 +2159,8 @@ impl<S: MutinyStorage> NodeManager<S> {
                             log_error!(
                                 self.logger,
                                 "had an error abandoning closing channel {} with node {} : {e:?}",
-                                &channel.channel_id.to_hex(),
-                                &channel.counterparty.node_id.to_hex()
+                                &channel.channel_id,
+                                &channel.counterparty.node_id,
                             );
                             MutinyError::ChannelClosingFailed
                         })?;
@@ -2210,8 +2187,8 @@ impl<S: MutinyStorage> NodeManager<S> {
                             log_error!(
                                 self.logger,
                                 "had an error closing channel {} with node {} : {e:?}",
-                                &channel.channel_id.to_hex(),
-                                &channel.counterparty.node_id.to_hex()
+                                &channel.channel_id,
+                                &channel.counterparty.node_id,
                             );
                             MutinyError::ChannelClosingFailed
                         })?;
@@ -2643,11 +2620,12 @@ mod tests {
     };
     use crate::{keymanager::generate_seed, MutinyWalletConfig};
     use bdk::chain::ConfirmationTime;
-    use bitcoin::hashes::hex::{FromHex, ToHex};
+    use bitcoin::absolute::LockTime;
+    use bitcoin::bip32::ExtendedPrivKey;
+    use bitcoin::hashes::hex::FromHex;
     use bitcoin::hashes::{sha256, Hash};
-    use bitcoin::secp256k1::PublicKey;
-    use bitcoin::util::bip32::ExtendedPrivKey;
-    use bitcoin::{Network, PackedLockTime, Transaction, TxOut, Txid};
+    use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
+    use bitcoin::{Network, Transaction, TxOut, Txid};
     use lightning::ln::PaymentHash;
     use lightning_invoice::Bolt11Invoice;
     use std::collections::HashMap;
@@ -2822,7 +2800,7 @@ mod tests {
 
         let fake_tx = Transaction {
             version: 2,
-            lock_time: PackedLockTime::ZERO,
+            lock_time: LockTime::ZERO,
             input: vec![],
             output: vec![TxOut {
                 value: 1_000_000,
@@ -2867,7 +2845,7 @@ mod tests {
             FromHex::from_hex("7722126954f07b120ba373f2b529efc3ce3a279ab4785a912edfe783c2cdb60b")
                 .unwrap();
 
-        let payment_hash = sha256::Hash::from_hex(
+        let payment_hash = sha256::Hash::from_str(
             "55ecf9169a6fa07e8ba181fdddf5b0bcc7860176659fa22a7cca9da2a359a33b",
         )
         .unwrap();
@@ -2891,7 +2869,7 @@ mod tests {
             bolt11: Some(invoice),
             description: None,
             payment_hash,
-            preimage: Some(preimage.to_hex()),
+            preimage: Some(hex::encode(preimage)),
             payee_pubkey: None,
             amount_sats: Some(100_000),
             expire: 1681781649 + 86400,
@@ -2904,7 +2882,7 @@ mod tests {
 
         let actual = MutinyInvoice::from(
             payment_info,
-            PaymentHash(payment_hash.into_inner()),
+            PaymentHash(payment_hash.into_32()),
             true,
             labels,
         )
@@ -2919,7 +2897,7 @@ mod tests {
             FromHex::from_hex("7600f5a9ad72452dea7ad86dabbc9cb46be96a1a2fcd961e041d066b38d93008")
                 .unwrap();
 
-        let payment_hash = sha256::Hash::from_hex(
+        let payment_hash = sha256::Hash::from_str(
             "55ecf9169a6fa07e8ba181fdddf5b0bcc7860176659fa22a7cca9da2a359a33b",
         )
         .unwrap();
@@ -2944,7 +2922,7 @@ mod tests {
             bolt11: None,
             description: None,
             payment_hash,
-            preimage: Some(preimage.to_hex()),
+            preimage: Some(hex::encode(preimage)),
             payee_pubkey: Some(pubkey),
             amount_sats: Some(100),
             expire: 1681781585,
@@ -2957,7 +2935,7 @@ mod tests {
 
         let actual = MutinyInvoice::from(
             payment_info,
-            PaymentHash(payment_hash.into_inner()),
+            PaymentHash(payment_hash.into_32()),
             false,
             vec![],
         )
@@ -2993,7 +2971,7 @@ mod tests {
             FromHex::from_hex("7600f5a9ad72452dea7ad86dabbc9cb46be96a1a2fcd961e041d066b38d93008")
                 .unwrap();
 
-        let payment_hash = sha256::Hash::from_hex(
+        let payment_hash = sha256::Hash::from_str(
             "55ecf9169a6fa07e8ba181fdddf5b0bcc7860176659fa22a7cca9da2a359a33b",
         )
         .unwrap();
@@ -3038,7 +3016,7 @@ mod tests {
             bolt11: None,
             description: None,
             payment_hash,
-            preimage: Some(preimage.to_hex()),
+            preimage: Some(hex::encode(preimage)),
             payee_pubkey: Some(pubkey),
             amount_sats: Some(100),
             expire: 1681781585,
@@ -3053,7 +3031,7 @@ mod tests {
             bolt11: None,
             description: None,
             payment_hash,
-            preimage: Some(preimage.to_hex()),
+            preimage: Some(hex::encode(preimage)),
             payee_pubkey: Some(pubkey),
             amount_sats: Some(100),
             expire: 1681781585,
@@ -3098,7 +3076,7 @@ mod tests {
             bolt11: None,
             description: Some("difference".to_string()),
             payment_hash,
-            preimage: Some(preimage.to_hex()),
+            preimage: Some(hex::encode(preimage)),
             payee_pubkey: Some(pubkey),
             amount_sats: Some(100),
             expire: 1681781585,

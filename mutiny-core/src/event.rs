@@ -9,10 +9,9 @@ use crate::redshift::RedshiftStorage;
 use crate::storage::MutinyStorage;
 use crate::utils::sleep;
 use anyhow::anyhow;
-use bitcoin::hashes::hex::ToHex;
+use bitcoin::absolute::LockTime;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
-use bitcoin::{LockTime, PackedLockTime};
 use core::fmt;
 use lightning::events::{Event, PaymentPurpose};
 use lightning::sign::SpendableOutputDescriptor;
@@ -164,7 +163,10 @@ impl<S: MutinyStorage> EventHandler<S> {
                     }
                 };
 
-                let label = format!("LN Channel: {}", counterparty_node_id.to_hex());
+                let label = format!(
+                    "LN Channel: {}",
+                    hex::encode(counterparty_node_id.serialize())
+                );
                 let labels = params_opt
                     .as_ref()
                     .and_then(|p| p.labels.clone())
@@ -226,14 +228,9 @@ impl<S: MutinyStorage> EventHandler<S> {
                 amount_msat,
                 ..
             } => {
-                log_debug!(self.logger, "EVENT: PaymentReceived received payment from payment hash {} of {amount_msat} millisatoshis to {receiver_node_id:?}", payment_hash.0.to_hex());
+                log_debug!(self.logger, "EVENT: PaymentReceived received payment from payment hash {payment_hash} of {amount_msat} millisatoshis to {receiver_node_id:?}");
 
-                if let Some(payment_preimage) = match purpose {
-                    PaymentPurpose::InvoicePayment {
-                        payment_preimage, ..
-                    } => payment_preimage,
-                    PaymentPurpose::SpontaneousPayment(preimage) => Some(preimage),
-                } {
+                if let Some(payment_preimage) = purpose.preimage() {
                     self.channel_manager.claim_funds(payment_preimage);
                 } else {
                     log_error!(self.logger, "ERROR: No payment preimage found");
@@ -247,7 +244,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 htlcs,
                 sender_intended_total_msat,
             } => {
-                log_debug!(self.logger, "EVENT: PaymentClaimed claimed payment from payment hash {} of {} millisatoshis ({sender_intended_total_msat:?} intended)  from {} htlcs", payment_hash.0.to_hex(), amount_msat, htlcs.len());
+                log_debug!(self.logger, "EVENT: PaymentClaimed claimed payment from payment hash {payment_hash} of {amount_msat} millisatoshis ({sender_intended_total_msat:?} intended)  from {} htlcs", htlcs.len());
 
                 let (payment_preimage, payment_secret) = match purpose {
                     PaymentPurpose::InvoicePayment {
@@ -316,11 +313,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 fee_paid_msat,
                 ..
             } => {
-                log_debug!(
-                    self.logger,
-                    "EVENT: PaymentSent: {}",
-                    payment_hash.0.to_hex()
-                );
+                log_debug!(self.logger, "EVENT: PaymentSent: {payment_hash}");
 
                 match self
                     .persister
@@ -409,11 +402,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 log_debug!(self.logger, "EVENT: ProbeFailed, ignored");
             }
             Event::PaymentFailed { payment_hash, .. } => {
-                log_error!(
-                    self.logger,
-                    "EVENT: PaymentFailed: {}",
-                    payment_hash.0.to_hex()
-                );
+                log_error!(self.logger, "EVENT: PaymentFailed: {payment_hash}",);
 
                 match self
                     .persister
@@ -489,7 +478,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 log_debug!(
                     self.logger,
                     "EVENT: Channel {} of size {} closed due to: {:?}",
-                    channel_id.to_hex(),
+                    channel_id,
                     channel_capacity_sats
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| "unknown".to_string()),
@@ -518,9 +507,9 @@ impl<S: MutinyStorage> EventHandler<S> {
                 log_debug!(
                     self.logger,
                     "EVENT: ChannelReady channel_id: {}, user_channel_id: {}, counterparty_node_id: {}, channel_type: {}",
-                    channel_id.to_hex(),
+                    channel_id,
                     user_channel_id,
-                    counterparty_node_id.to_hex(),
+                    counterparty_node_id,
                     channel_type);
 
                 // Channel is ready, if it is a redshift channel, should update the status.
@@ -555,9 +544,9 @@ impl<S: MutinyStorage> EventHandler<S> {
                 log_debug!(
                     self.logger,
                     "EVENT: ChannelPending channel_id: {}, user_channel_id: {}, counterparty_node_id: {}",
-                    channel_id.to_hex(),
+                    channel_id,
                     user_channel_id,
-                    counterparty_node_id.to_hex());
+                    counterparty_node_id);
 
                 if let Err(e) = self.persister.delete_channel_open_params(user_channel_id) {
                     log_warn!(
@@ -574,6 +563,13 @@ impl<S: MutinyStorage> EventHandler<S> {
             Event::InvoiceRequestFailed { payment_id } => {
                 // we don't support bolt 12 yet
                 log_warn!(self.logger, "EVENT: InvoiceRequestFailed: {payment_id}");
+            }
+            Event::ConnectionNeeded { node_id, addresses } => {
+                // we don't support bolt 12 yet
+                log_warn!(
+                    self.logger,
+                    "EVENT: ConnectionNeeded: {node_id}, {addresses:?}"
+                );
             }
         }
     }
@@ -627,7 +623,7 @@ impl<S: MutinyStorage> EventHandler<S> {
             height -= u32::from_be_bytes(rand) % 100;
         }
 
-        let locktime = LockTime::from_height(height).map(PackedLockTime::from).ok();
+        let locktime = LockTime::from_height(height).ok();
 
         let spending_tx = self
             .keys_manager

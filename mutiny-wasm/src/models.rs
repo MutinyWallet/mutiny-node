@@ -1,9 +1,8 @@
 use crate::error::MutinyJsError;
 use ::nostr::key::XOnlyPublicKey;
 use ::nostr::prelude::{FromBech32, ToBech32};
-use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::{Address, OutPoint};
+use bitcoin::OutPoint;
 use gloo_utils::format::JsValueSerdeExt;
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::lightning_address::LightningAddress;
@@ -77,10 +76,10 @@ impl From<nodemanager::ActivityItem> for ActivityItem {
         };
 
         let id = match a {
-            nodemanager::ActivityItem::OnChain(ref t) => t.txid.to_hex(),
-            nodemanager::ActivityItem::Lightning(ref ln) => ln.payment_hash.to_hex(),
+            nodemanager::ActivityItem::OnChain(ref t) => hex::encode(t.txid),
+            nodemanager::ActivityItem::Lightning(ref ln) => hex::encode(ln.payment_hash),
             nodemanager::ActivityItem::ChannelClosed(ref c) => {
-                c.user_channel_id.map(|c| c.to_hex()).unwrap_or_default()
+                c.user_channel_id.map(hex::encode).unwrap_or_default()
             }
         };
 
@@ -180,16 +179,16 @@ impl From<nodemanager::MutinyInvoice> for MutinyInvoice {
     fn from(m: nodemanager::MutinyInvoice) -> Self {
         let potential_hodl_invoice = match m.bolt11 {
             Some(ref b) => {
-                utils::HODL_INVOICE_NODES.contains(&b.recover_payee_pub_key().to_hex().as_str())
+                utils::HODL_INVOICE_NODES.contains(&b.recover_payee_pub_key().to_string().as_str())
             }
             None => false,
         };
         MutinyInvoice {
             bolt11: m.bolt11,
             description: m.description,
-            payment_hash: m.payment_hash.to_hex(),
+            payment_hash: hex::encode(m.payment_hash),
             preimage: m.preimage,
-            payee_pubkey: m.payee_pubkey.map(|p| p.to_hex()),
+            payee_pubkey: m.payee_pubkey.map(|p| p.to_string()),
             amount_sats: m.amount_sats,
             expire: m.expire,
             status: m.status.to_string(),
@@ -222,7 +221,7 @@ impl MutinyPeer {
 
     #[wasm_bindgen(getter)]
     pub fn pubkey(&self) -> String {
-        self.pubkey.to_hex()
+        self.pubkey.to_string()
     }
 
     #[wasm_bindgen(getter)]
@@ -315,7 +314,7 @@ impl From<nodemanager::MutinyChannel> for MutinyChannel {
             reserve: m.reserve,
             inbound: m.inbound,
             outpoint: m.outpoint.map(|o| o.to_string()),
-            peer: m.peer.to_hex(),
+            peer: m.peer.to_string(),
             confirmations_required: m.confirmations_required,
             confirmations: m.confirmations,
             is_outbound: m.is_outbound,
@@ -363,7 +362,7 @@ impl ChannelClosure {
 
     #[wasm_bindgen(getter)]
     pub fn channel_id(&self) -> Option<String> {
-        self.channel_id.map(|c| c.to_hex())
+        self.channel_id.map(hex::encode)
     }
 
     #[wasm_bindgen(getter)]
@@ -535,7 +534,7 @@ impl MutinyBip21RawMaterials {
 impl From<nodemanager::MutinyBip21RawMaterials> for MutinyBip21RawMaterials {
     fn from(m: nodemanager::MutinyBip21RawMaterials) -> Self {
         MutinyBip21RawMaterials {
-            address: m.address.to_string(),
+            address: m.address.assume_checked().to_string(),
             invoice: m.invoice.map(|i| i.to_string()),
             btc_amount: m.btc_amount,
             labels: m.labels,
@@ -577,7 +576,7 @@ pub struct Redshift {
     status: RedshiftStatus,
     sending_node: PublicKey,
     lightning_recipient_pubkey: Option<PublicKey>,
-    onchain_recipient: Option<Address>,
+    onchain_recipient: Option<String>,
     output_utxo: Option<OutPoint>,
     introduction_channel: Option<OutPoint>,
     output_channel: Option<Vec<OutPoint>>,
@@ -619,17 +618,17 @@ impl Redshift {
 
     #[wasm_bindgen(getter)]
     pub fn sending_node(&self) -> String {
-        self.sending_node.to_hex()
+        self.sending_node.to_string()
     }
 
     #[wasm_bindgen(getter)]
     pub fn lightning_recipient_pubkey(&self) -> Option<String> {
-        self.lightning_recipient_pubkey.map(|o| o.to_hex())
+        self.lightning_recipient_pubkey.map(|o| o.to_string())
     }
 
     #[wasm_bindgen(getter)]
     pub fn onchain_recipient(&self) -> Option<String> {
-        self.onchain_recipient.clone().map(|o| o.to_string())
+        self.onchain_recipient.clone()
     }
 
     #[wasm_bindgen(getter)]
@@ -649,7 +648,7 @@ impl Redshift {
 
     #[wasm_bindgen(getter)]
     pub fn introduction_node(&self) -> String {
-        self.introduction_node.to_hex()
+        self.introduction_node.to_string()
     }
 }
 
@@ -657,11 +656,13 @@ impl From<redshift::Redshift> for Redshift {
     fn from(rs: redshift::Redshift) -> Self {
         let (lightning_recipient_pubkey, onchain_recipient) = match rs.recipient {
             RedshiftRecipient::Lightning(pk) => (Some(pk), None),
-            RedshiftRecipient::OnChain(addr) => (None, addr),
+            RedshiftRecipient::OnChain(addr) => {
+                (None, addr.map(|a| a.assume_checked().to_string()))
+            }
         };
 
         Redshift {
-            id: rs.id.to_hex(),
+            id: hex::encode(rs.id),
             input_utxo: rs.input_utxo,
             status: rs.status,
             sending_node: rs.sending_node,
@@ -880,7 +881,6 @@ impl Contact {
 impl From<Contact> for MutinyContact {
     fn from(c: Contact) -> Self {
         let npub = c.npub.and_then(|n| XOnlyPublicKey::from_bech32(n).ok());
-        let npub = npub.map(|a| bitcoin::XOnlyPublicKey::from_slice(&a.serialize()).unwrap());
         MutinyContact {
             name: c.name,
             npub,
@@ -1142,7 +1142,7 @@ impl From<nostr::nwc::PendingNwcInvoice> for PendingNwcInvoice {
         PendingNwcInvoice {
             index: value.index,
             invoice: value.invoice.to_string(),
-            id: value.invoice.payment_hash().to_hex(),
+            id: hex::encode(value.invoice.payment_hash()),
             amount_sats: value.invoice.amount_milli_satoshis().unwrap_or_default() / 1_000,
             invoice_description,
             expiry,

@@ -2,6 +2,7 @@ use crate::logging::MutinyLogger;
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, utils};
 use bdk::FeeRate;
+use bitcoin::Weight;
 use esplora_client::AsyncClient;
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::{
@@ -65,7 +66,8 @@ impl<S: MutinyStorage> MutinyFeeEstimator<S> {
             // Calculate the transaction weight
             (non_witness_size * 4) + witness_size
         };
-        FeeRate::from_sat_per_kwu(sats_per_kw as f32).fee_wu(expected_weight)
+        FeeRate::from_sat_per_kwu(sats_per_kw as f32)
+            .fee_wu(Weight::from_witness_data_size(expected_weight as u64))
     }
 
     async fn get_last_sync_time(&self) -> Option<u64> {
@@ -186,7 +188,6 @@ impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
 
         // any post processing we do after the we get the fee rate from the cache
         match confirmation_target {
-            ConfirmationTarget::MaxAllowedNonAnchorChannelRemoteFee => fee * 30, // multiply by 30 to help prevent force closes
             ConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee => fee - 250, // helps with rounding errors
             _ => fee,
         }
@@ -200,7 +201,6 @@ fn num_blocks_from_conf_target(confirmation_target: ConfirmationTarget) -> usize
         ConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee => 1008,
         ConfirmationTarget::ChannelCloseMinimum => 1008,
         ConfirmationTarget::NonAnchorChannelFee => 6,
-        ConfirmationTarget::MaxAllowedNonAnchorChannelRemoteFee => 1,
         ConfirmationTarget::OnChainSweep => 1,
     }
 }
@@ -212,7 +212,6 @@ fn fallback_fee_from_conf_target(confirmation_target: ConfirmationTarget) -> u32
         ConfirmationTarget::ChannelCloseMinimum => 10 * 250,
         ConfirmationTarget::AnchorChannelFee => 10 * 250,
         ConfirmationTarget::NonAnchorChannelFee => 20 * 250,
-        ConfirmationTarget::MaxAllowedNonAnchorChannelRemoteFee => 50 * 250,
         ConfirmationTarget::OnChainSweep => 50 * 250,
     }
 }

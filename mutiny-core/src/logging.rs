@@ -1,4 +1,3 @@
-use bitcoin::hashes::hex::ToHex;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -99,11 +98,11 @@ impl Default for MutinyLogger {
 fn gen_session_id() -> String {
     let mut entropy = vec![0u8; 2];
     getrandom::getrandom(&mut entropy).unwrap();
-    entropy.to_hex()
+    hex::encode(entropy)
 }
 
 impl Logger for MutinyLogger {
-    fn log(&self, record: &Record) {
+    fn log(&self, record: Record) {
         let raw_log = record.args.to_string();
         let log = format!(
             "{} {} {:<5} [{}:{}] {}\n",
@@ -172,7 +171,7 @@ pub struct TestLogger {}
 
 #[cfg(test)]
 impl Logger for TestLogger {
-    fn log(&self, record: &Record) {
+    fn log(&self, record: Record) {
         let raw_log = record.args.to_string();
         let log = format!(
             "{} {:<5} [{}:{}] {}\n",

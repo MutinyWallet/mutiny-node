@@ -173,7 +173,7 @@ macro_rules! log {
     }
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
-use bitcoin::{util::bip32::ExtendedPrivKey, Network};
+use bitcoin::{bip32::ExtendedPrivKey, Network};
 use lightning::ln::PaymentSecret;
 use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
 use lightning_invoice::{Bolt11Invoice, InvoiceBuilder};

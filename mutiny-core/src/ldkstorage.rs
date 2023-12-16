@@ -12,7 +12,7 @@ use crate::utils;
 use crate::utils::{sleep, spawn};
 use crate::{chain::MutinyChain, scorer::HubPreferentialScorer};
 use anyhow::anyhow;
-use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::hashes::hex::FromHex;
 use bitcoin::Network;
 use bitcoin::{BlockHash, Transaction};
 use esplora_client::AsyncClient;
@@ -27,7 +27,7 @@ use lightning::ln::channelmanager::{
     self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
 };
 use lightning::ln::PaymentHash;
-use lightning::sign::{InMemorySigner, SpendableOutputDescriptor, WriteableEcdsaChannelSigner};
+use lightning::sign::{InMemorySigner, SpendableOutputDescriptor};
 use lightning::util::logger::Logger;
 use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
@@ -95,7 +95,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
     pub(crate) fn get_monitor_key(&self, funding_txo: &OutPoint) -> String {
         let key = format!(
             "{MONITORS_PREFIX_KEY}{}_{}",
-            funding_txo.txid.to_hex(),
+            hex::encode(funding_txo.txid),
             funding_txo.index
         );
         self.get_key(&key)
@@ -411,7 +411,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
     ) -> Result<(), MutinyError> {
         let key = self.get_key(&format!(
             "{CHANNEL_CLOSURE_PREFIX}{}",
-            user_channel_id.to_be_bytes().to_hex()
+            hex::encode(user_channel_id.to_be_bytes())
         ));
         self.storage.set_data(key, closure, None)?;
         Ok(())
@@ -423,7 +423,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
     ) -> Result<Option<ChannelClosure>, MutinyError> {
         let key = self.get_key(&format!(
             "{CHANNEL_CLOSURE_PREFIX}{}",
-            user_channel_id.to_be_bytes().to_hex()
+            hex::encode(user_channel_id.to_be_bytes())
         ));
         self.storage.get_data(key)
     }
@@ -466,7 +466,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         // convert the failed descriptors to hex
         let failed_hex: Vec<String> = failed
             .into_iter()
-            .map(|desc| desc.encode().to_hex())
+            .map(|desc| hex::encode(desc.encode()))
             .collect();
 
         // add the new descriptors
@@ -490,7 +490,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         // convert the failed descriptors to hex
         let descriptors_hex: Vec<String> = descriptors
             .into_iter()
-            .map(|desc| desc.encode().to_hex())
+            .map(|desc| hex::encode(desc.encode()))
             .collect();
 
         self.storage.set_data(key, descriptors_hex, None)?;
@@ -599,13 +599,13 @@ fn payment_key(inbound: bool, payment_hash: &[u8; 32]) -> String {
         format!(
             "{}{}",
             PAYMENT_INBOUND_PREFIX_KEY,
-            payment_hash.to_hex().as_str()
+            hex::encode(payment_hash)
         )
     } else {
         format!(
             "{}{}",
             PAYMENT_OUTBOUND_PREFIX_KEY,
-            payment_hash.to_hex().as_str()
+            hex::encode(payment_hash)
         )
     }
 }
@@ -634,7 +634,7 @@ impl<S: MutinyStorage>
 
         let value = VersionedValue {
             version,
-            value: serde_json::to_value(channel_manager.encode().to_hex()).unwrap(),
+            value: serde_json::to_value(hex::encode(channel_manager.encode())).unwrap(),
         };
 
         self.storage
@@ -650,20 +650,18 @@ impl<S: MutinyStorage>
         &self,
         scorer: &utils::Mutex<HubPreferentialScorer>,
     ) -> Result<(), lightning::io::Error> {
-        let scorer_str = scorer.encode().to_hex();
+        let scorer_str = hex::encode(scorer.encode());
         self.storage
             .set_data(PROB_SCORER_KEY.to_string(), scorer_str, None)
             .map_err(|_| lightning::io::ErrorKind::Other.into())
     }
 }
 
-impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<ChannelSigner>
-    for MutinyNodePersister<S>
-{
+impl<S: MutinyStorage> Persist<InMemorySigner> for MutinyNodePersister<S> {
     fn persist_new_channel(
         &self,
         funding_txo: OutPoint,
-        monitor: &ChannelMonitor<ChannelSigner>,
+        monitor: &ChannelMonitor<InMemorySigner>,
         monitor_update_id: MonitorUpdateId,
     ) -> ChannelMonitorUpdateStatus {
         let key = self.get_monitor_key(&funding_txo);
@@ -690,7 +688,7 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
         &self,
         funding_txo: OutPoint,
         _update: Option<&ChannelMonitorUpdate>,
-        monitor: &ChannelMonitor<ChannelSigner>,
+        monitor: &ChannelMonitor<InMemorySigner>,
         monitor_update_id: MonitorUpdateId,
     ) -> ChannelMonitorUpdateStatus {
         let key = self.get_monitor_key(&funding_txo);
@@ -752,9 +750,9 @@ mod test {
     };
     use crate::{keymanager::create_keys_manager, scorer::ProbScorer};
     use bip39::Mnemonic;
+    use bitcoin::bip32::ExtendedPrivKey;
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::PublicKey;
-    use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Txid;
     use esplora_client::Builder;
     use lightning::routing::router::DefaultRouter;
@@ -865,6 +863,7 @@ mod test {
                 index: 0,
             },
             output: Default::default(),
+            channel_keys_id: None,
         };
         let result = persister.persist_failed_spendable_outputs(vec![static_output_0.clone()]);
         assert!(result.is_ok());
@@ -878,6 +877,7 @@ mod test {
                 index: 1,
             },
             output: Default::default(),
+            channel_keys_id: None,
         };
         let result = persister.persist_failed_spendable_outputs(vec![static_output_1.clone()]);
         assert!(result.is_ok());

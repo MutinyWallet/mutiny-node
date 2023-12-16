@@ -1,7 +1,7 @@
 use aes::cipher::block_padding::UnpadError;
+use bdk_chain::local_chain::InsertBlockError;
 use bitcoin::Network;
 use lightning::ln::peer_handler::PeerHandleError;
-use lightning_invoice::payment::PaymentError;
 use lightning_invoice::ParseOrSemanticError;
 use lightning_rapid_gossip_sync::GraphSyncError;
 use lightning_transaction_sync::TxSyncError;
@@ -305,8 +305,8 @@ impl From<bip39::Error> for MutinyError {
     }
 }
 
-impl From<bitcoin::util::bip32::Error> for MutinyError {
-    fn from(_e: bitcoin::util::bip32::Error) -> Self {
+impl From<bitcoin::bip32::Error> for MutinyError {
+    fn from(_e: bitcoin::bip32::Error) -> Self {
         Self::InvalidMnemonic
     }
 }
@@ -351,15 +351,6 @@ impl From<PeerHandleError> for MutinyError {
     fn from(_e: PeerHandleError) -> Self {
         // TODO handle the case where `no_connection_possible`
         Self::ConnectionFailed
-    }
-}
-
-impl From<PaymentError> for MutinyError {
-    fn from(e: PaymentError) -> Self {
-        match e {
-            PaymentError::Invoice(_) => Self::InvoiceInvalid,
-            PaymentError::Sending(_) => Self::RoutingFailed,
-        }
     }
 }
 
@@ -411,8 +402,8 @@ impl From<bitcoin::hashes::hex::Error> for MutinyError {
     }
 }
 
-impl From<bitcoin::util::address::Error> for MutinyError {
-    fn from(_e: bitcoin::util::address::Error) -> Self {
+impl From<bitcoin::address::Error> for MutinyError {
+    fn from(_e: bitcoin::address::Error) -> Self {
         MutinyError::ReadError {
             source: MutinyStorageError::Other(anyhow::anyhow!("Failed to decode address")),
         }
@@ -426,8 +417,8 @@ impl From<esplora_client::Error> for MutinyError {
     }
 }
 
-impl From<bdk_chain::local_chain::InsertBlockNotMatchingError> for MutinyError {
-    fn from(_e: bdk_chain::local_chain::InsertBlockNotMatchingError) -> Self {
+impl From<InsertBlockError> for MutinyError {
+    fn from(_e: InsertBlockError) -> Self {
         Self::WalletSyncError
     }
 }
