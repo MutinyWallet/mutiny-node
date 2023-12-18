@@ -1,8 +1,12 @@
+use crate::lsp::{FeeRequest, InvoiceRequest, Lsp, LspConfig};
+use crate::{error::MutinyError, utils};
+use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
+use lightning::ln::PaymentHash;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use crate::{error::MutinyError, utils};
+use super::FeeResponse;
 
 #[derive(Clone, Debug)]
 pub(crate) struct LspClient {
@@ -51,18 +55,6 @@ pub struct ProposalRequest {
 #[derive(Serialize, Deserialize)]
 pub struct ProposalResponse {
     pub jit_bolt11: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct FeeRequest {
-    pub pubkey: String,
-    pub amount_msat: u64,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct FeeResponse {
-    pub id: String,
-    pub fee_amount_msat: u64,
 }
 
 #[derive(Deserialize, Debug)]
@@ -121,12 +113,21 @@ impl LspClient {
             http_client,
         })
     }
+}
 
-    pub(crate) async fn get_lsp_invoice(
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+impl Lsp for LspClient {
+    async fn get_lsp_invoice(
         &self,
-        bolt11: String,
-        fee_id: String,
+        invoice_request: InvoiceRequest,
     ) -> Result<String, MutinyError> {
+        let fee_id = invoice_request.fee_id.ok_or(MutinyError::LspGenericError)?;
+
+        let bolt11 = invoice_request
+            .bolt11
+            .ok_or(MutinyError::LspInvoiceRequired)?;
+
         let payload = ProposalRequest {
             bolt11,
             host: None,
@@ -174,10 +175,7 @@ impl LspClient {
         Err(MutinyError::LspGenericError)
     }
 
-    pub(crate) async fn get_lsp_fee_msat(
-        &self,
-        fee_request: FeeRequest,
-    ) -> Result<FeeResponse, MutinyError> {
+    async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> Result<FeeResponse, MutinyError> {
         let request = self
             .http_client
             .post(format!("{}{}", &self.url, FEE_PATH))
@@ -193,5 +191,21 @@ impl LspClient {
             .map_err(|_| MutinyError::LspGenericError)?;
 
         Ok(fee_response)
+    }
+
+    fn get_lsp_pubkey(&self) -> PublicKey {
+        self.pubkey
+    }
+
+    fn get_lsp_connection_string(&self) -> String {
+        self.connection_string.clone()
+    }
+
+    fn get_config(&self) -> LspConfig {
+        LspConfig::VoltageFlow(self.url.clone())
+    }
+
+    fn get_expected_skimmed_fee_msat(&self, _payment_hash: PaymentHash, _payment_size: u64) -> u64 {
+        0
     }
 }

@@ -1,7 +1,10 @@
 use crate::labels::LabelStorage;
 use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
-use crate::nodemanager::{ChannelClosure, LspConfig};
+use crate::lsp::{InvoiceRequest, LspConfig};
+use crate::messagehandler::MutinyMessageHandler;
+use crate::nodemanager::ChannelClosure;
 use crate::peermanager::LspMessageRouter;
+use crate::storage::MutinyStorage;
 use crate::utils::get_monitor_version;
 use crate::{
     chain::MutinyChain,
@@ -12,7 +15,7 @@ use crate::{
     keymanager::{create_keys_manager, pubkey_from_keys_manager},
     ldkstorage::{MutinyNodePersister, PhantomChannelManager},
     logging::MutinyLogger,
-    lspclient::LspClient,
+    lsp::{AnyLsp, FeeRequest, Lsp},
     nodemanager::{MutinyInvoice, NodeIndex},
     onchain::OnChainWallet,
     peermanager::{GossipMessageHandler, PeerManagerImpl},
@@ -20,11 +23,9 @@ use crate::{
 };
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
-use crate::{lspclient::FeeRequest, storage::MutinyStorage};
 use anyhow::{anyhow, Context};
 use bdk::FeeRate;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
-use bitcoin::secp256k1::rand;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint};
 use core::time::Duration;
@@ -67,6 +68,10 @@ use lightning_invoice::{
     utils::{create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice},
     Bolt11Invoice,
 };
+use lightning_liquidity::{
+    JITChannelsConfig, LiquidityManager as LDKLSPLiquidityManager, LiquidityProviderConfig,
+};
+
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 use std::collections::HashMap;
@@ -103,11 +108,18 @@ pub(crate) type OnionMessenger<S: MutinyStorage> = LdkOnionMessenger<
     IgnoringMessageHandler,
 >;
 
+pub type LiquidityManager<S> = LDKLSPLiquidityManager<
+    Arc<PhantomKeysManager<S>>,
+    Arc<PhantomChannelManager<S>>,
+    Arc<PeerManagerImpl<S>>,
+    Arc<dyn Filter + Send + Sync>,
+>;
+
 pub(crate) type MessageHandler<S: MutinyStorage> = LdkMessageHandler<
     Arc<PhantomChannelManager<S>>,
     Arc<GossipMessageHandler<S>>,
     Arc<OnionMessenger<S>>,
-    IgnoringMessageHandler,
+    Arc<MutinyMessageHandler<S>>,
 >;
 
 pub(crate) type ChainMonitor<S: MutinyStorage> = chainmonitor::ChainMonitor<
@@ -169,7 +181,7 @@ pub(crate) struct Node<S: MutinyStorage> {
     pub persister: Arc<MutinyNodePersister<S>>,
     wallet: Arc<OnChainWallet<S>>,
     pub(crate) logger: Arc<MutinyLogger>,
-    pub(crate) lsp_client: Option<LspClient>,
+    pub(crate) lsp_client: Option<AnyLsp<S>>,
     pub(crate) sync_lock: Arc<Mutex<()>>,
     stop: Arc<AtomicBool>,
     pub skip_hodl_invoices: bool,
@@ -191,7 +203,7 @@ impl<S: MutinyStorage> Node<S> {
         wallet: Arc<OnChainWallet<S>>,
         network: Network,
         esplora: &AsyncClient,
-        lsp_clients: &[LspClient],
+        lsp_config: Option<LspConfig>,
         logger: Arc<MutinyLogger>,
         do_not_connect_peers: bool,
         empty_state: bool,
@@ -321,27 +333,61 @@ impl<S: MutinyStorage> Node<S> {
         }
 
         log_info!(logger, "creating lsp client");
-        let lsp_client: Option<LspClient> = match node_index.lsp {
+        let lsp_config: Option<LspConfig> = match node_index.lsp {
             None => {
-                if lsp_clients.is_empty() {
-                    log_info!(logger, "no lsp saved and no lsp clients available");
-                    None
+                log_info!(logger, "no lsp saved, using configured one if present");
+                lsp_config
+            }
+            Some(ref lsp) => {
+                if lsp_config.as_ref() == Some(lsp) {
+                    log_info!(logger, "lsp config matches saved lsp config");
+                    lsp_config
                 } else {
-                    log_info!(logger, "no lsp saved, picking random one");
-                    // If we don't have an lsp saved we should pick a random
-                    // one from our client list and save it for next time
-                    let rand = rand::random::<usize>() % lsp_clients.len();
-                    Some(lsp_clients[rand].clone())
+                    log_info!(logger, "lsp config does not match saved lsp config");
+                    None
                 }
             }
-            Some(ref lsp) => lsp_clients
-                .iter()
-                .find(|c| match lsp {
-                    LspConfig::VoltageFlow(ref url) => url == &c.url,
-                })
-                .cloned(),
         };
-        let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.pubkey);
+
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let (lsp_client, liquidity) = match lsp_config {
+            Some(LspConfig::VoltageFlow(url)) => {
+                (Some(AnyLsp::new_voltage_flow(&url).await?), None)
+            }
+            Some(LspConfig::Lsps(lsps_config)) => {
+                let liquidity_manager = Arc::new(LiquidityManager::new(
+                    keys_manager.clone(),
+                    Some(LiquidityProviderConfig {
+                        lsps2_config: Some(JITChannelsConfig {
+                            promise_secret: [0; 32],
+                            min_payment_size_msat: 0,
+                            max_payment_size_msat: 9999999999,
+                        }),
+                    }),
+                    channel_manager.clone(),
+                    None,
+                    None,
+                ));
+
+                (
+                    Some(AnyLsp::new_lsps(
+                        lsps_config.connection_string.clone(),
+                        lsps_config.token.clone(),
+                        liquidity_manager.clone(),
+                        channel_manager.clone(),
+                        keys_manager.clone(),
+                        network,
+                        logger.clone(),
+                        stop.clone(),
+                    )?),
+                    Some(liquidity_manager),
+                )
+            }
+            None => (None, None),
+        };
+
+        let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.get_lsp_pubkey());
         let message_router = Arc::new(LspMessageRouter::new(lsp_client_pubkey));
         let onion_message_handler = Arc::new(OnionMessenger::new(
             keys_manager.clone(),
@@ -363,7 +409,7 @@ impl<S: MutinyStorage> Node<S> {
             chan_handler: channel_manager.clone(),
             route_handler,
             onion_message_handler,
-            custom_message_handler: IgnoringMessageHandler {},
+            custom_message_handler: Arc::new(MutinyMessageHandler { liquidity }),
         };
 
         let bump_tx_event_handler = Arc::new(BumpTransactionEventHandler::new(
@@ -381,7 +427,7 @@ impl<S: MutinyStorage> Node<S> {
             keys_manager.clone(),
             persister.clone(),
             bump_tx_event_handler,
-            lsp_client_pubkey,
+            lsp_client.clone(),
             logger.clone(),
         );
 
@@ -475,8 +521,6 @@ impl<S: MutinyStorage> Node<S> {
                 }
             }
         }
-
-        let stop = Arc::new(AtomicBool::new(false));
 
         let background_persister = persister.clone();
         let background_event_handler = event_handler.clone();
@@ -717,10 +761,7 @@ impl<S: MutinyStorage> Node<S> {
     pub fn node_index(&self) -> NodeIndex {
         NodeIndex {
             child_index: self.child_index,
-            lsp: self
-                .lsp_client
-                .clone()
-                .map(|l| LspConfig::VoltageFlow(l.url)),
+            lsp: self.lsp_client.as_ref().map(|l| l.get_config()),
             archived: Some(false),
         }
     }
@@ -801,92 +842,138 @@ impl<S: MutinyStorage> Node<S> {
         labels: Vec<String>,
         route_hints: Option<Vec<PhantomRouteHints>>,
     ) -> Result<Bolt11Invoice, MutinyError> {
-        // the amount to create for the invoice whether or not there is an lsp
-        let (amount_sat, lsp_fee) = if let Some(lsp) = self.lsp_client.as_ref() {
-            // LSP requires an amount:
-            let amount_sat = amount_sat.ok_or(MutinyError::BadAmountError)?;
-
-            // Needs any amount over 0 if channel exists
-            // Needs amount over minimum if no channel
-            let inbound_capacity_msat: u64 = self
-                .channel_manager
-                .list_channels_with_counterparty(&lsp.pubkey)
-                .iter()
-                .map(|c| c.inbound_capacity_msat)
-                .sum();
-            let min_amount_sat = if inbound_capacity_msat > amount_sat * 1_000 {
-                1
-            } else {
-                utils::min_lightning_amount(self.network)
-            };
-            if amount_sat < min_amount_sat {
-                return Err(MutinyError::BadAmountError);
-            }
-
-            // check the fee from the LSP
-            let lsp_fee = lsp
-                .get_lsp_fee_msat(FeeRequest {
-                    pubkey: self.pubkey.to_hex(),
-                    amount_msat: amount_sat * 1000,
-                })
-                .await?;
-
-            // Convert the fee from msat to sat for comparison and subtraction
-            let lsp_fee_sat = lsp_fee.fee_amount_msat / 1000;
-
-            // Ensure that the fee is less than the amount being requested.
-            // If it isn't, we don't subtract it.
-            // This prevents amount from being subtracted down to 0.
-            // This will mean that the LSP fee will be paid by the payer instead.
-            let amount_minus_fee = if lsp_fee_sat < amount_sat {
-                amount_sat
-                    .checked_sub(lsp_fee_sat)
-                    .ok_or(MutinyError::BadAmountError)?
-            } else {
-                amount_sat
-            };
-
-            (Some(amount_minus_fee), Some(lsp_fee))
-        } else {
-            (amount_sat, None)
-        };
-
-        let lsp_fee_msat = lsp_fee.as_ref().map(|l| l.fee_amount_msat);
-
-        let invoice = self
-            .create_internal_invoice(amount_sat, lsp_fee_msat, labels, route_hints)
-            .await?;
-
-        if let Some(lsp) = self.lsp_client.as_ref() {
-            self.connect_peer(PubkeyConnectionInfo::new(&lsp.connection_string)?, None)
-                .await?;
-            let lsp_invoice = match lsp
-                .get_lsp_invoice(
-                    invoice.to_string(),
-                    lsp_fee.expect("should have gotten a fee id").id,
+        match self.lsp_client.as_ref() {
+            Some(lsp) => {
+                self.connect_peer(
+                    PubkeyConnectionInfo::new(&lsp.get_lsp_connection_string())?,
+                    None,
                 )
-                .await
-            {
-                Ok(lsp_invoice_str) => Bolt11Invoice::from_str(&lsp_invoice_str)?,
-                Err(e) => {
-                    log_error!(self.logger, "Failed to get invoice from LSP: {e}");
-                    return Err(e);
+                .await?;
+
+                // LSP requires an amount:
+                let amount_sat = amount_sat.ok_or(MutinyError::BadAmountError)?;
+
+                // Needs any amount over 0 if channel exists
+                // Needs amount over minimum if no channel
+                let inbound_capacity_msat: u64 = self
+                    .channel_manager
+                    .list_channels_with_counterparty(&lsp.get_lsp_pubkey())
+                    .iter()
+                    .map(|c| c.inbound_capacity_msat)
+                    .sum();
+
+                let has_inbound_capacity = inbound_capacity_msat > amount_sat * 1_000;
+
+                let min_amount_sat = if has_inbound_capacity {
+                    1
+                } else {
+                    utils::min_lightning_amount(self.network)
+                };
+
+                if amount_sat < min_amount_sat {
+                    return Err(MutinyError::BadAmountError);
                 }
-            };
 
-            if invoice.network() != self.network {
-                return Err(MutinyError::IncorrectNetwork(invoice.network()));
+                let user_channel_id = match lsp {
+                    AnyLsp::VoltageFlow(_) => None,
+                    AnyLsp::Lsps(_) => Some(utils::now().as_secs().into()),
+                };
+
+                // check the fee from the LSP
+                let lsp_fee = lsp
+                    .get_lsp_fee_msat(FeeRequest {
+                        pubkey: self.pubkey.to_hex(),
+                        amount_msat: amount_sat * 1000,
+                        user_channel_id,
+                    })
+                    .await?;
+
+                // Convert the fee from msat to sat for comparison and subtraction
+                let lsp_fee_sat = lsp_fee.fee_amount_msat / 1000;
+
+                // Ensure that the fee is less than the amount being requested.
+                // If it isn't, we don't subtract it.
+                // This prevents amount from being subtracted down to 0.
+                // This will mean that the LSP fee will be paid by the payer instead.
+                let amount_minus_fee = if lsp_fee_sat < amount_sat {
+                    amount_sat
+                        .checked_sub(lsp_fee_sat)
+                        .ok_or(MutinyError::BadAmountError)?
+                } else {
+                    amount_sat
+                };
+
+                match lsp {
+                    AnyLsp::VoltageFlow(client) => {
+                        let invoice = self
+                            .create_internal_invoice(
+                                Some(amount_minus_fee),
+                                Some(lsp_fee.fee_amount_msat),
+                                labels,
+                                route_hints,
+                            )
+                            .await?;
+
+                        let lsp_invoice = match client
+                            .get_lsp_invoice(InvoiceRequest {
+                                bolt11: Some(invoice.to_string()),
+                                user_channel_id,
+                                fee_id: lsp_fee.id,
+                            })
+                            .await
+                        {
+                            Ok(lsp_invoice_str) => Bolt11Invoice::from_str(&lsp_invoice_str)?,
+                            Err(e) => {
+                                log_error!(self.logger, "Failed to get invoice from LSP: {e}");
+                                return Err(e);
+                            }
+                        };
+
+                        if invoice.network() != self.network {
+                            return Err(MutinyError::IncorrectNetwork(invoice.network()));
+                        }
+
+                        if lsp_invoice.payment_hash() != invoice.payment_hash()
+                            || lsp_invoice.recover_payee_pub_key() != client.get_lsp_pubkey()
+                        {
+                            return Err(MutinyError::InvoiceCreationFailed);
+                        }
+
+                        Ok(lsp_invoice)
+                    }
+                    AnyLsp::Lsps(client) => {
+                        if has_inbound_capacity {
+                            Ok(self
+                                .create_internal_invoice(
+                                    Some(amount_sat),
+                                    None,
+                                    labels,
+                                    route_hints,
+                                )
+                                .await?)
+                        } else {
+                            let lsp_invoice = match client
+                                .get_lsp_invoice(InvoiceRequest {
+                                    bolt11: None,
+                                    user_channel_id,
+                                    fee_id: lsp_fee.id,
+                                })
+                                .await
+                            {
+                                Ok(lsp_invoice_str) => Bolt11Invoice::from_str(&lsp_invoice_str)?,
+                                Err(e) => {
+                                    log_error!(self.logger, "Failed to get invoice from LSP: {e}");
+                                    return Err(e);
+                                }
+                            };
+                            Ok(lsp_invoice)
+                        }
+                    }
+                }
             }
-
-            if lsp_invoice.payment_hash() != invoice.payment_hash()
-                || lsp_invoice.recover_payee_pub_key() != lsp.pubkey
-            {
-                return Err(MutinyError::InvoiceCreationFailed);
-            }
-
-            Ok(lsp_invoice)
-        } else {
-            Ok(invoice)
+            None => Ok(self
+                .create_internal_invoice(amount_sat, None, labels, route_hints)
+                .await?),
         }
     }
 
@@ -1480,7 +1567,7 @@ impl<S: MutinyStorage> Node<S> {
         // if we are opening channel to LSP, turn off SCID alias until CLN is updated
         // LSP protects all invoice information anyways, so no UTXO leakage
         if let Some(lsp) = self.lsp_client.clone() {
-            if pubkey == lsp.pubkey {
+            if pubkey == lsp.get_lsp_pubkey() {
                 config.channel_handshake_config.negotiate_scid_privacy = false;
             }
         }
@@ -1583,7 +1670,7 @@ impl<S: MutinyStorage> Node<S> {
         // if we are opening channel to LSP, turn off SCID alias until CLN is updated
         // LSP protects all invoice information anyways, so no UTXO leakage
         if let Some(lsp) = self.lsp_client.clone() {
-            if pubkey == lsp.pubkey {
+            if pubkey == lsp.get_lsp_pubkey() {
                 config.channel_handshake_config.negotiate_scid_privacy = false;
             }
         }
@@ -1714,7 +1801,7 @@ async fn start_reconnection_handling<S: MutinyStorage>(
     fee_estimator: Arc<MutinyFeeEstimator<S>>,
     logger: &Arc<MutinyLogger>,
     uuid: String,
-    lsp_client: Option<&LspClient>,
+    lsp_client: Option<&AnyLsp<S>>,
     stop: Arc<AtomicBool>,
     stopped_components: Arc<RwLock<Vec<bool>>>,
     skip_fee_estimates: bool,
@@ -1752,12 +1839,12 @@ async fn start_reconnection_handling<S: MutinyStorage>(
     utils::spawn(async move {
         // Now try to connect to the client's LSP
         if let Some(lsp) = lsp_client_copy {
-            let node_id = NodeId::from_pubkey(&lsp.pubkey);
+            let node_id = NodeId::from_pubkey(&lsp.get_lsp_pubkey());
 
             let connect_res = connect_peer_if_necessary(
                 #[cfg(target_arch = "wasm32")]
                 &websocket_proxy_addr_copy_proxy,
-                &PubkeyConnectionInfo::new(lsp.connection_string.as_str()).unwrap(),
+                &PubkeyConnectionInfo::new(lsp.get_lsp_connection_string().as_str()).unwrap(),
                 &storage_copy,
                 proxy_logger.clone(),
                 peer_man_proxy.clone(),
@@ -1778,7 +1865,7 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                 &storage_copy,
                 &uuid_copy,
                 &node_id,
-                &lsp.connection_string,
+                &lsp.get_lsp_connection_string(),
                 None,
             ) {
                 log_error!(proxy_logger, "could not save connection to lsp: {e}");
@@ -1965,6 +2052,7 @@ pub(crate) fn default_user_config() -> UserConfig {
             max_dust_htlc_exposure: MaxDustHTLCExposure::FixedLimitMsat(
                 21_000_000 * 100_000_000 * 1_000,
             ),
+            accept_underpaying_htlcs: true,
             ..Default::default()
         },
         ..Default::default()

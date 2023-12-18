@@ -69,6 +69,9 @@ pub enum MutinyError {
     /// LSP indicated it was not connected to the client node.
     #[error("Failed to have a connection to the LSP node.")]
     LspConnectionError,
+    /// LSP required an invoice and none was provided.
+    #[error("Failed to provide an invoice to the LSP.")]
+    LspInvoiceRequired,
     /// Subscription Client Not Configured
     #[error("Subscription Client Not Configured")]
     SubscriptionClientNotConfigured,

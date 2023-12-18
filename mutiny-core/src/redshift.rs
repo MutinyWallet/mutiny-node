@@ -1,4 +1,5 @@
 use crate::error::MutinyError;
+use crate::lsp::Lsp;
 use crate::nodemanager::NodeManager;
 use crate::storage::MutinyStorage;
 use crate::utils::sleep;
@@ -198,7 +199,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
                 // TODO this would be better if it was a random node
                 let node = self.get_node(&node.pubkey).await?;
                 match &node.lsp_client {
-                    Some(lsp) => lsp.pubkey,
+                    Some(lsp) => lsp.get_lsp_pubkey(),
                     None => return Err(MutinyError::LspGenericError),
                 }
             }
