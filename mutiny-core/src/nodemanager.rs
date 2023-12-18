@@ -560,20 +560,13 @@ impl<S: MutinyStorage> NodeManager<S> {
     pub async fn new(
         c: MutinyWalletConfig,
         storage: S,
-        session_id: Option<String>,
+        stop: Arc<AtomicBool>,
+        logger: Arc<MutinyLogger>,
     ) -> Result<NodeManager<S>, MutinyError> {
-        let stop = Arc::new(AtomicBool::new(false));
-
         #[cfg(target_arch = "wasm32")]
         let websocket_proxy_addr = c
             .websocket_proxy_addr
             .unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
-
-        let logger = Arc::new(MutinyLogger::with_writer(
-            stop.clone(),
-            storage.clone(),
-            session_id,
-        ));
 
         // Need to prevent other devices from running at the same time
         if !c.skip_device_lock {
@@ -2637,6 +2630,7 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
 mod tests {
     use crate::{
         encrypt::encryption_key_from_pass,
+        logging::MutinyLogger,
         nodemanager::{
             ActivityItem, ChannelClosure, MutinyInvoice, NodeManager, TransactionDetails,
         },
@@ -2651,7 +2645,10 @@ mod tests {
     use lightning::ln::PaymentHash;
     use lightning_invoice::Bolt11Invoice;
     use std::collections::HashMap;
-    use std::str::FromStr;
+    use std::{
+        str::FromStr,
+        sync::{atomic::AtomicBool, Arc},
+    };
 
     use crate::test_utils::*;
 
@@ -2690,9 +2687,14 @@ mod tests {
             false,
             true,
         );
-        NodeManager::new(c, storage.clone(), None)
-            .await
-            .expect("node manager should initialize");
+        NodeManager::new(
+            c,
+            storage.clone(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(MutinyLogger::default()),
+        )
+        .await
+        .expect("node manager should initialize");
         storage.insert_mnemonic(seed).unwrap();
         assert!(NodeManager::has_node_manager(storage));
     }
@@ -2721,9 +2723,14 @@ mod tests {
             false,
             true,
         );
-        let nm = NodeManager::new(c, storage, None)
-            .await
-            .expect("node manager should initialize");
+        let nm = NodeManager::new(
+            c,
+            storage,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(MutinyLogger::default()),
+        )
+        .await
+        .expect("node manager should initialize");
 
         {
             let node_identity = nm.new_node().await.expect("should create new node");
@@ -2775,9 +2782,14 @@ mod tests {
         );
         let c = c.with_safe_mode();
 
-        let nm = NodeManager::new(c, storage, None)
-            .await
-            .expect("node manager should initialize");
+        let nm = NodeManager::new(
+            c,
+            storage,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(MutinyLogger::default()),
+        )
+        .await
+        .expect("node manager should initialize");
 
         let bip21 = nm.create_bip21(None, vec![]).await.unwrap();
         assert!(bip21.invoice.is_none());
@@ -2810,9 +2822,14 @@ mod tests {
             false,
             true,
         );
-        let nm = NodeManager::new(c, storage, None)
-            .await
-            .expect("node manager should initialize");
+        let nm = NodeManager::new(
+            c,
+            storage,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(MutinyLogger::default()),
+        )
+        .await
+        .expect("node manager should initialize");
 
         let labels = vec![String::from("label1"), String::from("label2")];
 

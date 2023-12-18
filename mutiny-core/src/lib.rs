@@ -43,7 +43,6 @@ pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
-use crate::auth::MutinyAuthClient;
 use crate::labels::{get_contact_key, Contact, LabelStorage};
 use crate::logging::LOGGING_KEY;
 use crate::nostr::nwc::{
@@ -51,6 +50,7 @@ use crate::nostr::nwc::{
 };
 use crate::nostr::MUTINY_PLUS_SUBSCRIPTION_LABEL;
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY};
+use crate::{auth::MutinyAuthClient, logging::MutinyLogger};
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{nostr::NostrManager, utils::sleep};
@@ -66,9 +66,9 @@ use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use nostr_sdk::{Client, RelayPoolNotification};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::{collections::HashMap, sync::atomic::AtomicBool};
 
 #[derive(Clone)]
 pub struct MutinyWalletConfig {
@@ -141,6 +141,8 @@ pub struct MutinyWallet<S: MutinyStorage> {
     pub storage: S,
     pub node_manager: Arc<NodeManager<S>>,
     pub nostr: Arc<NostrManager<S>>,
+    pub stop: Arc<AtomicBool>,
+    pub logger: Arc<MutinyLogger>,
 }
 
 impl<S: MutinyStorage> MutinyWallet<S> {
@@ -159,8 +161,21 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             None => storage.set_data(EXPECTED_NETWORK_KEY.to_string(), config.network, None)?,
         }
 
-        let node_manager =
-            Arc::new(NodeManager::new(config.clone(), storage.clone(), session_id).await?);
+        let stop = Arc::new(AtomicBool::new(false));
+        let logger = Arc::new(MutinyLogger::with_writer(
+            stop.clone(),
+            storage.clone(),
+            session_id,
+        ));
+        let node_manager = Arc::new(
+            NodeManager::new(
+                config.clone(),
+                storage.clone(),
+                stop.clone(),
+                logger.clone(),
+            )
+            .await?,
+        );
 
         NodeManager::start_sync(node_manager.clone());
 
@@ -183,6 +198,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             storage,
             node_manager,
             nostr,
+            stop,
+            logger,
         };
 
         #[cfg(not(test))]
@@ -219,8 +236,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     pub async fn start(&mut self) -> Result<(), MutinyError> {
         self.storage.start().await?;
         // when we restart, gen a new session id
-        self.node_manager =
-            Arc::new(NodeManager::new(self.config.clone(), self.storage.clone(), None).await?);
+        self.node_manager = Arc::new(
+            NodeManager::new(
+                self.config.clone(),
+                self.storage.clone(),
+                self.stop.clone(),
+                self.logger.clone(),
+            )
+            .await?,
+        );
         NodeManager::start_sync(self.node_manager.clone());
 
         // Redshifts disabled in safe mode
