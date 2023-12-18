@@ -40,7 +40,10 @@ use mutiny_core::redshift::RedshiftRecipient;
 use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
 use mutiny_core::utils::{now, sleep};
 use mutiny_core::vss::MutinyVssClient;
-use mutiny_core::{labels::LabelStorage, nodemanager::NodeManager};
+use mutiny_core::{
+    labels::LabelStorage,
+    nodemanager::{create_lsp_config, NodeManager},
+};
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
 use nostr::key::XOnlyPublicKey;
 use nostr::prelude::FromBech32;
@@ -634,6 +637,24 @@ impl MutinyWallet {
         Ok(JsValue::from_serde(
             &self.inner.node_manager.list_nodes().await?,
         )?)
+    }
+
+    /// Changes all the node's LSPs to the given config. If any of the nodes have an active channel with the
+    /// current LSP, it will fail to change the LSP.
+    ///
+    /// Requires a restart of the node manager to take effect.
+    pub async fn change_lsp(
+        &self,
+        lsp_url: Option<String>,
+        lsp_connection_string: Option<String>,
+        lsp_token: Option<String>,
+    ) -> Result<(), MutinyJsError> {
+        let lsp_config = create_lsp_config(lsp_url, lsp_connection_string, lsp_token)?;
+
+        self.inner.node_manager.change_lsp(lsp_config).await?;
+        // sleep 250ms to let storage take effect
+        sleep(250).await;
+        Ok(())
     }
 
     /// Attempts to connect to a peer from the selected node.

@@ -519,32 +519,11 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let gossip_sync = Arc::new(gossip_sync);
 
-        let lsp_config: Option<LspConfig> =
-            match (c.lsp_url.clone(), c.lsp_connection_string.clone()) {
-                (Some(lsp_url), None) => {
-                    if !lsp_url.is_empty() && !c.safe_mode {
-                        Some(LspConfig::new_voltage_flow(lsp_url))
-                    } else {
-                        None
-                    }
-                }
-                (None, Some(lsp_connection_string)) => {
-                    if !lsp_connection_string.is_empty() && !c.safe_mode {
-                        Some(LspConfig::new_lsps(lsp_connection_string, c.lsp_token))
-                    } else {
-                        None
-                    }
-                }
-                (Some(_), Some(_)) => {
-                    // both shouldn't be set, surface error
-                    log_error!(
-                        logger,
-                        "Both lsp_url and lsp_connection_string should not be set."
-                    );
-                    return Err(MutinyError::InvalidArgumentsError);
-                }
-                (None, None) => None,
-            };
+        let lsp_config = if c.safe_mode {
+            None
+        } else {
+            create_lsp_config(c.lsp_url, c.lsp_connection_string, c.lsp_token)?
+        };
 
         let node_storage = storage.get_nodes()?;
 
@@ -602,7 +581,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
             log_info!(logger, "inserting updated nodes");
 
-            storage.insert_nodes(NodeStorage {
+            storage.insert_nodes(&NodeStorage {
                 nodes: updated_nodes,
                 version: node_storage.version + 1,
             })?;
@@ -1492,6 +1471,45 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(peers)
     }
 
+    /// Changes all the node's LSPs to the given config. If any of the nodes have an active channel with the
+    /// current LSP, it will fail to change the LSP.
+    ///
+    /// Requires a restart of the node manager to take effect.
+    pub async fn change_lsp(&self, lsp_config: Option<LspConfig>) -> Result<(), MutinyError> {
+        // if we are in safe mode we don't load the lightning state so we can't know if it is safe to change the LSP.
+        if self.safe_mode {
+            return Err(MutinyError::NotRunning);
+        }
+
+        // check if any nodes have active channels with the current LSP
+        // if they do, we can't change the LSP
+        let nodes = self.nodes.lock().await;
+        if nodes.iter().any(|(_, n)| {
+            if let Some(lsp_pk) = n.lsp_client.as_ref().map(|x| x.get_lsp_pubkey()) {
+                !n.channel_manager
+                    .list_channels_with_counterparty(&lsp_pk)
+                    .is_empty()
+            } else {
+                false
+            }
+        }) {
+            return Err(MutinyError::LspGenericError);
+        }
+        drop(nodes);
+
+        // edit node storage
+        let mut node_storage = self.node_storage.lock().await;
+        node_storage.nodes.iter_mut().for_each(|(_, n)| {
+            n.lsp = lsp_config.clone();
+        });
+        node_storage.version += 1; // update version for VSS
+
+        // save updated lsp to storage
+        self.storage.insert_nodes(&node_storage)?;
+
+        Ok(())
+    }
+
     /// Attempts to connect to a peer using either a specified node or the first available node.
     pub async fn connect_to_peer(
         &self,
@@ -2359,7 +2377,7 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         .nodes
         .insert(next_node_uuid.clone(), next_node.clone());
 
-    node_manager.storage.insert_nodes(existing_nodes.clone())?;
+    node_manager.storage.insert_nodes(&existing_nodes)?;
     node_mutex.nodes = existing_nodes.nodes.clone();
 
     // now create the node process and init it
@@ -2401,6 +2419,32 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         uuid: next_node_uuid.clone(),
         pubkey: node_pubkey,
     })
+}
+
+/// Turn parameterized LSP options into a [`LspConfig`].
+pub fn create_lsp_config(
+    lsp_url: Option<String>,
+    lsp_connection_string: Option<String>,
+    lsp_token: Option<String>,
+) -> Result<Option<LspConfig>, MutinyError> {
+    match (lsp_url.clone(), lsp_connection_string.clone()) {
+        (Some(lsp_url), None) => {
+            if !lsp_url.is_empty() {
+                Ok(Some(LspConfig::new_voltage_flow(lsp_url)))
+            } else {
+                Ok(None)
+            }
+        }
+        (None, Some(lsp_connection_string)) => {
+            if !lsp_connection_string.is_empty() {
+                Ok(Some(LspConfig::new_lsps(lsp_connection_string, lsp_token)))
+            } else {
+                Ok(None)
+            }
+        }
+        (Some(_), Some(_)) => Err(MutinyError::InvalidArgumentsError),
+        (None, None) => Ok(None),
+    }
 }
 
 #[cfg(test)]
