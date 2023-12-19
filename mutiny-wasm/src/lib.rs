@@ -1022,7 +1022,9 @@ impl MutinyWallet {
 
     /// Lists the federation id's of the federation clients in the manager.
     #[wasm_bindgen]
-    pub async fn list_federations(&self) -> Result<JsValue /* Vec<String> */, MutinyJsError> {
+    pub async fn list_federations(
+        &self,
+    ) -> Result<JsValue /* Vec<FederationIdentity> */, MutinyJsError> {
         Ok(JsValue::from_serde(&self.inner.list_federations().await?)?)
     }
 

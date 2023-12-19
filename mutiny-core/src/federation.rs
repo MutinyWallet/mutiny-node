@@ -116,6 +116,10 @@ pub struct FederationStorage {
 pub struct FederationIdentity {
     pub uuid: String,
     pub federation_id: FederationId,
+    // https://github.com/fedimint/fedimint/tree/master/docs/meta_fields
+    pub federation_name: Option<String>,
+    pub federation_expiry_timestamp: Option<String>,
+    pub welcome_message: Option<String>,
 }
 
 // This is the FederationIndex reference that is saved to the DB
@@ -356,10 +360,15 @@ impl<S: MutinyStorage> FederationClient<S> {
         }
     }
 
-    pub async fn get_mutiny_federation_identity(&self) -> FederationIdentity {
+    pub fn get_mutiny_federation_identity(&self) -> FederationIdentity {
         FederationIdentity {
             uuid: self.uuid.clone(),
             federation_id: self.fedimint_client.federation_id(),
+            federation_name: self.fedimint_client.get_meta("federation_name"),
+            federation_expiry_timestamp: self
+                .fedimint_client
+                .get_meta("federation_expiry_timestamp"),
+            welcome_message: self.fedimint_client.get_meta("welcome_message"),
         }
     }
 }

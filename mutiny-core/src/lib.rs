@@ -564,7 +564,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .ok_or(MutinyError::InvoiceInvalid)?;
 
         // Try each federation first
-        let federation_ids = self.list_federations().await?;
+        let federation_ids = self.list_federation_ids().await?;
         for federation_id in federation_ids {
             if let Some(fedimint_client) = self.federations.lock().await.get(&federation_id) {
                 // Check if the federation has enough balance
@@ -635,7 +635,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             None
         } else {
             // Check if a federation exists
-            let federation_ids = self.list_federations().await?;
+            let federation_ids = self.list_federation_ids().await?;
             if !federation_ids.is_empty() {
                 // Use the first federation for simplicity
                 let federation_id = &federation_ids[0];
@@ -1032,13 +1032,23 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Lists the federation id's of the federation clients in the manager.
-    pub async fn list_federations(&self) -> Result<Vec<FederationId>, MutinyError> {
+    pub async fn list_federations(&self) -> Result<Vec<FederationIdentity>, MutinyError> {
         let federations = self.federations.lock().await;
-        let federation_ids = federations
+        let federation_identities = federations
+            .iter()
+            .map(|(_, n)| n.get_mutiny_federation_identity())
+            .collect();
+        Ok(federation_identities)
+    }
+
+    /// Lists the federation id's of the federation clients in the manager.
+    pub async fn list_federation_ids(&self) -> Result<Vec<FederationId>, MutinyError> {
+        let federations = self.federations.lock().await;
+        let federation_identities = federations
             .iter()
             .map(|(_, n)| n.fedimint_client.federation_id())
             .collect();
-        Ok(federation_ids)
+        Ok(federation_identities)
     }
 
     /// Removes a federation by setting its archived status to true, based on the FederationId.
@@ -1066,7 +1076,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     pub async fn get_total_federation_balance(&self) -> Result<u64, MutinyError> {
-        let federation_ids = self.list_federations().await?;
+        let federation_ids = self.list_federation_ids().await?;
         let mut total_balance = 0;
 
         let federations = self.federations.lock().await;
@@ -1086,13 +1096,13 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     pub async fn get_federation_balances(&self) -> Result<FederationBalances, MutinyError> {
         let federation_lock = self.federations.lock().await;
 
-        let federation_ids = self.list_federations().await?;
+        let federation_ids = self.list_federation_ids().await?;
         let mut balances = Vec::with_capacity(federation_ids.len());
         for fed_id in federation_ids {
             let fedimint_client = federation_lock.get(&fed_id).ok_or(MutinyError::NotFound)?;
 
             let balance = fedimint_client.get_balance().await?;
-            let identity = fedimint_client.get_mutiny_federation_identity().await;
+            let identity = fedimint_client.get_mutiny_federation_identity();
 
             balances.push(FederationBalance { identity, balance });
         }
@@ -1198,6 +1208,11 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     .await?;
 
     let federation_id = new_federation.fedimint_client.federation_id();
+    let federation_name = new_federation.fedimint_client.get_meta("federation_name");
+    let federation_expiry_timestamp = new_federation
+        .fedimint_client
+        .get_meta("federation_expiry_timestamp");
+    let welcome_message = new_federation.fedimint_client.get_meta("welcome_message");
     federations
         .lock()
         .await
@@ -1206,6 +1221,9 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     Ok(FederationIdentity {
         uuid: next_federation_uuid.clone(),
         federation_id,
+        federation_name,
+        federation_expiry_timestamp,
+        welcome_message,
     })
 }
 
