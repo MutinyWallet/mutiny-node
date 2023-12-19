@@ -2468,6 +2468,7 @@ dependencies = [
  "getrandom",
  "gloo-net",
  "gluesql",
+ "gluesql-core",
  "hex",
  "instant",
  "itertools 0.11.0",

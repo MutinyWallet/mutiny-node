@@ -571,7 +571,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 let balance = fedimint_client.get_balance().await?;
                 if balance >= send_msat / 1_000 {
                     // Try to pay the invoice using the federation
-                    let payment_result = fedimint_client.pay_invoice(inv.clone()).await;
+                    let payment_result = fedimint_client
+                        .pay_invoice(inv.clone(), labels.clone())
+                        .await;
                     match payment_result {
                         Ok(r) => return Ok(r),
                         Err(e) => match e {
@@ -644,7 +646,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 match fedimint_client {
                     Some(client) => {
                         // Try to create an invoice using the federation
-                        match client.get_invoice(amount.unwrap_or_default()).await {
+                        match client
+                            .get_invoice(amount.unwrap_or_default(), labels.clone())
+                            .await
+                        {
                             Ok(inv) => Some(inv.bolt11.ok_or(MutinyError::WalletOperationFailed)?),
                             Err(_) => None, // Handle the error or fallback to node_manager invoice creation
                         }

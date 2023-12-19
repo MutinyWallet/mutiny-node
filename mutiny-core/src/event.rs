@@ -22,6 +22,7 @@ use lightning::{
 };
 use lightning_invoice::Bolt11Invoice;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use std::sync::Arc;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
@@ -74,6 +75,20 @@ impl fmt::Display for HTLCStatus {
             HTLCStatus::InFlight => write!(f, "InFlight"),
             HTLCStatus::Succeeded => write!(f, "Succeeded"),
             HTLCStatus::Failed => write!(f, "Failed"),
+        }
+    }
+}
+
+impl FromStr for HTLCStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Pending" => Ok(HTLCStatus::Pending),
+            "InFlight" => Ok(HTLCStatus::InFlight),
+            "Succeeded" => Ok(HTLCStatus::Succeeded),
+            "Failed" => Ok(HTLCStatus::Failed),
+            _ => Err(format!("'{}' is not a valid HTLCStatus", s)),
         }
     }
 }
