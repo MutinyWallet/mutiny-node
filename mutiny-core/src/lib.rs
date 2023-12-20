@@ -71,9 +71,8 @@ use ::nostr::{Event, Kind, Metadata};
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
 use bitcoin::util::bip32::ExtendedPrivKey;
-use bitcoin::Network;
-use bitcoin::{hashes::sha256, secp256k1::PublicKey};
-use fedimint_core::{api::InviteCode, config::FederationId};
+use bitcoin::{hashes::sha256, Network};
+use fedimint_core::{api::InviteCode, config::FederationId, BitcoinHash};
 use futures::{pin_mut, select, FutureExt};
 use futures_util::lock::Mutex;
 use lightning::{log_debug, util::logger::Logger};
@@ -93,15 +92,19 @@ use mockall::{automock, predicate::*};
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 
 #[cfg_attr(test, automock)]
-pub(crate) trait InvoiceHandler {
+pub trait InvoiceHandler {
     fn logger(&self) -> &MutinyLogger;
     fn skip_hodl_invoices(&self) -> bool;
-    fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus>;
-    async fn pay_invoice_with_timeout(
+    async fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus>;
+    async fn pay_invoice(
         &self,
         invoice: &Bolt11Invoice,
         amt_sats: Option<u64>,
-        timeout_secs: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyInvoice, MutinyError>;
+    async fn create_invoice(
+        &self,
+        amount: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError>;
 }
@@ -348,6 +351,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             node_manager.xprivkey,
             storage.clone(),
             node_manager.logger.clone(),
+            stop.clone(),
         )?);
 
         // create gluedb storage
@@ -399,15 +403,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         // if we don't have any nodes, create one
-        let first_node = {
-            match mw.node_manager.list_nodes().await?.pop() {
-                Some(node) => node,
-                None => mw.node_manager.new_node().await?.pubkey,
+        match mw.node_manager.list_nodes().await?.pop() {
+            Some(_) => (),
+            None => {
+                mw.node_manager.new_node().await?;
             }
         };
 
         // start the nostr wallet connect background process
-        mw.start_nostr_wallet_connect(first_node).await;
+        mw.start_nostr_wallet_connect().await;
 
         Ok(mw)
     }
@@ -437,12 +441,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Starts a background process that will watch for nostr wallet connect events
-    pub(crate) async fn start_nostr_wallet_connect(&self, from_node: PublicKey) {
+    pub(crate) async fn start_nostr_wallet_connect(&self) {
         let nostr = self.nostr.clone();
-        let nm = self.node_manager.clone();
+        let logger = self.logger.clone();
+        let stop = self.stop.clone();
+        let self_clone = self.clone();
         utils::spawn(async move {
             loop {
-                if nm.stop.load(Ordering::Relaxed) {
+                if stop.load(Ordering::Relaxed) {
                     break;
                 };
 
@@ -457,19 +463,20 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 // clear in-active profiles, we used to have disabled and archived profiles
                 // but now we just delete profiles
                 if let Err(e) = nostr.remove_inactive_profiles() {
-                    log_warn!(nm.logger, "Failed to clear in-active NWC profiles: {e}");
+                    log_warn!(logger, "Failed to clear in-active NWC profiles: {e}");
                 }
 
                 // if a single-use profile's payment was successful in the background,
                 // we can safely clear it now
-                let node = nm.get_node(&from_node).await.expect("failed to get node");
-                if let Err(e) = nostr.clear_successful_single_use_profiles(&node) {
-                    log_warn!(nm.logger, "Failed to clear in-active NWC profiles: {e}");
+                if let Err(e) = nostr
+                    .clear_successful_single_use_profiles(&self_clone)
+                    .await
+                {
+                    log_warn!(logger, "Failed to clear in-active NWC profiles: {e}");
                 }
-                drop(node);
 
                 if let Err(e) = nostr.clear_expired_nwc_invoices().await {
-                    log_warn!(nm.logger, "Failed to clear expired NWC invoices: {e}");
+                    log_warn!(logger, "Failed to clear expired NWC invoices: {e}");
                 }
 
                 // clear successful single-use profiles
@@ -514,15 +521,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                             match notification {
                                 Ok(RelayPoolNotification::Event(_url, event)) => {
                                     if event.kind == Kind::WalletConnectRequest && event.verify().is_ok() {
-                                        match nostr.handle_nwc_request(event, &nm, &from_node).await {
+                                        match nostr.handle_nwc_request(event, &self_clone).await {
                                             Ok(Some(event)) => {
                                                 if let Err(e) = client.send_event(event).await {
-                                                    log_warn!(nm.logger, "Error sending NWC event: {e}");
+                                                    log_warn!(logger, "Error sending NWC event: {e}");
                                                 }
                                             }
                                             Ok(None) => {} // no response
                                             Err(e) => {
-                                                log_error!(nm.logger, "Error handling NWC request: {e}");
+                                                log_error!(logger, "Error handling NWC request: {e}");
                                             }
                                         }
                                     }
@@ -535,7 +542,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                             }
                         }
                         _ = delay_fut => {
-                            if nm.stop.load(Ordering::Relaxed) {
+                            if stop.load(Ordering::Relaxed) {
                                 break;
                             }
                         }
@@ -543,7 +550,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                             // Check if the filters have changed
                             let current_filters = nostr.get_nwc_filters();
                             if current_filters != last_filters {
-                                log_debug!(nm.logger, "subscribing to new nwc filters");
+                                log_debug!(logger, "subscribing to new nwc filters");
                                 client.subscribe(current_filters.clone()).await;
                                 last_filters = current_filters;
                             }
@@ -554,7 +561,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 }
 
                 if let Err(e) = client.disconnect().await {
-                    log_warn!(nm.logger, "Error disconnecting from relays: {e}");
+                    log_warn!(logger, "Error disconnecting from relays: {e}");
                 }
             }
         });
@@ -653,34 +660,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let invoice = if self.config.safe_mode {
             None
         } else {
-            // Check if a federation exists
-            let federation_ids = self.list_federation_ids().await?;
-            if !federation_ids.is_empty() {
-                // Use the first federation for simplicity
-                let federation_id = &federation_ids[0];
-                let fedimint_client = self.federations.lock().await.get(federation_id).cloned();
-
-                match fedimint_client {
-                    Some(client) => {
-                        // Try to create an invoice using the federation
-                        match client
-                            .get_invoice(amount.unwrap_or_default(), labels.clone())
-                            .await
-                        {
-                            Ok(inv) => Some(inv.bolt11.ok_or(MutinyError::WalletOperationFailed)?),
-                            Err(_) => None, // Handle the error or fallback to node_manager invoice creation
-                        }
-                    }
-                    None => None, // No federation client found, fallback to node_manager invoice creation
-                }
-            } else {
-                // Fallback to node_manager invoice creation if no federation is found
-                let inv = self
-                    .node_manager
-                    .create_invoice(amount, labels.clone())
-                    .await?;
-                Some(inv.bolt11.ok_or(MutinyError::WalletOperationFailed)?)
-            }
+            self.create_lightning_invoice(amount, labels.clone())
+                .await
+                .ok()
+                .and_then(|invoice| invoice.bolt11)
         };
 
         let Ok(address) = self.node_manager.get_new_address(labels.clone()) else {
@@ -693,6 +676,32 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             btc_amount: amount.map(|amount| bitcoin::Amount::from_sat(amount).to_btc().to_string()),
             labels,
         })
+    }
+
+    async fn create_lightning_invoice(
+        &self,
+        amount: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        let federation_ids = self.list_federation_ids().await?;
+
+        // Attempt to create federation invoice
+        if !federation_ids.is_empty() {
+            let federation_id = &federation_ids[0];
+            let fedimint_client = self.federations.lock().await.get(federation_id).cloned();
+
+            if let Some(client) = fedimint_client {
+                if let Ok(inv) = client
+                    .get_invoice(amount.unwrap_or_default(), labels.clone())
+                    .await
+                {
+                    return Ok(inv);
+                }
+            }
+        }
+
+        // Fallback to node_manager invoice creation if no federation invoice created
+        self.node_manager.create_invoice(amount, labels).await
     }
 
     /// Gets the current balance of the wallet.
@@ -1129,6 +1138,40 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         Ok(FederationBalances { balances })
+    }
+}
+
+impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
+    fn logger(&self) -> &MutinyLogger {
+        self.logger.as_ref()
+    }
+
+    fn skip_hodl_invoices(&self) -> bool {
+        self.config.skip_hodl_invoices
+    }
+
+    async fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus> {
+        self.get_invoice_by_hash(&sha256::Hash::hash(payment_hash))
+            .await
+            .ok()
+            .map(|p| p.status)
+    }
+
+    async fn pay_invoice(
+        &self,
+        invoice: &Bolt11Invoice,
+        amt_sats: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        self.pay_invoice(invoice, amt_sats, labels).await
+    }
+
+    async fn create_invoice(
+        &self,
+        amount: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        self.create_lightning_invoice(amount, labels).await
     }
 }
 

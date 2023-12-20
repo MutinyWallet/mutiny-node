@@ -1,3 +1,4 @@
+use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
 use crate::lsp::{InvoiceRequest, LspConfig};
 use crate::messagehandler::MutinyMessageHandler;
 use crate::nodemanager::ChannelClosure;
@@ -22,10 +23,6 @@ use crate::{
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
 use crate::{labels::LabelStorage, DEFAULT_PAYMENT_TIMEOUT};
-use crate::{
-    ldkstorage::{persist_monitor, ChannelOpenParams},
-    InvoiceHandler,
-};
 use anyhow::{anyhow, Context};
 use bdk::FeeRate;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
@@ -186,7 +183,6 @@ pub(crate) struct Node<S: MutinyStorage> {
     pub(crate) lsp_client: Option<AnyLsp<S>>,
     pub(crate) sync_lock: Arc<Mutex<()>>,
     stop: Arc<AtomicBool>,
-    pub skip_hodl_invoices: bool,
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
 }
@@ -209,7 +205,6 @@ impl<S: MutinyStorage> Node<S> {
         logger: Arc<MutinyLogger>,
         do_not_connect_peers: bool,
         empty_state: bool,
-        skip_hodl_invoices: bool,
         #[cfg(target_arch = "wasm32")] websocket_proxy_addr: String,
     ) -> Result<Self, MutinyError> {
         log_info!(logger, "initializing a new node: {uuid}");
@@ -728,7 +723,6 @@ impl<S: MutinyStorage> Node<S> {
             lsp_client,
             sync_lock,
             stop,
-            skip_hodl_invoices,
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
         })
@@ -1160,7 +1154,7 @@ impl<S: MutinyStorage> Node<S> {
             .read_payment_info(payment_hash.as_inner(), false, &self.logger)
         {
             Some(payment_info) => Ok((payment_info, false)),
-            None => Err(MutinyError::InvoiceInvalid),
+            None => Err(MutinyError::NotFound),
         }
     }
 
@@ -2054,33 +2048,6 @@ pub(crate) fn default_user_config() -> UserConfig {
             ..Default::default()
         },
         ..Default::default()
-    }
-}
-
-impl<S: MutinyStorage> InvoiceHandler for Node<S> {
-    fn logger(&self) -> &MutinyLogger {
-        self.logger.as_ref()
-    }
-
-    fn skip_hodl_invoices(&self) -> bool {
-        self.skip_hodl_invoices
-    }
-
-    fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus> {
-        self.persister
-            .read_payment_info(payment_hash, false, &self.logger)
-            .map(|p| p.status)
-    }
-
-    async fn pay_invoice_with_timeout(
-        &self,
-        invoice: &Bolt11Invoice,
-        amt_sats: Option<u64>,
-        timeout_secs: Option<u64>,
-        labels: Vec<String>,
-    ) -> Result<MutinyInvoice, MutinyError> {
-        self.pay_invoice_with_timeout(invoice, amt_sats, timeout_secs, labels)
-            .await
     }
 }
 

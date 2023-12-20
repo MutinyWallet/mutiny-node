@@ -1,7 +1,4 @@
-use crate::labels::LabelStorage;
 use crate::logging::MutinyLogger;
-use crate::node::Node;
-use crate::nodemanager::NodeManager;
 use crate::nostr::nip49::{NIP49BudgetPeriod, NIP49URI};
 use crate::nostr::nwc::{
     BudgetPeriod, BudgetedSpendingConditions, NostrWalletConnect, NwcProfile, NwcProfileTag,
@@ -10,11 +7,15 @@ use crate::nostr::nwc::{
 };
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
+use crate::{labels::LabelStorage, InvoiceHandler};
 use crate::{utils, HTLCStatus};
-use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::hashes::{sha256, Hash};
-use bitcoin::secp256k1::{PublicKey, Secp256k1, Signing};
+use bitcoin::secp256k1::{Secp256k1, Signing};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
+use bitcoin::{
+    hashes::hex::{FromHex, ToHex},
+    secp256k1::ThirtyTwoByteHash,
+};
 use futures::{pin_mut, select, FutureExt};
 use futures_util::lock::Mutex;
 use lightning::util::logger::Logger;
@@ -24,10 +25,9 @@ use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
 use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
 use nostr_sdk::{Client, RelayPoolNotification};
-use std::str::FromStr;
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, RwLock};
+use std::sync::{atomic::Ordering, Arc, RwLock};
 use std::time::Duration;
+use std::{str::FromStr, sync::atomic::AtomicBool};
 
 pub mod nip49;
 pub mod nwc;
@@ -76,6 +76,8 @@ pub struct NostrManager<S: MutinyStorage> {
     pending_nwc_lock: Arc<Mutex<()>>,
     /// Logger
     pub logger: Arc<MutinyLogger>,
+    /// Atomic stop signal
+    pub stop: Arc<AtomicBool>,
 }
 
 impl<S: MutinyStorage> NostrManager<S> {
@@ -151,30 +153,58 @@ impl<S: MutinyStorage> NostrManager<S> {
     }
 
     /// Goes through all single use profiles and removes the successfully paid ones
-    pub(crate) fn clear_successful_single_use_profiles(
+    pub(crate) async fn clear_successful_single_use_profiles(
         &self,
-        node: &Node<S>,
+        invoice_handler: &impl InvoiceHandler,
     ) -> Result<(), MutinyError> {
-        let mut profiles = self.nwc.write().unwrap();
-
-        profiles.retain(|x| {
-            if let SpendingConditions::SingleUse(single_use) = &x.profile.spending_conditions {
-                if let Some(payment_hash) = &single_use.payment_hash {
-                    let hash: [u8; 32] = FromHex::from_hex(payment_hash).expect("invalid hash");
-                    if let Some(payment) =
-                        node.persister.read_payment_info(&hash, false, &self.logger)
+        // Go through all remaining Single Use NWC
+        let indices_to_remove = {
+            let profiles = self.nwc.write().unwrap();
+            profiles
+                .iter()
+                .enumerate()
+                .filter_map(|(index, x)| {
+                    if let SpendingConditions::SingleUse(single_use) =
+                        &x.profile.spending_conditions
                     {
-                        if payment.status == HTLCStatus::Succeeded {
-                            return false;
+                        if let Some(payment_hash) = &single_use.payment_hash {
+                            match FromHex::from_hex(payment_hash) {
+                                Ok(hash) => {
+                                    let hash: [u8; 32] = hash;
+                                    Some((index, hash))
+                                }
+                                Err(_) => None,
+                            }
+                        } else {
+                            None
                         }
+                    } else {
+                        None
                     }
-                }
-            }
-            true
-        });
+                })
+                .collect::<Vec<_>>()
+        };
 
-        // save to storage
+        // All futures to go check on the status of those single use NWC
+        let futures: Vec<_> = indices_to_remove
+            .into_iter()
+            .map(|(index, hash)| async move {
+                match invoice_handler.get_outbound_payment_status(&hash).await {
+                    Some(HTLCStatus::Succeeded) => Some(index),
+                    _ => None,
+                }
+            })
+            .collect();
+
+        let results = futures::future::join_all(futures).await;
+
+        // Remove all of those NWC and then save
         {
+            let mut profiles = self.nwc.write().unwrap();
+            for index in results.into_iter().flatten().rev() {
+                profiles.remove(index);
+            }
+
             let profiles = profiles
                 .iter()
                 .map(|x| x.profile.clone())
@@ -586,13 +616,11 @@ impl<S: MutinyStorage> NostrManager<S> {
     pub async fn approve_invoice(
         &self,
         hash: sha256::Hash,
-        node_manager: &NodeManager<S>,
-        from_node: &PublicKey,
+        invoice_handler: &impl InvoiceHandler,
     ) -> Result<EventId, MutinyError> {
         let (nwc, inv) = self.find_nwc_data(&hash)?;
 
-        let node = node_manager.get_node(from_node).await?;
-        let resp = nwc.pay_nwc_invoice(node.as_ref(), &inv.invoice).await?;
+        let resp = nwc.pay_nwc_invoice(invoice_handler, &inv.invoice).await?;
 
         let event_id = self.broadcast_nwc_response(resp, nwc, inv).await?;
 
@@ -746,8 +774,7 @@ impl<S: MutinyStorage> NostrManager<S> {
     pub async fn handle_nwc_request(
         &self,
         event: Event,
-        node_manager: &NodeManager<S>,
-        from_node: &PublicKey,
+        invoice_handler: &impl InvoiceHandler,
     ) -> anyhow::Result<Option<Event>> {
         let nwc = {
             let vec = self.nwc.read().unwrap();
@@ -757,8 +784,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         };
 
         if let Some(mut nwc) = nwc {
-            let node = node_manager.get_node(from_node).await?;
-            let event = nwc.handle_nwc_request(event, node.as_ref(), self).await?;
+            let event = nwc.handle_nwc_request(event, invoice_handler, self).await?;
             Ok(event)
         } else {
             Ok(None)
@@ -802,7 +828,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         &self,
         amount_sats: u64,
         nwc_uri: &str,
-        node_manager: &NodeManager<S>,
+        invoice_handler: &impl InvoiceHandler,
     ) -> Result<Option<NIP47Error>, MutinyError> {
         let nwc = NostrWalletConnectURI::from_str(nwc_uri)
             .map_err(|_| MutinyError::InvalidArgumentsError)?;
@@ -818,7 +844,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         add_relay_res.expect("Failed to add relays");
         client.connect().await;
 
-        let invoice = node_manager
+        let invoice = invoice_handler
             .create_invoice(Some(amount_sats), vec!["Gift".to_string()])
             .await?;
         // unwrap is safe, we just created it
@@ -864,11 +890,11 @@ impl<S: MutinyStorage> NostrManager<S> {
 
             // check if the invoice has been paid, if so, return, otherwise continue
             // checking for response event
-            if let Ok(invoice) = node_manager
-                .get_invoice_by_hash(bolt11.payment_hash())
+            if let Some(status) = invoice_handler
+                .get_outbound_payment_status(&bolt11.payment_hash().into_32())
                 .await
             {
-                if invoice.paid() {
+                if status == HTLCStatus::Succeeded {
                     break;
                 }
             }
@@ -918,7 +944,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                     }
                 }
                 _ = delay_fut => {
-                    if node_manager.stop.load(Ordering::Relaxed) {
+                    if self.stop.load(Ordering::Relaxed) {
                         client.disconnect().await?;
                         return Err(MutinyError::NotRunning);
                     }
@@ -986,6 +1012,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         xprivkey: ExtendedPrivKey,
         storage: S,
         logger: Arc<MutinyLogger>,
+        stop: Arc<AtomicBool>,
     ) -> Result<Self, MutinyError> {
         let context = Secp256k1::new();
 
@@ -1008,6 +1035,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             storage,
             pending_nwc_lock: Arc::new(Mutex::new(())),
             logger,
+            stop,
         })
     }
 }
@@ -1061,7 +1089,9 @@ mod test {
 
         let logger = Arc::new(MutinyLogger::default());
 
-        NostrManager::from_mnemonic(xprivkey, storage, logger).unwrap()
+        let stop = Arc::new(AtomicBool::new(false));
+
+        NostrManager::from_mnemonic(xprivkey, storage, logger, stop).unwrap()
     }
 
     #[test]

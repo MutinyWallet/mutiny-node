@@ -1480,7 +1480,7 @@ impl MutinyWallet {
         Ok(self
             .inner
             .nostr
-            .claim_single_use_nwc(amount_sats, &nwc_uri, self.inner.node_manager.as_ref())
+            .claim_single_use_nwc(amount_sats, &nwc_uri, &self.inner)
             .await?
             .map(|r| r.message))
     }
@@ -1508,16 +1508,10 @@ impl MutinyWallet {
     }
 
     /// Approves an invoice and sends the payment
-    pub async fn approve_invoice(
-        &self,
-        hash: String,
-        from_node: String,
-    ) -> Result<(), MutinyJsError> {
-        let from_node = PublicKey::from_str(&from_node)?;
-
+    pub async fn approve_invoice(&self, hash: String) -> Result<(), MutinyJsError> {
         self.inner
             .nostr
-            .approve_invoice(hash.parse()?, &self.inner.node_manager, &from_node)
+            .approve_invoice(hash.parse()?, &self.inner)
             .await?;
 
         Ok(())
