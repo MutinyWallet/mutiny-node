@@ -1,3 +1,7 @@
+#![cfg_attr(
+    not(target_arch = "wasm32"),
+    allow(unused_variables, dead_code, unused_imports)
+)]
 use crate::{error::MutinyError, nodemanager::MutinyInvoice, HTLCStatus};
 
 pub mod glue;

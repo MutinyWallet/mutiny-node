@@ -125,7 +125,6 @@ impl GlueDB {
 }
 
 impl ApplicationStore for GlueDB {
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, unused_variables))]
     async fn save_payment(&self, invoice: MutinyInvoice) -> Result<(), MutinyError> {
         #[cfg(not(target_arch = "wasm32"))]
         unimplemented!("can't run on servers until Send is supported in Glue");
@@ -201,7 +200,6 @@ impl ApplicationStore for GlueDB {
         }
     }
 
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, unused_variables))]
     async fn get_payment(
         &self,
         payment_hash: &bitcoin::hashes::sha256::Hash,
@@ -255,7 +253,6 @@ impl ApplicationStore for GlueDB {
         }
     }
 
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, unused_variables))]
     async fn update_payment_status(
         &self,
         payment_hash: &bitcoin::hashes::sha256::Hash,
@@ -284,7 +281,6 @@ impl ApplicationStore for GlueDB {
         }
     }
 
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, unused_variables))]
     async fn update_payment_fee(
         &self,
         payment_hash: &bitcoin::hashes::sha256::Hash,
@@ -316,7 +312,6 @@ impl ApplicationStore for GlueDB {
         }
     }
 
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, unused_variables))]
     async fn update_payment_preimage(
         &self,
         payment_hash: &bitcoin::hashes::sha256::Hash,
@@ -348,7 +343,6 @@ impl ApplicationStore for GlueDB {
         }
     }
 
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     async fn list_payments(&self) -> Result<Vec<MutinyInvoice>, MutinyError> {
         #[cfg(not(target_arch = "wasm32"))]
         unimplemented!("can't run on servers until Send is supported in Glue");
@@ -382,7 +376,6 @@ impl ApplicationStore for GlueDB {
     }
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn parse_row_to_invoice(
     row: Vec<Value>,
     logger: Arc<MutinyLogger>,
@@ -598,7 +591,6 @@ impl IRawDatabase for FedimintDB {
     }
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub struct GluePseudoTransaction<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) db: Arc<Mutex<Glue<MemoryStorage>>>,

@@ -287,7 +287,7 @@ pub struct MutinyWallet<S: MutinyStorage> {
     pub node_manager: Arc<NodeManager<S>>,
     pub nostr: Arc<NostrManager<S>>,
     pub federation_storage: Arc<Mutex<FederationStorage>>,
-    pub(crate) federations: Arc<Mutex<HashMap<FederationId, Arc<FederationClient<S>>>>>,
+    pub(crate) federations: Arc<Mutex<HashMap<FederationId, Arc<FederationClient>>>>,
     pub stop: Arc<AtomicBool>,
     pub logger: Arc<MutinyLogger>,
 }
@@ -343,7 +343,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         // create federation library
         let (federation_storage, federations) =
-            create_federations(&storage, &config, glue_db.clone(), &logger, stop.clone()).await?;
+            create_federations(&storage, &config, glue_db.clone(), &logger).await?;
         let federation_storage = Arc::new(Mutex::new(federation_storage));
         let federations = federations;
 
@@ -1031,7 +1031,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             self.federation_storage.clone(),
             self.federations.clone(),
             federation_code,
-            self.stop.clone(),
         )
         .await
     }
@@ -1121,11 +1120,10 @@ async fn create_federations<S: MutinyStorage>(
     c: &MutinyWalletConfig,
     g: GlueDB,
     logger: &Arc<MutinyLogger>,
-    stop: Arc<AtomicBool>,
 ) -> Result<
     (
         FederationStorage,
-        Arc<Mutex<HashMap<FederationId, Arc<FederationClient<S>>>>>,
+        Arc<Mutex<HashMap<FederationId, Arc<FederationClient>>>>,
     ),
     MutinyError,
 > {
@@ -1135,14 +1133,11 @@ async fn create_federations<S: MutinyStorage>(
     for federation_item in federations {
         let federation = FederationClient::new(
             federation_item.0,
-            &federation_item.1,
             federation_item.1.federation_code.clone(),
             c.xprivkey,
-            storage.clone(),
             g.clone(),
             c.network,
             logger.clone(),
-            stop.clone(),
         )
         .await?;
 
@@ -1163,9 +1158,8 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     network: Network,
     logger: Arc<MutinyLogger>,
     federation_storage: Arc<Mutex<FederationStorage>>,
-    federations: Arc<Mutex<HashMap<FederationId, Arc<FederationClient<S>>>>>,
+    federations: Arc<Mutex<HashMap<FederationId, Arc<FederationClient>>>>,
     federation_code: InviteCode,
-    stop: Arc<AtomicBool>,
 ) -> Result<FederationIdentity, MutinyError> {
     // Begin with a mutex lock so that nothing else can
     // save or alter the federation list while it is about to
@@ -1201,14 +1195,11 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     // now create the federation process and init it
     let new_federation = FederationClient::new(
         next_federation_uuid.clone(),
-        &next_federation,
         federation_code,
         xprivkey,
-        storage.clone(),
         g.clone(),
         network,
         logger.clone(),
-        stop,
     )
     .await?;
 

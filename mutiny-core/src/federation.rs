@@ -5,7 +5,6 @@ use crate::{
     nodemanager::MutinyInvoice,
     onchain::coin_type_from_network,
     sql::{glue::GlueDB, ApplicationStore},
-    storage::MutinyStorage,
     utils::{self, sleep},
     ActivityItem, HTLCStatus, DEFAULT_PAYMENT_TIMEOUT,
 };
@@ -46,11 +45,7 @@ use futures_util::{pin_mut, StreamExt};
 use lightning::{log_debug, log_error, log_info, log_trace, log_warn, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    fmt::Debug,
-    sync::{atomic::AtomicBool, Arc, RwLock},
-};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 // The amount of time in milliseconds to wait for
 // checking the status of a fedimint payment. This
@@ -133,43 +128,24 @@ pub struct FedimintBalance {
     pub amount: u64,
 }
 
-// TODO remove
-#[allow(dead_code)]
-pub(crate) struct FederationClient<S: MutinyStorage> {
+pub(crate) struct FederationClient {
     pub(crate) uuid: String,
-    pub(crate) federation_index: FederationIndex,
-    pub(crate) federation_code: InviteCode,
     pub(crate) fedimint_client: ClientArc,
-    stopped_components: Arc<RwLock<Vec<bool>>>,
-    storage: S,
     g: GlueDB,
-    network: Network,
     pub(crate) logger: Arc<MutinyLogger>,
-    stop: Arc<AtomicBool>,
 }
 
-// TODO remove
-#[allow(dead_code)]
-impl<S: MutinyStorage> FederationClient<S> {
+impl FederationClient {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
         uuid: String,
-        federation_index: &FederationIndex,
         federation_code: InviteCode,
         xprivkey: ExtendedPrivKey,
-        storage: S,
         g: GlueDB,
         network: Network,
         logger: Arc<MutinyLogger>,
-        stop: Arc<AtomicBool>,
     ) -> Result<Self, MutinyError> {
         log_info!(logger, "initializing a new federation client: {uuid}");
-
-        // a list of components that need to be stopped and whether or not they are stopped
-        // TODO remove this if we end up not needing to stop things
-        let stopped_components = Arc::new(RwLock::new(vec![]));
-
-        log_info!(logger, "Joining federation {}", federation_code);
 
         let federation_info = FederationInfo::from_invite_code(federation_code.clone()).await?;
 
@@ -201,15 +177,9 @@ impl<S: MutinyStorage> FederationClient<S> {
         log_debug!(logger, "Built fedimint client");
         Ok(FederationClient {
             uuid,
-            federation_index: federation_index.clone(),
-            federation_code,
             fedimint_client,
-            stopped_components,
-            storage,
             g,
-            network,
             logger,
-            stop,
         })
     }
 
