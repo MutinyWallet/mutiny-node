@@ -1,4 +1,3 @@
-use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
 use crate::lsp::{InvoiceRequest, LspConfig};
 use crate::messagehandler::MutinyMessageHandler;
 use crate::nodemanager::ChannelClosure;
@@ -23,6 +22,10 @@ use crate::{
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
 use crate::{labels::LabelStorage, DEFAULT_PAYMENT_TIMEOUT};
+use crate::{
+    ldkstorage::{persist_monitor, ChannelOpenParams},
+    InvoiceHandler,
+};
 use anyhow::{anyhow, Context};
 use bdk::FeeRate;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
@@ -73,7 +76,7 @@ use lightning_liquidity::{
 };
 
 #[cfg(test)]
-use mockall::{automock, predicate::*};
+use mockall::predicate::*;
 use std::collections::HashMap;
 use std::{
     str::FromStr,
@@ -2054,21 +2057,7 @@ pub(crate) fn default_user_config() -> UserConfig {
     }
 }
 
-#[cfg_attr(test, automock)]
-pub(crate) trait LnNode {
-    fn logger(&self) -> &MutinyLogger;
-    fn skip_hodl_invoices(&self) -> bool;
-    fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus>;
-    async fn pay_invoice_with_timeout(
-        &self,
-        invoice: &Bolt11Invoice,
-        amt_sats: Option<u64>,
-        timeout_secs: Option<u64>,
-        labels: Vec<String>,
-    ) -> Result<MutinyInvoice, MutinyError>;
-}
-
-impl<S: MutinyStorage> LnNode for Node<S> {
+impl<S: MutinyStorage> InvoiceHandler for Node<S> {
     fn logger(&self) -> &MutinyLogger {
         self.logger.as_ref()
     }

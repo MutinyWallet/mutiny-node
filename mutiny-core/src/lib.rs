@@ -87,7 +87,24 @@ use std::sync::Arc;
 use std::{collections::HashMap, sync::atomic::AtomicBool};
 use uuid::Uuid;
 
+#[cfg(test)]
+use mockall::{automock, predicate::*};
+
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
+
+#[cfg_attr(test, automock)]
+pub(crate) trait InvoiceHandler {
+    fn logger(&self) -> &MutinyLogger;
+    fn skip_hodl_invoices(&self) -> bool;
+    fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus>;
+    async fn pay_invoice_with_timeout(
+        &self,
+        invoice: &Bolt11Invoice,
+        amt_sats: Option<u64>,
+        timeout_secs: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyInvoice, MutinyError>;
+}
 
 #[derive(Copy, Clone)]
 pub struct MutinyBalance {

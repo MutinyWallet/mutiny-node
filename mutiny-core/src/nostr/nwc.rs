@@ -1,10 +1,10 @@
 use crate::error::MutinyError;
 use crate::event::HTLCStatus;
-use crate::node::LnNode;
 use crate::nostr::nip49::NIP49Confirmation;
 use crate::nostr::NostrManager;
 use crate::storage::MutinyStorage;
 use crate::utils;
+use crate::InvoiceHandler;
 use anyhow::anyhow;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::secp256k1::{Secp256k1, Signing, ThirtyTwoByteHash};
@@ -309,7 +309,7 @@ impl NostrWalletConnect {
 
     pub(crate) async fn pay_nwc_invoice(
         &self,
-        node: &impl LnNode,
+        node: &impl InvoiceHandler,
         invoice: &Bolt11Invoice,
     ) -> Result<Response, MutinyError> {
         let label = self
@@ -398,7 +398,7 @@ impl NostrWalletConnect {
     pub async fn handle_nwc_request<S: MutinyStorage>(
         &mut self,
         event: Event,
-        node: &impl LnNode,
+        node: &impl InvoiceHandler,
         nostr_manager: &NostrManager<S>,
     ) -> anyhow::Result<Option<Event>> {
         let client_pubkey = self.client_key.public_key();
@@ -1102,11 +1102,11 @@ mod wasm_test {
     use super::*;
     use crate::event::{MillisatAmount, PaymentInfo};
     use crate::logging::MutinyLogger;
-    use crate::node::MockLnNode;
     use crate::nodemanager::MutinyInvoice;
     use crate::nostr::ProfileType;
     use crate::storage::MemoryStorage;
     use crate::test_utils::{create_dummy_invoice, create_node, create_nwc_request};
+    use crate::MockInvoiceHandler;
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::ONE_KEY;
     use bitcoin::Network;
@@ -1454,7 +1454,7 @@ mod wasm_test {
     async fn test_process_nwc_event_budget() {
         let storage = MemoryStorage::default();
         let logger = Arc::new(MutinyLogger::default());
-        let mut node = MockLnNode::new();
+        let mut node = MockInvoiceHandler::new();
 
         let amount_msats = 5_000;
 
