@@ -3,7 +3,7 @@ use crate::event::HTLCStatus;
 use crate::labels::LabelStorage;
 use crate::ldkstorage::CHANNEL_CLOSURE_PREFIX;
 use crate::logging::LOGGING_KEY;
-use crate::payjoin::PayjoinStorage;
+use crate::payjoin::{Error as PayjoinError, PayjoinStorage};
 use crate::utils::{sleep, spawn};
 use crate::ActivityItem;
 use crate::MutinyInvoice;
@@ -55,7 +55,9 @@ use lightning::util::logger::*;
 use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use lightning_transaction_sync::EsploraSyncClient;
+use payjoin::receive::v2::Enrolled;
 use payjoin::Uri;
+use pj::OhttpKeys;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -633,15 +635,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     pub(crate) fn resume_payjoins(nm: Arc<NodeManager<S>>) {
         let all = nm.storage.get_payjoins().unwrap_or_default();
         for payjoin in all {
-            let wallet = nm.wallet.clone();
-            let stop = nm.stop.clone();
-            let storage = Arc::new(nm.storage.clone());
-            utils::spawn(async move {
-                let pj_txid = Self::receive_payjoin(wallet, stop, storage, payjoin)
-                    .await
-                    .unwrap();
-                log::info!("Received payjoin txid: {}", pj_txid);
-            });
+            nm.clone().spawn_payjoin_receiver(payjoin);
         }
     }
 
@@ -734,6 +728,34 @@ impl<S: MutinyStorage> NodeManager<S> {
         Err(MutinyError::WalletOperationFailed)
     }
 
+    pub async fn start_payjoin_session(&self) -> Result<(Enrolled, OhttpKeys), PayjoinError> {
+        use crate::payjoin::{OHTTP_RELAYS, PAYJOIN_DIR};
+
+        let ohttp_keys =
+            crate::payjoin::fetch_ohttp_keys(OHTTP_RELAYS[0].to_owned(), PAYJOIN_DIR.to_owned())
+                .await?;
+        let http_client = reqwest::Client::builder().build()?;
+
+        let mut enroller = payjoin::receive::v2::Enroller::from_directory_config(
+            PAYJOIN_DIR.to_owned(),
+            ohttp_keys.clone(),
+            OHTTP_RELAYS[0].to_owned(), // TODO pick ohttp relay at random
+        );
+        // enroll client
+        let (req, context) = enroller.extract_req()?;
+        let ohttp_response = http_client
+            .post(req.url)
+            .header("Content-Type", "message/ohttp-req")
+            .body(req.body)
+            .send()
+            .await?;
+        let ohttp_response = ohttp_response.bytes().await?;
+        Ok((
+            enroller.process_res(ohttp_response.as_ref(), context)?,
+            ohttp_keys,
+        ))
+    }
+
     // Send v1 payjoin request
     pub async fn send_payjoin(
         &self,
@@ -809,8 +831,21 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(txid)
     }
 
+    pub fn spawn_payjoin_receiver(&self, session: crate::payjoin::Session) {
+        let logger = self.logger.clone();
+        let wallet = self.wallet.clone();
+        let stop = self.stop.clone();
+        let storage = Arc::new(self.storage.clone());
+        utils::spawn(async move {
+            match Self::receive_payjoin(wallet, stop, storage, session).await {
+                Ok(txid) => log_info!(logger, "Received payjoin txid: {txid}"),
+                Err(e) => log_error!(logger, "Error receiving payjoin: {e}"),
+            };
+        });
+    }
+
     /// Poll the payjoin relay to maintain a payjoin session and create a payjoin proposal.
-    pub async fn receive_payjoin(
+    async fn receive_payjoin(
         wallet: Arc<OnChainWallet<S>>,
         stop: Arc<AtomicBool>,
         storage: Arc<S>,
@@ -819,7 +854,9 @@ impl<S: MutinyStorage> NodeManager<S> {
         let http_client = reqwest::Client::builder().build()?;
         let proposal: payjoin::receive::v2::UncheckedProposal =
             Self::poll_for_fallback_psbt(stop, storage, &http_client, &mut session).await?;
-        let mut payjoin_proposal = wallet.process_payjoin_proposal(proposal).unwrap();
+        let mut payjoin_proposal = wallet
+            .process_payjoin_proposal(proposal)
+            .map_err(PayjoinError::Wallet)?;
 
         let (req, ohttp_ctx) = payjoin_proposal.extract_v2_req()?;
         let res = http_client

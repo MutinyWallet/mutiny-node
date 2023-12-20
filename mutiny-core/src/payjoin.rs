@@ -69,21 +69,16 @@ impl<S: MutinyStorage> PayjoinStorage for S {
     }
 }
 
-pub async fn fetch_ohttp_keys(
-    _ohttp_relay: Url,
-    directory: Url,
-) -> Result<OhttpKeys, Box<dyn std::error::Error>> {
+pub async fn fetch_ohttp_keys(_ohttp_relay: Url, directory: Url) -> Result<OhttpKeys, Error> {
     let http_client = reqwest::Client::builder().build().unwrap();
 
     let ohttp_keys_res = http_client
         .get(format!("{}/ohttp-keys", directory.as_ref()))
         .send()
-        .await
-        .unwrap()
+        .await?
         .bytes()
-        .await
-        .unwrap();
-    Ok(OhttpKeys::decode(ohttp_keys_res.as_ref())?)
+        .await?;
+    Ok(OhttpKeys::decode(ohttp_keys_res.as_ref()).map_err(|_| Error::OhttpDecodeFailed)?)
 }
 
 #[derive(Debug)]
@@ -92,6 +87,7 @@ pub enum Error {
     ReceiverStateMachine(payjoin::receive::Error),
     Wallet(payjoin::Error),
     Txid(bitcoin::hashes::hex::Error),
+    OhttpDecodeFailed,
     Shutdown,
     SessionExpired,
 }
@@ -105,6 +101,7 @@ impl std::fmt::Display for Error {
             Error::ReceiverStateMachine(e) => write!(f, "Payjoin error: {}", e),
             Error::Wallet(e) => write!(f, "Payjoin wallet error: {}", e),
             Error::Txid(e) => write!(f, "Payjoin txid error: {}", e),
+            Error::OhttpDecodeFailed => write!(f, "Failed to decode ohttp keys"),
             Error::Shutdown => write!(f, "Payjoin stopped by application shutdown"),
             Error::SessionExpired => write!(f, "Payjoin session expired. Create a new payment request and have the sender try again."),
         }
