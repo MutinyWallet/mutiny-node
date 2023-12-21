@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
 use lightning::ln::PaymentHash;
+use lightning_invoice::Bolt11Invoice;
 use lsps::{LspsClient, LspsConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -83,8 +84,10 @@ pub struct FeeResponse {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub(crate) trait Lsp {
     async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> Result<FeeResponse, MutinyError>;
-    async fn get_lsp_invoice(&self, invoice_request: InvoiceRequest)
-        -> Result<String, MutinyError>;
+    async fn get_lsp_invoice(
+        &self,
+        invoice_request: InvoiceRequest,
+    ) -> Result<Bolt11Invoice, MutinyError>;
     fn get_lsp_pubkey(&self) -> PublicKey;
     fn get_lsp_connection_string(&self) -> String;
     fn get_expected_skimmed_fee_msat(&self, payment_hash: PaymentHash, payment_size: u64) -> u64;
@@ -140,7 +143,7 @@ impl<S: MutinyStorage> Lsp for AnyLsp<S> {
     async fn get_lsp_invoice(
         &self,
         invoice_request: InvoiceRequest,
-    ) -> Result<String, MutinyError> {
+    ) -> Result<Bolt11Invoice, MutinyError> {
         match self {
             AnyLsp::VoltageFlow(client) => client.get_lsp_invoice(invoice_request).await,
             AnyLsp::Lsps(client) => client.get_lsp_invoice(invoice_request).await,

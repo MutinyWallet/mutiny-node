@@ -1035,20 +1035,13 @@ impl<S: MutinyStorage> Node<S> {
                             )
                             .await?;
 
-                        let lsp_invoice = match client
+                        let lsp_invoice = client
                             .get_lsp_invoice(InvoiceRequest {
                                 bolt11: Some(invoice.to_string()),
                                 user_channel_id,
                                 fee_id: lsp_fee.id,
                             })
-                            .await
-                        {
-                            Ok(lsp_invoice_str) => Bolt11Invoice::from_str(&lsp_invoice_str)?,
-                            Err(e) => {
-                                log_error!(self.logger, "Failed to get invoice from LSP: {e}");
-                                return Err(e);
-                            }
-                        };
+                            .await?;
 
                         if invoice.network() != self.network {
                             return Err(MutinyError::IncorrectNetwork(invoice.network()));
@@ -1081,7 +1074,7 @@ impl<S: MutinyStorage> Node<S> {
                                 })
                                 .await
                             {
-                                Ok(lsp_invoice_str) => Bolt11Invoice::from_str(&lsp_invoice_str)?,
+                                Ok(invoice) => invoice,
                                 Err(e) => {
                                     log_error!(self.logger, "Failed to get invoice from LSP: {e}");
                                     return Err(e);

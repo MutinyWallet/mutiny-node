@@ -228,12 +228,13 @@ impl<S: MutinyStorage> LspsClient<S> {
                         }
                     };
 
+                    let secp = Secp256k1::new();
                     let mut invoice = InvoiceBuilder::new(self.network.into())
                         .description("".into())
                         .payment_hash(payment_hash)
                         .payment_secret(payment_secret)
                         .duration_since_epoch(utils::now())
-                        .payee_pub_key(self.pubkey)
+                        .payee_pub_key(self.keys_manager.get_node_secret_key().public_key(&secp))
                         .min_final_cltv_expiry_delta(MIN_FINAL_CLTV_EXPIRY_DELTA.into())
                         .private_route(lsp_route_hint);
 
@@ -257,8 +258,7 @@ impl<S: MutinyStorage> LspsClient<S> {
                     invoice = invoice.amount_milli_satoshis(payment_size_msat);
 
                     let invoice = match invoice.build_signed(|hash| {
-                        Secp256k1::new()
-                            .sign_ecdsa_recoverable(hash, &self.keys_manager.get_node_secret_key())
+                        secp.sign_ecdsa_recoverable(hash, &self.keys_manager.get_node_secret_key())
                     }) {
                         Ok(invoice) => invoice,
                         Err(e) => {
@@ -415,7 +415,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
     async fn get_lsp_invoice(
         &self,
         invoice_request: InvoiceRequest,
-    ) -> Result<String, MutinyError> {
+    ) -> Result<Bolt11Invoice, MutinyError> {
         let user_channel_id = invoice_request
             .user_channel_id
             .ok_or(MutinyError::LspGenericError)?;
@@ -466,7 +466,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             );
         }
 
-        Ok(invoice.to_string())
+        Ok(invoice)
     }
 
     fn get_lsp_pubkey(&self) -> PublicKey {

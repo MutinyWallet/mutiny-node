@@ -668,8 +668,6 @@ impl MutinyWallet {
         let lsp_config = create_lsp_config(lsp_url, lsp_connection_string, lsp_token)?;
 
         self.inner.node_manager.change_lsp(lsp_config).await?;
-        // sleep 250ms to let storage take effect
-        sleep(250).await;
         Ok(())
     }
 
