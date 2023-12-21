@@ -349,9 +349,10 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
     }
 
     /// Inserts the node indexes into storage
-    fn insert_nodes(&self, nodes: &NodeStorage) -> Result<(), MutinyError> {
+    async fn insert_nodes(&self, nodes: &NodeStorage) -> Result<(), MutinyError> {
         let version = Some(nodes.version);
-        self.set_data(NODES_KEY.to_string(), nodes, version)
+        self.set_data_async(NODES_KEY.to_string(), nodes, version)
+            .await
     }
 
     /// Gets the federation indexes from storage

@@ -8,7 +8,7 @@ use lightning::ln::PaymentHash;
 use lightning::routing::gossip::RoutingFees;
 use lightning::routing::router::{RouteHint, RouteHintHop};
 use lightning::util::logger::Logger;
-use lightning::{log_debug, log_error};
+use lightning::{log_debug, log_error, log_info};
 use lightning_invoice::{Bolt11Invoice, InvoiceBuilder};
 use lightning_liquidity::events;
 use lightning_liquidity::lsps2::{LSPS2Event, OpeningFeeParams};
@@ -279,6 +279,8 @@ impl<S: MutinyStorage> LspsClient<S> {
                     if buy_response_sender.send(Ok(invoice)).is_err() {
                         log_error!(self.logger, "error sending buy response, receiver dropped?");
                     }
+
+                    log_info!(self.logger, "LSPS invoice created successfully");
                 }
             }
             _ => {}
