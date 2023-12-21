@@ -1074,7 +1074,17 @@ impl<S: MutinyStorage> Node<S> {
                                 })
                                 .await
                             {
-                                Ok(invoice) => invoice,
+                                Ok(invoice) => {
+                                    self.save_invoice_payment_info(
+                                        invoice.clone(),
+                                        Some(amount_sat * 1_000),
+                                        Some(lsp_fee.fee_amount_msat),
+                                        labels.clone(),
+                                    )
+                                    .await?;
+
+                                    invoice
+                                }
                                 Err(e) => {
                                     log_error!(self.logger, "Failed to get invoice from LSP: {e}");
                                     return Err(e);
@@ -1150,7 +1160,22 @@ impl<S: MutinyStorage> Node<S> {
             MutinyError::InvoiceCreationFailed
         })?;
 
-        let last_update = crate::utils::now().as_secs();
+        self.save_invoice_payment_info(invoice.clone(), amount_msat, fee_amount_msat, labels)
+            .await?;
+
+        log_info!(self.logger, "SUCCESS: generated invoice: {invoice}");
+
+        Ok(invoice)
+    }
+
+    async fn save_invoice_payment_info(
+        &self,
+        invoice: Bolt11Invoice,
+        amount_msat: Option<u64>,
+        fee_amount_msat: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<(), MutinyError> {
+        let last_update = utils::now().as_secs();
         let payment_hash = PaymentHash(invoice.payment_hash().into_inner());
         let payment_info = PaymentInfo {
             preimage: None,
@@ -1169,13 +1194,9 @@ impl<S: MutinyStorage> Node<S> {
                 MutinyError::InvoiceCreationFailed
             })?;
 
-        self.persister
-            .storage
-            .set_invoice_labels(invoice.clone(), labels)?;
+        self.persister.storage.set_invoice_labels(invoice, labels)?;
 
-        log_info!(self.logger, "SUCCESS: generated invoice: {invoice}");
-
-        Ok(invoice)
+        Ok(())
     }
 
     pub fn get_invoice_by_hash(&self, payment_hash: &Sha256) -> Result<MutinyInvoice, MutinyError> {
