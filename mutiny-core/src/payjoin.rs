@@ -3,13 +3,14 @@ use std::sync::Arc;
 
 use crate::error::MutinyError;
 use crate::storage::MutinyStorage;
-use bitcoin::Transaction;
+use bitcoin::{psbt::Psbt, Transaction, Txid};
 use core::time::Duration;
 use gloo_net::websocket::futures::WebSocket;
 use hex_conservative::DisplayHex;
 use once_cell::sync::Lazy;
 use payjoin::receive::v2::Enrolled;
 use payjoin::OhttpKeys;
+use pj::send::RequestContext;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -40,22 +41,46 @@ impl RecvSession {
         self.enrolled.pubkey()
     }
 }
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct SendSession {
+    pub original_psbt: Psbt,
+    pub req_ctx: RequestContext,
+    pub labels: Vec<String>,
+    pub expiry: Duration,
+}
+
 pub trait PayjoinStorage {
     fn list_recv_sessions(&self) -> Result<Vec<RecvSession>, MutinyError>;
     fn store_new_recv_session(&self, session: Enrolled) -> Result<RecvSession, MutinyError>;
     fn update_recv_session(&self, session: RecvSession) -> Result<(), MutinyError>;
     fn delete_recv_session(&self, id: &[u8; 33]) -> Result<(), MutinyError>;
+
+    fn list_send_sessions(&self) -> Result<Vec<SendSession>, MutinyError>;
+    fn store_new_send_session(
+        &self,
+        labels: Vec<String>,
+        original_psbt: Psbt,
+        req_ctx: RequestContext,
+    ) -> Result<SendSession, MutinyError>;
+    fn update_send_session(&self, session: SendSession) -> Result<(), MutinyError>;
+    fn delete_send_session(&self, session: SendSession) -> Result<(), MutinyError>;
 }
 
-const PAYJOIN_KEY_PREFIX: &str = "recvpj/";
+const RECV_PAYJOIN_KEY_PREFIX: &str = "recvpj/";
+const SEND_PAYJOIN_KEY_PREFIX: &str = "sendpj/";
 
-fn get_payjoin_key(id: &[u8; 33]) -> String {
-    format!("{PAYJOIN_KEY_PREFIX}{}", id.as_hex())
+fn get_recv_key(id: &[u8; 33]) -> String {
+    format!("{RECV_PAYJOIN_KEY_PREFIX}{}", id.as_hex())
+}
+
+fn get_send_key(original_txid: Txid) -> String {
+    format!("{RECV_PAYJOIN_KEY_PREFIX}{}", original_txid)
 }
 
 impl<S: MutinyStorage> PayjoinStorage for S {
     fn list_recv_sessions(&self) -> Result<Vec<RecvSession>, MutinyError> {
-        let map: HashMap<String, RecvSession> = self.scan(PAYJOIN_KEY_PREFIX, None)?;
+        let map: HashMap<String, RecvSession> = self.scan(RECV_PAYJOIN_KEY_PREFIX, None)?;
         Ok(map.values().map(|v| v.to_owned()).collect())
     }
 
@@ -66,16 +91,49 @@ impl<S: MutinyStorage> PayjoinStorage for S {
             expiry: in_24_hours,
             payjoin_tx: None,
         };
-        self.set_data(get_payjoin_key(&session.pubkey()), session.clone(), None)
+        self.set_data(get_recv_key(&session.pubkey()), session.clone(), None)
             .map(|_| session)
     }
 
     fn update_recv_session(&self, session: RecvSession) -> Result<(), MutinyError> {
-        self.set_data(get_payjoin_key(&session.pubkey()), session, None)
+        self.set_data(get_recv_key(&session.pubkey()), session, None)
     }
 
     fn delete_recv_session(&self, id: &[u8; 33]) -> Result<(), MutinyError> {
-        self.delete(&[get_payjoin_key(id)])
+        self.delete(&[get_recv_key(id)])
+    }
+
+    fn store_new_send_session(
+        &self,
+        labels: Vec<String>,
+        original_psbt: Psbt,
+        req_ctx: RequestContext,
+    ) -> Result<SendSession, MutinyError> {
+        let in_24_hours = crate::utils::now() + Duration::from_secs(60 * 60 * 24);
+        let o_txid = original_psbt.clone().extract_tx().txid();
+        let session = SendSession {
+            labels,
+            original_psbt,
+            expiry: in_24_hours,
+            req_ctx,
+        };
+        self.set_data(o_txid.to_string(), session.clone(), None)
+            .map(|_| session)
+    }
+
+    fn list_send_sessions(&self) -> Result<Vec<SendSession>, MutinyError> {
+        let map: HashMap<String, SendSession> = self.scan(SEND_PAYJOIN_KEY_PREFIX, None)?;
+        Ok(map.values().map(|v| v.to_owned()).collect())
+    }
+
+    fn update_send_session(&self, session: SendSession) -> Result<(), MutinyError> {
+        let o_txid = session.clone().original_psbt.extract_tx().txid();
+        self.set_data(get_send_key(o_txid), session, None)
+    }
+
+    fn delete_send_session(&self, session: SendSession) -> Result<(), MutinyError> {
+        let o_txid = session.original_psbt.extract_tx().txid();
+        self.delete(&[get_send_key(o_txid)])
     }
 }
 
