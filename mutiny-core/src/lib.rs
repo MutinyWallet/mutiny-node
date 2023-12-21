@@ -302,7 +302,7 @@ impl MutinyWalletConfig {
 /// bitcoin and the lightning functionality.
 pub struct MutinyWallet<S: MutinyStorage> {
     pub config: MutinyWalletConfig,
-    pub storage: S,
+    pub(crate) storage: S,
     glue_db: GlueDB,
     pub node_manager: Arc<NodeManager<S>>,
     pub nostr: Arc<NostrManager<S>>,
@@ -1012,11 +1012,22 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(())
     }
 
+    /// Deletes all the storage and gluedb data
+    pub async fn delete_all(&self) -> Result<(), MutinyError> {
+        self.storage.delete_all().await?;
+        self.glue_db.delete_all().await
+    }
+
     /// Restores the mnemonic after deleting the previous state.
     ///
     /// Backup the state beforehand. Does not restore lightning data.
     /// Should refresh or restart afterwards. Wallet should be stopped.
-    pub async fn restore_mnemonic(mut storage: S, m: Mnemonic) -> Result<(), MutinyError> {
+    pub async fn restore_mnemonic(
+        mut storage: S,
+        glue_db: GlueDB,
+        m: Mnemonic,
+    ) -> Result<(), MutinyError> {
+        // Delete our storage but insert some device specific data
         let device_id = storage.get_device_id()?;
         let logs: Option<Vec<String>> = storage.get_data(LOGGING_KEY)?;
         storage.stop();
@@ -1026,6 +1037,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         storage.set_data(NEED_FULL_SYNC_KEY.to_string(), true, None)?;
         storage.set_data(DEVICE_ID_KEY.to_string(), device_id, None)?;
         storage.set_data(LOGGING_KEY.to_string(), logs, None)?;
+
+        // Delete all of glue_db storage
+        glue_db.delete_all().await?;
+
         Ok(())
     }
 
@@ -1285,9 +1300,11 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::{
-        encrypt::encryption_key_from_pass, generate_seed, nodemanager::NodeManager, MutinyWallet,
-        MutinyWalletConfig,
+        encrypt::encryption_key_from_pass, generate_seed, logging::MutinyLogger,
+        nodemanager::NodeManager, sql::glue::GlueDB, MutinyWallet, MutinyWalletConfig,
     };
     use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Network;
@@ -1480,7 +1497,16 @@ mod tests {
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage3 = MemoryStorage::new(Some(pass), Some(cipher), None);
-        MutinyWallet::restore_mnemonic(storage3.clone(), mnemonic.clone())
+
+        let logger = Arc::new(MutinyLogger::default());
+        let glue_db = GlueDB::new(
+            #[cfg(target_arch = "wasm32")]
+            Some(test_name.to_string()),
+            logger.clone(),
+        )
+        .await
+        .unwrap();
+        MutinyWallet::restore_mnemonic(storage3.clone(), glue_db, mnemonic.clone())
             .await
             .expect("mutiny wallet should restore");
 

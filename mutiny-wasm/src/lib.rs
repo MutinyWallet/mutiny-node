@@ -29,7 +29,6 @@ use lightning::{log_error, routing::gossip::NodeId, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
-use mutiny_core::auth::MutinyAuthClient;
 use mutiny_core::encrypt::encryption_key_from_pass;
 use mutiny_core::labels::Contact;
 use mutiny_core::lnurlauth::AuthManager;
@@ -40,6 +39,7 @@ use mutiny_core::redshift::RedshiftRecipient;
 use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
 use mutiny_core::utils::{now, sleep};
 use mutiny_core::vss::MutinyVssClient;
+use mutiny_core::{auth::MutinyAuthClient, sql::glue::GlueDB};
 use mutiny_core::{
     labels::LabelStorage,
     nodemanager::{create_lsp_config, NodeManager},
@@ -1658,7 +1658,7 @@ impl MutinyWallet {
     /// All data in VSS persists but the device lock is cleared.
     #[wasm_bindgen]
     pub async fn delete_all(&self) -> Result<(), MutinyJsError> {
-        self.inner.storage.delete_all().await?;
+        self.inner.delete_all().await?;
         Ok(())
     }
 
@@ -1677,9 +1677,16 @@ impl MutinyWallet {
             .filter(|p| !p.is_empty())
             .map(|p| encryption_key_from_pass(p))
             .transpose()?;
-        let storage = IndexedDbStorage::new(password, cipher, None, logger).await?;
+        let storage = IndexedDbStorage::new(password, cipher, None, logger.clone()).await?;
+        let glue_db = GlueDB::new(
+            #[cfg(target_arch = "wasm32")]
+            None,
+            logger,
+        )
+        .await?;
         mutiny_core::MutinyWallet::<IndexedDbStorage>::restore_mnemonic(
             storage,
+            glue_db,
             Mnemonic::from_str(&m).map_err(|_| MutinyJsError::InvalidMnemonic)?,
         )
         .await?;

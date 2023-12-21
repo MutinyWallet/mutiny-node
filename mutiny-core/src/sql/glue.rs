@@ -14,7 +14,7 @@ use fedimint_core::db::{
     PrefixStream,
 };
 use gluesql::prelude::{Glue, Payload, Value};
-use lightning::{log_debug, log_error, log_trace, util::logger::Logger};
+use lightning::{log_debug, log_error, log_info, log_trace, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 use std::str::FromStr;
 
@@ -121,6 +121,22 @@ impl GlueDB {
         federation_id: String,
     ) -> Result<FedimintDB, MutinyError> {
         FedimintDB::new(self.db.clone(), federation_id, self.logger.clone()).await
+    }
+
+    pub async fn delete_all(&self) -> Result<(), MutinyError> {
+        let mut db = self.db.lock().await;
+
+        db.execute("DROP TABLE IF EXISTS mutiny_kv")
+            .await
+            .map_err(|_| MutinyError::write_err(MutinyStorageError::IndexedDBError))?;
+
+        db.execute("DROP TABLE IF EXISTS mutiny_invoice")
+            .await
+            .map_err(|_| MutinyError::write_err(MutinyStorageError::IndexedDBError))?;
+
+        log_info!(self.logger, "All data deleted from GlueDB");
+
+        Ok(())
     }
 }
 
@@ -909,6 +925,98 @@ async fn update_payments() {
 }
 
 #[cfg(test)]
+async fn delete_all() {
+    use bitcoin::hashes::hex::{FromHex, ToHex};
+
+    const INVOICE: &str = "lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm";
+
+    let db = GlueDB::new(
+        #[cfg(target_arch = "wasm32")]
+        Some("delete_all".to_string()),
+        Arc::new(MutinyLogger::default()),
+    )
+    .await
+    .unwrap();
+
+    // Insert something into the payments table
+    let preimage: [u8; 32] =
+        FromHex::from_hex("7600f5a9ad72452dea7ad86dabbc9cb46be96a1a2fcd961e041d066b38d93008")
+            .unwrap();
+    let payment_hash =
+        sha256::Hash::from_hex("55ecf9169a6fa07e8ba181fdddf5b0bcc7860176659fa22a7cca9da2a359a33b")
+            .unwrap();
+    let pubkey =
+        PublicKey::from_str("02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b")
+            .unwrap();
+    let i = Bolt11Invoice::from_str(INVOICE).unwrap();
+    let label = "test".to_string();
+    let labels = vec![label.clone()];
+    let invoice1: MutinyInvoice = MutinyInvoice {
+        bolt11: Some(i),
+        description: Some("dest".to_string()),
+        payment_hash,
+        preimage: Some(preimage.to_hex()),
+        payee_pubkey: Some(pubkey),
+        amount_sats: Some(100),
+        expire: 1681781585,
+        status: HTLCStatus::Pending,
+        fees_paid: Some(1),
+        inbound: false,
+        labels: labels.clone(),
+        last_updated: 1681781585,
+    };
+    db.save_payment(invoice1.clone()).await.unwrap();
+    let db_invoices = db.list_payments().await.unwrap();
+    assert_eq!(1, db_invoices.len());
+
+    // now insert something into the kv table too
+    db.db
+        .lock()
+        .await
+        .execute("INSERT INTO mutiny_kv (key, val, version) VALUES ('storage', X'', 0)")
+        .await
+        .unwrap();
+    let select_query = "SELECT val FROM mutiny_kv WHERE key = 'storage'";
+    let mut result = db.db.lock().await.execute(select_query).await.unwrap();
+    if let Payload::Select { rows, .. } = result.pop().expect("should get something") {
+        if let Some(row) = rows.first() {
+            if let Value::Bytea(hex_string) = &row[0] {
+                let serialized_data = hex::decode(hex_string).unwrap();
+                assert!(serialized_data.is_empty());
+            } else {
+                panic!("Expected bytea");
+            }
+        }
+    } else {
+        panic!("Expected Payload::Select");
+    }
+
+    // Now delete it all
+    db.delete_all().await.unwrap();
+    drop(db);
+
+    // Start up the DB again
+    let db = GlueDB::new(
+        #[cfg(target_arch = "wasm32")]
+        Some("delete_all".to_string()),
+        Arc::new(MutinyLogger::default()),
+    )
+    .await
+    .unwrap();
+
+    // Test to make sure it's not there
+    let db_invoices = db.list_payments().await.unwrap();
+    assert_eq!(0, db_invoices.len());
+
+    let mut result = db.db.lock().await.execute(select_query).await.unwrap();
+    if let Payload::Select { rows, .. } = result.pop().expect("should get something") {
+        assert_eq!(0, rows.len());
+    } else {
+        panic!("Expected Payload::Select");
+    }
+}
+
+#[cfg(test)]
 async fn create_glue_storage_value() {
     let db = GlueDB::new(
         #[cfg(target_arch = "wasm32")]
@@ -1157,6 +1265,12 @@ mod tests {
     async fn update_payments_tests() {
         update_payments().await;
     }
+
+    #[cfg(feature = "ignored_tests")]
+    #[tokio::test]
+    async fn delete_all_tests() {
+        delete_all().await;
+    }
 }
 
 #[cfg(test)]
@@ -1196,5 +1310,10 @@ mod wasm_tests {
     #[test]
     async fn update_payments_tests() {
         update_payments().await;
+    }
+
+    #[test]
+    async fn delete_all_tests() {
+        delete_all().await;
     }
 }
