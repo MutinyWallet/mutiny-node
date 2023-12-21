@@ -62,7 +62,6 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cmp::max;
-use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
@@ -756,20 +755,20 @@ impl<S: MutinyStorage> NodeManager<S> {
         ))
     }
 
-    // Send v1 payjoin request
+    // Send v2 payjoin request
     pub async fn send_payjoin(
         &self,
         uri: Uri<'_, NetworkUnchecked>,
         amount: u64,
         labels: Vec<String>,
         fee_rate: Option<f32>,
-    ) -> Result<Txid, MutinyError> {
+    ) -> Result<(), MutinyError> {
         let uri = uri
             .require_network(self.network)
             .map_err(|_| MutinyError::IncorrectNetwork)?;
         let address = uri.address.clone();
         let original_psbt = self.wallet.create_signed_psbt(address, amount, fee_rate)?;
-
+        // TODO ensure this creates a pending tx in the UI.  Ensure locked UTXO.
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
         } else {
@@ -777,57 +776,105 @@ impl<S: MutinyStorage> NodeManager<S> {
             FeeRate::from_sat_per_kwu(sat_per_kwu as f32)
         };
         let fee_rate = payjoin::bitcoin::FeeRate::from_sat_per_kwu(fee_rate.sat_per_kwu() as u64);
-        let original_psbt = payjoin::bitcoin::psbt::PartiallySignedTransaction::from_str(
-            &original_psbt.to_string(),
-        )
-        .map_err(|_| MutinyError::WalletOperationFailed)?;
         log_debug!(self.logger, "Creating payjoin request");
-        let (req, ctx) =
-            payjoin::send::RequestBuilder::from_psbt_and_uri(original_psbt.clone(), uri)
-                .unwrap()
-                .build_recommended(fee_rate)
-                .map_err(|_| MutinyError::PayjoinCreateRequest)?
-                .extract_v1()?;
+        let req_ctx = payjoin::send::RequestBuilder::from_psbt_and_uri(original_psbt.clone(), uri)
+            .unwrap()
+            .build_recommended(fee_rate)
+            .map_err(|_| MutinyError::PayjoinConfigError)?;
+        self.spawn_payjoin_sender(labels, original_psbt, req_ctx)
+            .await;
+        Ok(())
+    }
 
-        let client = Client::builder()
+    async fn spawn_payjoin_sender(
+        &self,
+        labels: Vec<String>,
+        original_psbt: bitcoin::psbt::Psbt,
+        req_ctx: payjoin::send::RequestContext,
+    ) {
+        let wallet = self.wallet.clone();
+        let logger = self.logger.clone();
+        let stop = self.stop.clone();
+        utils::spawn(async move {
+            let proposal_psbt = match Self::poll_payjoin_sender(stop, req_ctx).await {
+                Ok(psbt) => psbt,
+                Err(e) => {
+                    log_error!(logger, "Error polling payjoin sender: {e}");
+                    return;
+                }
+            };
+
+            if let Err(e) = Self::handle_proposal_psbt(
+                logger.clone(),
+                wallet,
+                original_psbt,
+                proposal_psbt,
+                labels,
+            )
+            .await
+            {
+                // Ensure ResponseError is logged with debug formatting
+                log_error!(logger, "Error handling payjoin proposal: {:?}", e);
+            }
+        });
+    }
+
+    async fn poll_payjoin_sender(
+        stop: Arc<AtomicBool>,
+        mut req_ctx: payjoin::send::RequestContext,
+    ) -> Result<bitcoin::psbt::Psbt, MutinyError> {
+        let http = Client::builder()
             .build()
-            .map_err(|e| MutinyError::Other(e.into()))?;
+            .map_err(|_| MutinyError::Other(anyhow!("failed to build http client")))?;
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                return Err(MutinyError::NotRunning);
+            }
 
-        log_debug!(self.logger, "Sending payjoin request");
-        let res = client
-            .post(req.url)
-            .body(req.body)
-            .header("Content-Type", "text/plain")
-            .send()
-            .await
-            .map_err(|_| MutinyError::PayjoinCreateRequest)?
-            .bytes()
-            .await
-            .map_err(|_| MutinyError::PayjoinCreateRequest)?;
+            let (req, ctx) = req_ctx
+                .extract_v2(crate::payjoin::OHTTP_RELAYS[0].to_owned())
+                .map_err(|_| MutinyError::PayjoinConfigError)?;
+            let response = http
+                .post(req.url)
+                .header("Content-Type", "message/ohttp-req")
+                .body(req.body)
+                .send()
+                .await
+                .map_err(|_| MutinyError::Other(anyhow!("failed to parse payjoin response")))?;
+            let mut reader =
+                std::io::Cursor::new(response.bytes().await.map_err(|_| {
+                    MutinyError::Other(anyhow!("failed to parse payjoin response"))
+                })?);
 
-        let mut cursor = Cursor::new(res.to_vec());
+            println!("Sent fallback transaction");
+            let psbt = ctx
+                .process_response(&mut reader)
+                .map_err(MutinyError::PayjoinResponse)?;
+            if let Some(psbt) = psbt {
+                let psbt = bitcoin::psbt::Psbt::from_str(&psbt.to_string())
+                    .map_err(|_| MutinyError::Other(anyhow!("psbt conversion failed")))?;
+                return Ok(psbt);
+            } else {
+                log::info!("No response yet for POST payjoin request, retrying some seconds");
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+        }
+    }
 
-        log_debug!(self.logger, "Processing payjoin response");
-        let proposal_psbt = ctx.process_response(&mut cursor).map_err(|e| {
-            // unrecognized error contents may only appear in debug logs and will not Display
-            log_debug!(self.logger, "Payjoin response error: {:?}", e);
-            e
-        })?;
-
-        // convert to pdk types
-        let original_psbt = PartiallySignedTransaction::from_str(&original_psbt.to_string())
-            .map_err(|_| MutinyError::PayjoinConfigError)?;
-        let proposal_psbt = PartiallySignedTransaction::from_str(&proposal_psbt.to_string())
-            .map_err(|_| MutinyError::PayjoinConfigError)?;
-
-        log_debug!(self.logger, "Sending payjoin..");
-        let tx = self
-            .wallet
+    async fn handle_proposal_psbt(
+        logger: Arc<MutinyLogger>,
+        wallet: Arc<OnChainWallet<S>>,
+        original_psbt: PartiallySignedTransaction,
+        proposal_psbt: PartiallySignedTransaction,
+        labels: Vec<String>,
+    ) -> Result<Txid, MutinyError> {
+        log_debug!(logger, "Sending payjoin..");
+        let tx = wallet
             .send_payjoin(original_psbt, proposal_psbt, labels)
             .await?;
         let txid = tx.txid();
-        self.broadcast_transaction(tx).await?;
-        log_debug!(self.logger, "Payjoin broadcast! TXID: {txid}");
+        wallet.broadcast_transaction(tx).await?;
+        log_info!(logger, "Payjoin broadcast! TXID: {txid}");
         Ok(txid)
     }
 
