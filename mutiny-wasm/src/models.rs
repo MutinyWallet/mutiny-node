@@ -1097,6 +1097,8 @@ pub struct PendingNwcInvoice {
     pub amount_sats: u64,
     /// The description of the invoice
     invoice_description: Option<String>,
+    /// Name of the NWC Profile that received the invoice
+    profile_name: String,
     /// Invoice expire time in seconds since epoch
     pub expiry: u64,
 }
@@ -1117,10 +1119,16 @@ impl PendingNwcInvoice {
     pub fn invoice_description(&self) -> Option<String> {
         self.invoice_description.clone()
     }
+
+    /// Name of the NWC Profile that received the invoice
+    #[wasm_bindgen(getter)]
+    pub fn profile_name(&self) -> String {
+        self.profile_name.clone()
+    }
 }
 
-impl From<nostr::nwc::PendingNwcInvoice> for PendingNwcInvoice {
-    fn from(value: nostr::nwc::PendingNwcInvoice) -> Self {
+impl From<(nostr::nwc::PendingNwcInvoice, String)> for PendingNwcInvoice {
+    fn from((value, profile_name): (nostr::nwc::PendingNwcInvoice, String)) -> Self {
         let invoice_description = match value.invoice.description() {
             Bolt11InvoiceDescription::Direct(desc) => Some(desc.to_string()),
             Bolt11InvoiceDescription::Hash(_) => None,
@@ -1135,6 +1143,7 @@ impl From<nostr::nwc::PendingNwcInvoice> for PendingNwcInvoice {
             id: value.invoice.payment_hash().to_hex(),
             amount_sats: value.invoice.amount_milli_satoshis().unwrap_or_default() / 1_000,
             invoice_description,
+            profile_name,
             expiry,
         }
     }

@@ -1517,12 +1517,28 @@ impl MutinyWallet {
 
     /// Lists all pending NWC invoices
     pub fn get_pending_nwc_invoices(&self) -> Result<Vec<PendingNwcInvoice>, MutinyJsError> {
-        let pending: Vec<PendingNwcInvoice> = self
-            .inner
-            .nostr
-            .get_pending_nwc_invoices()?
+        let pending = self.inner.nostr.get_pending_nwc_invoices()?;
+
+        if pending.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let profiles = self.inner.nostr.profiles();
+
+        let pending: Vec<PendingNwcInvoice> = pending
             .into_iter()
-            .map(|i| i.into())
+            .flat_map(|inv| {
+                profiles
+                    .iter()
+                    .find_map(|p| {
+                        if inv.index == p.index {
+                            Some(p.name.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .map(|n| (inv, n).into())
+            })
             .collect();
 
         Ok(pending)
