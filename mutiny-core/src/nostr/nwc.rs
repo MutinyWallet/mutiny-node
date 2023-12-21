@@ -17,7 +17,7 @@ use lightning_invoice::Bolt11Invoice;
 use nostr::key::XOnlyPublicKey;
 use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
-use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
+use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Tag};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::str::FromStr;
@@ -269,13 +269,13 @@ impl NostrWalletConnect {
     pub fn create_nwc_filter(&self) -> Filter {
         Filter::new()
             .kinds(vec![Kind::WalletConnectRequest])
-            .author(self.client_pubkey().to_string())
+            .author(self.client_pubkey())
             .pubkey(self.server_pubkey())
     }
 
     /// Create Nostr Wallet Connect Info event
     pub fn create_nwc_info_event(&self) -> anyhow::Result<Event> {
-        let info = EventBuilder::new(Kind::WalletConnectInfo, "pay_invoice".to_string(), &[])
+        let info = EventBuilder::new(Kind::WalletConnectInfo, "pay_invoice".to_string(), [])
             .to_event(&self.server_key)?;
         Ok(info)
     }
@@ -302,7 +302,7 @@ impl NostrWalletConnect {
             serde_json::to_string(&json)?,
         )?;
         let d_tag = Tag::Identifier(self.client_pubkey().to_hex());
-        let event = EventBuilder::new(Kind::ParameterizedReplaceable(33194), content, &[d_tag])
+        let event = EventBuilder::new(Kind::ParameterizedReplaceable(33194), content, [d_tag])
             .to_event(&self.server_key)?;
         Ok(Some(event))
     }
@@ -381,9 +381,17 @@ impl NostrWalletConnect {
 
         let encrypted = encrypt(&server_key, &client_pubkey, content.as_json())?;
 
-        let p_tag = Tag::PubKey(event.pubkey, None);
-        let e_tag = Tag::Event(event.id, None, None);
-        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, &[p_tag, e_tag])
+        let p_tag = Tag::PublicKey {
+            public_key: event.pubkey,
+            relay_url: None,
+            alias: None,
+        };
+        let e_tag = Tag::Event {
+            event_id: event.id,
+            relay_url: None,
+            marker: None,
+        };
+        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
             .to_event(&self.server_key)?;
 
         Ok(response)
@@ -578,10 +586,18 @@ impl NostrWalletConnect {
 
                     let encrypted = encrypt(&server_key, &client_pubkey, content.as_json())?;
 
-                    let p_tag = Tag::PubKey(event.pubkey, None);
-                    let e_tag = Tag::Event(event.id, None, None);
+                    let p_tag = Tag::PublicKey {
+                        public_key: event.pubkey,
+                        relay_url: None,
+                        alias: None,
+                    };
+                    let e_tag = Tag::Event {
+                        event_id: event.id,
+                        relay_url: None,
+                        marker: None,
+                    };
                     let response =
-                        EventBuilder::new(Kind::WalletConnectResponse, encrypted, &[p_tag, e_tag])
+                        EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
                             .to_event(&self.server_key)?;
 
                     if needs_delete {
@@ -725,10 +741,18 @@ impl NostrWalletConnect {
 
                     let encrypted = encrypt(&server_key, &client_pubkey, content.as_json())?;
 
-                    let p_tag = Tag::PubKey(event.pubkey, None);
-                    let e_tag = Tag::Event(event.id, None, None);
+                    let p_tag = Tag::PublicKey {
+                        public_key: event.pubkey,
+                        relay_url: None,
+                        alias: None,
+                    };
+                    let e_tag = Tag::Event {
+                        event_id: event.id,
+                        relay_url: None,
+                        marker: None,
+                    };
                     let response =
-                        EventBuilder::new(Kind::WalletConnectResponse, encrypted, &[p_tag, e_tag])
+                        EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
                             .to_event(&self.server_key)?;
 
                     return Ok(Some(response));
@@ -1227,7 +1251,7 @@ mod wasm_test {
 
         // test wrong kind
         let event = {
-            EventBuilder::new(Kind::TextNote, "", &[])
+            EventBuilder::new(Kind::TextNote, "", [])
                 .to_event(&Keys::new(uri.secret))
                 .unwrap()
         };
@@ -1243,8 +1267,12 @@ mod wasm_test {
             };
 
             let encrypted = encrypt(&uri.secret, &uri.public_key, req.as_json()).unwrap();
-            let p_tag = Tag::PubKey(uri.public_key, None);
-            EventBuilder::new(Kind::WalletConnectRequest, encrypted, &[p_tag])
+            let p_tag = Tag::PublicKey {
+                public_key: uri.public_key,
+                relay_url: None,
+                alias: None,
+            };
+            EventBuilder::new(Kind::WalletConnectRequest, encrypted, [p_tag])
                 .to_event(&Keys::new(uri.secret))
                 .unwrap()
         };

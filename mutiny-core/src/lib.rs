@@ -67,7 +67,7 @@ use crate::{
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
-use ::nostr::{Event, Kind, Metadata};
+use ::nostr::{Event, JsonUtil, Kind, Metadata};
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
 use bitcoin::util::bip32::ExtendedPrivKey;
@@ -479,19 +479,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     log_warn!(logger, "Failed to clear expired NWC invoices: {e}");
                 }
 
-                // clear successful single-use profiles
-
                 let client = Client::new(&nostr.primary_key);
 
-                #[cfg(target_arch = "wasm32")]
-                let add_relay_res = client.add_relays(nostr.get_relays()).await;
-
-                #[cfg(not(target_arch = "wasm32"))]
-                let add_relay_res = client
-                    .add_relays(nostr.get_relays().into_iter().map(|s| (s, None)).collect())
-                    .await;
-
-                add_relay_res.expect("Failed to add relays");
+                client
+                    .add_relays(nostr.get_relays())
+                    .await
+                    .expect("Failed to add relays");
                 client.connect().await;
 
                 let mut last_filters = nostr.get_nwc_filters();
@@ -519,7 +512,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     select! {
                         notification = read_fut => {
                             match notification {
-                                Ok(RelayPoolNotification::Event(_url, event)) => {
+                                Ok(RelayPoolNotification::Event { event, .. }) => {
                                     if event.kind == Kind::WalletConnectRequest && event.verify().is_ok() {
                                         match nostr.handle_nwc_request(event, &self_clone).await {
                                             Ok(Some(event)) => {
@@ -534,7 +527,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                         }
                                     }
                                 },
-                                Ok(RelayPoolNotification::Message(_, _)) => {}, // ignore messages
+                                Ok(RelayPoolNotification::Message { .. }) => {}, // ignore messages
                                 Ok(RelayPoolNotification::Shutdown) => break, // if we disconnect, we restart to reconnect
                                 Ok(RelayPoolNotification::Stop) => {}, // Currently unused
                                 Ok(RelayPoolNotification::RelayStatus { .. }) => {}, // Currently unused

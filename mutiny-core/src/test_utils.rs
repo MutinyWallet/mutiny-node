@@ -44,9 +44,13 @@ pub fn create_nwc_request(nwc: &NostrWalletConnectURI, invoice: String) -> Event
     };
 
     let encrypted = encrypt(&nwc.secret, &nwc.public_key, req.as_json()).unwrap();
-    let p_tag = Tag::PubKey(nwc.public_key, None);
+    let p_tag = Tag::PublicKey {
+        public_key: nwc.public_key,
+        relay_url: None,
+        alias: None,
+    };
 
-    EventBuilder::new(Kind::WalletConnectRequest, encrypted, &[p_tag])
+    EventBuilder::new(Kind::WalletConnectRequest, encrypted, [p_tag])
         .to_event(&Keys::new(nwc.secret))
         .unwrap()
 }
@@ -206,7 +210,7 @@ use lightning_transaction_sync::EsploraSyncClient;
 pub(crate) use log;
 use nostr::nips::nip47::*;
 use nostr::prelude::{encrypt, NostrWalletConnectURI};
-use nostr::{Event, EventBuilder, Keys, Kind, Tag};
+use nostr::{Event, EventBuilder, JsonUtil, Keys, Kind, Tag};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use uuid::Uuid;

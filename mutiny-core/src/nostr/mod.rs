@@ -23,7 +23,7 @@ use lightning::{log_error, log_warn};
 use nostr::key::SecretKey;
 use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
-use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
+use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Tag};
 use nostr_sdk::{Client, RelayPoolNotification};
 use std::sync::{atomic::Ordering, Arc, RwLock};
 use std::time::Duration;
@@ -440,13 +440,10 @@ impl<S: MutinyStorage> NostrManager<S> {
         if let Some(info_event) = info_event {
             let client = Client::new(&self.primary_key);
 
-            #[cfg(target_arch = "wasm32")]
-            let add_relay_res = client.add_relay(profile.relay.as_str()).await;
-
-            #[cfg(not(target_arch = "wasm32"))]
-            let add_relay_res = client.add_relay(profile.relay.as_str(), None).await;
-
-            add_relay_res.expect("Failed to add relays");
+            client
+                .add_relay(profile.relay.as_str())
+                .await
+                .expect("Failed to add relays");
             client.connect().await;
 
             client.send_event(info_event).await.map_err(|e| {
@@ -503,17 +500,10 @@ impl<S: MutinyStorage> NostrManager<S> {
         if let Some(nwc) = nwc {
             let client = Client::new(&self.primary_key);
 
-            #[cfg(target_arch = "wasm32")]
-            let add_relay_res = client
+            client
                 .add_relays(vec![relay, profile.relay.to_string()])
-                .await;
-
-            #[cfg(not(target_arch = "wasm32"))]
-            let add_relay_res = client
-                .add_relays(vec![(relay, None), (profile.relay.to_string(), None)])
-                .await;
-
-            add_relay_res.expect("Failed to add relays");
+                .await
+                .expect("Failed to add relays");
             client.connect().await;
 
             if let Some(event) = nwc.create_auth_confirmation_event(secret, commands)? {
@@ -580,13 +570,10 @@ impl<S: MutinyStorage> NostrManager<S> {
     ) -> Result<EventId, MutinyError> {
         let client = Client::new(&self.primary_key);
 
-        #[cfg(target_arch = "wasm32")]
-        let add_relay_res = client.add_relay(nwc.profile.relay.as_str()).await;
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let add_relay_res = client.add_relay(nwc.profile.relay.as_str(), None).await;
-
-        add_relay_res.expect("Failed to add relays");
+        client
+            .add_relay(nwc.profile.relay.as_str())
+            .await
+            .expect("Failed to add relays");
         client.connect().await;
 
         let encrypted = encrypt(
@@ -596,9 +583,17 @@ impl<S: MutinyStorage> NostrManager<S> {
         )
         .unwrap();
 
-        let p_tag = Tag::PubKey(inv.pubkey, None);
-        let e_tag = Tag::Event(inv.event_id, None, None);
-        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, &[p_tag, e_tag])
+        let p_tag = Tag::PublicKey {
+            public_key: inv.pubkey,
+            relay_url: None,
+            alias: None,
+        };
+        let e_tag = Tag::Event {
+            event_id: inv.event_id,
+            relay_url: None,
+            marker: None,
+        };
+        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
             .to_event(&nwc.server_key)
             .map_err(|e| MutinyError::Other(anyhow::anyhow!("Failed to create event: {e:?}")))?;
 
@@ -690,16 +685,10 @@ impl<S: MutinyStorage> NostrManager<S> {
         {
             let client = Client::new(&self.primary_key);
 
-            let relays = self.get_relays();
-            for relay in relays {
-                #[cfg(target_arch = "wasm32")]
-                let add_relay_res = client.add_relay(relay.as_str()).await;
-                #[cfg(not(target_arch = "wasm32"))]
-                let add_relay_res = client.add_relay(relay.as_str(), None).await;
-
-                add_relay_res.expect("Failed to add relays");
-            }
-
+            client
+                .add_relays(self.get_relays())
+                .await
+                .expect("Failed to add relays");
             client.connect().await;
 
             let invoices: Vec<PendingNwcInvoice> = self
@@ -725,10 +714,18 @@ impl<S: MutinyStorage> NostrManager<S> {
                 )
                 .unwrap();
 
-                let p_tag = Tag::PubKey(inv.pubkey, None);
-                let e_tag = Tag::Event(inv.event_id, None, None);
+                let p_tag = Tag::PublicKey {
+                    public_key: inv.pubkey,
+                    relay_url: None,
+                    alias: None,
+                };
+                let e_tag = Tag::Event {
+                    event_id: inv.event_id,
+                    relay_url: None,
+                    marker: None,
+                };
                 let response =
-                    EventBuilder::new(Kind::WalletConnectResponse, encrypted, &[p_tag, e_tag])
+                    EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
                         .to_event(&nwc.server_key)
                         .map_err(|e| {
                             MutinyError::Other(anyhow::anyhow!("Failed to create event: {e:?}"))
@@ -835,13 +832,10 @@ impl<S: MutinyStorage> NostrManager<S> {
         let secret = Keys::new(nwc.secret);
         let client = Client::new(&secret);
 
-        #[cfg(target_arch = "wasm32")]
-        let add_relay_res = client.add_relay(nwc.relay_url.as_str()).await;
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let add_relay_res = client.add_relay(nwc.relay_url.as_str(), None).await;
-
-        add_relay_res.expect("Failed to add relays");
+        client
+            .add_relay(nwc.relay_url.as_str())
+            .await
+            .expect("Failed to add relays");
         client.connect().await;
 
         let invoice = invoice_handler
@@ -857,13 +851,17 @@ impl<S: MutinyStorage> NostrManager<S> {
             }),
         };
         let encrypted = encrypt(&nwc.secret, &nwc.public_key, req.as_json())?;
-        let p_tag = Tag::PubKey(nwc.public_key, None);
+        let p_tag = Tag::PublicKey {
+            public_key: nwc.public_key,
+            relay_url: None,
+            alias: None,
+        };
         let request_event =
-            EventBuilder::new(Kind::WalletConnectRequest, encrypted, &[p_tag]).to_event(&secret)?;
+            EventBuilder::new(Kind::WalletConnectRequest, encrypted, [p_tag]).to_event(&secret)?;
 
         let filter = Filter::new()
             .kind(Kind::WalletConnectResponse)
-            .author(nwc.public_key.to_hex())
+            .author(nwc.public_key)
             .pubkey(secret.public_key())
             .event(request_event.id);
 
@@ -906,9 +904,9 @@ impl<S: MutinyStorage> NostrManager<S> {
             select! {
                 notification = read_fut => {
                     match notification {
-                        Ok(RelayPoolNotification::Event(_url, event)) => {
+                        Ok(RelayPoolNotification::Event { event, .. }) => {
                             let has_e_tag = event.tags.iter().any(|x| {
-                                if let Tag::Event(id, _, _) = x {
+                                if let Tag::Event { event_id: id, .. } = x {
                                     *id == request_event.id
                                 } else {
                                         false
@@ -935,7 +933,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                                 }
                             }
                         },
-                        Ok(RelayPoolNotification::Message(_, _)) => {}, // ignore messages
+                        Ok(RelayPoolNotification::Message { .. }) => {}, // ignore messages
                         Ok(RelayPoolNotification::Stop) => {}, // ignore stops
                         Ok(RelayPoolNotification::RelayStatus { .. }) => {}, // ignore status updates
                         Ok(RelayPoolNotification::Shutdown) =>
