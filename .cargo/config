@@ -1,2 +1,4 @@
 [build]
 target = "wasm32-unknown-unknown"
+# for fedimint to use tokio::task::Builder - https://github.com/fedimint/fedimint/issues/3951
+rustflags = ["--cfg", "tokio_unstable"]

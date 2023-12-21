@@ -22,9 +22,10 @@ use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
+use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
-use lightning::routing::gossip::NodeId;
+use lightning::{log_error, routing::gossip::NodeId, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
@@ -434,12 +435,7 @@ impl MutinyWallet {
         amount: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyBip21RawMaterials, MutinyJsError> {
-        Ok(self
-            .inner
-            .node_manager
-            .create_bip21(amount, labels)
-            .await?
-            .into())
+        Ok(self.inner.create_bip21(amount, labels).await?.into())
     }
 
     /// Sends an on-chain transaction to the given address.
@@ -603,7 +599,7 @@ impl MutinyWallet {
     /// This will not include any funds in an unconfirmed lightning channel.
     #[wasm_bindgen]
     pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyJsError> {
-        Ok(self.inner.node_manager.get_balance().await?.into())
+        Ok(self.inner.get_balance().await?.into())
     }
 
     /// Lists all the UTXOs in the wallet.
@@ -644,50 +640,30 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn connect_to_peer(
         &self,
-        self_node_pubkey: String,
         connection_string: String,
         label: Option<String>,
     ) -> Result<(), MutinyJsError> {
-        let self_node_pubkey = PublicKey::from_str(&self_node_pubkey)?;
         Ok(self
             .inner
             .node_manager
-            .connect_to_peer(&self_node_pubkey, &connection_string, label)
+            .connect_to_peer(None, &connection_string, label)
             .await?)
     }
 
     /// Disconnects from a peer from the selected node.
     #[wasm_bindgen]
-    pub async fn disconnect_peer(
-        &self,
-        self_node_pubkey: String,
-        peer: String,
-    ) -> Result<(), MutinyJsError> {
-        let self_node_pubkey = PublicKey::from_str(&self_node_pubkey)?;
+    pub async fn disconnect_peer(&self, peer: String) -> Result<(), MutinyJsError> {
         let peer = PublicKey::from_str(&peer)?;
-        Ok(self
-            .inner
-            .node_manager
-            .disconnect_peer(&self_node_pubkey, peer)
-            .await?)
+        Ok(self.inner.node_manager.disconnect_peer(None, peer).await?)
     }
 
     /// Deletes a peer from the selected node.
     /// This will make it so that the node will not attempt to
     /// reconnect to the peer.
     #[wasm_bindgen]
-    pub async fn delete_peer(
-        &self,
-        self_node_pubkey: String,
-        peer: String,
-    ) -> Result<(), MutinyJsError> {
-        let self_node_pubkey = PublicKey::from_str(&self_node_pubkey)?;
+    pub async fn delete_peer(&self, peer: String) -> Result<(), MutinyJsError> {
         let peer = NodeId::from_str(&peer)?;
-        Ok(self
-            .inner
-            .node_manager
-            .delete_peer(&self_node_pubkey, &peer)
-            .await?)
+        Ok(self.inner.node_manager.delete_peer(None, &peer).await?)
     }
 
     /// Sets the label of a peer from the selected node.
@@ -724,17 +700,14 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn pay_invoice(
         &self,
-        from_node: String,
         invoice_str: String,
         amt_sats: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
-        let from_node = PublicKey::from_str(&from_node)?;
         let invoice = Bolt11Invoice::from_str(&invoice_str)?;
         Ok(self
             .inner
-            .node_manager
-            .pay_invoice(&from_node, &invoice, amt_sats, labels)
+            .pay_invoice(&invoice, amt_sats, labels)
             .await?
             .into())
     }
@@ -744,18 +717,16 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn keysend(
         &self,
-        from_node: String,
         to_node: String,
         amt_sats: u64,
         message: Option<String>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
-        let from_node = PublicKey::from_str(&from_node)?;
         let to_node = PublicKey::from_str(&to_node)?;
         Ok(self
             .inner
             .node_manager
-            .keysend(&from_node, to_node, amt_sats, message, labels)
+            .keysend(None, to_node, amt_sats, message, labels)
             .await?
             .into())
     }
@@ -772,12 +743,7 @@ impl MutinyWallet {
         let network = network
             .map(|n| Network::from_str(&n).map_err(|_| MutinyJsError::InvalidArgumentsError))
             .transpose()?;
-        Ok(self
-            .inner
-            .node_manager
-            .decode_invoice(invoice, network)
-            .await?
-            .into())
+        Ok(self.inner.decode_invoice(invoice, network)?.into())
     }
 
     /// Calls upon a LNURL to get the parameters for it.
@@ -793,13 +759,11 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn lnurl_pay(
         &self,
-        from_node: String,
         lnurl: String,
         amount_sats: u64,
         zap_npub: Option<String>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
-        let from_node = PublicKey::from_str(&from_node)?;
         let lnurl = LnUrl::from_str(&lnurl)?;
 
         let zap_npub = match zap_npub.filter(|z| !z.is_empty()) {
@@ -812,7 +776,7 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .lnurl_pay(&from_node, &lnurl, amount_sats, zap_npub, labels)
+            .lnurl_pay(&lnurl, amount_sats, zap_npub, labels)
             .await?
             .into())
     }
@@ -845,7 +809,7 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn get_invoice(&self, invoice: String) -> Result<MutinyInvoice, MutinyJsError> {
         let invoice = Bolt11Invoice::from_str(&invoice)?;
-        Ok(self.inner.node_manager.get_invoice(&invoice).await?.into())
+        Ok(self.inner.get_invoice(&invoice).await?.into())
     }
 
     /// Gets an invoice from the node manager.
@@ -853,12 +817,7 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn get_invoice_by_hash(&self, hash: String) -> Result<MutinyInvoice, MutinyJsError> {
         let hash: sha256::Hash = sha256::Hash::from_str(&hash)?;
-        Ok(self
-            .inner
-            .node_manager
-            .get_invoice_by_hash(&hash)
-            .await?
-            .into())
+        Ok(self.inner.get_invoice_by_hash(&hash).await?.into())
     }
 
     /// Gets an invoice from the node manager.
@@ -905,13 +864,10 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn open_channel(
         &self,
-        from_node: String,
         to_pubkey: Option<String>,
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<MutinyChannel, MutinyJsError> {
-        let from_node = PublicKey::from_str(&from_node)?;
-
         let to_pubkey = match to_pubkey {
             Some(pubkey_str) if !pubkey_str.trim().is_empty() => {
                 Some(PublicKey::from_str(&pubkey_str)?)
@@ -922,7 +878,7 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .open_channel(&from_node, to_pubkey, amount, fee_rate, None)
+            .open_channel(None, to_pubkey, amount, fee_rate, None)
             .await?
             .into())
     }
@@ -933,11 +889,8 @@ impl MutinyWallet {
     /// The node must be online and have a connection to the peer.
     pub async fn sweep_all_to_channel(
         &self,
-        from_node: String,
         to_pubkey: Option<String>,
     ) -> Result<MutinyChannel, MutinyJsError> {
-        let from_node = PublicKey::from_str(&from_node)?;
-
         let to_pubkey = match to_pubkey {
             Some(pubkey_str) if !pubkey_str.trim().is_empty() => {
                 Some(PublicKey::from_str(&pubkey_str)?)
@@ -948,7 +901,7 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .sweep_all_to_channel(None, &from_node, to_pubkey)
+            .sweep_all_to_channel(None, None, to_pubkey)
             .await?
             .into())
     }
@@ -998,7 +951,7 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn get_activity(&self) -> Result<JsValue /* Vec<ActivityItem> */, MutinyJsError> {
         // get activity from the node manager
-        let activity = self.inner.node_manager.get_activity().await?;
+        let activity = self.inner.get_activity().await?;
         let mut activity: Vec<ActivityItem> = activity.into_iter().map(|a| a.into()).collect();
 
         // add contacts to the activity
@@ -1046,6 +999,51 @@ impl MutinyWallet {
         }
 
         Ok(JsValue::from_serde(&activity)?)
+    }
+
+    /// Adds a new federation based on its federation code
+    #[wasm_bindgen]
+    pub async fn new_federation(
+        &self,
+        federation_code: String,
+    ) -> Result<FederationIdentity, MutinyJsError> {
+        Ok(self
+            .inner
+            .new_federation(InviteCode::from_str(&federation_code).map_err(|e| {
+                log_error!(
+                    self.inner.logger,
+                    "Error parsing federation code ({federation_code}): {e}"
+                );
+                MutinyJsError::InvalidArgumentsError
+            })?)
+            .await?
+            .into())
+    }
+
+    /// Lists the federation id's of the federation clients in the manager.
+    #[wasm_bindgen]
+    pub async fn list_federations(
+        &self,
+    ) -> Result<JsValue /* Vec<FederationIdentity> */, MutinyJsError> {
+        Ok(JsValue::from_serde(&self.inner.list_federations().await?)?)
+    }
+
+    /// Removes a federation by setting its archived status to true, based on the FederationId.
+    #[wasm_bindgen]
+    pub async fn remove_federation(&self, federation_id: String) -> Result<(), MutinyJsError> {
+        Ok(self
+            .inner
+            .remove_federation(
+                FederationId::from_str(&federation_id)
+                    .map_err(|_| MutinyJsError::InvalidArgumentsError)?,
+            )
+            .await?)
+    }
+
+    /// Gets the current balances of each federation.
+    #[wasm_bindgen]
+    pub async fn get_federation_balances(&self) -> Result<FederationBalances, MutinyJsError> {
+        Ok(self.inner.get_federation_balances().await?.into())
     }
 
     /// Initiates a redshift
@@ -1482,7 +1480,7 @@ impl MutinyWallet {
         Ok(self
             .inner
             .nostr
-            .claim_single_use_nwc(amount_sats, &nwc_uri, self.inner.node_manager.as_ref())
+            .claim_single_use_nwc(amount_sats, &nwc_uri, &self.inner)
             .await?
             .map(|r| r.message))
     }
@@ -1510,16 +1508,10 @@ impl MutinyWallet {
     }
 
     /// Approves an invoice and sends the payment
-    pub async fn approve_invoice(
-        &self,
-        hash: String,
-        from_node: String,
-    ) -> Result<(), MutinyJsError> {
-        let from_node = PublicKey::from_str(&from_node)?;
-
+    pub async fn approve_invoice(&self, hash: String) -> Result<(), MutinyJsError> {
         self.inner
             .nostr
-            .approve_invoice(hash.parse()?, &self.inner.node_manager, &from_node)
+            .approve_invoice(hash.parse()?, &self.inner)
             .await?;
 
         Ok(())

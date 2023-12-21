@@ -1,4 +1,3 @@
-use crate::labels::LabelStorage;
 use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
 use crate::lsp::{InvoiceRequest, LspConfig};
 use crate::messagehandler::MutinyMessageHandler;
@@ -23,6 +22,7 @@ use crate::{
 };
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
+use crate::{labels::LabelStorage, DEFAULT_PAYMENT_TIMEOUT};
 use anyhow::{anyhow, Context};
 use bdk::FeeRate;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
@@ -73,7 +73,7 @@ use lightning_liquidity::{
 };
 
 #[cfg(test)]
-use mockall::{automock, predicate::*};
+use mockall::predicate::*;
 use std::collections::HashMap;
 use std::{
     str::FromStr,
@@ -83,7 +83,6 @@ use std::{
     },
 };
 
-const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 const INITIAL_RECONNECTION_DELAY: u64 = 5;
 const MAX_RECONNECTION_DELAY: u64 = 60;
 
@@ -184,7 +183,6 @@ pub(crate) struct Node<S: MutinyStorage> {
     pub(crate) lsp_client: Option<AnyLsp<S>>,
     pub(crate) sync_lock: Arc<Mutex<()>>,
     stop: Arc<AtomicBool>,
-    pub skip_hodl_invoices: bool,
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
 }
@@ -207,7 +205,6 @@ impl<S: MutinyStorage> Node<S> {
         logger: Arc<MutinyLogger>,
         do_not_connect_peers: bool,
         empty_state: bool,
-        skip_hodl_invoices: bool,
         #[cfg(target_arch = "wasm32")] websocket_proxy_addr: String,
     ) -> Result<Self, MutinyError> {
         log_info!(logger, "initializing a new node: {uuid}");
@@ -726,7 +723,6 @@ impl<S: MutinyStorage> Node<S> {
             lsp_client,
             sync_lock,
             stop,
-            skip_hodl_invoices,
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
         })
@@ -1064,10 +1060,6 @@ impl<S: MutinyStorage> Node<S> {
         Ok(invoice)
     }
 
-    pub fn get_invoice(&self, invoice: &Bolt11Invoice) -> Result<MutinyInvoice, MutinyError> {
-        self.get_invoice_by_hash(invoice.payment_hash())
-    }
-
     pub fn get_invoice_by_hash(&self, payment_hash: &Sha256) -> Result<MutinyInvoice, MutinyError> {
         let (payment_info, inbound) = self.get_payment_info_from_persisters(payment_hash)?;
         let labels_map = self.persister.storage.get_invoice_labels()?;
@@ -1162,7 +1154,7 @@ impl<S: MutinyStorage> Node<S> {
             .read_payment_info(payment_hash.as_inner(), false, &self.logger)
         {
             Some(payment_info) => Ok((payment_info, false)),
-            None => Err(MutinyError::InvoiceInvalid),
+            None => Err(MutinyError::NotFound),
         }
     }
 
@@ -2059,47 +2051,6 @@ pub(crate) fn default_user_config() -> UserConfig {
     }
 }
 
-#[cfg_attr(test, automock)]
-pub(crate) trait LnNode {
-    fn logger(&self) -> &MutinyLogger;
-    fn skip_hodl_invoices(&self) -> bool;
-    fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus>;
-    async fn pay_invoice_with_timeout(
-        &self,
-        invoice: &Bolt11Invoice,
-        amt_sats: Option<u64>,
-        timeout_secs: Option<u64>,
-        labels: Vec<String>,
-    ) -> Result<MutinyInvoice, MutinyError>;
-}
-
-impl<S: MutinyStorage> LnNode for Node<S> {
-    fn logger(&self) -> &MutinyLogger {
-        self.logger.as_ref()
-    }
-
-    fn skip_hodl_invoices(&self) -> bool {
-        self.skip_hodl_invoices
-    }
-
-    fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus> {
-        self.persister
-            .read_payment_info(payment_hash, false, &self.logger)
-            .map(|p| p.status)
-    }
-
-    async fn pay_invoice_with_timeout(
-        &self,
-        invoice: &Bolt11Invoice,
-        amt_sats: Option<u64>,
-        timeout_secs: Option<u64>,
-        labels: Vec<String>,
-    ) -> Result<MutinyInvoice, MutinyError> {
-        self.pay_invoice_with_timeout(invoice, amt_sats, timeout_secs, labels)
-            .await
-    }
-}
-
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
@@ -2294,7 +2245,7 @@ mod tests {
             _ => panic!("unexpected invoice description"),
         }
 
-        let from_storage = node.get_invoice(&invoice).unwrap();
+        let from_storage = node.get_invoice_by_hash(invoice.payment_hash()).unwrap();
         let by_hash = node.get_invoice_by_hash(invoice.payment_hash()).unwrap();
 
         assert_eq!(from_storage, by_hash);
@@ -2458,7 +2409,7 @@ mod wasm_test {
             _ => panic!("unexpected invoice description"),
         }
 
-        let from_storage = node.get_invoice(&invoice).unwrap();
+        let from_storage = node.get_invoice_by_hash(invoice.payment_hash()).unwrap();
         let by_hash = node.get_invoice_by_hash(invoice.payment_hash()).unwrap();
 
         assert_eq!(from_storage, by_hash);

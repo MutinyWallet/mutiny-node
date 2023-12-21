@@ -59,30 +59,30 @@ impl ActivityItem {
     }
 }
 
-impl From<nodemanager::ActivityItem> for ActivityItem {
-    fn from(a: nodemanager::ActivityItem) -> Self {
+impl From<mutiny_core::ActivityItem> for ActivityItem {
+    fn from(a: mutiny_core::ActivityItem) -> Self {
         let kind = match a {
-            nodemanager::ActivityItem::OnChain(_) => {
+            mutiny_core::ActivityItem::OnChain(_) => {
                 if a.is_channel_open() {
                     ActivityType::ChannelOpen
                 } else {
                     ActivityType::OnChain
                 }
             }
-            nodemanager::ActivityItem::Lightning(_) => ActivityType::Lightning,
-            nodemanager::ActivityItem::ChannelClosed(_) => ActivityType::ChannelClose,
+            mutiny_core::ActivityItem::Lightning(_) => ActivityType::Lightning,
+            mutiny_core::ActivityItem::ChannelClosed(_) => ActivityType::ChannelClose,
         };
 
         let id = match a {
-            nodemanager::ActivityItem::OnChain(ref t) => t.txid.to_hex(),
-            nodemanager::ActivityItem::Lightning(ref ln) => ln.payment_hash.to_hex(),
-            nodemanager::ActivityItem::ChannelClosed(ref c) => {
+            mutiny_core::ActivityItem::OnChain(ref t) => t.txid.to_hex(),
+            mutiny_core::ActivityItem::Lightning(ref ln) => ln.payment_hash.to_hex(),
+            mutiny_core::ActivityItem::ChannelClosed(ref c) => {
                 c.user_channel_id.map(|c| c.to_hex()).unwrap_or_default()
             }
         };
 
         let (inbound, amount_sats) = match a {
-            nodemanager::ActivityItem::OnChain(ref t) => {
+            mutiny_core::ActivityItem::OnChain(ref t) => {
                 let inbound = t.received > t.sent;
                 let amount_sats = if inbound {
                     Some(t.received - t.sent)
@@ -91,8 +91,8 @@ impl From<nodemanager::ActivityItem> for ActivityItem {
                 };
                 (inbound, amount_sats)
             }
-            nodemanager::ActivityItem::Lightning(ref ln) => (ln.inbound, ln.amount_sats),
-            nodemanager::ActivityItem::ChannelClosed(_) => (false, None),
+            mutiny_core::ActivityItem::Lightning(ref ln) => (ln.inbound, ln.amount_sats),
+            mutiny_core::ActivityItem::ChannelClosed(_) => (false, None),
         };
 
         ActivityItem {
@@ -403,6 +403,7 @@ pub struct MutinyBalance {
     pub confirmed: u64,
     pub unconfirmed: u64,
     pub lightning: u64,
+    pub federation: u64,
     pub force_close: u64,
 }
 
@@ -414,13 +415,84 @@ impl MutinyBalance {
     }
 }
 
-impl From<nodemanager::MutinyBalance> for MutinyBalance {
-    fn from(m: nodemanager::MutinyBalance) -> Self {
+impl From<mutiny_core::MutinyBalance> for MutinyBalance {
+    fn from(m: mutiny_core::MutinyBalance) -> Self {
         MutinyBalance {
             confirmed: m.confirmed,
             unconfirmed: m.unconfirmed,
             lightning: m.lightning,
+            federation: m.federation,
             force_close: m.force_close,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[wasm_bindgen]
+pub struct FederationBalance {
+    identity: FederationIdentity,
+    balance: u64,
+}
+
+#[wasm_bindgen]
+impl FederationBalance {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn identity_uuid(&self) -> String {
+        self.identity.uuid.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn identity_federation_id(&self) -> String {
+        self.identity.federation_id.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn balance(&self) -> u64 {
+        self.balance
+    }
+}
+
+impl From<mutiny_core::FederationBalance> for FederationBalance {
+    fn from(core_balance: mutiny_core::FederationBalance) -> Self {
+        FederationBalance {
+            identity: core_balance.identity.into(),
+            balance: core_balance.balance,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[wasm_bindgen]
+pub struct FederationBalances {
+    balances: Vec<FederationBalance>,
+}
+
+#[wasm_bindgen]
+impl FederationBalances {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn balances(&self) -> Vec<FederationBalance> {
+        self.balances.clone()
+    }
+}
+
+impl From<mutiny_core::FederationBalances> for FederationBalances {
+    fn from(core_balances: mutiny_core::FederationBalances) -> Self {
+        FederationBalances {
+            balances: core_balances
+                .balances
+                .into_iter()
+                .map(FederationBalance::from)
+                .collect(),
         }
     }
 }
@@ -488,6 +560,42 @@ impl From<nodemanager::NodeIdentity> for NodeIdentity {
         NodeIdentity {
             uuid: m.uuid,
             pubkey: m.pubkey,
+        }
+    }
+}
+
+// This is the FederationIdentity that refer to a specific node
+// Used for public facing identification.
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[wasm_bindgen]
+pub struct FederationIdentity {
+    uuid: String,
+    federation_id: String,
+}
+
+#[wasm_bindgen]
+impl FederationIdentity {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn uuid(&self) -> String {
+        self.uuid.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn federation_code(&self) -> String {
+        self.federation_id.to_string()
+    }
+}
+
+impl From<crate::models::federation::FederationIdentity> for FederationIdentity {
+    fn from(m: crate::models::federation::FederationIdentity) -> Self {
+        FederationIdentity {
+            uuid: m.uuid,
+            federation_id: m.federation_id.to_string(),
         }
     }
 }

@@ -14,8 +14,10 @@ mod chain;
 pub mod encrypt;
 pub mod error;
 mod event;
+pub mod federation;
 mod fees;
 mod gossip;
+mod key;
 mod keymanager;
 pub mod labels;
 mod ldkstorage;
@@ -31,6 +33,7 @@ mod onchain;
 mod peermanager;
 pub mod redshift;
 pub mod scorer;
+pub mod sql;
 pub mod storage;
 mod subscription;
 pub mod utils;
@@ -44,8 +47,10 @@ pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
-use crate::labels::{get_contact_key, Contact, LabelStorage};
 use crate::logging::LOGGING_KEY;
+use crate::nodemanager::{
+    ChannelClosure, MutinyBip21RawMaterials, MutinyInvoice, TransactionDetails,
+};
 use crate::nostr::nwc::{
     BudgetPeriod, BudgetedSpendingConditions, NwcProfileTag, SpendingConditions,
 };
@@ -53,23 +58,175 @@ use crate::nostr::MUTINY_PLUS_SUBSCRIPTION_LABEL;
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY};
 use crate::{auth::MutinyAuthClient, logging::MutinyLogger};
 use crate::{error::MutinyError, nostr::ReservedProfile};
+use crate::{
+    federation::{FederationClient, FederationIdentity, FederationIndex, FederationStorage},
+    labels::{get_contact_key, Contact, LabelStorage},
+    nodemanager::NodeBalance,
+    sql::glue::GlueDB,
+};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
 use ::nostr::{Event, Kind, Metadata};
+use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
-use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
-use bitcoin::Network;
+use bitcoin::{hashes::sha256, Network};
+use fedimint_core::{api::InviteCode, config::FederationId, BitcoinHash};
 use futures::{pin_mut, select, FutureExt};
+use futures_util::lock::Mutex;
 use lightning::{log_debug, util::logger::Logger};
 use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use nostr_sdk::{Client, RelayPoolNotification};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::{collections::HashMap, sync::atomic::AtomicBool};
+use uuid::Uuid;
+
+#[cfg(test)]
+use mockall::{automock, predicate::*};
+
+const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
+
+#[cfg_attr(test, automock)]
+pub trait InvoiceHandler {
+    fn logger(&self) -> &MutinyLogger;
+    fn skip_hodl_invoices(&self) -> bool;
+    async fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus>;
+    async fn pay_invoice(
+        &self,
+        invoice: &Bolt11Invoice,
+        amt_sats: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyInvoice, MutinyError>;
+    async fn create_invoice(
+        &self,
+        amount: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyInvoice, MutinyError>;
+}
+
+#[derive(Copy, Clone)]
+pub struct MutinyBalance {
+    pub confirmed: u64,
+    pub unconfirmed: u64,
+    pub lightning: u64,
+    pub federation: u64,
+    pub force_close: u64,
+}
+
+impl MutinyBalance {
+    fn new(ln_balance: NodeBalance, federation_balance: u64) -> Self {
+        Self {
+            confirmed: ln_balance.confirmed,
+            unconfirmed: ln_balance.unconfirmed,
+            lightning: ln_balance.lightning,
+            federation: federation_balance,
+            force_close: ln_balance.force_close,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+pub struct FederationBalance {
+    pub identity: FederationIdentity,
+    pub balance: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+pub struct FederationBalances {
+    pub balances: Vec<FederationBalance>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum ActivityItem {
+    OnChain(TransactionDetails),
+    Lightning(Box<MutinyInvoice>),
+    ChannelClosed(ChannelClosure),
+}
+
+impl ActivityItem {
+    pub fn last_updated(&self) -> Option<u64> {
+        match self {
+            ActivityItem::OnChain(t) => match t.confirmation_time {
+                ConfirmationTime::Confirmed { time, .. } => Some(time),
+                ConfirmationTime::Unconfirmed { .. } => None,
+            },
+            ActivityItem::Lightning(i) => match i.status {
+                HTLCStatus::Succeeded => Some(i.last_updated),
+                HTLCStatus::Failed => Some(i.last_updated),
+                HTLCStatus::Pending | HTLCStatus::InFlight => None,
+            },
+            ActivityItem::ChannelClosed(c) => Some(c.timestamp),
+        }
+    }
+
+    pub fn labels(&self) -> Vec<String> {
+        match self {
+            ActivityItem::OnChain(t) => t.labels.clone(),
+            ActivityItem::Lightning(i) => i.labels.clone(),
+            ActivityItem::ChannelClosed(_) => vec![],
+        }
+    }
+
+    pub fn is_channel_open(&self) -> bool {
+        match self {
+            ActivityItem::OnChain(onchain) => {
+                onchain.labels.iter().any(|l| l.contains("LN Channel:"))
+            }
+            ActivityItem::Lightning(_) => false,
+            ActivityItem::ChannelClosed(_) => false,
+        }
+    }
+}
+
+impl PartialOrd for ActivityItem {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ActivityItem {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        // We want None to be greater than Some because those are pending transactions
+        // so those should be at the top of the list
+        let sort = match (self.last_updated(), other.last_updated()) {
+            (Some(self_time), Some(other_time)) => self_time.cmp(&other_time),
+            (Some(_), None) => core::cmp::Ordering::Less,
+            (None, Some(_)) => core::cmp::Ordering::Greater,
+            (None, None) => {
+                // if both are none, do lightning first
+                match (self, other) {
+                    (ActivityItem::Lightning(_), ActivityItem::OnChain(_)) => {
+                        core::cmp::Ordering::Greater
+                    }
+                    (ActivityItem::OnChain(_), ActivityItem::Lightning(_)) => {
+                        core::cmp::Ordering::Less
+                    }
+                    (ActivityItem::Lightning(l1), ActivityItem::Lightning(l2)) => {
+                        // compare lightning by expire time
+                        l1.expire.cmp(&l2.expire)
+                    }
+                    (ActivityItem::OnChain(o1), ActivityItem::OnChain(o2)) => {
+                        // compare onchain by confirmation time (which will be last seen for unconfirmed)
+                        o1.confirmation_time.cmp(&o2.confirmation_time)
+                    }
+                    _ => core::cmp::Ordering::Equal,
+                }
+            }
+        };
+
+        // if the sort is equal, sort by serialization so we have a stable sort
+        sort.then_with(|| {
+            serde_json::to_string(self)
+                .unwrap()
+                .cmp(&serde_json::to_string(other).unwrap())
+        })
+    }
+}
 
 #[derive(Clone)]
 pub struct MutinyWalletConfig {
@@ -146,8 +303,11 @@ impl MutinyWalletConfig {
 pub struct MutinyWallet<S: MutinyStorage> {
     pub config: MutinyWalletConfig,
     pub storage: S,
+    glue_db: GlueDB,
     pub node_manager: Arc<NodeManager<S>>,
     pub nostr: Arc<NostrManager<S>>,
+    pub federation_storage: Arc<Mutex<FederationStorage>>,
+    pub(crate) federations: Arc<Mutex<HashMap<FederationId, Arc<FederationClient>>>>,
     pub stop: Arc<AtomicBool>,
     pub logger: Arc<MutinyLogger>,
 }
@@ -191,7 +351,22 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             node_manager.xprivkey,
             storage.clone(),
             node_manager.logger.clone(),
+            stop.clone(),
         )?);
+
+        // create gluedb storage
+        let glue_db = GlueDB::new(
+            #[cfg(target_arch = "wasm32")]
+            None,
+            logger.clone(),
+        )
+        .await?;
+
+        // create federation library
+        let (federation_storage, federations) =
+            create_federations(&storage, &config, glue_db.clone(), &logger).await?;
+        let federation_storage = Arc::new(Mutex::new(federation_storage));
+        let federations = federations;
 
         if !config.skip_hodl_invoices {
             log_warn!(
@@ -203,8 +378,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let mw = Self {
             config,
             storage,
+            glue_db,
             node_manager,
             nostr,
+            federation_storage,
+            federations,
             stop,
             logger,
         };
@@ -225,15 +403,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         // if we don't have any nodes, create one
-        let first_node = {
-            match mw.node_manager.list_nodes().await?.pop() {
-                Some(node) => node,
-                None => mw.node_manager.new_node().await?.pubkey,
+        match mw.node_manager.list_nodes().await?.pop() {
+            Some(_) => (),
+            None => {
+                mw.node_manager.new_node().await?;
             }
         };
 
         // start the nostr wallet connect background process
-        mw.start_nostr_wallet_connect(first_node).await;
+        mw.start_nostr_wallet_connect().await;
 
         Ok(mw)
     }
@@ -263,12 +441,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Starts a background process that will watch for nostr wallet connect events
-    pub(crate) async fn start_nostr_wallet_connect(&self, from_node: PublicKey) {
+    pub(crate) async fn start_nostr_wallet_connect(&self) {
         let nostr = self.nostr.clone();
-        let nm = self.node_manager.clone();
+        let logger = self.logger.clone();
+        let stop = self.stop.clone();
+        let self_clone = self.clone();
         utils::spawn(async move {
             loop {
-                if nm.stop.load(Ordering::Relaxed) {
+                if stop.load(Ordering::Relaxed) {
                     break;
                 };
 
@@ -283,19 +463,20 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 // clear in-active profiles, we used to have disabled and archived profiles
                 // but now we just delete profiles
                 if let Err(e) = nostr.remove_inactive_profiles() {
-                    log_warn!(nm.logger, "Failed to clear in-active NWC profiles: {e}");
+                    log_warn!(logger, "Failed to clear in-active NWC profiles: {e}");
                 }
 
                 // if a single-use profile's payment was successful in the background,
                 // we can safely clear it now
-                let node = nm.get_node(&from_node).await.expect("failed to get node");
-                if let Err(e) = nostr.clear_successful_single_use_profiles(&node) {
-                    log_warn!(nm.logger, "Failed to clear in-active NWC profiles: {e}");
+                if let Err(e) = nostr
+                    .clear_successful_single_use_profiles(&self_clone)
+                    .await
+                {
+                    log_warn!(logger, "Failed to clear in-active NWC profiles: {e}");
                 }
-                drop(node);
 
                 if let Err(e) = nostr.clear_expired_nwc_invoices().await {
-                    log_warn!(nm.logger, "Failed to clear expired NWC invoices: {e}");
+                    log_warn!(logger, "Failed to clear expired NWC invoices: {e}");
                 }
 
                 // clear successful single-use profiles
@@ -340,15 +521,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                             match notification {
                                 Ok(RelayPoolNotification::Event(_url, event)) => {
                                     if event.kind == Kind::WalletConnectRequest && event.verify().is_ok() {
-                                        match nostr.handle_nwc_request(event, &nm, &from_node).await {
+                                        match nostr.handle_nwc_request(event, &self_clone).await {
                                             Ok(Some(event)) => {
                                                 if let Err(e) = client.send_event(event).await {
-                                                    log_warn!(nm.logger, "Error sending NWC event: {e}");
+                                                    log_warn!(logger, "Error sending NWC event: {e}");
                                                 }
                                             }
                                             Ok(None) => {} // no response
                                             Err(e) => {
-                                                log_error!(nm.logger, "Error handling NWC request: {e}");
+                                                log_error!(logger, "Error handling NWC request: {e}");
                                             }
                                         }
                                     }
@@ -361,7 +542,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                             }
                         }
                         _ = delay_fut => {
-                            if nm.stop.load(Ordering::Relaxed) {
+                            if stop.load(Ordering::Relaxed) {
                                 break;
                             }
                         }
@@ -369,7 +550,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                             // Check if the filters have changed
                             let current_filters = nostr.get_nwc_filters();
                             if current_filters != last_filters {
-                                log_debug!(nm.logger, "subscribing to new nwc filters");
+                                log_debug!(logger, "subscribing to new nwc filters");
                                 client.subscribe(current_filters.clone()).await;
                                 last_filters = current_filters;
                             }
@@ -380,10 +561,204 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 }
 
                 if let Err(e) = client.disconnect().await {
-                    log_warn!(nm.logger, "Error disconnecting from relays: {e}");
+                    log_warn!(logger, "Error disconnecting from relays: {e}");
                 }
             }
         });
+    }
+
+    /// Pays a lightning invoice from a federation (preferred) or node.
+    /// An amount should only be provided if the invoice does not have an amount.
+    /// Amountless invoices cannot be paid by a federation.
+    /// The amount should be in satoshis.
+    pub async fn pay_invoice(
+        &self,
+        inv: &Bolt11Invoice,
+        amt_sats: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        if inv.network() != self.config.network {
+            return Err(MutinyError::IncorrectNetwork(inv.network()));
+        }
+
+        // Check the amount specified in the invoice, we need one to make the payment
+        let send_msat = inv
+            .amount_milli_satoshis()
+            .or(amt_sats.map(|x| x * 1_000))
+            .ok_or(MutinyError::InvoiceInvalid)?;
+
+        // Try each federation first
+        let federation_ids = self.list_federation_ids().await?;
+        for federation_id in federation_ids {
+            if let Some(fedimint_client) = self.federations.lock().await.get(&federation_id) {
+                // Check if the federation has enough balance
+                let balance = fedimint_client.get_balance().await?;
+                if balance >= send_msat / 1_000 {
+                    // Try to pay the invoice using the federation
+                    let payment_result = fedimint_client
+                        .pay_invoice(inv.clone(), labels.clone())
+                        .await;
+                    match payment_result {
+                        Ok(r) => return Ok(r),
+                        Err(e) => match e {
+                            MutinyError::PaymentTimeout => return Err(e),
+                            MutinyError::RoutingFailed => {
+                                log_debug!(
+                                    self.logger,
+                                    "could not make payment through federation: {e}"
+                                );
+                                continue;
+                            }
+                            _ => {
+                                log_warn!(self.logger, "unhandled error: {e}")
+                            }
+                        },
+                    }
+                }
+                // If payment fails or invoice amount is None or balance is not sufficient, continue to next federation
+            }
+            // If federation client is not found, continue to next federation
+        }
+
+        // If no federation could pay the invoice, fall back to using node_manager for payment
+        self.node_manager
+            .pay_invoice(None, inv, amt_sats, labels)
+            .await
+    }
+
+    /// Creates a BIP 21 invoice. This creates a new address and a lightning invoice.
+    /// The lightning invoice may return errors related to the LSP. Check the error and
+    /// fallback to `get_new_address` and warn the user that Lightning is not available.
+    ///
+    /// Errors that might be returned include:
+    ///
+    /// - [`MutinyError::LspGenericError`]: This is returned for various reasons, including if a
+    ///   request to the LSP server fails for any reason, or if the server returns
+    ///   a status other than 500 that can't be parsed into a `ProposalResponse`.
+    ///
+    /// - [`MutinyError::LspFundingError`]: Returned if the LSP server returns an error with
+    ///   a status of 500, indicating an "Internal Server Error", and a message
+    ///   stating "Cannot fund new channel at this time". This means that the LSP cannot support
+    ///   a new channel at this time.
+    ///
+    /// - [`MutinyError::LspAmountTooHighError`]: Returned if the LSP server returns an error with
+    ///   a status of 500, indicating an "Internal Server Error", and a message stating "Invoice
+    ///   amount is too high". This means that the LSP cannot support the amount that the user
+    ///   requested. The user should request a smaller amount from the LSP.
+    ///
+    /// - [`MutinyError::LspConnectionError`]: Returned if the LSP server returns an error with
+    ///   a status of 500, indicating an "Internal Server Error", and a message that starts with
+    ///   "Failed to connect to peer". This means that the LSP is not connected to our node.
+    ///
+    /// If the server returns a status of 500 with a different error message,
+    /// a [`MutinyError::LspGenericError`] is returned.
+    pub async fn create_bip21(
+        &self,
+        amount: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyBip21RawMaterials, MutinyError> {
+        let invoice = if self.config.safe_mode {
+            None
+        } else {
+            self.create_lightning_invoice(amount, labels.clone())
+                .await
+                .ok()
+                .and_then(|invoice| invoice.bolt11)
+        };
+
+        let Ok(address) = self.node_manager.get_new_address(labels.clone()) else {
+            return Err(MutinyError::WalletOperationFailed);
+        };
+
+        Ok(MutinyBip21RawMaterials {
+            address,
+            invoice,
+            btc_amount: amount.map(|amount| bitcoin::Amount::from_sat(amount).to_btc().to_string()),
+            labels,
+        })
+    }
+
+    async fn create_lightning_invoice(
+        &self,
+        amount: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        let federation_ids = self.list_federation_ids().await?;
+
+        // Attempt to create federation invoice
+        if !federation_ids.is_empty() {
+            let federation_id = &federation_ids[0];
+            let fedimint_client = self.federations.lock().await.get(federation_id).cloned();
+
+            if let Some(client) = fedimint_client {
+                if let Ok(inv) = client
+                    .get_invoice(amount.unwrap_or_default(), labels.clone())
+                    .await
+                {
+                    return Ok(inv);
+                }
+            }
+        }
+
+        // Fallback to node_manager invoice creation if no federation invoice created
+        self.node_manager.create_invoice(amount, labels).await
+    }
+
+    /// Gets the current balance of the wallet.
+    /// This includes both on-chain, lightning funds, and federations.
+    ///
+    /// This will not include any funds in an unconfirmed lightning channel.
+    pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyError> {
+        let ln_balance = self.node_manager.get_balance().await?;
+        let federation_balance = self.get_total_federation_balance().await?;
+
+        Ok(MutinyBalance::new(ln_balance, federation_balance))
+    }
+
+    /// Get the sorted activity list for lightning payments, channels, and txs.
+    pub async fn get_activity(&self) -> Result<Vec<ActivityItem>, MutinyError> {
+        // Get activities from node manager
+        let mut activities = self.node_manager.get_activity().await?;
+
+        // Directly iterate over federation clients to get their activities
+        let federations = self.federations.lock().await;
+        for (_fed_id, federation) in federations.iter() {
+            let federation_activities = federation.get_activity().await?;
+            activities.extend(federation_activities);
+        }
+
+        // Sort all activities, newest first
+        activities.sort_by(|a, b| b.cmp(a));
+
+        Ok(activities)
+    }
+
+    /// Gets an invoice.
+    /// This includes sent and received invoices.
+    pub async fn get_invoice(&self, invoice: &Bolt11Invoice) -> Result<MutinyInvoice, MutinyError> {
+        self.get_invoice_by_hash(invoice.payment_hash()).await
+    }
+
+    /// Looks up an invoice by hash.
+    /// This includes sent and received invoices.
+    pub async fn get_invoice_by_hash(
+        &self,
+        hash: &sha256::Hash,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        // First, try to find the invoice in the node manager
+        if let Ok(invoice) = self.node_manager.get_invoice_by_hash(hash).await {
+            return Ok(invoice);
+        }
+
+        // If not found in node manager, search in federations
+        let federations = self.federations.lock().await;
+        for (_fed_id, federation) in federations.iter() {
+            if let Ok(invoice) = federation.get_invoice_by_hash(hash).await {
+                return Ok(invoice);
+            }
+        }
+
+        Err(MutinyError::NotFound)
     }
 
     /// Checks whether or not the user is subscribed to Mutiny+.
@@ -417,18 +792,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         autopay: bool,
     ) -> Result<(), MutinyError> {
         if let Some(subscription_client) = self.node_manager.subscription_client.clone() {
-            let nodes = self.node_manager.nodes.lock().await;
-            let first_node_pubkey = if let Some(node) = nodes.values().next() {
-                node.pubkey
-            } else {
-                return Err(MutinyError::WalletOperationFailed);
-            };
-            drop(nodes);
-
             // TODO if this times out, we should make the next part happen in EventManager
             self.node_manager
                 .pay_invoice(
-                    &first_node_pubkey,
+                    None,
                     inv,
                     None,
                     vec![MUTINY_PLUS_SUBSCRIPTION_LABEL.to_string()],
@@ -661,6 +1028,259 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         storage.set_data(LOGGING_KEY.to_string(), logs, None)?;
         Ok(())
     }
+
+    /// Decodes a lightning invoice into useful information.
+    /// Will return an error if the invoice is for a different network.
+    pub fn decode_invoice(
+        &self,
+        invoice: Bolt11Invoice,
+        network: Option<Network>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        if invoice.network() != network.unwrap_or(self.config.network) {
+            return Err(MutinyError::IncorrectNetwork(invoice.network()));
+        }
+
+        Ok(invoice.into())
+    }
+
+    /// Adds a new federation based on its federation code
+    pub async fn new_federation(
+        &self,
+        federation_code: InviteCode,
+    ) -> Result<FederationIdentity, MutinyError> {
+        create_new_federation(
+            self.config.xprivkey,
+            self.storage.clone(),
+            self.glue_db.clone(),
+            self.config.network,
+            self.logger.clone(),
+            self.federation_storage.clone(),
+            self.federations.clone(),
+            federation_code,
+        )
+        .await
+    }
+
+    /// Lists the federation id's of the federation clients in the manager.
+    pub async fn list_federations(&self) -> Result<Vec<FederationIdentity>, MutinyError> {
+        let federations = self.federations.lock().await;
+        let federation_identities = federations
+            .iter()
+            .map(|(_, n)| n.get_mutiny_federation_identity())
+            .collect();
+        Ok(federation_identities)
+    }
+
+    /// Lists the federation id's of the federation clients in the manager.
+    pub async fn list_federation_ids(&self) -> Result<Vec<FederationId>, MutinyError> {
+        let federations = self.federations.lock().await;
+        let federation_identities = federations
+            .iter()
+            .map(|(_, n)| n.fedimint_client.federation_id())
+            .collect();
+        Ok(federation_identities)
+    }
+
+    /// Removes a federation by setting its archived status to true, based on the FederationId.
+    pub async fn remove_federation(&self, federation_id: FederationId) -> Result<(), MutinyError> {
+        let mut federations_guard = self.federations.lock().await;
+
+        if let Some(fedimint_client) = federations_guard.get(&federation_id) {
+            let uuid = &fedimint_client.uuid;
+
+            let mut federation_storage_guard = self.federation_storage.lock().await;
+
+            if federation_storage_guard.federations.contains_key(uuid) {
+                federation_storage_guard.federations.remove(uuid);
+                self.storage
+                    .insert_federations(federation_storage_guard.clone())?;
+                federations_guard.remove(&federation_id);
+            } else {
+                return Err(MutinyError::NotFound);
+            }
+        } else {
+            return Err(MutinyError::NotFound);
+        }
+
+        Ok(())
+    }
+
+    pub async fn get_total_federation_balance(&self) -> Result<u64, MutinyError> {
+        let federation_ids = self.list_federation_ids().await?;
+        let mut total_balance = 0;
+
+        let federations = self.federations.lock().await;
+        for fed_id in federation_ids {
+            let balance = federations
+                .get(&fed_id)
+                .ok_or(MutinyError::NotFound)?
+                .get_balance()
+                .await?;
+
+            total_balance += balance;
+        }
+
+        Ok(total_balance)
+    }
+
+    pub async fn get_federation_balances(&self) -> Result<FederationBalances, MutinyError> {
+        let federation_lock = self.federations.lock().await;
+
+        let federation_ids = self.list_federation_ids().await?;
+        let mut balances = Vec::with_capacity(federation_ids.len());
+        for fed_id in federation_ids {
+            let fedimint_client = federation_lock.get(&fed_id).ok_or(MutinyError::NotFound)?;
+
+            let balance = fedimint_client.get_balance().await?;
+            let identity = fedimint_client.get_mutiny_federation_identity();
+
+            balances.push(FederationBalance { identity, balance });
+        }
+
+        Ok(FederationBalances { balances })
+    }
+}
+
+impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
+    fn logger(&self) -> &MutinyLogger {
+        self.logger.as_ref()
+    }
+
+    fn skip_hodl_invoices(&self) -> bool {
+        self.config.skip_hodl_invoices
+    }
+
+    async fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus> {
+        self.get_invoice_by_hash(&sha256::Hash::hash(payment_hash))
+            .await
+            .ok()
+            .map(|p| p.status)
+    }
+
+    async fn pay_invoice(
+        &self,
+        invoice: &Bolt11Invoice,
+        amt_sats: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        self.pay_invoice(invoice, amt_sats, labels).await
+    }
+
+    async fn create_invoice(
+        &self,
+        amount: Option<u64>,
+        labels: Vec<String>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        self.create_lightning_invoice(amount, labels).await
+    }
+}
+
+async fn create_federations<S: MutinyStorage>(
+    storage: &S,
+    c: &MutinyWalletConfig,
+    g: GlueDB,
+    logger: &Arc<MutinyLogger>,
+) -> Result<
+    (
+        FederationStorage,
+        Arc<Mutex<HashMap<FederationId, Arc<FederationClient>>>>,
+    ),
+    MutinyError,
+> {
+    let federation_storage = storage.get_federations()?;
+    let federations = federation_storage.clone().federations.into_iter();
+    let mut federation_map = HashMap::new();
+    for federation_item in federations {
+        let federation = FederationClient::new(
+            federation_item.0,
+            federation_item.1.federation_code.clone(),
+            c.xprivkey,
+            g.clone(),
+            c.network,
+            logger.clone(),
+        )
+        .await?;
+
+        let id = federation.fedimint_client.federation_id();
+
+        federation_map.insert(id, Arc::new(federation));
+    }
+    let federations = Arc::new(Mutex::new(federation_map));
+    Ok((federation_storage, federations))
+}
+
+// This will create a new federation and returns the Federation ID of the client created.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn create_new_federation<S: MutinyStorage>(
+    xprivkey: ExtendedPrivKey,
+    storage: S,
+    g: GlueDB,
+    network: Network,
+    logger: Arc<MutinyLogger>,
+    federation_storage: Arc<Mutex<FederationStorage>>,
+    federations: Arc<Mutex<HashMap<FederationId, Arc<FederationClient>>>>,
+    federation_code: InviteCode,
+) -> Result<FederationIdentity, MutinyError> {
+    // Begin with a mutex lock so that nothing else can
+    // save or alter the federation list while it is about to
+    // be saved.
+    let mut federation_mutex = federation_storage.lock().await;
+
+    // Get the current federations so that we can check if the new federation already exists
+    let mut existing_federations = storage.get_federations()?;
+
+    // Check if the federation already exists
+    if existing_federations
+        .federations
+        .values()
+        .any(|federation| federation.federation_code == federation_code)
+    {
+        return Err(MutinyError::InvalidArgumentsError);
+    }
+
+    // Create and save a new federation
+    let next_federation_uuid = Uuid::new_v4().to_string();
+    let next_federation = FederationIndex {
+        federation_code: federation_code.clone(),
+    };
+
+    existing_federations.version += 1;
+    existing_federations
+        .federations
+        .insert(next_federation_uuid.clone(), next_federation.clone());
+
+    storage.insert_federations(existing_federations.clone())?;
+    federation_mutex.federations = existing_federations.federations.clone();
+
+    // now create the federation process and init it
+    let new_federation = FederationClient::new(
+        next_federation_uuid.clone(),
+        federation_code,
+        xprivkey,
+        g.clone(),
+        network,
+        logger.clone(),
+    )
+    .await?;
+
+    let federation_id = new_federation.fedimint_client.federation_id();
+    let federation_name = new_federation.fedimint_client.get_meta("federation_name");
+    let federation_expiry_timestamp = new_federation
+        .fedimint_client
+        .get_meta("federation_expiry_timestamp");
+    let welcome_message = new_federation.fedimint_client.get_meta("welcome_message");
+    federations
+        .lock()
+        .await
+        .insert(federation_id, Arc::new(new_federation));
+
+    Ok(FederationIdentity {
+        uuid: next_federation_uuid.clone(),
+        federation_id,
+        federation_name,
+        federation_expiry_timestamp,
+        welcome_message,
+    })
 }
 
 #[cfg(test)]
@@ -873,5 +1493,47 @@ mod tests {
             .expect("mutiny wallet should initialize");
         let restored_seed = mw2.node_manager.xprivkey;
         assert_eq!(seed, restored_seed);
+    }
+
+    #[test]
+    async fn create_mutiny_wallet_safe_mode() {
+        let test_name = "create_mutiny_wallet";
+        log!("{}", test_name);
+
+        let mnemonic = generate_seed(12).unwrap();
+        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &mnemonic.to_seed("")).unwrap();
+
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
+        assert!(!NodeManager::has_node_manager(storage.clone()));
+        let config = MutinyWalletConfig::new(
+            xpriv,
+            #[cfg(target_arch = "wasm32")]
+            None,
+            Network::Regtest,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            true,
+        )
+        .with_safe_mode();
+        let mw = MutinyWallet::new(storage.clone(), config, None)
+            .await
+            .expect("mutiny wallet should initialize");
+        mw.storage.insert_mnemonic(mnemonic).unwrap();
+        assert!(NodeManager::has_node_manager(storage));
+
+        let bip21 = mw.create_bip21(None, vec![]).await.unwrap();
+        assert!(bip21.invoice.is_none());
+
+        let new_node = mw.node_manager.new_node().await;
+        assert!(new_node.is_err());
     }
 }

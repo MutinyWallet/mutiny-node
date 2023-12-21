@@ -51,6 +51,31 @@ pub fn create_nwc_request(nwc: &NostrWalletConnectURI, invoice: String) -> Event
         .unwrap()
 }
 
+pub(crate) async fn create_mutiny_wallet<S: MutinyStorage>(storage: S) -> MutinyWallet<S> {
+    let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &[0; 32]).unwrap();
+
+    let config = MutinyWalletConfig::new(
+        xpriv,
+        #[cfg(target_arch = "wasm32")]
+        None,
+        Network::Regtest,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+        true,
+    );
+
+    MutinyWallet::new(storage.clone(), config, None)
+        .await
+        .expect("mutiny wallet should initialize")
+}
+
 pub(crate) async fn create_node<S: MutinyStorage>(storage: S) -> Node<S> {
     // mark first sync as done so we can execute node functions
     storage.set_done_first_sync().unwrap();
@@ -115,7 +140,6 @@ pub(crate) async fn create_node<S: MutinyStorage>(storage: S) -> Node<S> {
         logger,
         false,
         false,
-        true,
         #[cfg(target_arch = "wasm32")]
         String::from("wss://p.mutinywallet.com"),
     )
@@ -187,8 +211,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::auth::MutinyAuthClient;
-use crate::chain::MutinyChain;
 use crate::fees::MutinyFeeEstimator;
 use crate::logging::MutinyLogger;
 use crate::node::{NetworkGraph, Node, RapidGossipSync};
@@ -198,6 +220,8 @@ use crate::scorer::{HubPreferentialScorer, ProbScorer};
 use crate::storage::MutinyStorage;
 use crate::utils::{now, Mutex};
 use crate::vss::MutinyVssClient;
+use crate::{auth::MutinyAuthClient, MutinyWallet};
+use crate::{chain::MutinyChain, MutinyWalletConfig};
 use crate::{generate_seed, lnurlauth::AuthManager};
 
 pub const MANAGER_BYTES: [u8; 256] = [

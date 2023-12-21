@@ -625,12 +625,7 @@ fn get_tr_descriptors_for_extended_key(
     network: Network,
     account_number: u32,
 ) -> Result<(DescriptorTemplateOut, DescriptorTemplateOut), MutinyError> {
-    let coin_type = match network {
-        Network::Bitcoin => 0,
-        Network::Testnet => 1,
-        Network::Signet => 1,
-        Network::Regtest => 1,
-    };
+    let coin_type = coin_type_from_network(network);
 
     let base_path = DerivationPath::from_str("m/86'")?;
     let derivation_path = base_path.extend([
@@ -648,6 +643,15 @@ fn get_tr_descriptors_for_extended_key(
     )))?;
 
     Ok((receive_descriptor_template, change_descriptor_template))
+}
+
+pub(crate) fn coin_type_from_network(network: Network) -> u32 {
+    match network {
+        Network::Bitcoin => 0,
+        Network::Testnet => 1,
+        Network::Signet => 1,
+        Network::Regtest => 1,
+    }
 }
 
 pub(crate) fn get_esplora_url(network: Network, user_provided_url: Option<String>) -> String {

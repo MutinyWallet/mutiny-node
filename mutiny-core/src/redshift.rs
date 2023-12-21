@@ -175,7 +175,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
         let introduction_node = match (introduction_node, connection_string) {
             (Some(i), Some(c)) => {
                 let connect_string = format!("{i}@{c}");
-                self.connect_to_peer(&node.pubkey, &connect_string, None)
+                self.connect_to_peer(Some(&node.pubkey), &connect_string, None)
                     .await?;
                 i
             }
@@ -215,7 +215,7 @@ impl<S: MutinyStorage> RedshiftManager for NodeManager<S> {
         let channel = self
             .sweep_utxos_to_channel(
                 Some(user_chan_id),
-                &node.pubkey,
+                Some(&node.pubkey),
                 &[utxo],
                 Some(introduction_node),
             )
