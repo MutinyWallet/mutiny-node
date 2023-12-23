@@ -6,7 +6,6 @@ use crate::lsp::{AnyLsp, Lsp};
 use crate::node::BumpTxEventHandler;
 use crate::nodemanager::ChannelClosure;
 use crate::onchain::OnChainWallet;
-use crate::redshift::RedshiftStorage;
 use crate::storage::MutinyStorage;
 use crate::utils::sleep;
 use anyhow::anyhow;
@@ -49,10 +48,6 @@ pub(crate) struct MillisatAmount(pub Option<u64>);
 impl MillisatAmount {
     pub fn is_none(&self) -> bool {
         self.0.is_none()
-    }
-
-    pub fn amount_sats(&self) -> u64 {
-        self.0.unwrap_or(0) / 1_000
     }
 }
 
@@ -557,29 +552,6 @@ impl<S: MutinyStorage> EventHandler<S> {
                     user_channel_id,
                     counterparty_node_id.to_hex(),
                     channel_type);
-
-                // Channel is ready, if it is a redshift channel, should update the status.
-                if let Ok(Some(mut redshift)) = self
-                    .persister
-                    .storage
-                    .get_redshift(&user_channel_id.to_be_bytes())
-                {
-                    // get channel
-                    if let Some(chan) = self
-                        .channel_manager
-                        .list_channels_with_counterparty(&counterparty_node_id)
-                        .iter()
-                        .find(|c| c.channel_id == channel_id)
-                    {
-                        // update status, unwrap is safe because the channel is ready
-                        redshift.channel_opened(chan.funding_txo.unwrap().into_bitcoin_outpoint());
-
-                        // persist
-                        if let Err(e) = self.persister.storage.persist_redshift(redshift) {
-                            log_error!(self.logger, "Failed to persist redshift: {e}");
-                        }
-                    }
-                }
             }
             Event::ChannelPending {
                 channel_id,

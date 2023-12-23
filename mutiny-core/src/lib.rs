@@ -31,7 +31,6 @@ pub mod nodemanager;
 pub mod nostr;
 mod onchain;
 mod peermanager;
-pub mod redshift;
 pub mod scorer;
 pub mod sql;
 pub mod storage;
@@ -431,11 +430,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .await?,
         );
         NodeManager::start_sync(self.node_manager.clone());
-
-        // Redshifts disabled in safe mode
-        if !self.config.safe_mode {
-            NodeManager::start_redshifts(self.node_manager.clone());
-        }
 
         Ok(())
     }
@@ -954,7 +948,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Stops all of the nodes and background processes.
     /// Returns after node has been stopped.
     pub async fn stop(&self) -> Result<(), MutinyError> {
-        // TODO stop redshift and NWC as well
         self.node_manager.stop().await
     }
 

@@ -1,5 +1,4 @@
 use crate::logging::LOGGING_KEY;
-use crate::redshift::{RedshiftManager, RedshiftStatus, RedshiftStorage};
 use crate::storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY};
 use crate::utils::{sleep, spawn};
 use crate::MutinyWalletConfig;
@@ -649,13 +648,6 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(nm)
     }
 
-    /// Returns the node with the given pubkey
-    pub(crate) async fn get_node(&self, pk: &PublicKey) -> Result<Arc<Node<S>>, MutinyError> {
-        let nodes = self.nodes.lock().await;
-        let node = nodes.get(pk).ok_or(MutinyError::NotFound)?;
-        Ok(node.clone())
-    }
-
     // New function to get a node by PublicKey or return the first node
     pub(crate) async fn get_node_by_key_or_first(
         &self,
@@ -701,75 +693,6 @@ impl<S: MutinyStorage> NodeManager<S> {
         }
 
         Ok(())
-    }
-
-    /// Starts a background tasks to poll redshifts until they are ready and then start attempting payments.
-    ///
-    /// This function will first find redshifts that are in the [RedshiftStatus::AttemptingPayments] state and start attempting payments
-    /// and redshifts that are in the [RedshiftStatus::ClosingChannels] state and finish closing channels.
-    /// This is done in case the node manager was shutdown while attempting payments or closing channels.
-    pub(crate) fn start_redshifts(nm: Arc<NodeManager<S>>) {
-        // find AttemptingPayments redshifts and restart attempting payments
-        // find ClosingChannels redshifts and restart closing channels
-        // use unwrap_or_default() to handle errors
-        let all = nm.storage.get_redshifts().unwrap_or_default();
-        for redshift in all {
-            match redshift.status {
-                RedshiftStatus::AttemptingPayments => {
-                    // start attempting payments
-                    let nm_clone = nm.clone();
-                    utils::spawn(async move {
-                        if let Err(e) = nm_clone.attempt_payments(redshift).await {
-                            log_error!(nm_clone.logger, "Error attempting redshift payments: {e}");
-                        }
-                    });
-                }
-                RedshiftStatus::ClosingChannels => {
-                    // finish closing channels
-                    let nm_clone = nm.clone();
-                    utils::spawn(async move {
-                        if let Err(e) = nm_clone.close_channels(redshift).await {
-                            log_error!(nm_clone.logger, "Error closing redshift channels: {e}");
-                        }
-                    });
-                }
-                _ => {} // ignore other statuses
-            }
-        }
-
-        utils::spawn(async move {
-            loop {
-                if nm.stop.load(Ordering::Relaxed) {
-                    break;
-                }
-                // find redshifts with channels ready
-                // use unwrap_or_default() to handle errors
-                let all = nm.storage.get_redshifts().unwrap_or_default();
-                for mut redshift in all {
-                    if redshift.status == RedshiftStatus::ChannelOpened {
-                        // update status
-                        redshift.status = RedshiftStatus::AttemptingPayments;
-                        if let Err(e) = nm.storage.persist_redshift(redshift.clone()) {
-                            log_error!(nm.logger, "Error persisting redshift status update: {e}");
-                        }
-
-                        // start attempting payments
-                        let payment_nm = nm.clone();
-                        utils::spawn(async move {
-                            if let Err(e) = payment_nm.attempt_payments(redshift).await {
-                                log_error!(
-                                    payment_nm.logger,
-                                    "Error attempting redshift payments: {e}"
-                                );
-                            }
-                        });
-                    }
-                }
-
-                // sleep 10 seconds
-                sleep(10_000).await;
-            }
-        });
     }
 
     /// Creates a background process that will sync the wallet with the blockchain.

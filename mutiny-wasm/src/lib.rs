@@ -34,8 +34,6 @@ use mutiny_core::labels::Contact;
 use mutiny_core::lnurlauth::AuthManager;
 use mutiny_core::nostr::nip49::NIP49URI;
 use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
-use mutiny_core::redshift::RedshiftManager;
-use mutiny_core::redshift::RedshiftRecipient;
 use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
 use mutiny_core::utils::{now, sleep};
 use mutiny_core::vss::MutinyVssClient;
@@ -1065,56 +1063,6 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn get_federation_balances(&self) -> Result<FederationBalances, MutinyJsError> {
         Ok(self.inner.get_federation_balances().await?.into())
-    }
-
-    /// Initiates a redshift
-    #[wasm_bindgen]
-    pub async fn init_redshift(
-        &self,
-        outpoint: String,
-        lightning_recipient_pubkey: Option<String>,
-        lightning_recipient_connection_string: Option<String>,
-        onchain_recipient: Option<String>,
-    ) -> Result<Redshift, MutinyJsError> {
-        let outpoint: OutPoint =
-            OutPoint::from_str(&outpoint).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        let introduction_node = match lightning_recipient_pubkey.clone() {
-            Some(p) => Some(PublicKey::from_str(&p)?),
-            None => None,
-        };
-        let redshift_recipient = match (lightning_recipient_pubkey, onchain_recipient) {
-            (Some(_), Some(_)) => {
-                return Err(MutinyJsError::InvalidArgumentsError);
-            }
-            (Some(l), None) => {
-                let l = PublicKey::from_str(&l)?;
-                RedshiftRecipient::Lightning(l)
-            }
-            (None, Some(o)) => {
-                let o = Address::from_str(&o)?;
-                RedshiftRecipient::OnChain(Some(o))
-            }
-            (None, None) => RedshiftRecipient::OnChain(None),
-        };
-        Ok(self
-            .inner
-            .node_manager
-            .init_redshift(
-                outpoint,
-                redshift_recipient,
-                introduction_node,
-                lightning_recipient_connection_string.as_deref(),
-            )
-            .await?
-            .into())
-    }
-
-    /// Get all redshift attempts for a given utxo
-    #[wasm_bindgen]
-    pub fn get_redshift(&self, id: String) -> Result<Option<Redshift>, MutinyJsError> {
-        let id: [u8; 16] =
-            FromHex::from_hex(&id).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        Ok(self.inner.node_manager.get_redshift(&id)?.map(|r| r.into()))
     }
 
     pub fn get_address_labels(
