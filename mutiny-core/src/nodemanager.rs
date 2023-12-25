@@ -2372,14 +2372,15 @@ pub fn create_lsp_config(
 
 #[cfg(test)]
 mod tests {
+    use crate::keymanager::generate_seed;
     use crate::{
         encrypt::encryption_key_from_pass,
         logging::MutinyLogger,
         nodemanager::{
             ActivityItem, ChannelClosure, MutinyInvoice, NodeManager, TransactionDetails,
         },
+        MutinyWalletConfigBuilder,
     };
-    use crate::{keymanager::generate_seed, MutinyWalletConfig};
     use bdk::chain::ConfirmationTime;
     use bitcoin::hashes::hex::{FromHex, ToHex};
     use bitcoin::hashes::{sha256, Hash};
@@ -2417,22 +2418,7 @@ mod tests {
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
 
         assert!(!NodeManager::has_node_manager(storage.clone()));
-        let c = MutinyWalletConfig::new(
-            xpriv,
-            #[cfg(target_arch = "wasm32")]
-            None,
-            Network::Regtest,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            true,
-        );
+        let c = MutinyWalletConfigBuilder::new(xpriv).build();
         NodeManager::new(
             c,
             storage.clone(),
@@ -2455,22 +2441,7 @@ mod tests {
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
         let seed = generate_seed(12).expect("Failed to gen seed");
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
-        let c = MutinyWalletConfig::new(
-            xpriv,
-            #[cfg(target_arch = "wasm32")]
-            None,
-            Network::Regtest,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            true,
-        );
+        let c = MutinyWalletConfigBuilder::new(xpriv).build();
         let nm = NodeManager::new(
             c,
             storage,
@@ -2514,22 +2485,7 @@ mod tests {
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
         let seed = generate_seed(12).expect("Failed to gen seed");
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap();
-        let c = MutinyWalletConfig::new(
-            xpriv,
-            #[cfg(target_arch = "wasm32")]
-            None,
-            Network::Signet,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            true,
-        );
+        let c = MutinyWalletConfigBuilder::new(xpriv).build();
         let nm = NodeManager::new(
             c,
             storage,

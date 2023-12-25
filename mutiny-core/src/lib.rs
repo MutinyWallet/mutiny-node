@@ -227,8 +227,7 @@ impl Ord for ActivityItem {
     }
 }
 
-#[derive(Clone)]
-pub struct MutinyWalletConfig {
+pub struct MutinyWalletConfigBuilder {
     xprivkey: ExtendedPrivKey,
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: Option<String>,
@@ -247,52 +246,126 @@ pub struct MutinyWalletConfig {
     skip_hodl_invoices: bool,
 }
 
-impl MutinyWalletConfig {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        xprivkey: ExtendedPrivKey,
-        #[cfg(target_arch = "wasm32")] websocket_proxy_addr: Option<String>,
-        network: Network,
-        user_esplora_url: Option<String>,
-        user_rgs_url: Option<String>,
-        lsp_url: Option<String>,
-        lsp_connection_string: Option<String>,
-        lsp_token: Option<String>,
-        auth_client: Option<Arc<MutinyAuthClient>>,
-        subscription_url: Option<String>,
-        scorer_url: Option<String>,
-        skip_device_lock: bool,
-        skip_hodl_invoices: bool,
-    ) -> Self {
-        Self {
+impl MutinyWalletConfigBuilder {
+    pub fn new(xprivkey: ExtendedPrivKey) -> MutinyWalletConfigBuilder {
+        MutinyWalletConfigBuilder {
             xprivkey,
             #[cfg(target_arch = "wasm32")]
-            websocket_proxy_addr,
-            network,
-            user_esplora_url,
-            user_rgs_url,
-            scorer_url,
-            lsp_url,
-            lsp_connection_string,
-            lsp_token,
-            auth_client,
-            subscription_url,
+            websocket_proxy_addr: None,
+            network: Network::Regtest,
+            user_esplora_url: None,
+            user_rgs_url: None,
+            lsp_url: None,
+            lsp_connection_string: None,
+            lsp_token: None,
+            auth_client: None,
+            subscription_url: None,
+            scorer_url: None,
             do_not_connect_peers: false,
-            skip_device_lock,
+            skip_device_lock: false,
             safe_mode: false,
-            skip_hodl_invoices,
+            skip_hodl_invoices: true,
         }
     }
 
-    pub fn with_do_not_connect_peers(mut self) -> Self {
-        self.do_not_connect_peers = true;
-        self
+    #[cfg(target_arch = "wasm32")]
+    pub fn with_websocket_proxy_addr(&mut self, websocket_proxy_addr: String) {
+        self.websocket_proxy_addr = Some(websocket_proxy_addr);
     }
 
-    pub fn with_safe_mode(mut self) -> Self {
-        self.safe_mode = true;
-        self.with_do_not_connect_peers()
+    pub fn with_network(&mut self, network: Network) {
+        self.network = network;
     }
+
+    pub fn with_user_esplora_url(&mut self, user_esplora_url: String) {
+        self.user_esplora_url = Some(user_esplora_url);
+    }
+
+    pub fn with_user_rgs_url(&mut self, user_rgs_url: String) {
+        self.user_rgs_url = Some(user_rgs_url);
+    }
+
+    pub fn with_lsp_url(&mut self, lsp_url: String) {
+        self.lsp_url = Some(lsp_url);
+    }
+
+    pub fn with_lsp_connection_string(&mut self, lsp_connection_string: String) {
+        self.lsp_connection_string = Some(lsp_connection_string);
+    }
+
+    pub fn with_lsp_token(&mut self, lsp_token: String) {
+        self.lsp_token = Some(lsp_token);
+    }
+
+    pub fn with_auth_client(&mut self, auth_client: Arc<MutinyAuthClient>) {
+        self.auth_client = Some(auth_client);
+    }
+
+    pub fn with_subscription_url(&mut self, subscription_url: String) {
+        self.subscription_url = Some(subscription_url);
+    }
+
+    pub fn with_scorer_url(&mut self, scorer_url: String) {
+        self.scorer_url = Some(scorer_url);
+    }
+
+    pub fn do_not_connect_peers(&mut self) {
+        self.do_not_connect_peers = true;
+    }
+
+    pub fn with_skip_device_lock(&mut self) {
+        self.skip_device_lock = true;
+    }
+
+    pub fn with_safe_mode(&mut self) {
+        self.safe_mode = true;
+        self.skip_device_lock = true;
+    }
+
+    pub fn do_not_skip_hodl_invoices(&mut self) {
+        self.skip_hodl_invoices = false;
+    }
+
+    pub fn build(self) -> MutinyWalletConfig {
+        MutinyWalletConfig {
+            xprivkey: self.xprivkey,
+            #[cfg(target_arch = "wasm32")]
+            websocket_proxy_addr: self.websocket_proxy_addr,
+            network: self.network,
+            user_esplora_url: self.user_esplora_url,
+            user_rgs_url: self.user_rgs_url,
+            lsp_url: self.lsp_url,
+            lsp_connection_string: self.lsp_connection_string,
+            lsp_token: self.lsp_token,
+            auth_client: self.auth_client,
+            subscription_url: self.subscription_url,
+            scorer_url: self.scorer_url,
+            do_not_connect_peers: self.do_not_connect_peers,
+            skip_device_lock: self.skip_device_lock,
+            safe_mode: self.safe_mode,
+            skip_hodl_invoices: self.skip_hodl_invoices,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct MutinyWalletConfig {
+    xprivkey: ExtendedPrivKey,
+    #[cfg(target_arch = "wasm32")]
+    websocket_proxy_addr: Option<String>,
+    network: Network,
+    user_esplora_url: Option<String>,
+    user_rgs_url: Option<String>,
+    lsp_url: Option<String>,
+    lsp_connection_string: Option<String>,
+    lsp_token: Option<String>,
+    auth_client: Option<Arc<MutinyAuthClient>>,
+    subscription_url: Option<String>,
+    scorer_url: Option<String>,
+    do_not_connect_peers: bool,
+    skip_device_lock: bool,
+    pub safe_mode: bool,
+    skip_hodl_invoices: bool,
 }
 
 #[derive(Clone)]
@@ -1297,7 +1370,7 @@ mod tests {
 
     use crate::{
         encrypt::encryption_key_from_pass, generate_seed, logging::MutinyLogger,
-        nodemanager::NodeManager, sql::glue::GlueDB, MutinyWallet, MutinyWalletConfig,
+        nodemanager::NodeManager, sql::glue::GlueDB, MutinyWallet, MutinyWalletConfigBuilder,
     };
     use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Network;
@@ -1321,22 +1394,7 @@ mod tests {
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
         assert!(!NodeManager::has_node_manager(storage.clone()));
-        let config = MutinyWalletConfig::new(
-            xpriv,
-            #[cfg(target_arch = "wasm32")]
-            None,
-            Network::Regtest,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            true,
-        );
+        let config = MutinyWalletConfigBuilder::new(xpriv).build();
         let mw = MutinyWallet::new(storage.clone(), config, None)
             .await
             .expect("mutiny wallet should initialize");
@@ -1354,22 +1412,7 @@ mod tests {
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
         assert!(!NodeManager::has_node_manager(storage.clone()));
-        let config = MutinyWalletConfig::new(
-            xpriv,
-            #[cfg(target_arch = "wasm32")]
-            None,
-            Network::Regtest,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            true,
-        );
+        let config = MutinyWalletConfigBuilder::new(xpriv).build();
         let mut mw = MutinyWallet::new(storage.clone(), config, None)
             .await
             .expect("mutiny wallet should initialize");
@@ -1393,22 +1436,7 @@ mod tests {
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
 
         assert!(!NodeManager::has_node_manager(storage.clone()));
-        let config = MutinyWalletConfig::new(
-            xpriv,
-            #[cfg(target_arch = "wasm32")]
-            None,
-            Network::Regtest,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            true,
-        );
+        let config = MutinyWalletConfigBuilder::new(xpriv).build();
         let mut mw = MutinyWallet::new(storage.clone(), config, None)
             .await
             .expect("mutiny wallet should initialize");
@@ -1433,22 +1461,7 @@ mod tests {
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
         assert!(!NodeManager::has_node_manager(storage.clone()));
-        let config = MutinyWalletConfig::new(
-            xpriv,
-            #[cfg(target_arch = "wasm32")]
-            None,
-            Network::Regtest,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            true,
-        );
+        let config = MutinyWalletConfigBuilder::new(xpriv).build();
         let mw = MutinyWallet::new(storage.clone(), config, None)
             .await
             .expect("mutiny wallet should initialize");
@@ -1461,22 +1474,7 @@ mod tests {
         let storage2 = MemoryStorage::new(Some(pass), Some(cipher), None);
         assert!(!NodeManager::has_node_manager(storage2.clone()));
         let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &[0; 32]).unwrap();
-        let mut config2 = MutinyWalletConfig::new(
-            xpriv,
-            #[cfg(target_arch = "wasm32")]
-            None,
-            Network::Regtest,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            true,
-        );
+        let config2 = MutinyWalletConfigBuilder::new(xpriv).build();
         let mw2 = MutinyWallet::new(storage2.clone(), config2.clone(), None)
             .await
             .expect("mutiny wallet should initialize");
@@ -1503,11 +1501,11 @@ mod tests {
             .await
             .expect("mutiny wallet should restore");
 
-        config2.xprivkey = {
-            let seed = storage3.get_mnemonic().unwrap().unwrap();
-            ExtendedPrivKey::new_master(Network::Regtest, &seed.to_seed("")).unwrap()
-        };
-        let mw2 = MutinyWallet::new(storage3, config2, None)
+        let new_mnemonic = storage3.get_mnemonic().unwrap().unwrap();
+        let new_xpriv =
+            ExtendedPrivKey::new_master(Network::Regtest, &new_mnemonic.to_seed("")).unwrap();
+        let config3 = MutinyWalletConfigBuilder::new(new_xpriv).build();
+        let mw2 = MutinyWallet::new(storage3, config3, None)
             .await
             .expect("mutiny wallet should initialize");
         let restored_seed = mw2.node_manager.xprivkey;
@@ -1526,23 +1524,9 @@ mod tests {
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
         assert!(!NodeManager::has_node_manager(storage.clone()));
-        let config = MutinyWalletConfig::new(
-            xpriv,
-            #[cfg(target_arch = "wasm32")]
-            None,
-            Network::Regtest,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            true,
-        )
-        .with_safe_mode();
+        let mut config_builder = MutinyWalletConfigBuilder::new(xpriv);
+        config_builder.with_safe_mode();
+        let config = config_builder.build();
         let mw = MutinyWallet::new(storage.clone(), config, None)
             .await
             .expect("mutiny wallet should initialize");
