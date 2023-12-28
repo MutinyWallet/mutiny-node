@@ -402,6 +402,248 @@ pub struct Plan {
     pub amount_sat: u64,
 }
 
+pub struct NodeManagerBuilder<S: MutinyStorage> {
+    xprivkey: ExtendedPrivKey,
+    storage: S,
+    config: Option<MutinyWalletConfig>,
+    stop: Option<Arc<AtomicBool>>,
+    logger: Option<Arc<MutinyLogger>>,
+}
+
+impl<S: MutinyStorage> NodeManagerBuilder<S> {
+    pub fn new(xprivkey: ExtendedPrivKey, storage: S) -> NodeManagerBuilder<S> {
+        NodeManagerBuilder::<S> {
+            xprivkey,
+            storage,
+            config: None,
+            stop: None,
+            logger: None,
+        }
+    }
+
+    pub fn with_config(mut self, config: MutinyWalletConfig) -> NodeManagerBuilder<S> {
+        self.config = Some(config);
+        self
+    }
+
+    pub fn with_stop(&mut self, stop: Arc<AtomicBool>) {
+        self.stop = Some(stop);
+    }
+
+    pub fn with_logger(&mut self, logger: Arc<MutinyLogger>) {
+        self.logger = Some(logger);
+    }
+
+    /// Creates a new [NodeManager] with the given parameters.
+    /// The mnemonic seed is read from storage, unless one is provided.
+    /// If no mnemonic is provided, a new one is generated and stored.
+    pub async fn build(self) -> Result<NodeManager<S>, MutinyError> {
+        // config is required
+        let c = self
+            .config
+            .map_or_else(|| Err(MutinyError::InvalidArgumentsError), Ok)?;
+        let logger = self.logger.unwrap_or(Arc::new(MutinyLogger::default()));
+        let stop = self.stop.unwrap_or(Arc::new(AtomicBool::new(false)));
+
+        #[cfg(target_arch = "wasm32")]
+        let websocket_proxy_addr = c
+            .websocket_proxy_addr
+            .unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
+
+        // Need to prevent other devices from running at the same time
+        if !c.skip_device_lock {
+            if let Some(lock) = self.storage.get_device_lock()? {
+                log_info!(logger, "Current device lock: {lock:?}");
+            }
+            self.storage.set_device_lock().await?;
+        }
+
+        let storage_clone = self.storage.clone();
+        let logger_clone = logger.clone();
+        let stop_clone = stop.clone();
+        utils::spawn(async move {
+            loop {
+                if stop_clone.load(Ordering::Relaxed) {
+                    break;
+                }
+                sleep((DEVICE_LOCK_INTERVAL_SECS * 1_000) as i32).await;
+                if let Err(e) = storage_clone.set_device_lock().await {
+                    log_error!(logger_clone, "Error setting device lock: {e}");
+                }
+            }
+        });
+
+        let esplora_server_url = get_esplora_url(c.network, c.user_esplora_url);
+        let esplora = Builder::new(&esplora_server_url).build_async()?;
+        let tx_sync = Arc::new(EsploraSyncClient::from_client(
+            esplora.clone(),
+            logger.clone(),
+        ));
+
+        let esplora = Arc::new(esplora);
+        let fee_estimator = Arc::new(MutinyFeeEstimator::new(
+            self.storage.clone(),
+            esplora.clone(),
+            logger.clone(),
+        ));
+
+        let wallet = Arc::new(OnChainWallet::new(
+            c.xprivkey,
+            self.storage.clone(),
+            c.network,
+            esplora.clone(),
+            fee_estimator.clone(),
+            stop.clone(),
+            logger.clone(),
+        )?);
+
+        let chain = Arc::new(MutinyChain::new(tx_sync, wallet.clone(), logger.clone()));
+
+        let (gossip_sync, scorer) = get_gossip_sync(
+            &self.storage,
+            c.scorer_url,
+            c.auth_client.clone(),
+            c.network,
+            logger.clone(),
+        )
+        .await?;
+
+        let scorer = Arc::new(utils::Mutex::new(scorer));
+
+        let gossip_sync = Arc::new(gossip_sync);
+
+        let lsp_config = if c.safe_mode {
+            None
+        } else {
+            create_lsp_config(c.lsp_url, c.lsp_connection_string, c.lsp_token)?
+        };
+
+        let node_storage = self.storage.get_nodes()?;
+
+        let nodes = if c.safe_mode {
+            // If safe mode is enabled, we don't start any nodes
+            log_warn!(logger, "Safe mode enabled, not starting any nodes");
+            Arc::new(Mutex::new(HashMap::new()))
+        } else {
+            // Remove the archived nodes, we don't need to start them up.
+            let unarchived_nodes = node_storage
+                .clone()
+                .nodes
+                .into_iter()
+                .filter(|(_, n)| !n.is_archived());
+
+            let mut nodes_map = HashMap::new();
+
+            for node_item in unarchived_nodes {
+                let node = Node::new(
+                    node_item.0,
+                    &node_item.1,
+                    c.xprivkey,
+                    self.storage.clone(),
+                    gossip_sync.clone(),
+                    scorer.clone(),
+                    chain.clone(),
+                    fee_estimator.clone(),
+                    wallet.clone(),
+                    c.network,
+                    &esplora,
+                    lsp_config.clone(),
+                    logger.clone(),
+                    c.do_not_connect_peers,
+                    false,
+                    #[cfg(target_arch = "wasm32")]
+                    websocket_proxy_addr.clone(),
+                )
+                .await?;
+
+                let id = node
+                    .keys_manager
+                    .get_node_id(Recipient::Node)
+                    .expect("Failed to get node id");
+
+                nodes_map.insert(id, Arc::new(node));
+            }
+
+            // when we create the nodes we set the LSP if one is missing
+            // we need to save it to local storage after startup in case
+            // a LSP was set.
+            let updated_nodes: HashMap<String, NodeIndex> = nodes_map
+                .values()
+                .map(|n| (n._uuid.clone(), n.node_index()))
+                .collect();
+
+            log_info!(logger, "inserting updated nodes");
+
+            self.storage.insert_nodes(&NodeStorage {
+                nodes: updated_nodes,
+                version: node_storage.version + 1,
+            })?;
+
+            log_info!(logger, "inserted updated nodes");
+
+            Arc::new(Mutex::new(nodes_map))
+        };
+
+        let lnurl_client = Arc::new(
+            lnurl::Builder::default()
+                .build_async()
+                .expect("failed to make lnurl client"),
+        );
+
+        let (subscription_client, auth) = if let Some(auth_client) = c.auth_client {
+            if let Some(subscription_url) = c.subscription_url {
+                let auth = auth_client.auth.clone();
+                let s = Arc::new(MutinySubscriptionClient::new(
+                    auth_client,
+                    subscription_url,
+                    logger.clone(),
+                ));
+                (Some(s), auth)
+            } else {
+                (None, auth_client.auth.clone())
+            }
+        } else {
+            let auth_manager = AuthManager::new(c.xprivkey)?;
+            (None, auth_manager)
+        };
+
+        let price_cache = self
+            .storage
+            .get_bitcoin_price_cache()?
+            .into_iter()
+            .map(|(k, v)| (k, (v, Duration::from_secs(0))))
+            .collect();
+
+        let nm = NodeManager {
+            stop,
+            xprivkey: c.xprivkey,
+            network: c.network,
+            wallet,
+            gossip_sync,
+            scorer,
+            chain,
+            fee_estimator,
+            storage: self.storage,
+            node_storage: Mutex::new(node_storage),
+            nodes,
+            #[cfg(target_arch = "wasm32")]
+            websocket_proxy_addr,
+            user_rgs_url: c.user_rgs_url,
+            esplora,
+            auth,
+            lnurl_client,
+            lsp_config,
+            subscription_client,
+            logger,
+            bitcoin_price_cache: Arc::new(Mutex::new(price_cache)),
+            do_not_connect_peers: c.do_not_connect_peers,
+            safe_mode: c.safe_mode,
+        };
+
+        Ok(nm)
+    }
+}
+
 /// The [NodeManager] is the main entry point for interacting with the Mutiny Wallet.
 /// It is responsible for managing the on-chain wallet and the lightning nodes.
 ///
@@ -440,212 +682,6 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// This is checked by seeing if a mnemonic seed exists in storage.
     pub fn has_node_manager(storage: S) -> bool {
         storage.get_mnemonic().is_ok_and(|x| x.is_some())
-    }
-
-    /// Creates a new [NodeManager] with the given parameters.
-    /// The mnemonic seed is read from storage, unless one is provided.
-    /// If no mnemonic is provided, a new one is generated and stored.
-    pub async fn new(
-        c: MutinyWalletConfig,
-        storage: S,
-        stop: Arc<AtomicBool>,
-        logger: Arc<MutinyLogger>,
-    ) -> Result<NodeManager<S>, MutinyError> {
-        #[cfg(target_arch = "wasm32")]
-        let websocket_proxy_addr = c
-            .websocket_proxy_addr
-            .unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
-
-        // Need to prevent other devices from running at the same time
-        if !c.skip_device_lock {
-            if let Some(lock) = storage.get_device_lock()? {
-                log_info!(logger, "Current device lock: {lock:?}");
-            }
-            storage.set_device_lock().await?;
-        }
-
-        let storage_clone = storage.clone();
-        let logger_clone = logger.clone();
-        let stop_clone = stop.clone();
-        utils::spawn(async move {
-            loop {
-                if stop_clone.load(Ordering::Relaxed) {
-                    break;
-                }
-                sleep((DEVICE_LOCK_INTERVAL_SECS * 1_000) as i32).await;
-                if let Err(e) = storage_clone.set_device_lock().await {
-                    log_error!(logger_clone, "Error setting device lock: {e}");
-                }
-            }
-        });
-
-        let esplora_server_url = get_esplora_url(c.network, c.user_esplora_url);
-        let esplora = Builder::new(&esplora_server_url).build_async()?;
-        let tx_sync = Arc::new(EsploraSyncClient::from_client(
-            esplora.clone(),
-            logger.clone(),
-        ));
-
-        let esplora = Arc::new(esplora);
-        let fee_estimator = Arc::new(MutinyFeeEstimator::new(
-            storage.clone(),
-            esplora.clone(),
-            logger.clone(),
-        ));
-
-        let wallet = Arc::new(OnChainWallet::new(
-            c.xprivkey,
-            storage.clone(),
-            c.network,
-            esplora.clone(),
-            fee_estimator.clone(),
-            stop.clone(),
-            logger.clone(),
-        )?);
-
-        let chain = Arc::new(MutinyChain::new(tx_sync, wallet.clone(), logger.clone()));
-
-        let (gossip_sync, scorer) = get_gossip_sync(
-            &storage,
-            c.scorer_url,
-            c.auth_client.clone(),
-            c.network,
-            logger.clone(),
-        )
-        .await?;
-
-        let scorer = Arc::new(utils::Mutex::new(scorer));
-
-        let gossip_sync = Arc::new(gossip_sync);
-
-        let lsp_config = if c.safe_mode {
-            None
-        } else {
-            create_lsp_config(c.lsp_url, c.lsp_connection_string, c.lsp_token)?
-        };
-
-        let node_storage = storage.get_nodes()?;
-
-        let nodes = if c.safe_mode {
-            // If safe mode is enabled, we don't start any nodes
-            log_warn!(logger, "Safe mode enabled, not starting any nodes");
-            Arc::new(Mutex::new(HashMap::new()))
-        } else {
-            // Remove the archived nodes, we don't need to start them up.
-            let unarchived_nodes = node_storage
-                .clone()
-                .nodes
-                .into_iter()
-                .filter(|(_, n)| !n.is_archived());
-
-            let mut nodes_map = HashMap::new();
-
-            for node_item in unarchived_nodes {
-                let node = Node::new(
-                    node_item.0,
-                    &node_item.1,
-                    c.xprivkey,
-                    storage.clone(),
-                    gossip_sync.clone(),
-                    scorer.clone(),
-                    chain.clone(),
-                    fee_estimator.clone(),
-                    wallet.clone(),
-                    c.network,
-                    &esplora,
-                    lsp_config.clone(),
-                    logger.clone(),
-                    c.do_not_connect_peers,
-                    false,
-                    #[cfg(target_arch = "wasm32")]
-                    websocket_proxy_addr.clone(),
-                )
-                .await?;
-
-                let id = node
-                    .keys_manager
-                    .get_node_id(Recipient::Node)
-                    .expect("Failed to get node id");
-
-                nodes_map.insert(id, Arc::new(node));
-            }
-
-            // when we create the nodes we set the LSP if one is missing
-            // we need to save it to local storage after startup in case
-            // a LSP was set.
-            let updated_nodes: HashMap<String, NodeIndex> = nodes_map
-                .values()
-                .map(|n| (n._uuid.clone(), n.node_index()))
-                .collect();
-
-            log_info!(logger, "inserting updated nodes");
-
-            storage.insert_nodes(&NodeStorage {
-                nodes: updated_nodes,
-                version: node_storage.version + 1,
-            })?;
-
-            log_info!(logger, "inserted updated nodes");
-
-            Arc::new(Mutex::new(nodes_map))
-        };
-
-        let lnurl_client = Arc::new(
-            lnurl::Builder::default()
-                .build_async()
-                .expect("failed to make lnurl client"),
-        );
-
-        let (subscription_client, auth) = if let Some(auth_client) = c.auth_client {
-            if let Some(subscription_url) = c.subscription_url {
-                let auth = auth_client.auth.clone();
-                let s = Arc::new(MutinySubscriptionClient::new(
-                    auth_client,
-                    subscription_url,
-                    logger.clone(),
-                ));
-                (Some(s), auth)
-            } else {
-                (None, auth_client.auth.clone())
-            }
-        } else {
-            let auth_manager = AuthManager::new(c.xprivkey)?;
-            (None, auth_manager)
-        };
-
-        let price_cache = storage
-            .get_bitcoin_price_cache()?
-            .into_iter()
-            .map(|(k, v)| (k, (v, Duration::from_secs(0))))
-            .collect();
-
-        let nm = NodeManager {
-            stop,
-            xprivkey: c.xprivkey,
-            network: c.network,
-            wallet,
-            gossip_sync,
-            scorer,
-            chain,
-            fee_estimator,
-            storage,
-            node_storage: Mutex::new(node_storage),
-            nodes,
-            #[cfg(target_arch = "wasm32")]
-            websocket_proxy_addr,
-            user_rgs_url: c.user_rgs_url,
-            esplora,
-            auth,
-            lnurl_client,
-            lsp_config,
-            subscription_client,
-            logger,
-            bitcoin_price_cache: Arc::new(Mutex::new(price_cache)),
-            do_not_connect_peers: c.do_not_connect_peers,
-            safe_mode: c.safe_mode,
-        };
-
-        Ok(nm)
     }
 
     // New function to get a node by PublicKey or return the first node
@@ -2379,15 +2415,14 @@ pub fn create_lsp_config(
 
 #[cfg(test)]
 mod tests {
-    use crate::keymanager::generate_seed;
     use crate::{
         encrypt::encryption_key_from_pass,
-        logging::MutinyLogger,
         nodemanager::{
             ActivityItem, ChannelClosure, MutinyInvoice, NodeManager, TransactionDetails,
         },
         MutinyWalletConfigBuilder,
     };
+    use crate::{keymanager::generate_seed, nodemanager::NodeManagerBuilder};
     use bdk::chain::ConfirmationTime;
     use bitcoin::hashes::hex::{FromHex, ToHex};
     use bitcoin::hashes::{sha256, Hash};
@@ -2397,10 +2432,7 @@ mod tests {
     use lightning::ln::PaymentHash;
     use lightning_invoice::Bolt11Invoice;
     use std::collections::HashMap;
-    use std::{
-        str::FromStr,
-        sync::{atomic::AtomicBool, Arc},
-    };
+    use std::str::FromStr;
 
     use crate::test_utils::*;
 
@@ -2429,14 +2461,11 @@ mod tests {
         let c = MutinyWalletConfigBuilder::new(xpriv)
             .with_network(network)
             .build();
-        NodeManager::new(
-            c,
-            storage.clone(),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(MutinyLogger::default()),
-        )
-        .await
-        .expect("node manager should initialize");
+        NodeManagerBuilder::new(xpriv, storage.clone())
+            .with_config(c)
+            .build()
+            .await
+            .expect("node manager should initialize");
         storage.insert_mnemonic(seed).unwrap();
         assert!(NodeManager::has_node_manager(storage));
     }
@@ -2455,14 +2484,11 @@ mod tests {
         let c = MutinyWalletConfigBuilder::new(xpriv)
             .with_network(network)
             .build();
-        let nm = NodeManager::new(
-            c,
-            storage,
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(MutinyLogger::default()),
-        )
-        .await
-        .expect("node manager should initialize");
+        let nm = NodeManagerBuilder::new(xpriv, storage.clone())
+            .with_config(c)
+            .build()
+            .await
+            .expect("node manager should initialize");
 
         {
             let node_identity = nm.new_node().await.expect("should create new node");
@@ -2502,14 +2528,11 @@ mod tests {
         let c = MutinyWalletConfigBuilder::new(xpriv)
             .with_network(network)
             .build();
-        let nm = NodeManager::new(
-            c,
-            storage,
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(MutinyLogger::default()),
-        )
-        .await
-        .expect("node manager should initialize");
+        let nm = NodeManagerBuilder::new(xpriv, storage.clone())
+            .with_config(c)
+            .build()
+            .await
+            .expect("node manager should initialize");
 
         let labels = vec![String::from("label1"), String::from("label2")];
 

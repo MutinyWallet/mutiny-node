@@ -46,7 +46,6 @@ pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 
-use crate::logging::LOGGING_KEY;
 use crate::nodemanager::{
     ChannelClosure, MutinyBip21RawMaterials, MutinyInvoice, TransactionDetails,
 };
@@ -63,6 +62,7 @@ use crate::{
     nodemanager::NodeBalance,
     sql::glue::GlueDB,
 };
+use crate::{logging::LOGGING_KEY, nodemanager::NodeManagerBuilder};
 use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
@@ -468,15 +468,12 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             self.storage.clone(),
             self.session_id,
         ));
-        let node_manager = Arc::new(
-            NodeManager::new(
-                config.clone(),
-                self.storage.clone(),
-                stop.clone(),
-                logger.clone(),
-            )
-            .await?,
-        );
+
+        let mut nm_builder = NodeManagerBuilder::new(self.xprivkey, self.storage.clone())
+            .with_config(config.clone());
+        nm_builder.with_stop(stop.clone());
+        nm_builder.with_logger(logger.clone());
+        let node_manager = Arc::new(nm_builder.build().await?);
 
         NodeManager::start_sync(node_manager.clone());
 
@@ -580,16 +577,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Not needed after [NodeManager]'s `new()` function.
     pub async fn start(&mut self) -> Result<(), MutinyError> {
         self.storage.start().await?;
+
+        let mut nm_builder = NodeManagerBuilder::new(self.xprivkey, self.storage.clone())
+            .with_config(self.config.clone());
+        nm_builder.with_stop(self.stop.clone());
+        nm_builder.with_logger(self.logger.clone());
+
         // when we restart, gen a new session id
-        self.node_manager = Arc::new(
-            NodeManager::new(
-                self.config.clone(),
-                self.storage.clone(),
-                self.stop.clone(),
-                self.logger.clone(),
-            )
-            .await?,
-        );
+        self.node_manager = Arc::new(nm_builder.build().await?);
         NodeManager::start_sync(self.node_manager.clone());
 
         Ok(())
