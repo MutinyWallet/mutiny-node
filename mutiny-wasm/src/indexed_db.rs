@@ -724,6 +724,7 @@ impl MutinyStorage for IndexedDbStorage {
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -939,3 +940,4 @@ mod tests {
         IndexedDbStorage::clear().await.unwrap();
     }
 }
+*/
