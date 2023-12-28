@@ -17,7 +17,7 @@ use lightning_invoice::Bolt11Invoice;
 use nostr::key::XOnlyPublicKey;
 use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
-use nostr::{Event, EventBuilder, EventId, Filter, Keys, Kind, Tag};
+use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Tag};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::str::FromStr;
@@ -269,13 +269,13 @@ impl NostrWalletConnect {
     pub fn create_nwc_filter(&self) -> Filter {
         Filter::new()
             .kinds(vec![Kind::WalletConnectRequest])
-            .author(self.client_pubkey().to_string())
+            .author(self.client_pubkey())
             .pubkey(self.server_pubkey())
     }
 
     /// Create Nostr Wallet Connect Info event
     pub fn create_nwc_info_event(&self) -> anyhow::Result<Event> {
-        let info = EventBuilder::new(Kind::WalletConnectInfo, "pay_invoice".to_string(), &[])
+        let info = EventBuilder::new(Kind::WalletConnectInfo, "pay_invoice".to_string(), [])
             .to_event(&self.server_key)?;
         Ok(info)
     }
@@ -302,7 +302,7 @@ impl NostrWalletConnect {
             serde_json::to_string(&json)?,
         )?;
         let d_tag = Tag::Identifier(self.client_pubkey().to_hex());
-        let event = EventBuilder::new(Kind::ParameterizedReplaceable(33194), content, &[d_tag])
+        let event = EventBuilder::new(Kind::ParameterizedReplaceable(33194), content, [d_tag])
             .to_event(&self.server_key)?;
         Ok(Some(event))
     }
@@ -367,13 +367,18 @@ impl NostrWalletConnect {
         Ok(())
     }
 
-    fn get_skipped_error_event(&self, event: &Event, message: String) -> anyhow::Result<Event> {
+    fn get_skipped_error_event(
+        &self,
+        event: &Event,
+        error_code: ErrorCode,
+        message: String,
+    ) -> anyhow::Result<Event> {
         let server_key = self.server_key.secret_key()?;
         let client_pubkey = self.client_key.public_key();
         let content = Response {
             result_type: Method::PayInvoice,
             error: Some(NIP47Error {
-                code: ErrorCode::Other,
+                code: error_code,
                 message,
             }),
             result: None,
@@ -381,9 +386,17 @@ impl NostrWalletConnect {
 
         let encrypted = encrypt(&server_key, &client_pubkey, content.as_json())?;
 
-        let p_tag = Tag::PubKey(event.pubkey, None);
-        let e_tag = Tag::Event(event.id, None, None);
-        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, &[p_tag, e_tag])
+        let p_tag = Tag::PublicKey {
+            public_key: event.pubkey,
+            relay_url: None,
+            alias: None,
+        };
+        let e_tag = Tag::Event {
+            event_id: event.id,
+            relay_url: None,
+            marker: None,
+        };
+        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
             .to_event(&self.server_key)?;
 
         Ok(response)
@@ -408,11 +421,32 @@ impl NostrWalletConnect {
             let server_key = self.server_key.secret_key()?;
 
             let decrypted = decrypt(&server_key, &client_pubkey, &event.content)?;
-            let req: Request = Request::from_json(decrypted)?;
+            let req: Request = match Request::from_json(decrypted) {
+                Ok(req) => req,
+                Err(e) => {
+                    log_warn!(
+                        nostr_manager.logger,
+                        "Failed to parse request: {e}, skipping..."
+                    );
+                    return self
+                        .get_skipped_error_event(
+                            &event,
+                            ErrorCode::NotImplemented,
+                            "Failed to parse request.".to_string(),
+                        )
+                        .map(Some);
+                }
+            };
 
             // only respond to pay invoice requests
             if req.method != Method::PayInvoice {
-                return Ok(None);
+                return self
+                    .get_skipped_error_event(
+                        &event,
+                        ErrorCode::NotImplemented,
+                        "Command is not supported.".to_string(),
+                    )
+                    .map(Some);
             }
 
             let invoice = match req.params {
@@ -424,7 +458,11 @@ impl NostrWalletConnect {
             // if the invoice has expired, skip it
             if invoice.would_expire(utils::now()) {
                 return self
-                    .get_skipped_error_event(&event, "Invoice expired".to_string())
+                    .get_skipped_error_event(
+                        &event,
+                        ErrorCode::Other,
+                        "Invoice expired".to_string(),
+                    )
                     .map(Some);
             }
 
@@ -435,7 +473,11 @@ impl NostrWalletConnect {
                     "NWC Invoice amount not set, cannot pay: {invoice}"
                 );
                 return self
-                    .get_skipped_error_event(&event, "Invoice amount not set".to_string())
+                    .get_skipped_error_event(
+                        &event,
+                        ErrorCode::Other,
+                        "Invoice amount not set".to_string(),
+                    )
                     .map(Some);
             }
 
@@ -451,6 +493,7 @@ impl NostrWalletConnect {
                     return self
                         .get_skipped_error_event(
                             &event,
+                            ErrorCode::Other,
                             "Paying hodl invoices disabled".to_string(),
                         )
                         .map(Some);
@@ -578,10 +621,18 @@ impl NostrWalletConnect {
 
                     let encrypted = encrypt(&server_key, &client_pubkey, content.as_json())?;
 
-                    let p_tag = Tag::PubKey(event.pubkey, None);
-                    let e_tag = Tag::Event(event.id, None, None);
+                    let p_tag = Tag::PublicKey {
+                        public_key: event.pubkey,
+                        relay_url: None,
+                        alias: None,
+                    };
+                    let e_tag = Tag::Event {
+                        event_id: event.id,
+                        relay_url: None,
+                        marker: None,
+                    };
                     let response =
-                        EventBuilder::new(Kind::WalletConnectResponse, encrypted, &[p_tag, e_tag])
+                        EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
                             .to_event(&self.server_key)?;
 
                     if needs_delete {
@@ -725,10 +776,18 @@ impl NostrWalletConnect {
 
                     let encrypted = encrypt(&server_key, &client_pubkey, content.as_json())?;
 
-                    let p_tag = Tag::PubKey(event.pubkey, None);
-                    let e_tag = Tag::Event(event.id, None, None);
+                    let p_tag = Tag::PublicKey {
+                        public_key: event.pubkey,
+                        relay_url: None,
+                        alias: None,
+                    };
+                    let e_tag = Tag::Event {
+                        event_id: event.id,
+                        relay_url: None,
+                        marker: None,
+                    };
                     let response =
-                        EventBuilder::new(Kind::WalletConnectResponse, encrypted, &[p_tag, e_tag])
+                        EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
                             .to_event(&self.server_key)?;
 
                     return Ok(Some(response));
@@ -1123,6 +1182,7 @@ mod wasm_test {
     use bitcoin::Network;
     use mockall::predicate::eq;
     use nostr::key::SecretKey;
+    use serde_json::json;
     use std::sync::{atomic::AtomicBool, Arc};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
@@ -1227,12 +1287,37 @@ mod wasm_test {
 
         // test wrong kind
         let event = {
-            EventBuilder::new(Kind::TextNote, "", &[])
+            EventBuilder::new(Kind::TextNote, "", [])
                 .to_event(&Keys::new(uri.secret))
                 .unwrap()
         };
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
         assert_eq!(result.unwrap(), None);
+        check_no_pending_invoices(&storage);
+
+        // test unknown command
+        let event = {
+            let req = json!({"method": "fake_command", "params": {}});
+
+            let encrypted = encrypt(&uri.secret, &uri.public_key, req.to_string()).unwrap();
+            let p_tag = Tag::PublicKey {
+                public_key: uri.public_key,
+                relay_url: None,
+                alias: None,
+            };
+            EventBuilder::new(Kind::WalletConnectRequest, encrypted, [p_tag])
+                .to_event(&Keys::new(uri.secret))
+                .unwrap()
+        };
+        let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
+        check_nwc_error_response(
+            result.unwrap().unwrap(),
+            &uri.secret,
+            NIP47Error {
+                code: ErrorCode::NotImplemented,
+                message: "Failed to parse request.".to_string(),
+            },
+        );
         check_no_pending_invoices(&storage);
 
         // test unexpected command
@@ -1243,13 +1328,24 @@ mod wasm_test {
             };
 
             let encrypted = encrypt(&uri.secret, &uri.public_key, req.as_json()).unwrap();
-            let p_tag = Tag::PubKey(uri.public_key, None);
-            EventBuilder::new(Kind::WalletConnectRequest, encrypted, &[p_tag])
+            let p_tag = Tag::PublicKey {
+                public_key: uri.public_key,
+                relay_url: None,
+                alias: None,
+            };
+            EventBuilder::new(Kind::WalletConnectRequest, encrypted, [p_tag])
                 .to_event(&Keys::new(uri.secret))
                 .unwrap()
         };
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
-        assert_eq!(result.unwrap(), None);
+        check_nwc_error_response(
+            result.unwrap().unwrap(),
+            &uri.secret,
+            NIP47Error {
+                code: ErrorCode::NotImplemented,
+                message: "Command is not supported.".to_string(),
+            },
+        );
         check_no_pending_invoices(&storage);
 
         // test invalid invoice

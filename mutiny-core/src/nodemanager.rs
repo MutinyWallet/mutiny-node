@@ -49,7 +49,7 @@ use lightning_transaction_sync::EsploraSyncClient;
 use lnurl::lnurl::LnUrl;
 use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use nostr::key::XOnlyPublicKey;
-use nostr::{EventBuilder, Keys, Kind, Tag, TagKind};
+use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag, TagKind};
 use payjoin::{PjUri, PjUriExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -1617,13 +1617,20 @@ impl<S: MutinyStorage> NodeManager<S> {
                 let zap_request = match zap_npub {
                     Some(zap_npub) => {
                         let tags = vec![
-                            Tag::PubKey(zap_npub, None),
-                            Tag::Amount(msats),
+                            Tag::PublicKey {
+                                public_key: zap_npub,
+                                relay_url: None,
+                                alias: None,
+                            },
+                            Tag::Amount {
+                                millisats: msats,
+                                bolt11: None,
+                            },
                             Tag::Lnurl(lnurl.to_string()),
                             Tag::Relays(vec!["wss://nostr.mutinywallet.com".into()]),
                             Tag::Generic(TagKind::Custom("anon".to_string()), vec![]),
                         ];
-                        EventBuilder::new(Kind::ZapRequest, "", &tags)
+                        EventBuilder::new(Kind::ZapRequest, "", tags)
                             .to_event(&Keys::generate())
                             .ok()
                             .map(|z| z.as_json())

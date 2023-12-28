@@ -133,26 +133,6 @@ pub struct NIP49URI {
     pub identity: Option<XOnlyPublicKey>,
 }
 
-fn method_from_str(s: &str) -> Result<Method, Error> {
-    match s {
-        "pay_invoice" => Ok(Method::PayInvoice),
-        "make_invoice" => Ok(Method::MakeInvoice),
-        "lookup_invoice" => Ok(Method::LookupInvoice),
-        "get_balance" => Ok(Method::GetBalance),
-        _ => Err(Error::InvalidURI),
-    }
-}
-
-fn method_to_string(method: &Method) -> String {
-    match method {
-        Method::PayInvoice => "pay_invoice",
-        Method::MakeInvoice => "make_invoice",
-        Method::LookupInvoice => "lookup_invoice",
-        Method::GetBalance => "get_balance",
-    }
-    .to_string()
-}
-
 impl FromStr for NIP49URI {
     type Err = Error;
     fn from_str(uri: &str) -> Result<Self, Self::Err> {
@@ -183,13 +163,13 @@ impl FromStr for NIP49URI {
                     Cow::Borrowed("required_commands") => {
                         required_commands = value
                             .split(' ')
-                            .map(method_from_str)
+                            .map(Method::from_str)
                             .collect::<Result<Vec<Method>, Error>>()?;
                     }
                     Cow::Borrowed("optional_commands") => {
                         optional_commands = value
                             .split(' ')
-                            .map(method_from_str)
+                            .map(Method::from_str)
                             .collect::<Result<Vec<Method>, Error>>()?;
                     }
                     Cow::Borrowed("budget") => {
@@ -234,7 +214,7 @@ impl fmt::Display for NIP49URI {
             url_encode(
                 self.required_commands
                     .iter()
-                    .map(method_to_string)
+                    .map(|x| x.to_string())
                     .join(" ")
             ),
         )?;
@@ -245,7 +225,7 @@ impl fmt::Display for NIP49URI {
                 url_encode(
                     self.optional_commands
                         .iter()
-                        .map(method_to_string)
+                        .map(|x| x.to_string())
                         .join(" ")
                 )
             )?;
