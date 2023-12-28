@@ -2,10 +2,12 @@ use crate::dlc::DlcHandler;
 use crate::error::MutinyError;
 use crate::logging::MutinyLogger;
 use crate::storage::MutinyStorage;
+use crate::utils::{now, oracle_announcement_from_hex};
 use bitcoin::hashes::hex::ToHex;
 use dlc::secp256k1_zkp::PublicKey;
 use dlc_manager::Storage;
 use dlc_messages::message_handler::read_dlc_message;
+use dlc_messages::oracle_msgs::OracleAnnouncement;
 use dlc_messages::{Message, WireMessage};
 use lightning::ln::wire::Type;
 use lightning::util::logger::Logger;
@@ -15,10 +17,13 @@ use nostr::key::{Keys, XOnlyPublicKey};
 use nostr::prelude::{decrypt, encrypt, Parity};
 use nostr::Url;
 use nostr::{Event, EventBuilder, EventId, Filter, Kind, Tag};
+use nostr_sdk::Client;
 use std::io::Read;
 use std::sync::Arc;
 
 pub const DLC_WIRE_MESSAGE_KIND: Kind = Kind::Ephemeral(28_888);
+pub const DLC_OFFER_MESSAGE_KIND: Kind = Kind::ParameterizedReplaceable(30_088);
+pub const ORACLE_ANNOUNCEMENT_KIND: Kind = Kind::Custom(88);
 
 /// A wrapper around a DLC message that indicates if it is an error
 pub(crate) enum DlcMessageType {
@@ -54,6 +59,33 @@ impl<S: MutinyStorage> NostrDlcHandler<S> {
         Filter::new()
             .kind(DLC_WIRE_MESSAGE_KIND)
             .pubkey(self.key.public_key())
+    }
+
+    /// Gets oracle announcements from the relay
+    pub async fn get_oracle_announcements(&self) -> Result<Vec<OracleAnnouncement>, MutinyError> {
+        let client = Client::new(&Keys::generate());
+        client.add_relay("wss://relay.damus.io").await?;
+        client.connect().await;
+
+        let filter = Filter::new().kind(ORACLE_ANNOUNCEMENT_KIND);
+        let events = client.get_events_of(vec![filter], None).await?;
+        client.disconnect().await?;
+
+        let ann = events
+            .into_iter()
+            .flat_map(|e| match oracle_announcement_from_hex(&e.content) {
+                Ok(ann) => {
+                    if (ann.oracle_event.event_maturity_epoch as u64) < now().as_secs() {
+                        Some(ann)
+                    } else {
+                        None
+                    }
+                }
+                Err(_) => None,
+            })
+            .collect();
+
+        Ok(ann)
     }
 
     /// Turns an DLC message into a Nostr event
