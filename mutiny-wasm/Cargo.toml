@@ -17,6 +17,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 mutiny-core = { path = "../mutiny-core" }
+logseq-sqlite = { path = "../../../Rust/sqlite-db" }
 
 anyhow = "1.0"
 async-trait = "0.1.68"
@@ -35,7 +36,36 @@ wasm-logger = "0.2.0"
 log = "0.4.17"
 rexie = "0.5.0"
 gloo-utils = { version = "0.2.0", features = ["serde"] }
-web-sys = { version = "0.3.60", features = ["console"] }
+js-sys = "0.3.65"
+web-sys = { version = "0.3.65", features = [
+    "console",
+    "FileSystemHandle",
+    "FileSystemHandleKind",
+    "FileSystemFileHandle",
+    "FileSystemEntry",
+    "File",
+    "FileSystem",
+    "FileReader",
+    "Navigator",
+    "HtmlInputElement",
+    "StorageManager",
+    "HtmlElement",
+    "TextEncoder",
+    "TextDecoder",
+    "Window",
+    "Worker",
+    "WorkerGlobalScope",
+    "WorkerNavigator",
+    "FileSystemDirectoryHandle",
+    "FileSystemGetFileOptions",
+    "FileSystemSyncAccessHandle",
+    "FileSystemReadWriteOptions",
+    "BroadcastChannel",
+    "AddEventListenerOptions",
+    "EventTarget",
+    "EventListener",
+    "Event",
+] }
 bip39 = { version = "2.0.0" }
 getrandom = { version = "0.2", features = ["js"] }
 futures = "0.3.25"
@@ -51,9 +81,7 @@ fedimint-core = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09
 console_error_panic_hook = { version = "0.1.7", optional = true }
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3.33"
-web-sys = { version = "0.3.65", features = ["console"] }
-js-sys = "0.3.65"
+wasm-bindgen-test = "0.3.37"
 
 [features]
 default = []

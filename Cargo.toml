@@ -20,3 +20,5 @@ lightning-invoice = { git = 'https://github.com/MutinyWallet/rust-lightning.git'
 lightning-rapid-gossip-sync = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "686a84236f54bf8d7270a5fbec07801e5281691f" }
 lightning-background-processor = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "686a84236f54bf8d7270a5fbec07801e5281691f" }
 lightning-transaction-sync  = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "686a84236f54bf8d7270a5fbec07801e5281691f" }
+
+libsqlite3-sys = { path = "../../Rust/sqlite-db/libsqlite3-sys" }

@@ -29,6 +29,7 @@ use lightning::{log_error, routing::gossip::NodeId, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
+use log::info;
 use mutiny_core::encrypt::encryption_key_from_pass;
 use mutiny_core::labels::Contact;
 use mutiny_core::lnurlauth::AuthManager;
@@ -46,13 +47,14 @@ use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
 use nostr::key::XOnlyPublicKey;
 use nostr::prelude::FromBech32;
 use payjoin::UriExt;
-use std::str::FromStr;
-use std::sync::Arc;
+use std::{cell::RefCell, sync::Arc};
 use std::{
     collections::HashMap,
     sync::atomic::{AtomicBool, Ordering},
 };
+use std::{rc::Rc, str::FromStr};
 use wasm_bindgen::prelude::*;
+use web_sys::{HtmlElement, HtmlInputElement, MessageEvent, Worker};
 
 static INITIALIZED: once_cell::sync::Lazy<Mutex<bool>> =
     once_cell::sync::Lazy::new(|| Mutex::new(false));
@@ -61,6 +63,41 @@ static INITIALIZED: once_cell::sync::Lazy<Mutex<bool>> =
 async fn uninit() {
     let mut init = INITIALIZED.lock().await;
     *init = false;
+}
+
+/// A number evaluation struct
+///
+/// This struct will be the main object which responds to messages passed to the
+/// worker. It stores the last number which it was passed to have a state. The
+/// statefulness is not is not required in this example but should show how
+/// larger, more complex scenarios with statefulness can be set up.
+#[wasm_bindgen]
+pub struct NumberEval {
+    number: i32,
+}
+
+#[wasm_bindgen]
+impl NumberEval {
+    /// Create new instance.
+    pub fn new() -> NumberEval {
+        NumberEval { number: 0 }
+    }
+
+    /// Check if a number is even and store it as last processed number.
+    ///
+    /// # Arguments
+    ///
+    /// * `number` - The number to be checked for being even/odd.
+    pub fn is_even(&mut self, number: i32) -> bool {
+        self.number = number;
+        self.number % 2 == 0
+    }
+
+    /// Get last number that was checked - this method is added to work with
+    /// statefulness.
+    pub fn get_last_number(&self) -> i32 {
+        self.number
+    }
 }
 
 #[wasm_bindgen]
@@ -109,6 +146,15 @@ impl MutinyWallet {
         } else {
             *init = true;
         }
+
+        // Here, we create our worker. In a larger app, multiple callbacks should be
+        // able to interact with the code in the worker. Therefore, we wrap it in
+        // `Rc<RefCell>` following the interior mutability pattern. Here, it would
+        // not be needed but we include the wrapping anyway as example.
+        let worker_handle = Rc::new(RefCell::new(Worker::new("./worker.js").unwrap()));
+
+        // Pass the worker to the function which sets up the `oninput` callback.
+        setup_input_oninput_callback(worker_handle);
 
         match Self::new_internal(
             password,
@@ -1698,6 +1744,98 @@ impl MutinyWallet {
     }
 }
 
+fn setup_input_oninput_callback(worker: Rc<RefCell<web_sys::Worker>>) {
+    let document = web_sys::window().unwrap().document().unwrap();
+
+    // If our `onmessage` callback should stay valid after exiting from the
+    // `oninput` closure scope, we need to either forget it (so it is not
+    // destroyed) or store it somewhere. To avoid leaking memory every time we
+    // want to receive a response from the worker, we move a handle into the
+    // `oninput` closure to which we will always attach the last `onmessage`
+    // callback. The initial value will not be used and we silence the warning.
+    #[allow(unused_assignments)]
+    let persistent_callback_handle = get_on_msg_callback();
+
+    let worker_handle = &*worker.borrow();
+    let _ = worker_handle.post_message(&5.into());
+    worker_handle.set_onmessage(Some(persistent_callback_handle.as_ref().unchecked_ref()));
+
+    /*
+    let callback: Closure<_> = Closure::new(move || {
+        info!("oninput callback triggered");
+        let document = web_sys::window().unwrap().document().unwrap();
+
+        let input_field = document
+            .get_element_by_id("inputNumber")
+            .expect("#inputNumber should exist");
+        let input_field = input_field
+            .dyn_ref::<HtmlInputElement>()
+            .expect("#inputNumber should be a HtmlInputElement");
+
+        // If the value in the field can be parsed to a `i32`, send it to the
+        // worker. Otherwise clear the result field.
+        match input_field.value().parse::<i32>() {
+            Ok(number) => {
+                // Access worker behind shared handle, following the interior
+                // mutability pattern.
+                let worker_handle = &*worker.borrow();
+                let _ = worker_handle.post_message(&number.into());
+                persistent_callback_handle = get_on_msg_callback();
+
+                // Since the worker returns the message asynchronously, we
+                // attach a callback to be triggered when the worker returns.
+                worker_handle
+                    .set_onmessage(Some(persistent_callback_handle.as_ref().unchecked_ref()));
+            }
+            Err(_) => {
+                document
+                    .get_element_by_id("resultField")
+                    .expect("#resultField should exist")
+                    .dyn_ref::<HtmlElement>()
+                    .expect("#resultField should be a HtmlInputElement")
+                    .set_inner_text("");
+            }
+        }
+    });
+    */
+
+    // Attach the closure as `oninput` callback to the input field.
+    /*
+    document
+        .get_element_by_id("inputNumber")
+        .expect("#inputNumber should exist")
+        .dyn_ref::<HtmlInputElement>()
+        .expect("#inputNumber should be a HtmlInputElement")
+        .set_oninput(Some(callback.as_ref().unchecked_ref()));
+        */
+
+    // Leaks memory.
+    //  callback.forget();
+}
+
+/// Create a closure to act on the message returned by the worker
+fn get_on_msg_callback() -> Closure<dyn FnMut(MessageEvent)> {
+    Closure::new(move |event: MessageEvent| {
+        info!("Received response: {:?}", &event.data());
+
+        let result = match event.data().as_bool().unwrap() {
+            true => "even",
+            false => "odd",
+        };
+
+        /*
+        let document = web_sys::window().unwrap().document().unwrap();
+        document
+            .get_element_by_id("resultField")
+            .expect("#resultField should exist")
+            .dyn_ref::<HtmlElement>()
+            .expect("#resultField should be a HtmlInputElement")
+            .set_inner_text(result);
+            */
+    })
+}
+
+/*
 #[cfg(test)]
 mod tests {
     use crate::utils::test::*;
@@ -2166,5 +2304,42 @@ mod tests {
             .await
             .expect("failed to clear storage");
         uninit().await;
+    }
+}
+*/
+
+#[cfg(test)]
+mod db_tests {
+    extern crate wasm_bindgen_test;
+
+    use logseq_sqlite::console_log;
+    use wasm_bindgen_test::*;
+
+    wasm_bindgen_test_configure!(run_in_worker);
+
+    #[wasm_bindgen_test]
+    fn sqlite_version() {
+        let x = logseq_sqlite::get_version();
+        assert_eq!(x, "3.42.0".to_string());
+        logseq_sqlite::log(&format!("sqlite version: {}", x));
+    }
+
+    #[wasm_bindgen_test]
+    async fn opfs_ok() {
+        let has_opfs_support = logseq_sqlite::has_opfs_support();
+        assert_eq!(has_opfs_support, true);
+    }
+
+    #[wasm_bindgen_test]
+    async fn library_init() {
+        logseq_sqlite::ensure_init().await.unwrap();
+
+        logseq_sqlite::init_db("my-graph").await.unwrap();
+
+        // logseq_sqlite::rusqlite_test().unwrap();
+
+        logseq_sqlite::block_db_test().unwrap();
+
+        logseq_sqlite::log("all done");
     }
 }
