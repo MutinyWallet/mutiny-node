@@ -56,26 +56,14 @@ pub fn create_nwc_request(nwc: &NostrWalletConnectURI, invoice: String) -> Event
 }
 
 pub(crate) async fn create_mutiny_wallet<S: MutinyStorage>(storage: S) -> MutinyWallet<S> {
-    let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &[0; 32]).unwrap();
-
-    let config = MutinyWalletConfig::new(
-        xpriv,
-        #[cfg(target_arch = "wasm32")]
-        None,
-        Network::Regtest,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        true,
-    );
-
-    MutinyWallet::new(storage.clone(), config, None)
+    let network = Network::Regtest;
+    let xpriv = ExtendedPrivKey::new_master(network, &[0; 32]).unwrap();
+    let config = MutinyWalletConfigBuilder::new(xpriv)
+        .with_network(network)
+        .build();
+    let mw_builder = MutinyWalletBuilder::new(xpriv, storage.clone()).with_config(config);
+    mw_builder
+        .build()
         .await
         .expect("mutiny wallet should initialize")
 }
@@ -128,27 +116,22 @@ pub(crate) async fn create_node<S: MutinyStorage>(storage: S) -> Node<S> {
 
     let chain = Arc::new(MutinyChain::new(tx_sync, wallet.clone(), logger.clone()));
 
-    Node::new(
-        Uuid::new_v4().to_string(),
-        &NodeIndex::default(),
-        xprivkey,
-        storage,
-        gossip_sync,
-        scorer,
-        chain,
-        fee_estimator,
-        wallet,
-        network,
-        &esplora,
-        None,
-        logger,
-        false,
-        false,
-        #[cfg(target_arch = "wasm32")]
-        String::from("wss://p.mutinywallet.com"),
-    )
-    .await
-    .unwrap()
+    let mut node_builder = NodeBuilder::new(xprivkey, storage)
+        .with_uuid(Uuid::new_v4().to_string())
+        .with_node_index(NodeIndex::default())
+        .with_gossip_sync(gossip_sync)
+        .with_scorer(scorer)
+        .with_chain(chain)
+        .with_fee_estimator(fee_estimator)
+        .with_wallet(wallet)
+        .with_esplora(esplora)
+        .with_network(network);
+    node_builder.with_logger(logger.clone());
+
+    #[cfg(target_arch = "wasm32")]
+    node_builder.with_websocket_proxy_addr(String::from("wss://p.mutinywallet.com"));
+
+    node_builder.build().await.unwrap()
 }
 
 pub fn create_dummy_invoice(
@@ -215,8 +198,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::fees::MutinyFeeEstimator;
-use crate::logging::MutinyLogger;
 use crate::node::{NetworkGraph, Node, RapidGossipSync};
 use crate::nodemanager::NodeIndex;
 use crate::onchain::{get_esplora_url, OnChainWallet};
@@ -225,8 +206,10 @@ use crate::storage::MutinyStorage;
 use crate::utils::{now, Mutex};
 use crate::vss::MutinyVssClient;
 use crate::{auth::MutinyAuthClient, MutinyWallet};
-use crate::{chain::MutinyChain, MutinyWalletConfig};
+use crate::{chain::MutinyChain, MutinyWalletBuilder};
+use crate::{fees::MutinyFeeEstimator, MutinyWalletConfigBuilder};
 use crate::{generate_seed, lnurlauth::AuthManager};
+use crate::{logging::MutinyLogger, node::NodeBuilder};
 
 pub const MANAGER_BYTES: [u8; 256] = [
     1, 1, 246, 30, 238, 59, 99, 163, 128, 164, 119, 160, 99, 175, 50, 178, 187, 201, 124, 159, 249,

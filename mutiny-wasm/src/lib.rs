@@ -29,8 +29,6 @@ use lightning::{log_error, routing::gossip::NodeId, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
-use mutiny_core::encrypt::encryption_key_from_pass;
-use mutiny_core::labels::Contact;
 use mutiny_core::lnurlauth::AuthManager;
 use mutiny_core::nostr::nip49::NIP49URI;
 use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
@@ -38,6 +36,8 @@ use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
 use mutiny_core::utils::{now, sleep};
 use mutiny_core::vss::MutinyVssClient;
 use mutiny_core::{auth::MutinyAuthClient, sql::glue::GlueDB};
+use mutiny_core::{encrypt::encryption_key_from_pass, MutinyWalletConfigBuilder};
+use mutiny_core::{labels::Contact, MutinyWalletBuilder};
 use mutiny_core::{
     labels::LabelStorage,
     nodemanager::{create_lsp_config, NodeManager},
@@ -224,38 +224,56 @@ impl MutinyWallet {
 
         let storage = IndexedDbStorage::new(password, cipher, vss_client, logger.clone()).await?;
 
-        let mut config = mutiny_core::MutinyWalletConfig::new(
-            xprivkey,
-            websocket_proxy_addr,
-            network,
-            user_esplora_url,
-            user_rgs_url,
-            lsp_url,
-            lsp_connection_string,
-            lsp_token,
-            auth_client,
-            subscription_url,
-            scorer_url,
-            skip_device_lock.unwrap_or(false),
-            skip_hodl_invoices.unwrap_or(true),
-        );
-
+        let mut config_builder = MutinyWalletConfigBuilder::new(xprivkey).with_network(network);
+        if let Some(w) = websocket_proxy_addr {
+            config_builder.with_websocket_proxy_addr(w);
+        }
+        if let Some(url) = user_esplora_url {
+            config_builder.with_user_esplora_url(url);
+        }
+        if let Some(url) = user_rgs_url {
+            config_builder.with_user_rgs_url(url);
+        }
+        if let Some(url) = lsp_url {
+            config_builder.with_lsp_url(url);
+        }
+        if let Some(url) = lsp_connection_string {
+            config_builder.with_lsp_connection_string(url);
+        }
+        if let Some(url) = lsp_token {
+            config_builder.with_lsp_token(url);
+        }
+        if let Some(a) = auth_client {
+            config_builder.with_auth_client(a);
+        }
+        if let Some(url) = subscription_url {
+            config_builder.with_subscription_url(url);
+        }
+        if let Some(url) = scorer_url {
+            config_builder.with_scorer_url(url);
+        }
+        if let Some(true) = skip_device_lock {
+            config_builder.with_skip_device_lock();
+        }
+        if let Some(false) = skip_hodl_invoices {
+            config_builder.do_not_skip_hodl_invoices();
+        }
         if let Some(true) = do_not_connect_peers {
-            config = config.with_do_not_connect_peers();
+            config_builder.do_not_connect_peers();
         }
-
         if safe_mode {
-            config = config.with_safe_mode();
+            config_builder.with_safe_mode();
         }
+        let config = config_builder.build();
 
-        let inner =
-            mutiny_core::MutinyWallet::new(storage, config, Some(logger.session_id.clone()))
-                .await?;
+        let mut mw_builder = MutinyWalletBuilder::new(xprivkey, storage).with_config(config);
+        mw_builder.with_session_id(logger.session_id.clone());
+        let inner = mw_builder.build().await?;
         Ok(MutinyWallet { mnemonic, inner })
     }
 
     pub fn is_safe_mode(&self) -> bool {
-        self.inner.config.safe_mode
+        self.inner.is_safe_mode()
     }
 
     /// Returns if there is a saved wallet in storage.
