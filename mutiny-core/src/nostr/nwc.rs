@@ -1215,7 +1215,7 @@ mod wasm_test {
     async fn test_allowed_hodl_invoice() {
         let storage = MemoryStorage::default();
         let mut mw = create_mutiny_wallet(storage.clone()).await;
-        mw.config.skip_hodl_invoices = false; // allow hodl invoices
+        mw.skip_hodl_invoices = false; // allow hodl invoices
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));

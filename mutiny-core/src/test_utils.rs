@@ -61,7 +61,9 @@ pub(crate) async fn create_mutiny_wallet<S: MutinyStorage>(storage: S) -> Mutiny
     let config = MutinyWalletConfigBuilder::new(xpriv)
         .with_network(network)
         .build();
-    MutinyWallet::new(storage.clone(), config, None)
+    let mw_builder = MutinyWalletBuilder::new(xpriv, storage.clone()).with_config(config);
+    mw_builder
+        .build()
         .await
         .expect("mutiny wallet should initialize")
 }
@@ -201,7 +203,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::chain::MutinyChain;
 use crate::logging::MutinyLogger;
 use crate::node::{NetworkGraph, Node, RapidGossipSync};
 use crate::nodemanager::NodeIndex;
@@ -211,6 +212,7 @@ use crate::storage::MutinyStorage;
 use crate::utils::{now, Mutex};
 use crate::vss::MutinyVssClient;
 use crate::{auth::MutinyAuthClient, MutinyWallet};
+use crate::{chain::MutinyChain, MutinyWalletBuilder};
 use crate::{fees::MutinyFeeEstimator, MutinyWalletConfigBuilder};
 use crate::{generate_seed, lnurlauth::AuthManager};
 

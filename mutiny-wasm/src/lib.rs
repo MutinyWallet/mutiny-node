@@ -29,7 +29,6 @@ use lightning::{log_error, routing::gossip::NodeId, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
-use mutiny_core::labels::Contact;
 use mutiny_core::lnurlauth::AuthManager;
 use mutiny_core::nostr::nip49::NIP49URI;
 use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
@@ -38,6 +37,7 @@ use mutiny_core::utils::{now, sleep};
 use mutiny_core::vss::MutinyVssClient;
 use mutiny_core::{auth::MutinyAuthClient, sql::glue::GlueDB};
 use mutiny_core::{encrypt::encryption_key_from_pass, MutinyWalletConfigBuilder};
+use mutiny_core::{labels::Contact, MutinyWalletBuilder};
 use mutiny_core::{
     labels::LabelStorage,
     nodemanager::{create_lsp_config, NodeManager},
@@ -266,14 +266,14 @@ impl MutinyWallet {
         }
         let config = config_builder.build();
 
-        let inner =
-            mutiny_core::MutinyWallet::new(storage, config, Some(logger.session_id.clone()))
-                .await?;
+        let mut mw_builder = MutinyWalletBuilder::new(xprivkey, storage).with_config(config);
+        mw_builder.with_session_id(logger.session_id.clone());
+        let inner = mw_builder.build().await?;
         Ok(MutinyWallet { mnemonic, inner })
     }
 
     pub fn is_safe_mode(&self) -> bool {
-        self.inner.config.safe_mode
+        self.inner.is_safe_mode()
     }
 
     /// Returns if there is a saved wallet in storage.

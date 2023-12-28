@@ -372,48 +372,106 @@ pub struct MutinyWalletConfig {
     skip_hodl_invoices: bool,
 }
 
-#[derive(Clone)]
-/// MutinyWallet is the main entry point for the library.
-/// It contains the NodeManager, which is the main interface to manage the
-/// bitcoin and the lightning functionality.
-pub struct MutinyWallet<S: MutinyStorage> {
-    pub config: MutinyWalletConfig,
-    pub(crate) storage: S,
-    glue_db: GlueDB,
-    pub node_manager: Arc<NodeManager<S>>,
-    pub nostr: Arc<NostrManager<S>>,
-    pub federation_storage: Arc<Mutex<FederationStorage>>,
-    pub(crate) federations: Arc<Mutex<HashMap<FederationId, Arc<FederationClient>>>>,
-    pub stop: Arc<AtomicBool>,
-    pub logger: Arc<MutinyLogger>,
+pub struct MutinyWalletBuilder<S: MutinyStorage> {
+    xprivkey: ExtendedPrivKey,
+    storage: S,
+    glue_db: Option<GlueDB>,
+    config: Option<MutinyWalletConfig>,
+    session_id: Option<String>,
+    network: Option<Network>,
+    do_not_connect_peers: bool,
+    skip_hodl_invoices: bool,
+    skip_device_lock: bool,
+    safe_mode: bool,
 }
 
-impl<S: MutinyStorage> MutinyWallet<S> {
-    pub async fn new(
-        storage: S,
-        config: MutinyWalletConfig,
-        session_id: Option<String>,
-    ) -> Result<MutinyWallet<S>, MutinyError> {
-        let expected_network = storage.get::<Network>(EXPECTED_NETWORK_KEY)?;
+impl<S: MutinyStorage> MutinyWalletBuilder<S> {
+    pub fn new(xprivkey: ExtendedPrivKey, storage: S) -> MutinyWalletBuilder<S> {
+        MutinyWalletBuilder::<S> {
+            xprivkey,
+            storage,
+            glue_db: None,
+            config: None,
+            session_id: None,
+            network: None,
+            do_not_connect_peers: false,
+            skip_device_lock: false,
+            safe_mode: false,
+            skip_hodl_invoices: true,
+        }
+    }
+
+    pub fn with_config(mut self, config: MutinyWalletConfig) -> MutinyWalletBuilder<S> {
+        self.network = Some(config.network);
+        self.do_not_connect_peers = config.do_not_connect_peers;
+        self.skip_hodl_invoices = config.skip_hodl_invoices;
+        self.skip_device_lock = config.skip_device_lock;
+        self.safe_mode = config.safe_mode;
+        self.config = Some(config);
+        self
+    }
+
+    pub fn with_glue_db(&mut self, glue_db: GlueDB) {
+        self.glue_db = Some(glue_db);
+    }
+
+    pub fn with_session_id(&mut self, session_id: String) {
+        self.session_id = Some(session_id);
+    }
+
+    pub fn with_network(&mut self, network: Network) {
+        self.network = Some(network);
+    }
+
+    pub fn do_not_connect_peers(&mut self) {
+        self.do_not_connect_peers = true;
+    }
+
+    pub fn do_not_skip_hodl_invoices(&mut self) {
+        self.skip_hodl_invoices = false;
+    }
+
+    pub fn with_skip_device_lock(&mut self) {
+        self.skip_device_lock = true;
+    }
+
+    pub fn with_safe_mode(&mut self) {
+        self.safe_mode = true;
+        self.skip_device_lock = true;
+    }
+
+    pub async fn build(self) -> Result<MutinyWallet<S>, MutinyError> {
+        let network = self
+            .network
+            .map_or_else(|| Err(MutinyError::InvalidArgumentsError), Ok)?;
+        let config = self.config.unwrap_or(
+            MutinyWalletConfigBuilder::new(self.xprivkey)
+                .with_network(network)
+                .build(),
+        );
+
+        let expected_network = self.storage.get::<Network>(EXPECTED_NETWORK_KEY)?;
         match expected_network {
-            Some(network) => {
-                if network != config.network {
+            Some(n) => {
+                if n != network {
                     return Err(MutinyError::NetworkMismatch);
                 }
             }
-            None => storage.set_data(EXPECTED_NETWORK_KEY.to_string(), config.network, None)?,
+            None => self
+                .storage
+                .set_data(EXPECTED_NETWORK_KEY.to_string(), self.network, None)?,
         }
 
         let stop = Arc::new(AtomicBool::new(false));
         let logger = Arc::new(MutinyLogger::with_writer(
             stop.clone(),
-            storage.clone(),
-            session_id,
+            self.storage.clone(),
+            self.session_id,
         ));
         let node_manager = Arc::new(
             NodeManager::new(
                 config.clone(),
-                storage.clone(),
+                self.storage.clone(),
                 stop.clone(),
                 logger.clone(),
             )
@@ -425,7 +483,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // create nostr manager
         let nostr = Arc::new(NostrManager::from_mnemonic(
             node_manager.xprivkey,
-            storage.clone(),
+            self.storage.clone(),
             node_manager.logger.clone(),
             stop.clone(),
         )?);
@@ -440,20 +498,21 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         // create federation library
         let (federation_storage, federations) =
-            create_federations(&storage, &config, glue_db.clone(), &logger).await?;
+            create_federations(&self.storage, &config, glue_db.clone(), &logger).await?;
         let federation_storage = Arc::new(Mutex::new(federation_storage));
         let federations = federations;
 
-        if !config.skip_hodl_invoices {
+        if !self.skip_hodl_invoices {
             log_warn!(
                 node_manager.logger,
                 "Starting with HODL invoices enabled. This is not recommended!"
             );
         }
 
-        let mw = Self {
+        let mw = MutinyWallet {
+            xprivkey: self.xprivkey,
             config,
-            storage,
+            storage: self.storage,
             glue_db,
             node_manager,
             nostr,
@@ -461,6 +520,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             federations,
             stop,
             logger,
+            network,
+            skip_hodl_invoices: self.skip_hodl_invoices,
+            safe_mode: self.safe_mode,
         };
 
         #[cfg(not(test))]
@@ -474,7 +536,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         // if we are in safe mode, don't create any nodes or
         // start any nostr services
-        if mw.config.safe_mode {
+        if self.safe_mode {
             return Ok(mw);
         }
 
@@ -491,7 +553,29 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         Ok(mw)
     }
+}
 
+/// MutinyWallet is the main entry point for the library.
+/// It contains the NodeManager, which is the main interface to manage the
+/// bitcoin and the lightning functionality.
+#[derive(Clone)]
+pub struct MutinyWallet<S: MutinyStorage> {
+    xprivkey: ExtendedPrivKey,
+    config: MutinyWalletConfig,
+    pub(crate) storage: S,
+    glue_db: GlueDB,
+    pub node_manager: Arc<NodeManager<S>>,
+    pub nostr: Arc<NostrManager<S>>,
+    pub federation_storage: Arc<Mutex<FederationStorage>>,
+    pub(crate) federations: Arc<Mutex<HashMap<FederationId, Arc<FederationClient>>>>,
+    pub stop: Arc<AtomicBool>,
+    pub logger: Arc<MutinyLogger>,
+    network: Network,
+    skip_hodl_invoices: bool,
+    safe_mode: bool,
+}
+
+impl<S: MutinyStorage> MutinyWallet<S> {
     /// Starts up all the nodes again.
     /// Not needed after [NodeManager]'s `new()` function.
     pub async fn start(&mut self) -> Result<(), MutinyError> {
@@ -641,7 +725,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         amt_sats: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
-        if inv.network() != self.config.network {
+        if inv.network() != self.network {
             return Err(MutinyError::IncorrectNetwork(inv.network()));
         }
 
@@ -721,7 +805,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         amount: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyBip21RawMaterials, MutinyError> {
-        let invoice = if self.config.safe_mode {
+        let invoice = if self.safe_mode {
             None
         } else {
             self.create_lightning_invoice(amount, labels.clone())
@@ -1114,7 +1198,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         invoice: Bolt11Invoice,
         network: Option<Network>,
     ) -> Result<MutinyInvoice, MutinyError> {
-        if invoice.network() != network.unwrap_or(self.config.network) {
+        if invoice.network() != network.unwrap_or(self.network) {
             return Err(MutinyError::IncorrectNetwork(invoice.network()));
         }
 
@@ -1127,10 +1211,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         federation_code: InviteCode,
     ) -> Result<FederationIdentity, MutinyError> {
         create_new_federation(
-            self.config.xprivkey,
+            self.xprivkey,
             self.storage.clone(),
             self.glue_db.clone(),
-            self.config.network,
+            self.network,
             self.logger.clone(),
             self.federation_storage.clone(),
             self.federations.clone(),
@@ -1217,6 +1301,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         Ok(FederationBalances { balances })
     }
+
+    pub fn is_safe_mode(&self) -> bool {
+        self.safe_mode
+    }
 }
 
 impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
@@ -1225,7 +1313,7 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
     }
 
     fn skip_hodl_invoices(&self) -> bool {
-        self.config.skip_hodl_invoices
+        self.skip_hodl_invoices
     }
 
     async fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus> {
@@ -1367,7 +1455,8 @@ mod tests {
 
     use crate::{
         encrypt::encryption_key_from_pass, generate_seed, logging::MutinyLogger,
-        nodemanager::NodeManager, sql::glue::GlueDB, MutinyWallet, MutinyWalletConfigBuilder,
+        nodemanager::NodeManager, sql::glue::GlueDB, MutinyWallet, MutinyWalletBuilder,
+        MutinyWalletConfigBuilder,
     };
     use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Network;
@@ -1395,7 +1484,9 @@ mod tests {
         let config = MutinyWalletConfigBuilder::new(xpriv)
             .with_network(network)
             .build();
-        let mw = MutinyWallet::new(storage.clone(), config, None)
+        let mw = MutinyWalletBuilder::new(xpriv, storage.clone())
+            .with_config(config)
+            .build()
             .await
             .expect("mutiny wallet should initialize");
         mw.storage.insert_mnemonic(mnemonic).unwrap();
@@ -1416,7 +1507,9 @@ mod tests {
         let config = MutinyWalletConfigBuilder::new(xpriv)
             .with_network(network)
             .build();
-        let mut mw = MutinyWallet::new(storage.clone(), config, None)
+        let mut mw = MutinyWalletBuilder::new(xpriv, storage.clone())
+            .with_config(config)
+            .build()
             .await
             .expect("mutiny wallet should initialize");
 
@@ -1443,7 +1536,9 @@ mod tests {
         let config = MutinyWalletConfigBuilder::new(xpriv)
             .with_network(network)
             .build();
-        let mut mw = MutinyWallet::new(storage.clone(), config, None)
+        let mut mw = MutinyWalletBuilder::new(xpriv, storage.clone())
+            .with_config(config)
+            .build()
             .await
             .expect("mutiny wallet should initialize");
 
@@ -1471,7 +1566,9 @@ mod tests {
         let config = MutinyWalletConfigBuilder::new(xpriv)
             .with_network(network)
             .build();
-        let mw = MutinyWallet::new(storage.clone(), config, None)
+        let mw = MutinyWalletBuilder::new(xpriv, storage.clone())
+            .with_config(config)
+            .build()
             .await
             .expect("mutiny wallet should initialize");
         let seed = mw.node_manager.xprivkey;
@@ -1482,11 +1579,13 @@ mod tests {
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage2 = MemoryStorage::new(Some(pass), Some(cipher), None);
         assert!(!NodeManager::has_node_manager(storage2.clone()));
-        let xpriv = ExtendedPrivKey::new_master(network, &[0; 32]).unwrap();
-        let config2 = MutinyWalletConfigBuilder::new(xpriv)
+        let xpriv2 = ExtendedPrivKey::new_master(network, &[0; 32]).unwrap();
+        let config2 = MutinyWalletConfigBuilder::new(xpriv2)
             .with_network(network)
             .build();
-        let mw2 = MutinyWallet::new(storage2.clone(), config2.clone(), None)
+        let mw2 = MutinyWalletBuilder::new(xpriv2, storage2.clone())
+            .with_config(config2)
+            .build()
             .await
             .expect("mutiny wallet should initialize");
         let seed2 = mw2.node_manager.xprivkey;
@@ -1517,10 +1616,12 @@ mod tests {
         let config3 = MutinyWalletConfigBuilder::new(new_xpriv)
             .with_network(network)
             .build();
-        let mw2 = MutinyWallet::new(storage3, config3, None)
+        let mw3 = MutinyWalletBuilder::new(new_xpriv, storage3.clone())
+            .with_config(config3)
+            .build()
             .await
             .expect("mutiny wallet should initialize");
-        let restored_seed = mw2.node_manager.xprivkey;
+        let restored_seed = mw3.node_manager.xprivkey;
         assert_eq!(seed, restored_seed);
     }
 
@@ -1540,7 +1641,9 @@ mod tests {
         let mut config_builder = MutinyWalletConfigBuilder::new(xpriv).with_network(network);
         config_builder.with_safe_mode();
         let config = config_builder.build();
-        let mw = MutinyWallet::new(storage.clone(), config, None)
+        let mw = MutinyWalletBuilder::new(xpriv, storage.clone())
+            .with_config(config)
+            .build()
             .await
             .expect("mutiny wallet should initialize");
         mw.storage.insert_mnemonic(mnemonic).unwrap();
