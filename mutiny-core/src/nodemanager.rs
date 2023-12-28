@@ -1,5 +1,4 @@
 use crate::logging::LOGGING_KEY;
-use crate::storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY};
 use crate::utils::{sleep, spawn};
 use crate::MutinyWalletConfig;
 use crate::{
@@ -22,6 +21,10 @@ use crate::{
 use crate::{gossip::*, scorer::HubPreferentialScorer};
 use crate::{labels::LabelStorage, subscription::MutinySubscriptionClient};
 use crate::{lnurlauth::AuthManager, ActivityItem};
+use crate::{
+    node::NodeBuilder,
+    storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY},
+};
 use anyhow::anyhow;
 use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::{wallet::AddressIndex, FeeRate, LocalUtxo};
@@ -488,7 +491,7 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
         ));
 
         let wallet = Arc::new(OnChainWallet::new(
-            c.xprivkey,
+            self.xprivkey,
             self.storage.clone(),
             c.network,
             esplora.clone(),
@@ -535,26 +538,29 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             let mut nodes_map = HashMap::new();
 
             for node_item in unarchived_nodes {
-                let node = Node::new(
-                    node_item.0,
-                    &node_item.1,
-                    c.xprivkey,
-                    self.storage.clone(),
-                    gossip_sync.clone(),
-                    scorer.clone(),
-                    chain.clone(),
-                    fee_estimator.clone(),
-                    wallet.clone(),
-                    c.network,
-                    &esplora,
-                    lsp_config.clone(),
-                    logger.clone(),
-                    c.do_not_connect_peers,
-                    false,
-                    #[cfg(target_arch = "wasm32")]
-                    websocket_proxy_addr.clone(),
-                )
-                .await?;
+                let mut node_builder = NodeBuilder::new(self.xprivkey, self.storage.clone())
+                    .with_uuid(node_item.0)
+                    .with_node_index(node_item.1)
+                    .with_gossip_sync(gossip_sync.clone())
+                    .with_scorer(scorer.clone())
+                    .with_chain(chain.clone())
+                    .with_fee_estimator(fee_estimator.clone())
+                    .with_wallet(wallet.clone())
+                    .with_esplora(esplora.clone())
+                    .with_network(c.network);
+                node_builder.with_logger(logger.clone());
+
+                #[cfg(target_arch = "wasm32")]
+                node_builder.with_websocket_proxy_addr(websocket_proxy_addr.clone());
+
+                if let Some(l) = lsp_config.clone() {
+                    node_builder.with_lsp_config(l);
+                }
+                if c.do_not_connect_peers {
+                    node_builder.do_not_connect_peers();
+                }
+
+                let node = node_builder.build().await?;
 
                 let id = node
                     .keys_manager
@@ -603,7 +609,7 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
                 (None, auth_client.auth.clone())
             }
         } else {
-            let auth_manager = AuthManager::new(c.xprivkey)?;
+            let auth_manager = AuthManager::new(self.xprivkey)?;
             (None, auth_manager)
         };
 
@@ -616,7 +622,7 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
 
         let nm = NodeManager {
             stop,
-            xprivkey: c.xprivkey,
+            xprivkey: self.xprivkey,
             network: c.network,
             wallet,
             gossip_sync,
@@ -2346,33 +2352,29 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
     node_manager.storage.insert_nodes(&existing_nodes)?;
     node_mutex.nodes = existing_nodes.nodes.clone();
 
-    // now create the node process and init it
-    let new_node_res = Node::new(
-        next_node_uuid.clone(),
-        &next_node,
-        node_manager.xprivkey,
-        node_manager.storage.clone(),
-        node_manager.gossip_sync.clone(),
-        node_manager.scorer.clone(),
-        node_manager.chain.clone(),
-        node_manager.fee_estimator.clone(),
-        node_manager.wallet.clone(),
-        node_manager.network,
-        &node_manager.esplora,
-        node_manager.lsp_config.clone(),
-        node_manager.logger.clone(),
-        node_manager.do_not_connect_peers,
-        false,
-        #[cfg(target_arch = "wasm32")]
-        node_manager.websocket_proxy_addr.clone(),
-    )
-    .await;
+    let mut node_builder = NodeBuilder::new(node_manager.xprivkey, node_manager.storage.clone())
+        .with_uuid(next_node_uuid.clone())
+        .with_node_index(next_node)
+        .with_gossip_sync(node_manager.gossip_sync.clone())
+        .with_scorer(node_manager.scorer.clone())
+        .with_chain(node_manager.chain.clone())
+        .with_fee_estimator(node_manager.fee_estimator.clone())
+        .with_wallet(node_manager.wallet.clone())
+        .with_esplora(node_manager.esplora.clone())
+        .with_network(node_manager.network);
+    node_builder.with_logger(node_manager.logger.clone());
 
-    let new_node = match new_node_res {
-        Ok(new_node) => new_node,
-        Err(e) => return Err(e),
-    };
+    #[cfg(target_arch = "wasm32")]
+    node_builder.with_websocket_proxy_addr(node_manager.websocket_proxy_addr.clone());
 
+    if let Some(l) = node_manager.lsp_config.clone() {
+        node_builder.with_lsp_config(l);
+    }
+    if node_manager.do_not_connect_peers {
+        node_builder.do_not_connect_peers();
+    }
+
+    let new_node = node_builder.build().await?;
     let node_pubkey = new_node.pubkey;
     node_manager
         .nodes

@@ -166,47 +166,172 @@ impl PubkeyConnectionInfo {
     }
 }
 
-pub(crate) struct Node<S: MutinyStorage> {
-    pub _uuid: String,
-    pub child_index: u32,
-    stopped_components: Arc<RwLock<Vec<bool>>>,
-    pub pubkey: PublicKey,
-    pub peer_manager: Arc<PeerManagerImpl<S>>,
-    pub keys_manager: Arc<PhantomKeysManager<S>>,
-    pub channel_manager: Arc<PhantomChannelManager<S>>,
-    pub chain_monitor: Arc<ChainMonitor<S>>,
-    pub fee_estimator: Arc<MutinyFeeEstimator<S>>,
-    network: Network,
-    pub persister: Arc<MutinyNodePersister<S>>,
-    wallet: Arc<OnChainWallet<S>>,
-    pub(crate) logger: Arc<MutinyLogger>,
-    pub(crate) lsp_client: Option<AnyLsp<S>>,
-    pub(crate) sync_lock: Arc<Mutex<()>>,
-    stop: Arc<AtomicBool>,
+pub struct NodeBuilder<S: MutinyStorage> {
+    // required
+    xprivkey: ExtendedPrivKey,
+    storage: S,
+    uuid: Option<String>,
+    node_index: Option<NodeIndex>,
+    gossip_sync: Option<Arc<RapidGossipSync>>,
+    scorer: Option<Arc<utils::Mutex<HubPreferentialScorer>>>,
+    chain: Option<Arc<MutinyChain<S>>>,
+    fee_estimator: Option<Arc<MutinyFeeEstimator<S>>>,
+    wallet: Option<Arc<OnChainWallet<S>>>,
+    esplora: Option<Arc<AsyncClient>>,
     #[cfg(target_arch = "wasm32")]
-    websocket_proxy_addr: String,
+    websocket_proxy_addr: Option<String>,
+    network: Option<Network>,
+
+    // optional
+    lsp_config: Option<LspConfig>,
+    logger: Option<Arc<MutinyLogger>>,
+    do_not_connect_peers: bool,
 }
 
-impl<S: MutinyStorage> Node<S> {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn new(
-        uuid: String,
-        node_index: &NodeIndex,
-        xprivkey: ExtendedPrivKey,
-        storage: S,
-        gossip_sync: Arc<RapidGossipSync>,
+impl<S: MutinyStorage> NodeBuilder<S> {
+    pub fn new(xprivkey: ExtendedPrivKey, storage: S) -> NodeBuilder<S> {
+        NodeBuilder::<S> {
+            xprivkey,
+            storage,
+            uuid: None,
+            node_index: None,
+            gossip_sync: None,
+            scorer: None,
+            chain: None,
+            fee_estimator: None,
+            wallet: None,
+            esplora: None,
+            #[cfg(target_arch = "wasm32")]
+            websocket_proxy_addr: None,
+            lsp_config: None,
+            logger: None,
+            network: None,
+            do_not_connect_peers: false,
+        }
+    }
+
+    /// Required
+    pub fn with_uuid(mut self, uuid: String) -> NodeBuilder<S> {
+        self.uuid = Some(uuid);
+        self
+    }
+
+    /// Required
+    pub fn with_node_index(mut self, node_index: NodeIndex) -> NodeBuilder<S> {
+        self.node_index = Some(node_index);
+        self
+    }
+
+    /// Required
+    pub fn with_gossip_sync(mut self, gossip_sync: Arc<RapidGossipSync>) -> NodeBuilder<S> {
+        self.gossip_sync = Some(gossip_sync);
+        self
+    }
+
+    /// Required
+    pub fn with_scorer(
+        mut self,
         scorer: Arc<utils::Mutex<HubPreferentialScorer>>,
-        chain: Arc<MutinyChain<S>>,
+    ) -> NodeBuilder<S> {
+        self.scorer = Some(scorer);
+        self
+    }
+
+    /// Required
+    pub fn with_chain(mut self, chain: Arc<MutinyChain<S>>) -> NodeBuilder<S> {
+        self.chain = Some(chain);
+        self
+    }
+
+    /// Required
+    pub fn with_fee_estimator(
+        mut self,
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
-        wallet: Arc<OnChainWallet<S>>,
-        network: Network,
-        esplora: &AsyncClient,
-        lsp_config: Option<LspConfig>,
-        logger: Arc<MutinyLogger>,
-        do_not_connect_peers: bool,
-        empty_state: bool,
-        #[cfg(target_arch = "wasm32")] websocket_proxy_addr: String,
-    ) -> Result<Self, MutinyError> {
+    ) -> NodeBuilder<S> {
+        self.fee_estimator = Some(fee_estimator);
+        self
+    }
+
+    /// Required
+    pub fn with_wallet(mut self, wallet: Arc<OnChainWallet<S>>) -> NodeBuilder<S> {
+        self.wallet = Some(wallet);
+        self
+    }
+
+    /// Required
+    pub fn with_esplora(mut self, esplora: Arc<AsyncClient>) -> NodeBuilder<S> {
+        self.esplora = Some(esplora);
+        self
+    }
+
+    pub fn with_network(mut self, network: Network) -> NodeBuilder<S> {
+        self.network = Some(network);
+        self
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    /// Required
+    pub fn with_websocket_proxy_addr(&mut self, websocket_proxy_addr: String) {
+        self.websocket_proxy_addr = Some(websocket_proxy_addr);
+    }
+
+    pub fn with_lsp_config(&mut self, lsp_config: LspConfig) {
+        self.lsp_config = Some(lsp_config);
+    }
+
+    pub fn with_logger(&mut self, logger: Arc<MutinyLogger>) {
+        self.logger = Some(logger);
+    }
+
+    pub fn do_not_connect_peers(&mut self) {
+        self.do_not_connect_peers = true;
+    }
+
+    pub async fn build(self) -> Result<Node<S>, MutinyError> {
+        // check for all required parameters
+        let uuid = self.uuid.as_ref().map_or_else(
+            || Err(MutinyError::InvalidArgumentsError),
+            |v| Ok(v.clone()),
+        )?;
+        let node_index = self.node_index.as_ref().map_or_else(
+            || Err(MutinyError::InvalidArgumentsError),
+            |v| Ok(v.clone()),
+        )?;
+        let gossip_sync = self.gossip_sync.as_ref().map_or_else(
+            || Err(MutinyError::InvalidArgumentsError),
+            |v| Ok(v.clone()),
+        )?;
+        let scorer = self.scorer.as_ref().map_or_else(
+            || Err(MutinyError::InvalidArgumentsError),
+            |v| Ok(v.clone()),
+        )?;
+        let chain = self.chain.as_ref().map_or_else(
+            || Err(MutinyError::InvalidArgumentsError),
+            |v| Ok(v.clone()),
+        )?;
+        let fee_estimator = self.fee_estimator.as_ref().map_or_else(
+            || Err(MutinyError::InvalidArgumentsError),
+            |v| Ok(v.clone()),
+        )?;
+        let wallet = self.wallet.as_ref().map_or_else(
+            || Err(MutinyError::InvalidArgumentsError),
+            |v| Ok(v.clone()),
+        )?;
+        let esplora = self.esplora.as_ref().map_or_else(
+            || Err(MutinyError::InvalidArgumentsError),
+            |v| Ok(v.clone()),
+        )?;
+        let network = self
+            .network
+            .map_or_else(|| Err(MutinyError::InvalidArgumentsError), Ok)?;
+        #[cfg(target_arch = "wasm32")]
+        let websocket_proxy_addr = self.websocket_proxy_addr.as_ref().map_or_else(
+            || Err(MutinyError::InvalidArgumentsError),
+            |v| Ok(v.clone()),
+        )?;
+
+        let logger = self.logger.unwrap_or(Arc::new(MutinyLogger::default()));
+
         log_info!(logger, "initializing a new node: {uuid}");
 
         // a list of components that need to be stopped and whether or not they are stopped
@@ -214,7 +339,7 @@ impl<S: MutinyStorage> Node<S> {
 
         let keys_manager = Arc::new(create_keys_manager(
             wallet.clone(),
-            xprivkey,
+            self.xprivkey,
             node_index.child_index,
             logger.clone(),
         )?);
@@ -223,7 +348,7 @@ impl<S: MutinyStorage> Node<S> {
         // init the persister
         let persister = Arc::new(MutinyNodePersister::new(
             uuid.clone(),
-            storage,
+            self.storage,
             logger.clone(),
         ));
 
@@ -244,17 +369,11 @@ impl<S: MutinyStorage> Node<S> {
             .replace(chain_monitor.clone());
 
         // read channelmonitor state from disk
-        let channel_monitors = if empty_state {
-            vec![]
-        } else {
-            persister
-                .read_channel_monitors(keys_manager.clone())
-                .map_err(|e| MutinyError::ReadError {
-                    source: MutinyStorageError::Other(anyhow!(
-                        "failed to read channel monitors: {e}"
-                    )),
-                })?
-        };
+        let channel_monitors = persister
+            .read_channel_monitors(keys_manager.clone())
+            .map_err(|e| MutinyError::ReadError {
+                source: MutinyStorageError::Other(anyhow!("failed to read channel monitors: {e}")),
+            })?;
 
         let network_graph = gossip_sync.network_graph().clone();
 
@@ -267,8 +386,8 @@ impl<S: MutinyStorage> Node<S> {
         ));
 
         // init channel manager
-        let mut read_channel_manager = if empty_state {
-            MutinyNodePersister::create_new_channel_manager(
+        let mut read_channel_manager = persister
+            .read_channel_manager(
                 network,
                 chain_monitor.clone(),
                 chain.clone(),
@@ -277,24 +396,9 @@ impl<S: MutinyStorage> Node<S> {
                 keys_manager.clone(),
                 router.clone(),
                 channel_monitors,
-                esplora,
+                &esplora,
             )
-            .await?
-        } else {
-            persister
-                .read_channel_manager(
-                    network,
-                    chain_monitor.clone(),
-                    chain.clone(),
-                    fee_estimator.clone(),
-                    logger.clone(),
-                    keys_manager.clone(),
-                    router.clone(),
-                    channel_monitors,
-                    esplora,
-                )
-                .await?
-        };
+            .await?;
 
         let channel_manager: Arc<PhantomChannelManager<S>> =
             Arc::new(read_channel_manager.channel_manager);
@@ -333,12 +437,12 @@ impl<S: MutinyStorage> Node<S> {
         let lsp_config: Option<LspConfig> = match node_index.lsp {
             None => {
                 log_info!(logger, "no lsp saved, using configured one if present");
-                lsp_config
+                self.lsp_config
             }
             Some(ref lsp) => {
-                if lsp_config.as_ref() == Some(lsp) {
+                if self.lsp_config.as_ref() == Some(lsp) {
                     log_info!(logger, "lsp config matches saved lsp config");
-                    lsp_config
+                    self.lsp_config
                 } else {
                     log_info!(logger, "lsp config does not match saved lsp config");
                     None
@@ -470,51 +574,49 @@ impl<S: MutinyStorage> Node<S> {
         // processor so we prevent any race conditions.
         // if we fail to read the spendable outputs, just log a warning and
         // continue
-        if !empty_state {
-            let retry_spendable_outputs = persister
-                .get_failed_spendable_outputs()
-                .map_err(|e| MutinyError::ReadError {
-                    source: MutinyStorageError::Other(anyhow!(
-                        "failed to read retry spendable outputs: {e}"
-                    )),
-                })
-                .unwrap_or_else(|e| {
-                    log_warn!(logger, "Failed to read retry spendable outputs: {e}");
-                    vec![]
-                });
+        let retry_spendable_outputs = persister
+            .get_failed_spendable_outputs()
+            .map_err(|e| MutinyError::ReadError {
+                source: MutinyStorageError::Other(anyhow!(
+                    "failed to read retry spendable outputs: {e}"
+                )),
+            })
+            .unwrap_or_else(|e| {
+                log_warn!(logger, "Failed to read retry spendable outputs: {e}");
+                vec![]
+            });
 
-            if !retry_spendable_outputs.is_empty() {
-                log_info!(
-                    logger,
-                    "Retrying {} spendable outputs",
-                    retry_spendable_outputs.len()
-                );
+        if !retry_spendable_outputs.is_empty() {
+            log_info!(
+                logger,
+                "Retrying {} spendable outputs",
+                retry_spendable_outputs.len()
+            );
 
-                match event_handler
-                    .handle_spendable_outputs(&retry_spendable_outputs)
-                    .await
-                {
-                    Ok(_) => {
-                        log_info!(logger, "Successfully retried spendable outputs");
-                        persister.clear_failed_spendable_outputs()?;
-                    }
-                    Err(_) => {
-                        // retry them individually then only save failed ones
-                        // if there was only one we don't need to retry
-                        if retry_spendable_outputs.len() > 1 {
-                            let mut failed = vec![];
-                            for o in retry_spendable_outputs {
-                                if event_handler
-                                    .handle_spendable_outputs(&[o.clone()])
-                                    .await
-                                    .is_err()
-                                {
-                                    failed.push(o);
-                                }
+            match event_handler
+                .handle_spendable_outputs(&retry_spendable_outputs)
+                .await
+            {
+                Ok(_) => {
+                    log_info!(logger, "Successfully retried spendable outputs");
+                    persister.clear_failed_spendable_outputs()?;
+                }
+                Err(_) => {
+                    // retry them individually then only save failed ones
+                    // if there was only one we don't need to retry
+                    if retry_spendable_outputs.len() > 1 {
+                        let mut failed = vec![];
+                        for o in retry_spendable_outputs {
+                            if event_handler
+                                .handle_spendable_outputs(&[o.clone()])
+                                .await
+                                .is_err()
+                            {
+                                failed.push(o);
                             }
-                            persister.set_failed_spendable_outputs(failed)?;
-                        };
-                    }
+                        }
+                        persister.set_failed_spendable_outputs(failed)?;
+                    };
                 }
             }
         }
@@ -576,7 +678,7 @@ impl<S: MutinyStorage> Node<S> {
             }
         });
 
-        if !do_not_connect_peers {
+        if !self.do_not_connect_peers {
             #[cfg(target_arch = "wasm32")]
             let reconnection_proxy_addr = websocket_proxy_addr.clone();
 
@@ -727,7 +829,30 @@ impl<S: MutinyStorage> Node<S> {
             websocket_proxy_addr,
         })
     }
+}
 
+pub(crate) struct Node<S: MutinyStorage> {
+    pub _uuid: String,
+    pub child_index: u32,
+    stopped_components: Arc<RwLock<Vec<bool>>>,
+    pub pubkey: PublicKey,
+    pub peer_manager: Arc<PeerManagerImpl<S>>,
+    pub keys_manager: Arc<PhantomKeysManager<S>>,
+    pub channel_manager: Arc<PhantomChannelManager<S>>,
+    pub chain_monitor: Arc<ChainMonitor<S>>,
+    pub fee_estimator: Arc<MutinyFeeEstimator<S>>,
+    network: Network,
+    pub persister: Arc<MutinyNodePersister<S>>,
+    wallet: Arc<OnChainWallet<S>>,
+    pub(crate) logger: Arc<MutinyLogger>,
+    pub(crate) lsp_client: Option<AnyLsp<S>>,
+    pub(crate) sync_lock: Arc<Mutex<()>>,
+    stop: Arc<AtomicBool>,
+    #[cfg(target_arch = "wasm32")]
+    websocket_proxy_addr: String,
+}
+
+impl<S: MutinyStorage> Node<S> {
     pub async fn stop(&self) -> Result<(), MutinyError> {
         self.stop.store(true, Ordering::Relaxed);
 
