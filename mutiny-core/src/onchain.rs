@@ -27,6 +27,9 @@ use crate::logging::MutinyLogger;
 use crate::storage::{MutinyStorage, OnChainStorage};
 use crate::utils::{now, sleep};
 
+const DEFAULT_STOP_GAP: usize = 20;
+const FULL_SYNC_STOP_GAP: usize = 150;
+
 #[derive(Clone)]
 pub struct OnChainWallet<S: MutinyStorage> {
     pub wallet: Arc<RwLock<Wallet<OnChainStorage<S>>>>,
@@ -167,7 +170,14 @@ impl<S: MutinyStorage> OnChainWallet<S> {
 
         let update = self
             .blockchain
-            .scan(&checkpoints, spks, txids, core::iter::empty(), 20, 5)
+            .scan(
+                &checkpoints,
+                spks,
+                txids,
+                core::iter::empty(),
+                DEFAULT_STOP_GAP,
+                5,
+            )
             .await?;
 
         for _ in 0..10 {
@@ -206,7 +216,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                 spks,
                 core::iter::empty(),
                 core::iter::empty(),
-                20,
+                FULL_SYNC_STOP_GAP,
                 5,
             )
             .await?;
