@@ -494,10 +494,18 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         .await?;
 
         // create federation library
-        let (federation_storage, federations) =
-            create_federations(&self.storage, &config, glue_db.clone(), &logger).await?;
-        let federation_storage = Arc::new(Mutex::new(federation_storage));
-        let federations = federations;
+        let federation_storage = self.storage.get_federations()?;
+        let federations = if federation_storage.federations.len() > 0 {
+            create_federations(
+                federation_storage.clone(),
+                &config,
+                glue_db.clone(),
+                &logger,
+            )
+            .await?
+        } else {
+            Arc::new(Mutex::new(HashMap::new()))
+        };
 
         if !self.skip_hodl_invoices {
             log_warn!(
@@ -513,7 +521,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             glue_db,
             node_manager,
             nostr,
-            federation_storage,
+            federation_storage: Arc::new(Mutex::new(federation_storage)),
             federations,
             stop,
             logger,
@@ -1336,20 +1344,13 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
     }
 }
 
-async fn create_federations<S: MutinyStorage>(
-    storage: &S,
+async fn create_federations(
+    federation_storage: FederationStorage,
     c: &MutinyWalletConfig,
     g: GlueDB,
     logger: &Arc<MutinyLogger>,
-) -> Result<
-    (
-        FederationStorage,
-        Arc<Mutex<HashMap<FederationId, Arc<FederationClient>>>>,
-    ),
-    MutinyError,
-> {
-    let federation_storage = storage.get_federations()?;
-    let federations = federation_storage.clone().federations.into_iter();
+) -> Result<Arc<Mutex<HashMap<FederationId, Arc<FederationClient>>>>, MutinyError> {
+    let federations = federation_storage.federations.into_iter();
     let mut federation_map = HashMap::new();
     for federation_item in federations {
         let federation = FederationClient::new(
@@ -1367,7 +1368,7 @@ async fn create_federations<S: MutinyStorage>(
         federation_map.insert(id, Arc::new(federation));
     }
     let federations = Arc::new(Mutex::new(federation_map));
-    Ok((federation_storage, federations))
+    Ok(federations)
 }
 
 // This will create a new federation and returns the Federation ID of the client created.
