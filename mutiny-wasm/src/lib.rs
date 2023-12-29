@@ -29,13 +29,13 @@ use lightning::{log_error, routing::gossip::NodeId, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
+use mutiny_core::auth::MutinyAuthClient;
 use mutiny_core::lnurlauth::AuthManager;
 use mutiny_core::nostr::nip49::NIP49URI;
 use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
 use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
 use mutiny_core::utils::{now, sleep};
 use mutiny_core::vss::MutinyVssClient;
-use mutiny_core::{auth::MutinyAuthClient, sql::glue::GlueDB};
 use mutiny_core::{encrypt::encryption_key_from_pass, MutinyWalletConfigBuilder};
 use mutiny_core::{labels::Contact, MutinyWalletBuilder};
 use mutiny_core::{
@@ -1041,7 +1041,7 @@ impl MutinyWallet {
     /// Adds a new federation based on its federation code
     #[wasm_bindgen]
     pub async fn new_federation(
-        &self,
+        &mut self,
         federation_code: String,
     ) -> Result<FederationIdentity, MutinyJsError> {
         Ok(self
@@ -1660,15 +1660,9 @@ impl MutinyWallet {
             .map(|p| encryption_key_from_pass(p))
             .transpose()?;
         let storage = IndexedDbStorage::new(password, cipher, None, logger.clone()).await?;
-        let glue_db = GlueDB::new(
-            #[cfg(target_arch = "wasm32")]
-            None,
-            logger,
-        )
-        .await?;
         mutiny_core::MutinyWallet::<IndexedDbStorage>::restore_mnemonic(
             storage,
-            glue_db,
+            None, // FIXME: We dont currently support deleting glue_db yet due to safari bug
             Mnemonic::from_str(&m).map_err(|_| MutinyJsError::InvalidMnemonic)?,
         )
         .await?;

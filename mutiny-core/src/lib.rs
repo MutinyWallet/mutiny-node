@@ -485,26 +485,27 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             stop.clone(),
         )?);
 
-        // create gluedb storage
-        let glue_db = GlueDB::new(
-            #[cfg(target_arch = "wasm32")]
-            None,
-            logger.clone(),
-        )
-        .await?;
-
-        // create federation library
+        // create federation module if any exist
         let federation_storage = self.storage.get_federations()?;
-        let federations = if federation_storage.federations.len() > 0 {
-            create_federations(
+        let (federations, glue_db) = if !federation_storage.federations.is_empty() {
+            // create gluedb storage
+            let glue_db = GlueDB::new(
+                #[cfg(target_arch = "wasm32")]
+                None,
+                logger.clone(),
+            )
+            .await?;
+
+            let federations = create_federations(
                 federation_storage.clone(),
                 &config,
                 glue_db.clone(),
                 &logger,
             )
-            .await?
+            .await?;
+            (federations, Some(glue_db))
         } else {
-            Arc::new(Mutex::new(HashMap::new()))
+            (Arc::new(Mutex::new(HashMap::new())), None)
         };
 
         if !self.skip_hodl_invoices {
@@ -568,7 +569,7 @@ pub struct MutinyWallet<S: MutinyStorage> {
     xprivkey: ExtendedPrivKey,
     config: MutinyWalletConfig,
     pub(crate) storage: S,
-    glue_db: GlueDB,
+    glue_db: Option<GlueDB>,
     pub node_manager: Arc<NodeManager<S>>,
     pub nostr: Arc<NostrManager<S>>,
     pub federation_storage: Arc<Mutex<FederationStorage>>,
@@ -1165,7 +1166,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Deletes all the storage and gluedb data
     pub async fn delete_all(&self) -> Result<(), MutinyError> {
         self.storage.delete_all().await?;
-        self.glue_db.delete_all().await
+        if let Some(glue_db) = self.glue_db.as_ref() {
+            glue_db.delete_all().await?;
+        }
+        Ok(())
     }
 
     /// Restores the mnemonic after deleting the previous state.
@@ -1174,7 +1178,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Should refresh or restart afterwards. Wallet should be stopped.
     pub async fn restore_mnemonic(
         mut storage: S,
-        glue_db: GlueDB,
+        glue_db: Option<GlueDB>,
         m: Mnemonic,
     ) -> Result<(), MutinyError> {
         // Delete our storage but insert some device specific data
@@ -1189,7 +1193,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         storage.set_data(LOGGING_KEY.to_string(), logs, None)?;
 
         // Delete all of glue_db storage
-        glue_db.delete_all().await?;
+        // FIXME: on Safari this will clash with previous storage setup
+        if let Some(glue_db) = glue_db.as_ref() {
+            glue_db.delete_all().await?;
+        }
 
         Ok(())
     }
@@ -1210,13 +1217,24 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     /// Adds a new federation based on its federation code
     pub async fn new_federation(
-        &self,
+        &mut self,
         federation_code: InviteCode,
     ) -> Result<FederationIdentity, MutinyError> {
+        // if we have not init glue_db yet, do it now
+        if self.glue_db.is_none() {
+            let glue_db = GlueDB::new(
+                #[cfg(target_arch = "wasm32")]
+                None,
+                self.logger.clone(),
+            )
+            .await?;
+            self.glue_db = Some(glue_db);
+        }
+
         create_new_federation(
             self.xprivkey,
             self.storage.clone(),
-            self.glue_db.clone(),
+            self.glue_db.as_ref().expect("just created this").clone(),
             self.network,
             self.logger.clone(),
             self.federation_storage.clone(),
@@ -1603,7 +1621,7 @@ mod tests {
         )
         .await
         .unwrap();
-        MutinyWallet::restore_mnemonic(storage3.clone(), glue_db, mnemonic.clone())
+        MutinyWallet::restore_mnemonic(storage3.clone(), Some(glue_db), mnemonic.clone())
             .await
             .expect("mutiny wallet should restore");
 
