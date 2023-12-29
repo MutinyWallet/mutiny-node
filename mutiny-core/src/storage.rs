@@ -100,6 +100,11 @@ impl DeviceLock {
         let diff = now.saturating_sub(self.time as u64);
         diff < DEVICE_LOCK_INTERVAL_SECS * 2 && self.device != id
     }
+
+    // Check if the device is the last one to have the lock
+    pub fn is_last_locker(&self, id: &str) -> bool {
+        self.device == id
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
@@ -751,7 +756,9 @@ mod tests {
         let lock = storage.get_device_lock().unwrap();
         assert!(lock.is_some());
         assert!(!lock.clone().unwrap().is_locked(&id));
+        assert!(lock.clone().unwrap().is_last_locker(&id));
         assert!(lock.clone().unwrap().is_locked("different_id"));
+        assert!(!lock.clone().unwrap().is_last_locker("different_id"));
         assert_eq!(lock.unwrap().device, id);
 
         // make sure we can set lock again, should work because same device id
@@ -770,8 +777,10 @@ mod tests {
         assert!(lock.is_some());
         // not locked for active device
         assert!(!lock.clone().unwrap().is_locked(&id));
+        assert!(lock.clone().unwrap().is_last_locker(&id));
         // is locked for new device
         assert!(lock.clone().unwrap().is_locked(&new_id));
+        assert!(!lock.clone().unwrap().is_last_locker(&new_id));
         assert_eq!(lock.unwrap().device, id);
 
         assert_eq!(
