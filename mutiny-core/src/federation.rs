@@ -728,12 +728,32 @@ mod tests {
 
 #[cfg(test)]
 #[cfg(target_arch = "wasm32")]
-mod wasm_tests {
+mod browser_tests {
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     use super::*;
 
     wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test]
+    fn test_fedimint_seed_generation() {
+        fedimint_seed_generation();
+    }
+
+    #[test]
+    fn test_fedimint_mnemonic_generation() {
+        fedimint_mnemonic_generation();
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_arch = "wasm32")]
+mod wasm_worker_tests {
+    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+
+    use super::*;
+
+    wasm_bindgen_test_configure!(run_in_worker);
 
     #[test]
     fn test_fedimint_seed_generation() {

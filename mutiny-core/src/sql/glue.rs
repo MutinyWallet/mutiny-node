@@ -704,15 +704,28 @@ impl<'a> IDatabaseTransactionOps for GluePseudoTransaction<'a> {
 }
 
 #[cfg(test)]
+use bitcoin::hashes::hex::ToHex;
+#[cfg(test)]
 use gluesql::core::store::GStore;
 #[cfg(test)]
 use gluesql::core::store::GStoreMut;
 
 #[cfg(test)]
+#[cfg(target_arch = "wasm32")]
+fn gen_rand_id() -> String {
+    let mut entropy = vec![0u8; 4];
+    getrandom::getrandom(&mut entropy).unwrap();
+    entropy.to_hex()
+}
+
+#[cfg(test)]
 async fn create_glue_and_fedimint_storage() {
     let db = GlueDB::new(
         #[cfg(target_arch = "wasm32")]
-        Some("create_glue_and_fedimint_storage".to_string()),
+        Some(format!(
+            "create_glue_and_fedimint_storage_{}",
+            gen_rand_id()
+        )),
         Arc::new(MutinyLogger::default()),
     )
     .await
@@ -725,13 +738,16 @@ async fn create_glue_and_fedimint_storage() {
 
 #[cfg(test)]
 async fn create_glue_and_payments_storage() {
-    use bitcoin::hashes::hex::{FromHex, ToHex};
+    use bitcoin::hashes::hex::FromHex;
 
     const INVOICE: &str = "lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm";
 
     let db = GlueDB::new(
         #[cfg(target_arch = "wasm32")]
-        Some("create_glue_and_payments_storage".to_string()),
+        Some(format!(
+            "create_glue_and_payments_storage_{}",
+            gen_rand_id()
+        )),
         Arc::new(MutinyLogger::default()),
     )
     .await
@@ -844,13 +860,13 @@ async fn create_glue_and_payments_storage() {
 
 #[cfg(test)]
 async fn update_payments() {
-    use bitcoin::hashes::hex::{FromHex, ToHex};
+    use bitcoin::hashes::hex::FromHex;
 
     const INVOICE: &str = "lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm";
 
     let db = GlueDB::new(
         #[cfg(target_arch = "wasm32")]
-        Some("update_payments".to_string()),
+        Some(format!("update_payments_{}", gen_rand_id())),
         Arc::new(MutinyLogger::default()),
     )
     .await
@@ -926,13 +942,13 @@ async fn update_payments() {
 
 #[cfg(test)]
 async fn delete_all() {
-    use bitcoin::hashes::hex::{FromHex, ToHex};
+    use bitcoin::hashes::hex::FromHex;
 
     const INVOICE: &str = "lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm";
 
     let db = GlueDB::new(
         #[cfg(target_arch = "wasm32")]
-        Some("delete_all".to_string()),
+        Some(format!("delete_all_{}", gen_rand_id())),
         Arc::new(MutinyLogger::default()),
     )
     .await
@@ -1020,7 +1036,7 @@ async fn delete_all() {
 async fn create_glue_storage_value() {
     let db = GlueDB::new(
         #[cfg(target_arch = "wasm32")]
-        Some("create_glue_storage_value".to_string()),
+        Some(format!("create_glue_storage_value_{}", gen_rand_id())),
         Arc::new(MutinyLogger::default()),
     )
     .await
@@ -1275,7 +1291,7 @@ mod tests {
 
 #[cfg(test)]
 #[cfg(target_arch = "wasm32")]
-mod wasm_tests {
+mod browser_tests {
     use gluesql::prelude::{Glue, IdbStorage};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
@@ -1285,7 +1301,52 @@ mod wasm_tests {
 
     #[test]
     async fn basic_wasm32_glue_tests() {
-        let storage = IdbStorage::new(Some("basic_wasm32_glue_tests".to_string()))
+        let storage = IdbStorage::new(Some(format!("basic_wasm32_glue_tests_{}", gen_rand_id())))
+            .await
+            .unwrap();
+        let mut glue = Glue::new(storage);
+        run_basic_glue_tests(&mut glue).await;
+    }
+
+    #[test]
+    async fn create_glue_storage_tests() {
+        create_glue_and_fedimint_storage().await;
+    }
+
+    #[test]
+    async fn create_glue_storage_value_tests() {
+        create_glue_storage_value().await;
+    }
+
+    #[test]
+    async fn create_glue_and_payments_storage_tests() {
+        create_glue_and_payments_storage().await;
+    }
+
+    #[test]
+    async fn update_payments_tests() {
+        update_payments().await;
+    }
+
+    #[test]
+    async fn delete_all_tests() {
+        delete_all().await;
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_arch = "wasm32")]
+mod wasm_worker_tests {
+    use gluesql::prelude::{Glue, IdbStorage};
+    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+
+    use super::*;
+
+    wasm_bindgen_test_configure!(run_in_worker);
+
+    #[test]
+    async fn basic_wasm32_glue_tests() {
+        let storage = IdbStorage::new(Some(format!("basic_wasm32_glue_tests_{}", gen_rand_id())))
             .await
             .unwrap();
         let mut glue = Glue::new(storage);

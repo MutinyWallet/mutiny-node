@@ -60,12 +60,27 @@ mod tests {
 
 #[cfg(test)]
 #[cfg(target_arch = "wasm32")]
-mod wasm_tests {
+mod browser_tests {
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     use crate::key::run_key_generation_tests;
 
     wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test]
+    fn key_generation_tests() {
+        run_key_generation_tests();
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_arch = "wasm32")]
+mod wasm_worker_tests {
+    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+
+    use crate::key::run_key_generation_tests;
+
+    wasm_bindgen_test_configure!(run_in_worker);
 
     #[test]
     fn key_generation_tests() {
