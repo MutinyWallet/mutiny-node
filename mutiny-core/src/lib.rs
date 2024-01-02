@@ -67,13 +67,13 @@ use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
 use ::nostr::{Event, JsonUtil, Kind, Metadata};
+use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{hashes::sha256, Network};
 use fedimint_core::{api::InviteCode, config::FederationId, BitcoinHash};
 use futures::{pin_mut, select, FutureExt};
-use futures_util::lock::Mutex;
 use lightning::{log_debug, util::logger::Logger};
 use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
@@ -505,7 +505,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             .await?;
             (federations, Some(glue_db))
         } else {
-            (Arc::new(Mutex::new(HashMap::new())), None)
+            (Arc::new(RwLock::new(HashMap::new())), None)
         };
 
         if !self.skip_hodl_invoices {
@@ -522,7 +522,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             glue_db,
             node_manager,
             nostr,
-            federation_storage: Arc::new(Mutex::new(federation_storage)),
+            federation_storage: Arc::new(RwLock::new(federation_storage)),
             federations,
             stop,
             logger,
@@ -572,8 +572,8 @@ pub struct MutinyWallet<S: MutinyStorage> {
     glue_db: Option<GlueDB>,
     pub node_manager: Arc<NodeManager<S>>,
     pub nostr: Arc<NostrManager<S>>,
-    pub federation_storage: Arc<Mutex<FederationStorage>>,
-    pub(crate) federations: Arc<Mutex<HashMap<FederationId, Arc<FederationClient>>>>,
+    pub federation_storage: Arc<RwLock<FederationStorage>>,
+    pub(crate) federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient>>>>,
     pub stop: Arc<AtomicBool>,
     pub logger: Arc<MutinyLogger>,
     network: Network,
@@ -742,7 +742,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // Try each federation first
         let federation_ids = self.list_federation_ids().await?;
         for federation_id in federation_ids {
-            if let Some(fedimint_client) = self.federations.lock().await.get(&federation_id) {
+            if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
                 // Check if the federation has enough balance
                 let balance = fedimint_client.get_balance().await?;
                 if balance >= send_msat / 1_000 {
@@ -840,7 +840,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // Attempt to create federation invoice
         if !federation_ids.is_empty() {
             let federation_id = &federation_ids[0];
-            let fedimint_client = self.federations.lock().await.get(federation_id).cloned();
+            let fedimint_client = self.federations.read().await.get(federation_id).cloned();
 
             if let Some(client) = fedimint_client {
                 if let Ok(inv) = client
@@ -873,7 +873,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let mut activities = self.node_manager.get_activity().await?;
 
         // Directly iterate over federation clients to get their activities
-        let federations = self.federations.lock().await;
+        let federations = self.federations.read().await;
         for (_fed_id, federation) in federations.iter() {
             let federation_activities = federation.get_activity().await?;
             activities.extend(federation_activities);
@@ -903,7 +903,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         // If not found in node manager, search in federations
-        let federations = self.federations.lock().await;
+        let federations = self.federations.read().await;
         for (_fed_id, federation) in federations.iter() {
             if let Ok(invoice) = federation.get_invoice_by_hash(hash).await {
                 return Ok(invoice);
@@ -1246,7 +1246,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     /// Lists the federation id's of the federation clients in the manager.
     pub async fn list_federations(&self) -> Result<Vec<FederationIdentity>, MutinyError> {
-        let federations = self.federations.lock().await;
+        let federations = self.federations.read().await;
         let federation_identities = federations
             .iter()
             .map(|(_, n)| n.get_mutiny_federation_identity())
@@ -1256,7 +1256,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     /// Lists the federation id's of the federation clients in the manager.
     pub async fn list_federation_ids(&self) -> Result<Vec<FederationId>, MutinyError> {
-        let federations = self.federations.lock().await;
+        let federations = self.federations.read().await;
         let federation_identities = federations
             .iter()
             .map(|(_, n)| n.fedimint_client.federation_id())
@@ -1266,12 +1266,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     /// Removes a federation by setting its archived status to true, based on the FederationId.
     pub async fn remove_federation(&self, federation_id: FederationId) -> Result<(), MutinyError> {
-        let mut federations_guard = self.federations.lock().await;
+        let mut federations_guard = self.federations.write().await;
 
         if let Some(fedimint_client) = federations_guard.get(&federation_id) {
             let uuid = &fedimint_client.uuid;
 
-            let mut federation_storage_guard = self.federation_storage.lock().await;
+            let mut federation_storage_guard = self.federation_storage.write().await;
 
             if federation_storage_guard.federations.contains_key(uuid) {
                 federation_storage_guard.federations.remove(uuid);
@@ -1292,7 +1292,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let federation_ids = self.list_federation_ids().await?;
         let mut total_balance = 0;
 
-        let federations = self.federations.lock().await;
+        let federations = self.federations.read().await;
         for fed_id in federation_ids {
             let balance = federations
                 .get(&fed_id)
@@ -1307,7 +1307,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     pub async fn get_federation_balances(&self) -> Result<FederationBalances, MutinyError> {
-        let federation_lock = self.federations.lock().await;
+        let federation_lock = self.federations.read().await;
 
         let federation_ids = self.list_federation_ids().await?;
         let mut balances = Vec::with_capacity(federation_ids.len());
@@ -1367,7 +1367,7 @@ async fn create_federations(
     c: &MutinyWalletConfig,
     g: GlueDB,
     logger: &Arc<MutinyLogger>,
-) -> Result<Arc<Mutex<HashMap<FederationId, Arc<FederationClient>>>>, MutinyError> {
+) -> Result<Arc<RwLock<HashMap<FederationId, Arc<FederationClient>>>>, MutinyError> {
     let federations = federation_storage.federations.into_iter();
     let mut federation_map = HashMap::new();
     for federation_item in federations {
@@ -1385,7 +1385,7 @@ async fn create_federations(
 
         federation_map.insert(id, Arc::new(federation));
     }
-    let federations = Arc::new(Mutex::new(federation_map));
+    let federations = Arc::new(RwLock::new(federation_map));
     Ok(federations)
 }
 
@@ -1397,14 +1397,14 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     g: GlueDB,
     network: Network,
     logger: Arc<MutinyLogger>,
-    federation_storage: Arc<Mutex<FederationStorage>>,
-    federations: Arc<Mutex<HashMap<FederationId, Arc<FederationClient>>>>,
+    federation_storage: Arc<RwLock<FederationStorage>>,
+    federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient>>>>,
     federation_code: InviteCode,
 ) -> Result<FederationIdentity, MutinyError> {
     // Begin with a mutex lock so that nothing else can
     // save or alter the federation list while it is about to
     // be saved.
-    let mut federation_mutex = federation_storage.lock().await;
+    let mut federation_mutex = federation_storage.write().await;
 
     // Get the current federations so that we can check if the new federation already exists
     let mut existing_federations = storage.get_federations()?;
@@ -1450,7 +1450,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         .get_meta("federation_expiry_timestamp");
     let welcome_message = new_federation.fedimint_client.get_meta("welcome_message");
     federations
-        .lock()
+        .write()
         .await
         .insert(federation_id, Arc::new(new_federation));
 
