@@ -830,10 +830,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let invoice = if self.safe_mode {
             None
         } else {
-            self.create_lightning_invoice(amount, labels.clone())
-                .await
-                .ok()
-                .and_then(|invoice| invoice.bolt11)
+            Some(
+                self.create_lightning_invoice(amount, labels.clone())
+                    .await?
+                    .bolt11
+                    .ok_or(MutinyError::InvoiceCreationFailed)?,
+            )
         };
 
         let Ok(address) = self.node_manager.get_new_address(labels.clone()) else {
