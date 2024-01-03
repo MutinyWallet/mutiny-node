@@ -695,7 +695,9 @@ impl<S: MutinyStorage> WalletSource for OnChainWallet<S> {
 
     fn get_change_script(&self) -> Result<Script, ()> {
         let mut wallet = self.wallet.try_write().map_err(|_| ())?;
-        let addr = wallet.get_internal_address(AddressIndex::New).address;
+        let addr = wallet
+            .get_internal_address(AddressIndex::LastUnused)
+            .address;
         Ok(addr.script_pubkey())
     }
 

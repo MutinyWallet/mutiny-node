@@ -68,7 +68,11 @@ impl<S: MutinyStorage> PhantomKeysManager<S> {
     ) -> Result<Transaction, ()> {
         let address = {
             let mut wallet = self.wallet.wallet.try_write().map_err(|_| ())?;
-            wallet.get_internal_address(AddressIndex::New).address
+            // These often fail because we continually retry these. Use LastUnused so we don't generate a ton of new
+            // addresses for no reason.
+            wallet
+                .get_internal_address(AddressIndex::LastUnused)
+                .address
         };
 
         let result = self.inner.spend_spendable_outputs(
