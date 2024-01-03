@@ -788,7 +788,7 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn decode_lnurl(&self, lnurl: String) -> Result<LnUrlParams, MutinyJsError> {
         let lnurl = LnUrl::from_str(&lnurl)?;
-        Ok(self.inner.node_manager.decode_lnurl(lnurl).await?.into())
+        Ok(self.inner.decode_lnurl(lnurl).await?.into())
     }
 
     /// Calls upon a LNURL and pays it.
@@ -812,7 +812,6 @@ impl MutinyWallet {
 
         Ok(self
             .inner
-            .node_manager
             .lnurl_pay(&lnurl, amount_sats, zap_npub, labels)
             .await?
             .into())
@@ -827,18 +826,14 @@ impl MutinyWallet {
         amount_sats: u64,
     ) -> Result<bool, MutinyJsError> {
         let lnurl = LnUrl::from_str(&lnurl)?;
-        Ok(self
-            .inner
-            .node_manager
-            .lnurl_withdraw(&lnurl, amount_sats)
-            .await?)
+        Ok(self.inner.lnurl_withdraw(&lnurl, amount_sats).await?)
     }
 
     /// Authenticates with a LNURL-auth for the given profile.
     #[wasm_bindgen]
     pub async fn lnurl_auth(&self, lnurl: String) -> Result<(), MutinyJsError> {
         let lnurl = LnUrl::from_str(&lnurl)?;
-        Ok(self.inner.node_manager.lnurl_auth(lnurl).await?)
+        Ok(self.inner.lnurl_auth(lnurl).await?)
     }
 
     /// Gets an invoice from the node manager.
@@ -1552,7 +1547,7 @@ impl MutinyWallet {
     /// Gets the subscription plans for Mutiny+ subscriptions
     #[wasm_bindgen]
     pub async fn get_subscription_plans(&self) -> Result<JsValue /* Vec<Plan> */, MutinyJsError> {
-        let plans = self.inner.node_manager.get_subscription_plans().await?;
+        let plans = self.inner.get_subscription_plans().await?;
 
         Ok(JsValue::from_serde(&plans)?)
     }
@@ -1562,7 +1557,7 @@ impl MutinyWallet {
     /// Returns a lightning invoice so that the plan can be paid for to start it.
     #[wasm_bindgen]
     pub async fn subscribe_to_plan(&self, id: u8) -> Result<MutinyInvoice, MutinyJsError> {
-        Ok(self.inner.node_manager.subscribe_to_plan(id).await?.into())
+        Ok(self.inner.subscribe_to_plan(id).await?.into())
     }
 
     /// Pay the subscription invoice. This will post a NWC automatically afterwards.

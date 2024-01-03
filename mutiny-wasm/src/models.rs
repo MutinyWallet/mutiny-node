@@ -517,8 +517,8 @@ impl LnUrlParams {
     }
 }
 
-impl From<nodemanager::LnUrlParams> for LnUrlParams {
-    fn from(m: nodemanager::LnUrlParams) -> Self {
+impl From<mutiny_core::LnUrlParams> for LnUrlParams {
+    fn from(m: mutiny_core::LnUrlParams) -> Self {
         LnUrlParams {
             max: m.max,
             min: m.min,
@@ -1054,8 +1054,8 @@ impl Plan {
     }
 }
 
-impl From<nodemanager::Plan> for Plan {
-    fn from(m: nodemanager::Plan) -> Self {
+impl From<mutiny_core::Plan> for Plan {
+    fn from(m: mutiny_core::Plan) -> Self {
         Plan {
             id: m.id,
             amount_sat: m.amount_sat,

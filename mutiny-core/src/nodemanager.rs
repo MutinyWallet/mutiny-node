@@ -1,5 +1,8 @@
+use crate::event::{HTLCStatus, PaymentInfo};
+use crate::labels::LabelStorage;
 use crate::logging::LOGGING_KEY;
 use crate::utils::{sleep, spawn};
+use crate::ActivityItem;
 use crate::MutinyWalletConfig;
 use crate::{
     chain::MutinyChain,
@@ -14,13 +17,7 @@ use crate::{
     onchain::OnChainWallet,
     utils,
 };
-use crate::{
-    event::{HTLCStatus, PaymentInfo},
-    lnurlauth::make_lnurl_auth_connection,
-};
 use crate::{gossip::*, scorer::HubPreferentialScorer};
-use crate::{labels::LabelStorage, subscription::MutinySubscriptionClient};
-use crate::{lnurlauth::AuthManager, ActivityItem};
 use crate::{
     node::NodeBuilder,
     storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY},
@@ -49,10 +46,6 @@ use lightning::util::logger::*;
 use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lightning_transaction_sync::EsploraSyncClient;
-use lnurl::lnurl::LnUrl;
-use lnurl::{AsyncClient as LnUrlClient, LnUrlResponse, Response};
-use nostr::key::XOnlyPublicKey;
-use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag, TagKind};
 use payjoin::{PjUri, PjUriExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -388,23 +381,6 @@ pub struct NodeBalance {
     pub force_close: u64,
 }
 
-pub struct LnUrlParams {
-    pub max: u64,
-    pub min: u64,
-    pub tag: String,
-}
-
-/// Plan is a subscription plan for Mutiny+
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Plan {
-    /// The ID of the internal plan.
-    /// Used for subscribing to specific one.
-    pub id: u8,
-
-    /// The amount in sats for the plan.
-    pub amount_sat: u64,
-}
-
 pub struct NodeManagerBuilder<S: MutinyStorage> {
     xprivkey: ExtendedPrivKey,
     storage: S,
@@ -590,29 +566,6 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             Arc::new(Mutex::new(nodes_map))
         };
 
-        let lnurl_client = Arc::new(
-            lnurl::Builder::default()
-                .build_async()
-                .expect("failed to make lnurl client"),
-        );
-
-        let (subscription_client, auth) = if let Some(auth_client) = c.auth_client {
-            if let Some(subscription_url) = c.subscription_url {
-                let auth = auth_client.auth.clone();
-                let s = Arc::new(MutinySubscriptionClient::new(
-                    auth_client,
-                    subscription_url,
-                    logger.clone(),
-                ));
-                (Some(s), auth)
-            } else {
-                (None, auth_client.auth.clone())
-            }
-        } else {
-            let auth_manager = AuthManager::new(self.xprivkey)?;
-            (None, auth_manager)
-        };
-
         let price_cache = self
             .storage
             .get_bitcoin_price_cache()?
@@ -636,10 +589,7 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             websocket_proxy_addr,
             user_rgs_url: c.user_rgs_url,
             esplora,
-            auth,
-            lnurl_client,
             lsp_config,
-            subscription_client,
             logger,
             bitcoin_price_cache: Arc::new(Mutex::new(price_cache)),
             do_not_connect_peers: c.do_not_connect_peers,
@@ -673,10 +623,7 @@ pub struct NodeManager<S: MutinyStorage> {
     pub(crate) storage: S,
     pub(crate) node_storage: Mutex<NodeStorage>,
     pub(crate) nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node<S>>>>>,
-    auth: AuthManager,
-    lnurl_client: Arc<LnUrlClient>,
     pub(crate) lsp_config: Option<LspConfig>,
-    pub(crate) subscription_client: Option<Arc<MutinySubscriptionClient>>,
     pub(crate) logger: Arc<MutinyLogger>,
     bitcoin_price_cache: Arc<Mutex<HashMap<String, (f32, Duration)>>>,
     do_not_connect_peers: bool,
@@ -1602,153 +1549,6 @@ impl<S: MutinyStorage> NodeManager<S> {
             .await
     }
 
-    /// Calls upon a LNURL to get the parameters for it.
-    /// This contains what kind of LNURL it is (pay, withdrawal, auth, etc).
-    // todo revamp LnUrlParams to be well designed
-    pub async fn decode_lnurl(&self, lnurl: LnUrl) -> Result<LnUrlParams, MutinyError> {
-        // handle LNURL-AUTH
-        if lnurl.is_lnurl_auth() {
-            return Ok(LnUrlParams {
-                max: 0,
-                min: 0,
-                tag: "login".to_string(),
-            });
-        }
-
-        let response = self.lnurl_client.make_request(&lnurl.url).await?;
-
-        let params = match response {
-            LnUrlResponse::LnUrlPayResponse(pay) => LnUrlParams {
-                max: pay.max_sendable,
-                min: pay.min_sendable,
-                tag: "payRequest".to_string(),
-            },
-            LnUrlResponse::LnUrlChannelResponse(_chan) => LnUrlParams {
-                max: 0,
-                min: 0,
-                tag: "channelRequest".to_string(),
-            },
-            LnUrlResponse::LnUrlWithdrawResponse(withdraw) => LnUrlParams {
-                max: withdraw.max_withdrawable,
-                min: withdraw.min_withdrawable.unwrap_or(0),
-                tag: "withdrawRequest".to_string(),
-            },
-        };
-
-        Ok(params)
-    }
-
-    /// Calls upon a LNURL and pays it.
-    /// This will fail if the LNURL is not a LNURL pay.
-    pub async fn lnurl_pay(
-        &self,
-        lnurl: &LnUrl,
-        amount_sats: u64,
-        zap_npub: Option<XOnlyPublicKey>,
-        mut labels: Vec<String>,
-    ) -> Result<MutinyInvoice, MutinyError> {
-        let response = self.lnurl_client.make_request(&lnurl.url).await?;
-
-        match response {
-            LnUrlResponse::LnUrlPayResponse(pay) => {
-                let msats = amount_sats * 1000;
-
-                // if user's npub is given, do an anon zap
-                let zap_request = match zap_npub {
-                    Some(zap_npub) => {
-                        let tags = vec![
-                            Tag::PublicKey {
-                                public_key: zap_npub,
-                                relay_url: None,
-                                alias: None,
-                            },
-                            Tag::Amount {
-                                millisats: msats,
-                                bolt11: None,
-                            },
-                            Tag::Lnurl(lnurl.to_string()),
-                            Tag::Relays(vec!["wss://nostr.mutinywallet.com".into()]),
-                            Tag::Generic(TagKind::Custom("anon".to_string()), vec![]),
-                        ];
-                        EventBuilder::new(Kind::ZapRequest, "", tags)
-                            .to_event(&Keys::generate())
-                            .ok()
-                            .map(|z| z.as_json())
-                    }
-                    None => None,
-                };
-
-                let invoice = self
-                    .lnurl_client
-                    .get_invoice(&pay, msats, zap_request, None)
-                    .await?;
-
-                let invoice = Bolt11Invoice::from_str(invoice.invoice())?;
-
-                if invoice
-                    .amount_milli_satoshis()
-                    .is_some_and(|amt| msats == amt)
-                {
-                    // If we have a contact for this lnurl, add it to the labels as the first
-                    if let Some(label) = self.get_contact_for_lnurl(lnurl)? {
-                        if !labels.contains(&label) {
-                            labels.insert(0, label)
-                        }
-                    }
-
-                    self.pay_invoice(None, &invoice, None, labels).await
-                } else {
-                    log_error!(self.logger, "LNURL return invoice with incorrect amount");
-                    Err(MutinyError::LnUrlFailure)
-                }
-            }
-            LnUrlResponse::LnUrlWithdrawResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
-            LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
-        }
-    }
-
-    /// Calls upon a LNURL and withdraws from it.
-    /// This will fail if the LNURL is not a LNURL withdrawal.
-    pub async fn lnurl_withdraw(
-        &self,
-        lnurl: &LnUrl,
-        amount_sats: u64,
-    ) -> Result<bool, MutinyError> {
-        let response = self.lnurl_client.make_request(&lnurl.url).await?;
-
-        match response {
-            LnUrlResponse::LnUrlPayResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
-            LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
-            LnUrlResponse::LnUrlWithdrawResponse(withdraw) => {
-                // fixme: do we need to use this description?
-                let _description = withdraw.default_description.clone();
-                let mutiny_invoice = self
-                    .create_invoice(Some(amount_sats), vec!["LNURL Withdrawal".to_string()])
-                    .await?;
-                let invoice_str = mutiny_invoice.bolt11.expect("Invoice should have bolt11");
-                let res = self
-                    .lnurl_client
-                    .do_withdrawal(&withdraw, &invoice_str.to_string())
-                    .await?;
-                match res {
-                    Response::Ok { .. } => Ok(true),
-                    Response::Error { .. } => Ok(false),
-                }
-            }
-        }
-    }
-
-    /// Authenticate with a LNURL-auth
-    pub async fn lnurl_auth(&self, lnurl: LnUrl) -> Result<(), MutinyError> {
-        make_lnurl_auth_connection(
-            self.auth.clone(),
-            self.lnurl_client.clone(),
-            lnurl,
-            self.logger.clone(),
-        )
-        .await
-    }
-
     /// Gets an invoice from the node manager.
     /// This includes sent and received invoices.
     pub(crate) async fn get_invoice_by_hash(
@@ -2070,39 +1870,6 @@ impl<S: MutinyStorage> NodeManager<S> {
         storage_peers.sort();
 
         Ok(storage_peers)
-    }
-
-    /// Checks whether or not the user is subscribed to Mutiny+.
-    ///
-    /// Returns None if there's no subscription at all.
-    /// Returns Some(u64) for their unix expiration timestamp, which may be in the
-    /// past or in the future, depending on whether or not it is currently active.
-    pub(crate) async fn check_subscribed(&self) -> Result<Option<u64>, MutinyError> {
-        if let Some(subscription_client) = self.subscription_client.clone() {
-            Ok(subscription_client.check_subscribed().await?)
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Gets the subscription plans for Mutiny+ subscriptions
-    pub async fn get_subscription_plans(&self) -> Result<Vec<Plan>, MutinyError> {
-        if let Some(subscription_client) = self.subscription_client.clone() {
-            Ok(subscription_client.get_plans().await?)
-        } else {
-            Ok(vec![])
-        }
-    }
-
-    /// Subscribes to a Mutiny+ plan with a specific plan id.
-    ///
-    /// Returns a lightning invoice so that the plan can be paid for to start it.
-    pub async fn subscribe_to_plan(&self, id: u8) -> Result<MutinyInvoice, MutinyError> {
-        if let Some(subscription_client) = self.subscription_client.clone() {
-            Ok(Bolt11Invoice::from_str(&subscription_client.subscribe_to_plan(id).await?)?.into())
-        } else {
-            Err(MutinyError::SubscriptionClientNotConfigured)
-        }
     }
 
     /// Gets the current bitcoin price in USD.
