@@ -629,15 +629,18 @@ where
             let timeout_future = sleep(timeout as i32);
             pin_mut!(timeout_future);
 
+            log_trace!(logger, "start timeout stream futures");
             while let future::Either::Left((outcome_option, _)) =
                 future::select(s.next(), &mut timeout_future).await
             {
                 if let Some(outcome) = outcome_option {
+                    log_trace!(logger, "Streamed Outcome received: {:?}", outcome);
                     let (status, preimage) = process_fn(outcome);
                     invoice.status = status;
                     invoice.preimage = preimage;
 
                     if matches!(invoice.status, HTLCStatus::Succeeded | HTLCStatus::Failed) {
+                        log_trace!(logger, "Streamed Outcome final, returning");
                         break;
                     }
                 } else {
@@ -649,6 +652,11 @@ where
                     break;
                 }
             }
+            log_trace!(
+                logger,
+                "Done with stream outcome, status: {}",
+                invoice.status
+            );
         }
     }
 
