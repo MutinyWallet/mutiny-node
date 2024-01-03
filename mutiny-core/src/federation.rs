@@ -412,12 +412,6 @@ impl FederationClient {
         invoice: Bolt11Invoice,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
-        // Save before sending
-        let mut stored_payment: MutinyInvoice = invoice.clone().into();
-        stored_payment.inbound = false;
-        stored_payment.labels = labels;
-        self.g.save_payment(stored_payment.clone()).await?;
-
         let lightning_module = self
             .fedimint_client
             .get_first_module::<LightningClientModule>();
@@ -425,6 +419,12 @@ impl FederationClient {
         let outgoing_payment = lightning_module
             .pay_bolt11_invoice(invoice.clone(), ())
             .await?;
+
+        // Save after payment was initiated successfully
+        let mut stored_payment: MutinyInvoice = invoice.clone().into();
+        stored_payment.inbound = false;
+        stored_payment.labels = labels;
+        self.g.save_payment(stored_payment.clone()).await?;
 
         // Subscribe and process outcome based on payment type
         let inv = match outgoing_payment.payment_type {
