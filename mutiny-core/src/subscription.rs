@@ -5,7 +5,7 @@ use lightning::util::logger::*;
 use reqwest::{Method, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 
-use crate::{auth::MutinyAuthClient, error::MutinyError, logging::MutinyLogger, nodemanager::Plan};
+use crate::{auth::MutinyAuthClient, error::MutinyError, logging::MutinyLogger, Plan};
 
 pub(crate) struct MutinySubscriptionClient {
     auth_client: Arc<MutinyAuthClient>,

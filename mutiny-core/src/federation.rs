@@ -687,7 +687,6 @@ fn fedimint_seed_generation() {
 #[cfg(test)]
 fn fedimint_mnemonic_generation() {
     use super::*;
-    use std::str::FromStr;
 
     let mnemonic_str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     let root_mnemonic = Mnemonic::from_str(mnemonic_str).expect("could not generate");
