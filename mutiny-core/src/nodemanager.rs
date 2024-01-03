@@ -800,12 +800,10 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     /// Gets a new bitcoin address from the wallet.
-    /// Will generate a new address on every call.
-    ///
-    /// It is recommended to create a new address for every transaction.
+    /// Will generate the last unused address in our bdk wallet.
     pub fn get_new_address(&self, labels: Vec<String>) -> Result<Address, MutinyError> {
         if let Ok(mut wallet) = self.wallet.wallet.try_write() {
-            let address = wallet.get_address(AddressIndex::New).address;
+            let address = wallet.get_address(AddressIndex::LastUnused).address;
             self.set_address_labels(address.clone(), labels)?;
             return Ok(address);
         }
