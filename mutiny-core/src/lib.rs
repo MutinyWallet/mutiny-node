@@ -741,6 +741,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         // Try each federation first
         let federation_ids = self.list_federation_ids().await?;
+        let mut last_federation_error = None;
         for federation_id in federation_ids {
             if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
                 // Check if the federation has enough balance
@@ -759,10 +760,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                     self.logger,
                                     "could not make payment through federation: {e}"
                                 );
+                                last_federation_error = Some(e);
                                 continue;
                             }
                             _ => {
-                                log_warn!(self.logger, "unhandled error: {e}")
+                                log_warn!(self.logger, "unhandled error: {e}");
+                                last_federation_error = Some(e);
                             }
                         },
                     }
@@ -772,10 +775,25 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             // If federation client is not found, continue to next federation
         }
 
-        // If no federation could pay the invoice, fall back to using node_manager for payment
-        self.node_manager
-            .pay_invoice(None, inv, amt_sats, labels)
+        // If any balance at all, then fallback to node manager for payment.
+        // Take the error from the node manager as the priority.
+        if self
+            .node_manager
+            .nodes
+            .lock()
             .await
+            .iter()
+            .flat_map(|(_, n)| n.channel_manager.list_channels())
+            .map(|c| c.balance_msat)
+            .sum::<u64>()
+            > 0
+        {
+            self.node_manager
+                .pay_invoice(None, inv, amt_sats, labels)
+                .await
+        } else {
+            Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
+        }
     }
 
     /// Creates a BIP 21 invoice. This creates a new address and a lightning invoice.
