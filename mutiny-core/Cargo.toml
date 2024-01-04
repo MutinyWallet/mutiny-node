@@ -51,13 +51,13 @@ bincode = "1.3.3"
 hex = "0.4.3"
 async-lock = "3.2.0"
 
-fedimint-client = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09c76b8a15615114d4f2c2663c738d8ff3135" }
-fedimint-core = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09c76b8a15615114d4f2c2663c738d8ff3135" }
-fedimint-wallet-client = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09c76b8a15615114d4f2c2663c738d8ff3135" }
-fedimint-mint-client = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09c76b8a15615114d4f2c2663c738d8ff3135" }
-fedimint-ln-client = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09c76b8a15615114d4f2c2663c738d8ff3135" }
-fedimint-bip39 = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09c76b8a15615114d4f2c2663c738d8ff3135" }
-fedimint-ln-common = { git = "https://github.com/fedimint/fedimint.git", rev = "51d09c76b8a15615114d4f2c2663c738d8ff3135" }
+fedimint-client = "0.2.1"
+fedimint-core = "0.2.1"
+fedimint-wallet-client = "0.2.1"
+fedimint-mint-client = "0.2.1"
+fedimint-ln-client = "0.2.1"
+fedimint-bip39 = "0.2.1"
+fedimint-ln-common = "0.2.1"
 
 base64 = "0.13.0"
 pbkdf2 = "0.11"
