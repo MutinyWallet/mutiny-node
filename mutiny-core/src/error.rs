@@ -148,7 +148,7 @@ pub enum MutinyError {
     #[error("Failed to create payjoin request.")]
     PayjoinCreateRequest,
     /// Payjoin request failed.
-    #[error("Payjoin response error.")]
+    #[error("Payjoin response error: {0}")]
     PayjoinResponse(payjoin::send::ResponseError),
     /// Payjoin configuration error
     #[error("Payjoin configuration failed.")]
