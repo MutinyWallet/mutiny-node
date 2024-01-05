@@ -43,7 +43,7 @@ use fedimint_wallet_client::WalletClientInit;
 use futures::future::{self};
 use futures_util::{pin_mut, StreamExt};
 use lightning::{log_debug, log_error, log_info, log_trace, log_warn, util::logger::Logger};
-use lightning_invoice::Bolt11Invoice;
+use lightning_invoice::{Bolt11Invoice, RoutingFees};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
@@ -116,6 +116,22 @@ pub struct FederationIdentity {
     pub federation_name: Option<String>,
     pub federation_expiry_timestamp: Option<String>,
     pub welcome_message: Option<String>,
+    pub gateway_fees: Option<GatewayFees>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+pub struct GatewayFees {
+    pub base_msat: u32,
+    pub proportional_millionths: u32,
+}
+
+impl From<RoutingFees> for GatewayFees {
+    fn from(val: RoutingFees) -> Self {
+        GatewayFees {
+            base_msat: val.base_msat,
+            proportional_millionths: val.proportional_millionths,
+        }
+    }
 }
 
 // This is the FederationIndex reference that is saved to the DB
@@ -181,6 +197,15 @@ impl FederationClient {
             g,
             logger,
         })
+    }
+
+    pub(crate) async fn gateway_fee(&self) -> Result<GatewayFees, MutinyError> {
+        let lightning_module = self
+            .fedimint_client
+            .get_first_module::<LightningClientModule>();
+
+        let gw = lightning_module.select_active_gateway().await?;
+        Ok(gw.fees.into())
     }
 
     pub(crate) async fn get_invoice(
@@ -473,7 +498,9 @@ impl FederationClient {
         }
     }
 
-    pub fn get_mutiny_federation_identity(&self) -> FederationIdentity {
+    pub async fn get_mutiny_federation_identity(&self) -> FederationIdentity {
+        let gateway_fees = self.gateway_fee().await.ok();
+
         FederationIdentity {
             uuid: self.uuid.clone(),
             federation_id: self.fedimint_client.federation_id(),
@@ -482,6 +509,7 @@ impl FederationClient {
                 .fedimint_client
                 .get_meta("federation_expiry_timestamp"),
             welcome_message: self.fedimint_client.get_meta("welcome_message"),
+            gateway_fees,
         }
     }
 }

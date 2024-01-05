@@ -1331,10 +1331,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Lists the federation id's of the federation clients in the manager.
     pub async fn list_federations(&self) -> Result<Vec<FederationIdentity>, MutinyError> {
         let federations = self.federations.read().await;
-        let federation_identities = federations
-            .iter()
-            .map(|(_, n)| n.get_mutiny_federation_identity())
-            .collect();
+        let mut federation_identities = Vec::new();
+        for f in federations.iter() {
+            let i = f.1.get_mutiny_federation_identity().await;
+            federation_identities.push(i);
+        }
         Ok(federation_identities)
     }
 
@@ -1399,7 +1400,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             let fedimint_client = federation_lock.get(&fed_id).ok_or(MutinyError::NotFound)?;
 
             let balance = fedimint_client.get_balance().await?;
-            let identity = fedimint_client.get_mutiny_federation_identity();
+            let identity = fedimint_client.get_mutiny_federation_identity().await;
 
             balances.push(FederationBalance { identity, balance });
         }
@@ -1680,6 +1681,8 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         .fedimint_client
         .get_meta("federation_expiry_timestamp");
     let welcome_message = new_federation.fedimint_client.get_meta("welcome_message");
+    let gateway_fees = new_federation.gateway_fee().await.ok();
+
     federations
         .write()
         .await
@@ -1691,6 +1694,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         federation_name,
         federation_expiry_timestamp,
         welcome_message,
+        gateway_fees,
     })
 }
 
