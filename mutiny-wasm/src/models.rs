@@ -1,4 +1,4 @@
-use ::nostr::key::XOnlyPublicKey;
+use ::nostr::ToBech32;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::OutPoint;
@@ -687,7 +687,7 @@ pub struct TagItem {
     pub kind: TagKind,
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    npub: Option<XOnlyPublicKey>,
+    npub: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ln_address: Option<LightningAddress>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -735,7 +735,7 @@ impl TagItem {
 
     #[wasm_bindgen(getter)]
     pub fn npub(&self) -> Option<String> {
-        self.npub.map(|a| a.to_string())
+        self.npub.clone()
     }
 
     #[wasm_bindgen(getter)]
@@ -755,16 +755,12 @@ impl TagItem {
 }
 
 impl From<(String, MutinyContact)> for TagItem {
-    fn from(m: (String, MutinyContact)) -> Self {
-        let (id, contact) = m;
-        let npub = contact
-            .npub
-            .map(|a| XOnlyPublicKey::from_slice(&a.serialize()).unwrap());
+    fn from((id, contact): (String, MutinyContact)) -> Self {
         TagItem {
             id,
             kind: TagKind::Contact,
             name: contact.name,
-            npub,
+            npub: contact.npub.map(|n| n.to_bech32().expect("bech32")),
             ln_address: contact.ln_address,
             lnurl: contact.lnurl,
             image_url: contact.image_url,

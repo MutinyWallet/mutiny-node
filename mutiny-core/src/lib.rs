@@ -1169,8 +1169,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         for (npub, meta) in metadata {
-            // need to convert from nostr::XOnlyPublicKey
-            let npub = bitcoin::XOnlyPublicKey::from_slice(&npub.serialize()).unwrap();
             let contact = Contact::create_from_metadata(npub, meta);
 
             if contact.name.is_empty() {

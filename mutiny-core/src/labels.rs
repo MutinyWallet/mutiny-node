@@ -1,11 +1,11 @@
 use crate::error::MutinyError;
 use crate::nodemanager::NodeManager;
 use crate::storage::MutinyStorage;
-use bitcoin::{Address, XOnlyPublicKey};
+use bitcoin::Address;
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
-use nostr::Metadata;
+use nostr::{key::XOnlyPublicKey, Metadata};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;

@@ -453,6 +453,12 @@ impl From<nostr::nips::nip04::Error> for MutinyError {
     }
 }
 
+impl From<nostr::nips::nip19::Error> for MutinyError {
+    fn from(_e: nostr::nips::nip19::Error) -> Self {
+        Self::InvalidArgumentsError
+    }
+}
+
 impl From<nostr::event::builder::Error> for MutinyError {
     fn from(_e: nostr::event::builder::Error) -> Self {
         Self::NostrError

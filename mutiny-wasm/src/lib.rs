@@ -34,7 +34,7 @@ use mutiny_core::lnurlauth::AuthManager;
 use mutiny_core::nostr::nip49::NIP49URI;
 use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
 use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
-use mutiny_core::utils::{now, sleep};
+use mutiny_core::utils::{now, parse_npub, sleep};
 use mutiny_core::vss::MutinyVssClient;
 use mutiny_core::{encrypt::encryption_key_from_pass, MutinyWalletConfigBuilder};
 use mutiny_core::{labels::Contact, MutinyWalletBuilder};
@@ -43,8 +43,6 @@ use mutiny_core::{
     nodemanager::{create_lsp_config, NodeManager},
 };
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
-use nostr::key::XOnlyPublicKey;
-use nostr::prelude::FromBech32;
 use payjoin::UriExt;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -802,9 +800,7 @@ impl MutinyWallet {
         let lnurl = LnUrl::from_str(&lnurl)?;
 
         let zap_npub = match zap_npub.filter(|z| !z.is_empty()) {
-            Some(z) => {
-                Some(XOnlyPublicKey::from_bech32(&z).or_else(|_| XOnlyPublicKey::from_str(&z))?)
-            }
+            Some(z) => Some(parse_npub(&z)?),
             None => None,
         };
 
@@ -1168,9 +1164,7 @@ impl MutinyWallet {
     ) -> Result<String, MutinyJsError> {
         let contact = Contact {
             name,
-            npub: npub
-                .map(|n| bitcoin::XOnlyPublicKey::from_str(&n))
-                .transpose()?,
+            npub: npub.map(|n| parse_npub(&n)).transpose()?,
             ln_address: ln_address
                 .map(|l| LightningAddress::from_str(&l))
                 .transpose()?,
@@ -1196,9 +1190,7 @@ impl MutinyWallet {
     ) -> Result<String, MutinyJsError> {
         let contact = Contact {
             name,
-            npub: npub
-                .map(|n| bitcoin::XOnlyPublicKey::from_str(&n))
-                .transpose()?,
+            npub: npub.map(|n| parse_npub(&n)).transpose()?,
             ln_address: ln_address
                 .map(|l| LightningAddress::from_str(&l))
                 .transpose()?,
@@ -1225,9 +1217,7 @@ impl MutinyWallet {
     ) -> Result<(), MutinyJsError> {
         let contact = Contact {
             name,
-            npub: npub
-                .map(|n| bitcoin::XOnlyPublicKey::from_str(&n))
-                .transpose()?,
+            npub: npub.map(|n| parse_npub(&n)).transpose()?,
             ln_address: ln_address
                 .map(|l| LightningAddress::from_str(&l))
                 .transpose()?,
@@ -1577,7 +1567,7 @@ impl MutinyWallet {
         primal_url: Option<String>,
         npub_str: String,
     ) -> Result<(), MutinyJsError> {
-        let npub = XOnlyPublicKey::from_bech32(&npub_str)?;
+        let npub = parse_npub(&npub_str)?;
         self.inner
             .sync_nostr_contacts(primal_url.as_deref(), npub)
             .await?;
@@ -1698,7 +1688,7 @@ impl MutinyWallet {
     /// Convert an npub string to a hex string
     #[wasm_bindgen]
     pub async fn npub_to_hexpub(npub: String) -> Result<String, MutinyJsError> {
-        let npub = XOnlyPublicKey::from_bech32(npub)?;
+        let npub = parse_npub(&npub)?;
         Ok(npub.to_hex())
     }
 }
