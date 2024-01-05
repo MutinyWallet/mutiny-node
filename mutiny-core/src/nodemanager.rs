@@ -1963,10 +1963,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     async fn fetch_bitcoin_price(fiat: &str) -> Result<f32, MutinyError> {
-        let api_url = format!(
-            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies={}",
-            fiat
-        );
+        let api_url = format!("https://price.mutinywallet.com/price/{fiat}");
 
         let client = Client::builder()
             .build()
@@ -1979,18 +1976,14 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let resp: reqwest::Response = utils::fetch_with_timeout(&client, request).await?;
 
-        let response: CoingeckoResponse = resp
+        let response: BitcoinPriceResponse = resp
             .error_for_status()
             .map_err(|_| MutinyError::BitcoinPriceError)?
             .json()
             .await
             .map_err(|_| MutinyError::BitcoinPriceError)?;
 
-        if let Some(price) = response.bitcoin.get(fiat) {
-            Ok(*price)
-        } else {
-            Err(MutinyError::BitcoinPriceError)
-        }
+        Ok(response.price)
     }
 
     /// Retrieves the logs from storage.
@@ -2072,9 +2065,9 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 }
 
-#[derive(Deserialize, Clone, Debug)]
-struct CoingeckoResponse {
-    pub bitcoin: HashMap<String, f32>,
+#[derive(Deserialize, Clone, Copy, Debug)]
+struct BitcoinPriceResponse {
+    pub price: f32,
 }
 
 // This will create a new node with a node manager and return the PublicKey of the node created.
