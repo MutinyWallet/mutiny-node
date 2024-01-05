@@ -762,15 +762,17 @@ mod tests {
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let db = MemoryStorage::new(Some(pass), Some(cipher), None);
         let logger = Arc::new(MutinyLogger::default());
+        let network = Network::Testnet;
         let fees = Arc::new(MutinyFeeEstimator::new(
             db.clone(),
+            network,
             esplora.clone(),
             logger.clone(),
         ));
         let stop = Arc::new(AtomicBool::new(false));
-        let xpriv = ExtendedPrivKey::new_master(Network::Testnet, &mnemonic.to_seed("")).unwrap();
+        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
 
-        OnChainWallet::new(xpriv, db, Network::Testnet, esplora, fees, stop, logger).unwrap()
+        OnChainWallet::new(xpriv, db, network, esplora, fees, stop, logger).unwrap()
     }
 
     #[test]

@@ -926,6 +926,7 @@ mod test {
         let esplora = Arc::new(Builder::new(&esplora_server_url).build_async().unwrap());
         let fees = Arc::new(MutinyFeeEstimator::new(
             persister.storage.clone(),
+            network,
             esplora.clone(),
             logger.clone(),
         ));
