@@ -83,7 +83,7 @@ use std::{
     },
 };
 
-const INITIAL_RECONNECTION_DELAY: u64 = 5;
+const INITIAL_RECONNECTION_DELAY: u64 = 10;
 const MAX_RECONNECTION_DELAY: u64 = 60;
 
 pub(crate) type BumpTxEventHandler<S: MutinyStorage> = BumpTransactionEventHandler<
@@ -2025,8 +2025,28 @@ async fn start_reconnection_handling<S: MutinyStorage>(
         // hashMap to store backoff times for each pubkey
         let mut backoff_times = HashMap::new();
 
+        // Only begin this process after 30s of running
+        for _ in 0..30 {
+            if stop.load(Ordering::Relaxed) {
+                log_debug!(
+                    connect_logger,
+                    "stopping connection component and disconnecting peers for node: {}",
+                    node_pubkey.to_hex(),
+                );
+                connect_peer_man.disconnect_all_peers();
+                stop_component(&stopped_components);
+                log_debug!(
+                    connect_logger,
+                    "stopped connection component and disconnected peers for node: {}",
+                    node_pubkey.to_hex(),
+                );
+                return;
+            }
+            sleep(1_000).await;
+        }
+
         loop {
-            for _ in 0..5 {
+            for _ in 0..10 {
                 if stop.load(Ordering::Relaxed) {
                     log_debug!(
                         connect_logger,
