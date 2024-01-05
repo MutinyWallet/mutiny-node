@@ -7,7 +7,7 @@
 
 The mutiny node that powers the mutiny web frontend.
 
-The original frontend proof of concept has moved to [here](https://github.com/MutinyWallet/mutiny-web-poc). While the latest version is being worked on [here](https://github.com/MutinyWallet/mutiny-web).
+The frontend for Mutiny Wallet is [here](https://github.com/MutinyWallet/mutiny-web).
 
 ## Importing
 
