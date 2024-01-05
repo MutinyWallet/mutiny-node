@@ -10,7 +10,10 @@ use futures::{
 use lightning::routing::scoring::{LockableScore, ScoreLookUp, ScoreUpdate};
 use lightning::util::ser::Writeable;
 use lightning::util::ser::Writer;
+use nostr::key::XOnlyPublicKey;
+use nostr::FromBech32;
 use reqwest::Client;
+use std::str::FromStr;
 
 pub const FETCH_TIMEOUT: i32 = 30_000;
 
@@ -175,6 +178,13 @@ where
     F: future::Future<Output = ()> + Send + 'static,
 {
     tokio::spawn(future);
+}
+
+pub fn parse_npub(str: &str) -> Result<XOnlyPublicKey, MutinyError> {
+    match XOnlyPublicKey::from_str(str) {
+        Ok(x) => Ok(x),
+        Err(_) => Ok(XOnlyPublicKey::from_bech32(str)?),
+    }
 }
 
 /// Returns the version of a channel monitor from a serialized version
