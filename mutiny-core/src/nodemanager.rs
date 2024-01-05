@@ -462,6 +462,7 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
         let esplora = Arc::new(esplora);
         let fee_estimator = Arc::new(MutinyFeeEstimator::new(
             self.storage.clone(),
+            c.network,
             esplora.clone(),
             logger.clone(),
         ));

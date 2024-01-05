@@ -2,6 +2,7 @@ use crate::logging::MutinyLogger;
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, utils};
 use bdk::FeeRate;
+use bitcoin::Network;
 use esplora_client::AsyncClient;
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::{
@@ -24,6 +25,7 @@ pub(crate) const TAPROOT_OUTPUT_SIZE: usize = 43;
 #[derive(Clone)]
 pub struct MutinyFeeEstimator<S: MutinyStorage> {
     storage: S,
+    network: Network,
     esplora: Arc<AsyncClient>,
     logger: Arc<MutinyLogger>,
     last_fee_update_time_secs: Arc<Mutex<Option<u64>>>,
@@ -32,11 +34,13 @@ pub struct MutinyFeeEstimator<S: MutinyStorage> {
 impl<S: MutinyStorage> MutinyFeeEstimator<S> {
     pub fn new(
         storage: S,
+        network: Network,
         esplora: Arc<AsyncClient>,
         logger: Arc<MutinyLogger>,
     ) -> MutinyFeeEstimator<S> {
         MutinyFeeEstimator {
             storage,
+            network,
             esplora,
             logger,
             last_fee_update_time_secs: Arc::new(Mutex::new(None)),
@@ -186,7 +190,14 @@ impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
 
         // any post processing we do after the we get the fee rate from the cache
         match confirmation_target {
-            ConfirmationTarget::MaxAllowedNonAnchorChannelRemoteFee => fee * 30, // multiply by 30 to help prevent force closes
+            ConfirmationTarget::MaxAllowedNonAnchorChannelRemoteFee => {
+                // multiply by 30 to help prevent force closes
+                // multiply by 100 on test networks because CLN sucks
+                match self.network {
+                    Network::Bitcoin => fee * 30,
+                    _ => fee * 100,
+                }
+            }
             ConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee => fee - 250, // helps with rounding errors
             _ => fee,
         }
@@ -239,7 +250,7 @@ mod test {
         );
         let logger = Arc::new(MutinyLogger::default());
 
-        MutinyFeeEstimator::new(storage, esplora, logger)
+        MutinyFeeEstimator::new(storage, Network::Bitcoin, esplora, logger)
     }
 
     #[test]

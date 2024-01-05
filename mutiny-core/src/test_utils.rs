@@ -97,6 +97,7 @@ pub(crate) async fn create_node<S: MutinyStorage>(storage: S) -> Node<S> {
     let esplora = Arc::new(esplora);
     let fee_estimator = Arc::new(MutinyFeeEstimator::new(
         storage.clone(),
+        network,
         esplora.clone(),
         logger.clone(),
     ));

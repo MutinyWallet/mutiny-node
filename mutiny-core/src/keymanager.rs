@@ -288,29 +288,22 @@ mod tests {
                 .build_async()
                 .unwrap(),
         );
+        let network = Network::Testnet;
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let db = MemoryStorage::new(Some(pass), Some(cipher), None);
         let logger = Arc::new(MutinyLogger::default());
         let fees = Arc::new(MutinyFeeEstimator::new(
             db.clone(),
+            network,
             esplora.clone(),
             logger.clone(),
         ));
         let stop = Arc::new(AtomicBool::new(false));
-        let xpriv = ExtendedPrivKey::new_master(Network::Testnet, &mnemonic.to_seed("")).unwrap();
+        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
 
         let wallet = Arc::new(
-            OnChainWallet::new(
-                xpriv,
-                db,
-                Network::Testnet,
-                esplora,
-                fees,
-                stop,
-                logger.clone(),
-            )
-            .unwrap(),
+            OnChainWallet::new(xpriv, db, network, esplora, fees, stop, logger.clone()).unwrap(),
         );
 
         let km = create_keys_manager(wallet.clone(), xpriv, 1, logger.clone()).unwrap();
