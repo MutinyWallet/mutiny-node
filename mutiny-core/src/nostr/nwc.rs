@@ -738,6 +738,20 @@ impl NostrWalletConnect {
                                                 "Payment timeout, not removing payment from budget"
                                             );
                                         }
+                                        MutinyError::NonUniquePaymentHash => {
+                                            log_warn!(
+                                                nostr_manager.logger,
+                                                "Already paid invoice, removing payment from budget"
+                                            );
+                                            budget.remove_payment(&invoice);
+                                            self.profile.spending_conditions =
+                                                SpendingConditions::Budget(budget);
+
+                                            nostr_manager.save_nwc_profile(self.clone())?;
+
+                                            // don't save to pending list, we already paid it
+                                            return Ok(None);
+                                        }
                                         _ => {
                                             log_warn!(
                                                 nostr_manager.logger,
