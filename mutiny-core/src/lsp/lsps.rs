@@ -8,7 +8,7 @@ use lightning::ln::PaymentHash;
 use lightning::routing::gossip::RoutingFees;
 use lightning::routing::router::{RouteHint, RouteHintHop};
 use lightning::util::logger::Logger;
-use lightning::{log_debug, log_error};
+use lightning::{log_debug, log_error, log_info};
 use lightning_invoice::{Bolt11Invoice, InvoiceBuilder};
 use lightning_liquidity::events;
 use lightning_liquidity::lsps2::{LSPS2Event, OpeningFeeParams};
@@ -228,12 +228,14 @@ impl<S: MutinyStorage> LspsClient<S> {
                         }
                     };
 
+                    let secp = Secp256k1::new();
+                    let payee_pub_key = self.keys_manager.get_node_secret_key().public_key(&secp);
                     let mut invoice = InvoiceBuilder::new(self.network.into())
                         .description("".into())
                         .payment_hash(payment_hash)
                         .payment_secret(payment_secret)
                         .duration_since_epoch(utils::now())
-                        .payee_pub_key(self.pubkey)
+                        .payee_pub_key(payee_pub_key)
                         .min_final_cltv_expiry_delta(MIN_FINAL_CLTV_EXPIRY_DELTA.into())
                         .private_route(lsp_route_hint);
 
@@ -256,9 +258,17 @@ impl<S: MutinyStorage> LspsClient<S> {
 
                     invoice = invoice.amount_milli_satoshis(payment_size_msat);
 
-                    let invoice = match invoice.build_signed(|hash| {
-                        Secp256k1::new()
-                            .sign_ecdsa_recoverable(hash, &self.keys_manager.get_node_secret_key())
+                    let invoice = match invoice.try_build_signed(|hash| {
+                        let sig = secp
+                            .sign_ecdsa_recoverable(hash, &self.keys_manager.get_node_secret_key());
+
+                        // verify that the signature is correct and we produced a valid invoice
+                        let pk = secp.recover_ecdsa(hash, &sig)?;
+                        if pk != payee_pub_key {
+                            return Err(bitcoin::secp256k1::Error::IncorrectSignature);
+                        }
+
+                        Ok(sig)
                     }) {
                         Ok(invoice) => invoice,
                         Err(e) => {
@@ -279,6 +289,8 @@ impl<S: MutinyStorage> LspsClient<S> {
                     if buy_response_sender.send(Ok(invoice)).is_err() {
                         log_error!(self.logger, "error sending buy response, receiver dropped?");
                     }
+
+                    log_info!(self.logger, "LSPS invoice created successfully");
                 }
             }
             _ => {}
@@ -413,7 +425,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
     async fn get_lsp_invoice(
         &self,
         invoice_request: InvoiceRequest,
-    ) -> Result<String, MutinyError> {
+    ) -> Result<Bolt11Invoice, MutinyError> {
         let user_channel_id = invoice_request
             .user_channel_id
             .ok_or(MutinyError::LspGenericError)?;
@@ -464,7 +476,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             );
         }
 
-        Ok(invoice.to_string())
+        Ok(invoice)
     }
 
     fn get_lsp_pubkey(&self) -> PublicKey {

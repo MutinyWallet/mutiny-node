@@ -3,8 +3,10 @@ use crate::{error::MutinyError, utils};
 use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
 use lightning::ln::PaymentHash;
+use lightning_invoice::Bolt11Invoice;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 use super::FeeResponse;
 
@@ -121,7 +123,7 @@ impl Lsp for LspClient {
     async fn get_lsp_invoice(
         &self,
         invoice_request: InvoiceRequest,
-    ) -> Result<String, MutinyError> {
+    ) -> Result<Bolt11Invoice, MutinyError> {
         let fee_id = invoice_request.fee_id.ok_or(MutinyError::LspGenericError)?;
 
         let bolt11 = invoice_request
@@ -151,7 +153,8 @@ impl Lsp for LspClient {
                 .await
                 .map_err(|_| MutinyError::LspGenericError)?;
 
-            return Ok(proposal_response.jit_bolt11);
+            let inv = Bolt11Invoice::from_str(&proposal_response.jit_bolt11)?;
+            return Ok(inv);
         } else if response.status().as_u16() >= 400 {
             // If it's not OK, copy the response body to a string and try to parse as ErrorResponse
             let response_body = response

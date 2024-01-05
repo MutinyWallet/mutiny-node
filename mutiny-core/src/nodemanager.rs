@@ -556,10 +556,12 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
 
             log_info!(logger, "inserting updated nodes");
 
-            self.storage.insert_nodes(&NodeStorage {
-                nodes: updated_nodes,
-                version: node_storage.version + 1,
-            })?;
+            self.storage
+                .insert_nodes(&NodeStorage {
+                    nodes: updated_nodes,
+                    version: node_storage.version + 1,
+                })
+                .await?;
 
             log_info!(logger, "inserted updated nodes");
 
@@ -1415,7 +1417,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         node_storage.version += 1; // update version for VSS
 
         // save updated lsp to storage
-        self.storage.insert_nodes(&node_storage)?;
+        self.storage.insert_nodes(&node_storage).await?;
 
         Ok(())
     }
@@ -2114,7 +2116,7 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         .nodes
         .insert(next_node_uuid.clone(), next_node.clone());
 
-    node_manager.storage.insert_nodes(&existing_nodes)?;
+    node_manager.storage.insert_nodes(&existing_nodes).await?;
     node_mutex.nodes = existing_nodes.nodes.clone();
 
     let mut node_builder = NodeBuilder::new(node_manager.xprivkey, node_manager.storage.clone())
