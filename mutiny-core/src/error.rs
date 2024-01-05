@@ -147,9 +147,9 @@ pub enum MutinyError {
     /// Payjoin request creation failed.
     #[error("Failed to create payjoin request.")]
     PayjoinCreateRequest,
-    /// Payjoin response validation failed.
-    #[error("Failed to validate payjoin response.")]
-    PayjoinValidateResponse(payjoin::send::ValidationError),
+    /// Payjoin request failed.
+    #[error("Payjoin response error.")]
+    PayjoinResponse(payjoin::send::ResponseError),
     /// Payjoin configuration error
     #[error("Payjoin configuration failed.")]
     PayjoinConfigError,
@@ -471,8 +471,8 @@ impl From<payjoin::send::CreateRequestError> for MutinyError {
     }
 }
 
-impl From<payjoin::send::ValidationError> for MutinyError {
-    fn from(e: payjoin::send::ValidationError) -> Self {
-        Self::PayjoinValidateResponse(e)
+impl From<payjoin::send::ResponseError> for MutinyError {
+    fn from(e: payjoin::send::ResponseError) -> Self {
+        Self::PayjoinResponse(e)
     }
 }

@@ -2957,13 +2957,14 @@ checksum = "de3145af08024dea9fa9914f381a17b8fc6034dfb00f3a84013f7ff43f29ed4c"
 
 [[package]]
 name = "payjoin"
-version = "0.10.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fac532e6caa3a192dd6017a88446c2a1014d31b66cc68f04c584a846a4cb0373"
+checksum = "e7b659f9e4ff06192df5d4504ea7ae866a1680eb2c87e4dca521fb14753eb0e7"
 dependencies = [
  "bip21",
  "bitcoin 0.30.1",
  "log",
+ "serde_json",
  "url",
 ]
 

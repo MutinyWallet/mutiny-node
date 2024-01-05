@@ -43,7 +43,6 @@ use mutiny_core::{
     nodemanager::{create_lsp_config, NodeManager},
 };
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
-use payjoin::UriExt;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{
@@ -487,9 +486,7 @@ impl MutinyWallet {
         // I know walia parses `pj=` and `pjos=` but payjoin::Uri parses the whole bip21 uri
         let pj_uri = payjoin::Uri::try_from(payjoin_uri.as_str())
             .map_err(|_| MutinyJsError::InvalidArgumentsError)?
-            .assume_checked()
-            .check_pj_supported()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+            .assume_checked();
         Ok(self
             .inner
             .node_manager
