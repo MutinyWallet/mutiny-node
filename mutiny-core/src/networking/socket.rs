@@ -89,6 +89,7 @@ pub fn schedule_descriptor_read<P: PeerManager>(
                                 log_error!(logger, "got an error reading msg: {}", e);
                                 descriptor.disconnect_socket();
                                 peer_manager.socket_disconnected(&mut descriptor);
+                                peer_manager.process_events();
                                 break;
                             }
                         }
