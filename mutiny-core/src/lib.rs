@@ -208,6 +208,8 @@ pub enum ActivityItem {
     OnChain(TransactionDetails),
     Lightning(Box<MutinyInvoice>),
     ChannelClosed(ChannelClosure),
+    // /// A payjoin proposal is posted to the directory but not yet broadcast from the sender
+    // PendingPayjoin,
 }
 
 impl ActivityItem {
@@ -1477,7 +1479,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let Ok(address) = self.node_manager.get_new_address(labels.clone()) else {
             return Err(MutinyError::WalletOperationFailed);
         };
-
+        log_info!(self.logger, "created new address: {address}");
         let (pj, ohttp) = match self.node_manager.start_payjoin_session().await {
             Ok((enrolled, ohttp_keys)) => {
                 let session = self
