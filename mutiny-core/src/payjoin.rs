@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::error::MutinyError;
 use crate::storage::MutinyStorage;
+use bitcoin::Transaction;
 use core::time::Duration;
 use hex_conservative::DisplayHex;
 use once_cell::sync::Lazy;
@@ -29,6 +30,7 @@ pub(crate) static PAYJOIN_DIR: Lazy<Url> =
 pub struct RecvSession {
     pub enrolled: Enrolled,
     pub expiry: Duration,
+    pub payjoin_tx: Option<Transaction>,
 }
 
 impl RecvSession {
@@ -39,6 +41,7 @@ impl RecvSession {
 pub trait PayjoinStorage {
     fn list_recv_sessions(&self) -> Result<Vec<RecvSession>, MutinyError>;
     fn store_new_recv_session(&self, session: Enrolled) -> Result<RecvSession, MutinyError>;
+    fn update_recv_session(&self, session: RecvSession) -> Result<(), MutinyError>;
     fn delete_recv_session(&self, id: &[u8; 33]) -> Result<(), MutinyError>;
 }
 
@@ -59,9 +62,14 @@ impl<S: MutinyStorage> PayjoinStorage for S {
         let session = RecvSession {
             enrolled,
             expiry: in_24_hours,
+            payjoin_tx: None,
         };
         self.set_data(get_payjoin_key(&session.pubkey()), session.clone(), None)
             .map(|_| session)
+    }
+
+    fn update_recv_session(&self, session: RecvSession) -> Result<(), MutinyError> {
+        self.set_data(get_payjoin_key(&session.pubkey()), session, None)
     }
 
     fn delete_recv_session(&self, id: &[u8; 33]) -> Result<(), MutinyError> {
@@ -89,6 +97,10 @@ pub enum Error {
     OhttpDecodeFailed,
     Shutdown,
     SessionExpired,
+    BadDirectoryHost,
+    BadOhttpWsHost,
+    RequestFailed(String),
+    CancelPayjoinTx,
 }
 
 impl std::error::Error for Error {}
@@ -102,6 +114,10 @@ impl std::fmt::Display for Error {
             Error::OhttpDecodeFailed => write!(f, "Failed to decode ohttp keys"),
             Error::Shutdown => write!(f, "Payjoin stopped by application shutdown"),
             Error::SessionExpired => write!(f, "Payjoin session expired. Create a new payment request and have the sender try again."),
+            Error::BadDirectoryHost => write!(f, "Bad directory host"),
+            Error::BadOhttpWsHost => write!(f, "Bad ohttp ws host"),
+            Error::RequestFailed(e) => write!(f, "Request failed: {}", e),
+            Error::CancelPayjoinTx => write!(f, "Failed to cancel payjoin tx in wallet"),
         }
     }
 }

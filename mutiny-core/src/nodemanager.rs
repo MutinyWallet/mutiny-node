@@ -718,7 +718,6 @@ impl<S: MutinyStorage> NodeManager<S> {
             .map_err(|_| MutinyError::IncorrectNetwork)?;
         let address = uri.address.clone();
         let original_psbt = self.wallet.create_signed_psbt(address, amount, fee_rate)?;
-
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
         } else {
@@ -803,11 +802,18 @@ impl<S: MutinyStorage> NodeManager<S> {
         let http_client = reqwest::Client::builder()
             .build()
             .map_err(PayjoinError::Reqwest)?;
-        let proposal: payjoin::receive::v2::UncheckedProposal =
-            Self::poll_for_fallback_psbt(stop, storage, &http_client, &mut session).await?;
+        let proposal: payjoin::receive::v2::UncheckedProposal = Self::poll_for_fallback_psbt(
+            stop,
+            wallet.clone(),
+            storage.clone(),
+            &http_client,
+            &mut session,
+        )
+        .await?;
         let original_tx = proposal.extract_tx_to_schedule_broadcast();
         let mut payjoin_proposal = match wallet
             .process_payjoin_proposal(proposal)
+            .await
             .map_err(|e| PayjoinError::ReceiverStateMachine(e.to_string()))
         {
             Ok(p) => p,
@@ -832,11 +838,23 @@ impl<S: MutinyStorage> NodeManager<S> {
         let _res = payjoin_proposal
             .deserialize_res(res.to_vec(), ohttp_ctx)
             .map_err(|e| PayjoinError::ReceiverStateMachine(e.to_string()))?;
-        Ok(payjoin_proposal.psbt().clone().extract_tx().txid())
+        let payjoin_tx = payjoin_proposal.psbt().clone().extract_tx();
+        let payjoin_txid = payjoin_tx.txid();
+        wallet
+            .insert_tx(
+                payjoin_tx.clone(),
+                ConfirmationTime::unconfirmed(utils::now().as_secs()),
+                None,
+            )
+            .await?;
+        session.payjoin_tx = Some(payjoin_tx);
+        storage.update_recv_session(session)?;
+        Ok(payjoin_txid)
     }
 
     async fn poll_for_fallback_psbt(
         stop: Arc<AtomicBool>,
+        wallet: Arc<OnChainWallet<S>>,
         storage: Arc<S>,
         client: &reqwest::Client,
         session: &mut crate::payjoin::RecvSession,
@@ -847,6 +865,11 @@ impl<S: MutinyStorage> NodeManager<S> {
             }
 
             if session.expiry < utils::now() {
+                if let Some(payjoin_tx) = &session.payjoin_tx {
+                    wallet
+                        .cancel_tx(payjoin_tx)
+                        .map_err(|_| crate::payjoin::Error::CancelPayjoinTx)?;
+                }
                 let _ = storage.delete_recv_session(&session.enrolled.pubkey());
                 return Err(crate::payjoin::Error::SessionExpired);
             }

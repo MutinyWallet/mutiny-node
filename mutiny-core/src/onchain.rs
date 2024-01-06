@@ -355,6 +355,12 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         Ok(())
     }
 
+    pub(crate) fn cancel_tx(&self, tx: &Transaction) -> Result<(), MutinyError> {
+        let mut wallet = self.wallet.try_write()?;
+        wallet.cancel_tx(tx);
+        Ok(())
+    }
+
     fn is_mine(&self, script: &Script) -> Result<bool, MutinyError> {
         Ok(self.wallet.try_read()?.is_mine(script))
     }
@@ -363,7 +369,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         Ok(self.wallet.try_read()?.list_unspent().collect())
     }
 
-    pub fn process_payjoin_proposal(
+    pub async fn process_payjoin_proposal(
         &self,
         proposal: payjoin::receive::v2::UncheckedProposal,
     ) -> Result<payjoin::receive::v2::PayjoinProposal, payjoin::Error> {
@@ -407,21 +413,26 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let payjoin_proposal = provisional_payjoin.finalize_proposal(
             |psbt| {
                 let mut psbt = psbt.clone();
-                let wallet = self
-                    .wallet
-                    .try_read()
-                    .map_err(|_| Error::Server(MutinyError::WalletSigningFailed.into()))?;
-                wallet
+                self.wallet
+                    .try_write()
+                    .map_err(|_| Error::Server(MutinyError::WalletSigningFailed.into()))?
                     .sign(&mut psbt, SignOptions::default())
                     .map_err(|_| Error::Server(MutinyError::WalletSigningFailed.into()))?;
                 Ok(psbt)
             },
             Some(min_pj_fee_rate),
         )?;
-        let payjoin_proposal_psbt = payjoin_proposal.psbt();
+        let payjoin_psbt_tx = payjoin_proposal.psbt().clone().extract_tx();
+        self.insert_tx(
+            payjoin_psbt_tx,
+            ConfirmationTime::unconfirmed(crate::utils::now().as_secs()),
+            None,
+        )
+        .await
+        .map_err(|_| Error::Server(MutinyError::WalletOperationFailed.into()))?;
         log::debug!(
             "Receiver's Payjoin proposal PSBT Rsponse: {:#?}",
-            payjoin_proposal_psbt
+            payjoin_proposal.psbt()
         );
         Ok(payjoin_proposal)
     }
