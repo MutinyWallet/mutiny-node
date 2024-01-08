@@ -14,7 +14,7 @@ pub fn set_panic_hook() {
 
 #[wasm_bindgen(start)]
 pub async fn main_js() -> Result<(), JsValue> {
-    wasm_logger::init(wasm_logger::Config::new(Level::Debug).message_on_new_line());
+    wasm_logger::init(wasm_logger::Config::new(Level::Info).message_on_new_line());
     debug!("Main function begins and ends");
     Ok(())
 }
