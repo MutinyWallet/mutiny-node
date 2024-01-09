@@ -1981,7 +1981,8 @@ async fn start_reconnection_handling<S: MutinyStorage>(
     let stop_copy = stop.clone();
     utils::spawn(async move {
         // Now try to connect to the client's LSP
-        if let Some(lsp) = lsp_client_copy {
+        // This is here in case the LSP client node info has not saved to storage yet
+        if let Some(lsp) = lsp_client_copy.as_ref() {
             let node_id = NodeId::from_pubkey(&lsp.get_lsp_pubkey());
 
             let connect_res = connect_peer_if_necessary(
@@ -2015,6 +2016,54 @@ async fn start_reconnection_handling<S: MutinyStorage>(
             }
         };
 
+        // Now try to connect to other nodes the client might have, skipping the LSP if necessary
+        let stored_peers = get_all_peers(&storage_copy).unwrap_or_default();
+        let lsp_node_id = lsp_client_copy.map(|lsp| NodeId::from_pubkey(&lsp.get_lsp_pubkey()));
+        let initial_peers: Vec<(NodeId, String)> = stored_peers
+            .into_iter()
+            .filter(|(_, d)| {
+                d.connection_string.is_some() && d.nodes.binary_search(&uuid.to_string()).is_ok()
+            })
+            .map(|(n, d)| (n, d.connection_string.unwrap()))
+            .filter(|(n, _)| lsp_node_id != Some(*n))
+            .collect();
+        for (pubkey, conn_str) in initial_peers.into_iter() {
+            log_trace!(
+                proxy_logger,
+                "starting initial connection to peer: {pubkey}"
+            );
+            let peer_connection_info = match PubkeyConnectionInfo::new(&conn_str) {
+                Ok(p) => p,
+                Err(e) => {
+                    log_error!(proxy_logger, "could not parse connection info: {e}");
+                    continue;
+                }
+            };
+
+            let connect_res = connect_peer_if_necessary(
+                #[cfg(target_arch = "wasm32")]
+                &websocket_proxy_addr,
+                &peer_connection_info,
+                &storage_copy,
+                proxy_logger.clone(),
+                peer_man_proxy.clone(),
+                proxy_fee_estimator.clone(),
+                stop.clone(),
+            )
+            .await;
+            match connect_res {
+                Ok(_) => {
+                    log_trace!(proxy_logger, "initial connection to peer: {pubkey}");
+                }
+                Err(e) => {
+                    log_warn!(
+                        proxy_logger,
+                        "could not start initial connection to peer: {e}"
+                    );
+                }
+            }
+        }
+
         // keep trying to connect each lightning peer if they get disconnected
         // hashMap to store backoff times for each pubkey
         let mut backoff_times = HashMap::new();
@@ -2040,7 +2089,7 @@ async fn start_reconnection_handling<S: MutinyStorage>(
         }
 
         loop {
-            for _ in 0..10 {
+            for _ in 0..INITIAL_RECONNECTION_DELAY {
                 if stop.load(Ordering::Relaxed) {
                     log_debug!(
                         proxy_logger,
