@@ -427,7 +427,7 @@ impl FederationClient {
         self.g.save_payment(stored_payment.clone()).await?;
 
         // Subscribe and process outcome based on payment type
-        let inv = match outgoing_payment.payment_type {
+        let mut inv = match outgoing_payment.payment_type {
             fedimint_ln_client::PayType::Internal(pay_id) => {
                 match lightning_module.subscribe_internal_pay(pay_id).await {
                     Ok(o) => {
@@ -461,6 +461,7 @@ impl FederationClient {
                 }
             }
         };
+        inv.fees_paid = Some(outgoing_payment.fee.sats_round_down());
 
         self.maybe_update_after_checking_fedimint(inv.clone())
             .await?;
