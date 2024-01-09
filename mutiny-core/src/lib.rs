@@ -68,7 +68,7 @@ use crate::{
 };
 use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
-use ::nostr::{Event, EventBuilder, JsonUtil, Keys, Kind, Metadata, Tag, TagKind};
+use ::nostr::{Event, EventBuilder, JsonUtil, Keys, Kind, Metadata, Tag};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
@@ -1449,6 +1449,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         amount_sats: u64,
         zap_npub: Option<XOnlyPublicKey>,
         mut labels: Vec<String>,
+        comment: Option<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let response = self.lnurl_client.make_request(&lnurl.url).await?;
 
@@ -1457,7 +1458,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 let msats = amount_sats * 1000;
 
                 // if user's npub is given, do an anon zap
-                let zap_request = match zap_npub {
+                let (zap_request, comment) = match zap_npub {
                     Some(zap_npub) => {
                         let tags = vec![
                             Tag::PublicKey {
@@ -1471,19 +1472,20 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                             },
                             Tag::Lnurl(lnurl.to_string()),
                             Tag::Relays(vec!["wss://nostr.mutinywallet.com".into()]),
-                            Tag::Generic(TagKind::Custom("anon".to_string()), vec![]),
+                            Tag::Anon { msg: comment },
                         ];
-                        EventBuilder::new(Kind::ZapRequest, "", tags)
-                            .to_event(&Keys::generate())
-                            .ok()
-                            .map(|z| z.as_json())
+                        let event = EventBuilder::new(Kind::ZapRequest, "", tags)
+                            .to_event(&Keys::generate())?
+                            .as_json();
+
+                        (Some(event), None)
                     }
-                    None => None,
+                    None => (None, comment.filter(|c| !c.is_empty())),
                 };
 
                 let invoice = self
                     .lnurl_client
-                    .get_invoice(&pay, msats, zap_request, None)
+                    .get_invoice(&pay, msats, zap_request, comment.as_deref())
                     .await?;
 
                 let invoice = Bolt11Invoice::from_str(invoice.invoice())?;
