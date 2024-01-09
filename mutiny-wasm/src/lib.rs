@@ -796,6 +796,7 @@ impl MutinyWallet {
         amount_sats: u64,
         zap_npub: Option<String>,
         labels: Vec<String>,
+        comment: Option<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let lnurl = LnUrl::from_str(&lnurl)?;
 
@@ -806,7 +807,7 @@ impl MutinyWallet {
 
         Ok(self
             .inner
-            .lnurl_pay(&lnurl, amount_sats, zap_npub, labels)
+            .lnurl_pay(&lnurl, amount_sats, zap_npub, labels, comment)
             .await?
             .into())
     }
