@@ -570,33 +570,28 @@ async fn extract_invoice_from_entry(
     }
 }
 
-fn process_pay_state_internal(pay_state: InternalPayState) -> (HTLCStatus, Option<String>) {
-    let status: HTLCStatus = pay_state.clone().into();
-
-    let p = if let InternalPayState::Preimage(preimage) = pay_state {
+fn process_pay_state_internal(pay_state: InternalPayState, invoice: &mut MutinyInvoice) {
+    invoice.preimage = if let InternalPayState::Preimage(ref preimage) = pay_state {
         Some(preimage.0.to_hex())
     } else {
         None
     };
 
-    (status, p)
+    invoice.status = pay_state.into();
 }
 
-fn process_pay_state_ln(pay_state: LnPayState) -> (HTLCStatus, Option<String>) {
-    let status: HTLCStatus = pay_state.clone().into();
-
-    let p = if let LnPayState::Success { ref preimage } = pay_state {
+fn process_pay_state_ln(pay_state: LnPayState, invoice: &mut MutinyInvoice) {
+    invoice.preimage = if let LnPayState::Success { ref preimage } = pay_state {
         Some(preimage.to_string())
     } else {
         None
     };
 
-    (status, p)
+    invoice.status = pay_state.into();
 }
 
-fn process_receive_state(receive_state: LnReceiveState) -> (HTLCStatus, Option<String>) {
-    let status: HTLCStatus = receive_state.into();
-    (status, None)
+fn process_receive_state(receive_state: LnReceiveState, invoice: &mut MutinyInvoice) {
+    invoice.status = receive_state.into();
 }
 
 async fn process_outcome<U, F>(
@@ -616,7 +611,7 @@ where
         + MaybeSend
         + MaybeSync
         + 'static,
-    F: Fn(U) -> (HTLCStatus, Option<String>) + Copy,
+    F: Fn(U, &mut MutinyInvoice),
 {
     let mut invoice: MutinyInvoice = invoice.into();
     invoice.inbound = inbound;
@@ -636,9 +631,7 @@ where
             {
                 if let Some(outcome) = outcome_option {
                     log_trace!(logger, "Streamed Outcome received: {:?}", outcome);
-                    let (status, preimage) = process_fn(outcome);
-                    invoice.status = status;
-                    invoice.preimage = preimage;
+                    process_fn(outcome, &mut invoice);
 
                     if matches!(invoice.status, HTLCStatus::Succeeded | HTLCStatus::Failed) {
                         log_trace!(logger, "Streamed Outcome final, returning");
