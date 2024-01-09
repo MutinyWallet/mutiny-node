@@ -2014,14 +2014,8 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                 log_error!(proxy_logger, "could not save connection to lsp: {e}");
             }
         };
-    });
 
-    // keep trying to connect each lightning peer if they get disconnected
-    let connect_peer_man = peer_man.clone();
-    let connect_fee_estimator = fee_estimator.clone();
-    let connect_logger = logger.clone();
-    let connect_storage = storage.clone();
-    utils::spawn(async move {
+        // keep trying to connect each lightning peer if they get disconnected
         // hashMap to store backoff times for each pubkey
         let mut backoff_times = HashMap::new();
 
@@ -2029,14 +2023,14 @@ async fn start_reconnection_handling<S: MutinyStorage>(
         for _ in 0..30 {
             if stop.load(Ordering::Relaxed) {
                 log_debug!(
-                    connect_logger,
+                    proxy_logger,
                     "stopping connection component and disconnecting peers for node: {}",
                     node_pubkey.to_hex(),
                 );
-                connect_peer_man.disconnect_all_peers();
+                peer_man_proxy.disconnect_all_peers();
                 stop_component(&stopped_components);
                 log_debug!(
-                    connect_logger,
+                    proxy_logger,
                     "stopped connection component and disconnected peers for node: {}",
                     node_pubkey.to_hex(),
                 );
@@ -2049,14 +2043,14 @@ async fn start_reconnection_handling<S: MutinyStorage>(
             for _ in 0..10 {
                 if stop.load(Ordering::Relaxed) {
                     log_debug!(
-                        connect_logger,
+                        proxy_logger,
                         "stopping connection component and disconnecting peers for node: {}",
                         node_pubkey.to_hex(),
                     );
-                    connect_peer_man.disconnect_all_peers();
+                    peer_man_proxy.disconnect_all_peers();
                     stop_component(&stopped_components);
                     log_debug!(
-                        connect_logger,
+                        proxy_logger,
                         "stopped connection component and disconnected peers for node: {}",
                         node_pubkey.to_hex(),
                     );
@@ -2065,8 +2059,8 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                 sleep(1_000).await;
             }
 
-            let peer_connections = get_all_peers(&connect_storage).unwrap_or_default();
-            let current_connections = connect_peer_man.get_peer_node_ids();
+            let peer_connections = get_all_peers(&storage_copy).unwrap_or_default();
+            let current_connections = peer_man_proxy.get_peer_node_ids();
 
             let not_connected: Vec<(NodeId, String)> = peer_connections
                 .into_iter()
@@ -2098,11 +2092,11 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                 // Update the last attempt time
                 backoff_entry.1 = now;
 
-                log_trace!(connect_logger, "going to auto connect to peer: {pubkey}");
+                log_trace!(proxy_logger, "going to auto connect to peer: {pubkey}");
                 let peer_connection_info = match PubkeyConnectionInfo::new(&conn_str) {
                     Ok(p) => p,
                     Err(e) => {
-                        log_error!(connect_logger, "could not parse connection info: {e}");
+                        log_error!(proxy_logger, "could not parse connection info: {e}");
                         continue;
                     }
                 };
@@ -2111,21 +2105,21 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                     #[cfg(target_arch = "wasm32")]
                     &websocket_proxy_addr,
                     &peer_connection_info,
-                    &connect_storage,
-                    connect_logger.clone(),
-                    connect_peer_man.clone(),
-                    connect_fee_estimator.clone(),
+                    &storage_copy,
+                    proxy_logger.clone(),
+                    peer_man_proxy.clone(),
+                    proxy_fee_estimator.clone(),
                     stop.clone(),
                 )
                 .await;
                 match connect_res {
                     Ok(_) => {
-                        log_trace!(connect_logger, "auto connected peer: {pubkey}");
+                        log_trace!(proxy_logger, "auto connected peer: {pubkey}");
                         // reset backoff time to initial value if connection is successful
                         backoff_entry.0 = INITIAL_RECONNECTION_DELAY;
                     }
                     Err(e) => {
-                        log_warn!(connect_logger, "could not auto connect peer: {e}");
+                        log_warn!(proxy_logger, "could not auto connect peer: {e}");
                         // double the backoff time if connection fails, but do not exceed max
                         backoff_entry.0 = (backoff_entry.0 * 2).min(MAX_RECONNECTION_DELAY);
                     }
