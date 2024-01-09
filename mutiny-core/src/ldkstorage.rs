@@ -197,6 +197,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
     pub(crate) async fn read_channel_manager(
         &self,
         network: Network,
+        accept_underpaying_htlcs: bool,
         chain_monitor: Arc<ChainMonitor<S>>,
         mutiny_chain: Arc<MutinyChain<S>>,
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
@@ -215,6 +216,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
                 let bytes = FromHex::from_hex(&hex)?;
                 let res = Self::parse_channel_manager(
                     bytes,
+                    accept_underpaying_htlcs,
                     chain_monitor,
                     mutiny_chain,
                     fee_estimator,
@@ -234,6 +236,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
 
                 Self::create_new_channel_manager(
                     network,
+                    accept_underpaying_htlcs,
                     chain_monitor,
                     mutiny_chain,
                     fee_estimator,
@@ -250,6 +253,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
                 let bytes = self.read_value(CHANNEL_MANAGER_KEY)?;
                 Self::parse_channel_manager(
                     bytes,
+                    accept_underpaying_htlcs,
                     chain_monitor,
                     mutiny_chain,
                     fee_estimator,
@@ -265,6 +269,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
     #[allow(clippy::too_many_arguments)]
     fn parse_channel_manager(
         bytes: Vec<u8>,
+        accept_underpaying_htlcs: bool,
         chain_monitor: Arc<ChainMonitor<S>>,
         mutiny_chain: Arc<MutinyChain<S>>,
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
@@ -286,7 +291,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             mutiny_chain,
             router,
             mutiny_logger,
-            default_user_config(),
+            default_user_config(accept_underpaying_htlcs),
             channel_monitor_mut_references,
         );
         let mut readable_kv_value = Cursor::new(bytes);
@@ -307,6 +312,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn create_new_channel_manager(
         network: Network,
+        accept_underpaying_htlcs: bool,
         chain_monitor: Arc<ChainMonitor<S>>,
         mutiny_chain: Arc<MutinyChain<S>>,
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
@@ -344,7 +350,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             keys_manager.clone(),
             keys_manager.clone(),
             keys_manager,
-            default_user_config(),
+            default_user_config(accept_underpaying_htlcs),
             chain_params,
             utils::now().as_secs() as u32,
         );
@@ -978,6 +984,7 @@ mod test {
         let read = persister
             .read_channel_manager(
                 network,
+                false,
                 chain_monitor.clone(),
                 chain.clone(),
                 fees.clone(),
@@ -1001,6 +1008,7 @@ mod test {
         let read = persister
             .read_channel_manager(
                 network,
+                false,
                 chain_monitor,
                 chain.clone(),
                 fees.clone(),

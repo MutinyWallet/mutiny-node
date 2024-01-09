@@ -35,6 +35,13 @@ impl LspConfig {
             token,
         })
     }
+
+    pub fn accept_underpaying_htlcs(&self) -> bool {
+        match self {
+            LspConfig::VoltageFlow(_) => false,
+            LspConfig::Lsps(_) => true,
+        }
+    }
 }
 
 pub fn deserialize_lsp_config<'de, D>(deserializer: D) -> Result<Option<LspConfig>, D::Error>
@@ -127,6 +134,13 @@ impl<S: MutinyStorage> AnyLsp<S> {
             stop,
         )?;
         Ok(Self::Lsps(lsps_client))
+    }
+
+    pub fn accept_underpaying_htlcs(&self) -> bool {
+        match self {
+            AnyLsp::VoltageFlow(_) => false,
+            AnyLsp::Lsps(_) => true,
+        }
     }
 }
 

@@ -385,54 +385,6 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             scoring_params(),
         ));
 
-        // init channel manager
-        let mut read_channel_manager = persister
-            .read_channel_manager(
-                network,
-                chain_monitor.clone(),
-                chain.clone(),
-                fee_estimator.clone(),
-                logger.clone(),
-                keys_manager.clone(),
-                router.clone(),
-                channel_monitors,
-                &esplora,
-            )
-            .await?;
-
-        let channel_manager: Arc<PhantomChannelManager<S>> =
-            Arc::new(read_channel_manager.channel_manager);
-
-        // Check all existing channels against default configs.
-        // If we have default config changes, those should apply
-        // to all existing and new channels.
-        let default_config = default_user_config().channel_config;
-        for channel in channel_manager.list_channels() {
-            // unwrap is safe after LDK.0.0.109
-            if channel.config.unwrap() != default_config {
-                match channel_manager.update_channel_config(
-                    &channel.counterparty.node_id,
-                    &[channel.channel_id],
-                    &default_config,
-                ) {
-                    Ok(_) => {
-                        log_debug!(
-                            logger,
-                            "changed default config for channel: {}",
-                            channel.channel_id.to_hex()
-                        )
-                    }
-                    Err(e) => {
-                        log_error!(
-                            logger,
-                            "error changing default config for channel: {} - {e:?}",
-                            channel.channel_id.to_hex()
-                        )
-                    }
-                };
-            }
-        }
-
         log_info!(logger, "creating lsp client");
         let lsp_config: Option<LspConfig> = match node_index.lsp {
             None => {
@@ -449,6 +401,28 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                 }
             }
         };
+
+        // init channel manager
+        let accept_underpaying_htlcs = lsp_config
+            .as_ref()
+            .is_some_and(|l| l.accept_underpaying_htlcs());
+        let mut read_channel_manager = persister
+            .read_channel_manager(
+                network,
+                accept_underpaying_htlcs,
+                chain_monitor.clone(),
+                chain.clone(),
+                fee_estimator.clone(),
+                logger.clone(),
+                keys_manager.clone(),
+                router.clone(),
+                channel_monitors,
+                &esplora,
+            )
+            .await?;
+
+        let channel_manager: Arc<PhantomChannelManager<S>> =
+            Arc::new(read_channel_manager.channel_manager);
 
         let stop = Arc::new(AtomicBool::new(false));
 
@@ -618,6 +592,36 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                         persister.set_failed_spendable_outputs(failed)?;
                     };
                 }
+            }
+        }
+
+        // Check all existing channels against default configs.
+        // If we have default config changes, those should apply
+        // to all existing and new channels.
+        let default_config = default_user_config(accept_underpaying_htlcs).channel_config;
+        for channel in channel_manager.list_channels() {
+            // unwrap is safe after LDK.0.0.109
+            if channel.config.unwrap() != default_config {
+                match channel_manager.update_channel_config(
+                    &channel.counterparty.node_id,
+                    &[channel.channel_id],
+                    &default_config,
+                ) {
+                    Ok(_) => {
+                        log_debug!(
+                            logger,
+                            "changed default config for channel: {}",
+                            channel.channel_id.to_hex()
+                        )
+                    }
+                    Err(e) => {
+                        log_error!(
+                            logger,
+                            "error changing default config for channel: {} - {e:?}",
+                            channel.channel_id.to_hex()
+                        )
+                    }
+                };
             }
         }
 
@@ -1693,7 +1697,11 @@ impl<S: MutinyStorage> Node<S> {
         fee_rate: Option<f32>,
         user_channel_id: Option<u128>,
     ) -> Result<u128, MutinyError> {
-        let mut config = default_user_config();
+        let accept_underpaying_htlcs = self
+            .lsp_client
+            .as_ref()
+            .is_some_and(|l| l.accept_underpaying_htlcs());
+        let mut config = default_user_config(accept_underpaying_htlcs);
 
         // if we are opening channel to LSP, turn off SCID alias until CLN is updated
         // LSP protects all invoice information anyways, so no UTXO leakage
@@ -1797,7 +1805,11 @@ impl<S: MutinyStorage> Node<S> {
         // channel size is the total value of the utxos minus the fee
         let channel_value_satoshis = utxo_value - expected_fee;
 
-        let mut config = default_user_config();
+        let accept_underpaying_htlcs = self
+            .lsp_client
+            .as_ref()
+            .is_some_and(|l| l.accept_underpaying_htlcs());
+        let mut config = default_user_config(accept_underpaying_htlcs);
         // if we are opening channel to LSP, turn off SCID alias until CLN is updated
         // LSP protects all invoice information anyways, so no UTXO leakage
         if let Some(lsp) = self.lsp_client.clone() {
@@ -2158,7 +2170,7 @@ pub(crate) fn split_peer_connection_string(
     Ok((pubkey, peer_addr_str.to_string()))
 }
 
-pub(crate) fn default_user_config() -> UserConfig {
+pub(crate) fn default_user_config(accept_underpaying_htlcs: bool) -> UserConfig {
     UserConfig {
         channel_handshake_limits: ChannelHandshakeLimits {
             // lnd's max to_self_delay is 2016, so we want to be compatible.
@@ -2183,7 +2195,7 @@ pub(crate) fn default_user_config() -> UserConfig {
             max_dust_htlc_exposure: MaxDustHTLCExposure::FixedLimitMsat(
                 21_000_000 * 100_000_000 * 1_000,
             ),
-            accept_underpaying_htlcs: true,
+            accept_underpaying_htlcs,
             ..Default::default()
         },
         ..Default::default()
