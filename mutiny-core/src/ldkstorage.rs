@@ -177,10 +177,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
                         (keys_manager.as_ref(), keys_manager.as_ref()),
                     ) {
                         Ok((blockhash, channel_monitor)) => {
-                            // if there are no claimable balances, we don't need to watch the channel
-                            if !channel_monitor.get_claimable_balances().is_empty() {
-                                accum.push((blockhash, channel_monitor));
-                            }
+                            accum.push((blockhash, channel_monitor));
                             Ok(accum)
                         }
                         Err(e) => Err(io::Error::new(
