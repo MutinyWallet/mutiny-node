@@ -403,36 +403,6 @@ impl<S: MutinyStorage> NodeBuilder<S> {
         let channel_manager: Arc<PhantomChannelManager<S>> =
             Arc::new(read_channel_manager.channel_manager);
 
-        // Check all existing channels against default configs.
-        // If we have default config changes, those should apply
-        // to all existing and new channels.
-        let default_config = default_user_config().channel_config;
-        for channel in channel_manager.list_channels() {
-            // unwrap is safe after LDK.0.0.109
-            if channel.config.unwrap() != default_config {
-                match channel_manager.update_channel_config(
-                    &channel.counterparty.node_id,
-                    &[channel.channel_id],
-                    &default_config,
-                ) {
-                    Ok(_) => {
-                        log_debug!(
-                            logger,
-                            "changed default config for channel: {}",
-                            channel.channel_id.to_hex()
-                        )
-                    }
-                    Err(e) => {
-                        log_error!(
-                            logger,
-                            "error changing default config for channel: {} - {e:?}",
-                            channel.channel_id.to_hex()
-                        )
-                    }
-                };
-            }
-        }
-
         log_info!(logger, "creating lsp client");
         let lsp_config: Option<LspConfig> = match node_index.lsp {
             None => {
@@ -618,6 +588,36 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                         persister.set_failed_spendable_outputs(failed)?;
                     };
                 }
+            }
+        }
+
+        // Check all existing channels against default configs.
+        // If we have default config changes, those should apply
+        // to all existing and new channels.
+        let default_config = default_user_config().channel_config;
+        for channel in channel_manager.list_channels() {
+            // unwrap is safe after LDK.0.0.109
+            if channel.config.unwrap() != default_config {
+                match channel_manager.update_channel_config(
+                    &channel.counterparty.node_id,
+                    &[channel.channel_id],
+                    &default_config,
+                ) {
+                    Ok(_) => {
+                        log_debug!(
+                            logger,
+                            "changed default config for channel: {}",
+                            channel.channel_id.to_hex()
+                        )
+                    }
+                    Err(e) => {
+                        log_error!(
+                            logger,
+                            "error changing default config for channel: {} - {e:?}",
+                            channel.channel_id.to_hex()
+                        )
+                    }
+                };
             }
         }
 
