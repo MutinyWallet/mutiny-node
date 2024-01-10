@@ -99,7 +99,7 @@ pub enum TagItem {
     Contact((String, Contact)),
 }
 
-fn get_label_item_key(label: impl AsRef<str>) -> String {
+pub(crate) fn get_label_item_key(label: impl AsRef<str>) -> String {
     format!("{}{}", LABEL_PREFIX, label.as_ref())
 }
 
