@@ -99,7 +99,7 @@ pub enum TagItem {
     Contact((String, Contact)),
 }
 
-fn get_label_item_key(label: impl AsRef<str>) -> String {
+pub(crate) fn get_label_item_key(label: impl AsRef<str>) -> String {
     format!("{}{}", LABEL_PREFIX, label.as_ref())
 }
 
@@ -284,7 +284,7 @@ impl<S: MutinyStorage> LabelStorage for S {
     fn get_contacts(&self) -> Result<HashMap<String, Contact>, MutinyError> {
         let all = self.scan::<Contact>(CONTACT_PREFIX, None)?;
         // remove the prefix from the keys
-        let mut contacts = HashMap::new();
+        let mut contacts = HashMap::with_capacity(all.len());
         for (key, contact) in all {
             let label = key.replace(CONTACT_PREFIX, "");
             // skip archived contacts

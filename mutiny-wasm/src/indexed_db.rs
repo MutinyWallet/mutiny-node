@@ -139,11 +139,10 @@ impl IndexedDbStorage {
 
     async fn save_to_indexed_db(
         indexed_db: &Arc<RwLock<RexieContainer>>,
-        key: &str,
-        data: &Value,
+        items: &[(String, Value)],
     ) -> Result<(), MutinyError> {
         // Device lock is only saved to VSS
-        if key == DEVICE_LOCK_KEY {
+        if items.len() == 1 && items.iter().all(|(k, _)| k == DEVICE_LOCK_KEY) {
             return Ok(());
         }
 
@@ -169,10 +168,12 @@ impl IndexedDbStorage {
         })?;
 
         // save to indexed db
-        store
-            .put(&JsValue::from_serde(&data)?, Some(&JsValue::from(key)))
-            .await
-            .map_err(|_| MutinyError::write_err(MutinyStorageError::IndexedDBError))?;
+        for (key, data) in items {
+            store
+                .put(&JsValue::from_serde(&data)?, Some(&JsValue::from(key)))
+                .await
+                .map_err(|_| MutinyError::write_err(MutinyStorageError::IndexedDBError))?;
+        }
 
         tx.done()
             .await
@@ -277,7 +278,7 @@ impl IndexedDbStorage {
             }
 
             let json: Value = value.into_serde()?;
-            map.set(key, json)?;
+            map.set(vec![(key, json)])?;
         }
 
         match vss {
@@ -483,32 +484,40 @@ impl MutinyStorage for IndexedDbStorage {
         self.vss.clone()
     }
 
-    fn set<T>(&self, key: String, value: T) -> Result<(), MutinyError>
-    where
-        T: Serialize,
-    {
-        let data = serde_json::to_value(value).map_err(|e| MutinyError::PersistenceFailed {
-            source: MutinyStorageError::SerdeError { source: e },
-        })?;
+    fn set(&self, items: Vec<(String, impl Serialize)>) -> Result<(), MutinyError> {
+        let items = items
+            .into_iter()
+            .map(|(k, v)| {
+                serde_json::to_value(v)
+                    .map_err(|e| MutinyError::PersistenceFailed {
+                        source: MutinyStorageError::SerdeError { source: e },
+                    })
+                    .map(|d| (k, d))
+            })
+            .collect::<Result<Vec<(String, Value)>, MutinyError>>()?;
 
         let indexed_db = self.indexed_db.clone();
-        let key_clone = key.clone();
-        let data_clone = data.clone();
+        let items_clone = items.clone();
         let logger = self.logger.clone();
         spawn_local(async move {
-            if let Err(e) = Self::save_to_indexed_db(&indexed_db, &key_clone, &data_clone).await {
-                log_error!(logger, "Failed to save ({key_clone}) to indexed db: {e}");
+            if let Err(e) = Self::save_to_indexed_db(&indexed_db, &items_clone).await {
+                log_error!(
+                    logger,
+                    "Failed to save ({items_clone:?}) to indexed db: {e}"
+                );
             };
         });
 
         // some values only are read once, so we don't need to write them to memory,
         // just need them in indexed db for next time
-        if !used_once(key.as_ref()) {
-            let mut map = self
-                .memory
-                .try_write()
-                .map_err(|e| MutinyError::write_err(e.into()))?;
-            map.insert(key, data);
+        for (key, data) in items {
+            if !used_once(key.as_ref()) {
+                let mut map = self
+                    .memory
+                    .try_write()
+                    .map_err(|e| MutinyError::write_err(e.into()))?;
+                map.insert(key, data);
+            }
         }
 
         Ok(())
@@ -522,7 +531,7 @@ impl MutinyStorage for IndexedDbStorage {
             source: MutinyStorageError::SerdeError { source: e },
         })?;
 
-        Self::save_to_indexed_db(&self.indexed_db, &key, &data).await?;
+        Self::save_to_indexed_db(&self.indexed_db, &[(key.clone(), data.clone())]).await?;
 
         // some values only are read once, so we don't need to write them to memory,
         // just need them in indexed db for next time
@@ -771,7 +780,7 @@ mod tests {
         let result: Option<String> = storage.get(&key).unwrap();
         assert_eq!(result, None);
 
-        storage.set(key.clone(), value).unwrap();
+        storage.set(vec![(key.clone(), value)]).unwrap();
 
         let result: Option<String> = storage.get(&key).unwrap();
         assert_eq!(result, Some(value.to_string()));
@@ -845,7 +854,7 @@ mod tests {
             .await
             .unwrap();
 
-        storage.set(key.clone(), value).unwrap();
+        storage.set(vec![(key.clone(), value)]).unwrap();
 
         IndexedDbStorage::clear().await.unwrap();
 

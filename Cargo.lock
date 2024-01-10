@@ -2669,8 +2669,7 @@ checksum = "61807f77802ff30975e01f4f071c8ba10c022052f98b3294119f3e615d13e5be"
 [[package]]
 name = "nostr"
 version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72adfa99eb5f1e5afa3f1fe6503c89989b7b0b61c4e5ec23c5b839967cd54da1"
+source = "git+https://github.com/benthecarman/nostr.git?rev=7195b8d537db5fe0612b3d94794893bc0021aa11#7195b8d537db5fe0612b3d94794893bc0021aa11"
 dependencies = [
  "aes",
  "base64 0.21.5",
@@ -2691,8 +2690,7 @@ dependencies = [
 [[package]]
 name = "nostr-database"
 version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "569f72670f79c10437eed69325b5b10ac69a1e23c2ee45d7d5781e6ec791cbce"
+source = "git+https://github.com/benthecarman/nostr.git?rev=7195b8d537db5fe0612b3d94794893bc0021aa11#7195b8d537db5fe0612b3d94794893bc0021aa11"
 dependencies = [
  "async-trait",
  "nostr",
@@ -2705,8 +2703,7 @@ dependencies = [
 [[package]]
 name = "nostr-sdk"
 version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a96ff1b1be7872abe0f6c0e151c2a1fd45b374756f05f2c00e328b003333f0c5"
+source = "git+https://github.com/benthecarman/nostr.git?rev=7195b8d537db5fe0612b3d94794893bc0021aa11#7195b8d537db5fe0612b3d94794893bc0021aa11"
 dependencies = [
  "async-utility",
  "nostr",
@@ -2721,8 +2718,7 @@ dependencies = [
 [[package]]
 name = "nostr-sdk-net"
 version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7eccf4d9be57b513f5ee77e1931bf2fbf02da8ca1edae1feb001558e1e23332"
+source = "git+https://github.com/benthecarman/nostr.git?rev=7195b8d537db5fe0612b3d94794893bc0021aa11#7195b8d537db5fe0612b3d94794893bc0021aa11"
 dependencies = [
  "futures-util",
  "thiserror",

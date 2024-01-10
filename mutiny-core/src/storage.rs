@@ -120,9 +120,7 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
     fn vss_client(&self) -> Option<Arc<MutinyVssClient>>;
 
     /// Set a value in the storage, the value will already be encrypted if needed
-    fn set<T>(&self, key: String, value: T) -> Result<(), MutinyError>
-    where
-        T: Serialize;
+    fn set(&self, items: Vec<(String, impl Serialize)>) -> Result<(), MutinyError>;
 
     /// Set a value in the storage, the value will already be encrypted if needed
     /// This is an async version of set, it is not required to implement this
@@ -131,7 +129,7 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
     where
         T: Serialize + Send,
     {
-        self.set(key, value)
+        self.set(vec![(key, value)])
     }
 
     /// Set a value in the storage, the function will encrypt the value if needed
@@ -158,7 +156,7 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
 
         let json: Value = encrypt_value(&key, data, self.cipher())?;
 
-        self.set(key, json)
+        self.set(vec![(key, json)])
     }
 
     /// Set a value in the storage, the function will encrypt the value if needed
@@ -495,18 +493,17 @@ impl MutinyStorage for MemoryStorage {
         self.vss_client.clone()
     }
 
-    fn set<T>(&self, key: String, value: T) -> Result<(), MutinyError>
-    where
-        T: Serialize,
-    {
-        let data = serde_json::to_value(value).map_err(|e| MutinyError::PersistenceFailed {
-            source: MutinyStorageError::SerdeError { source: e },
-        })?;
-        let mut map = self
-            .memory
-            .try_write()
-            .map_err(|e| MutinyError::write_err(e.into()))?;
-        map.insert(key, data);
+    fn set(&self, items: Vec<(String, impl Serialize)>) -> Result<(), MutinyError> {
+        for (key, value) in items {
+            let data = serde_json::to_value(value).map_err(|e| MutinyError::PersistenceFailed {
+                source: MutinyStorageError::SerdeError { source: e },
+            })?;
+            let mut map = self
+                .memory
+                .try_write()
+                .map_err(|e| MutinyError::write_err(e.into()))?;
+            map.insert(key, data);
+        }
 
         Ok(())
     }
@@ -606,10 +603,7 @@ impl MutinyStorage for () {
         None
     }
 
-    fn set<T>(&self, _key: String, _value: T) -> Result<(), MutinyError>
-    where
-        T: Serialize,
-    {
+    fn set(&self, _: Vec<(String, impl Serialize)>) -> Result<(), MutinyError> {
         Ok(())
     }
 

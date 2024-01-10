@@ -88,6 +88,7 @@ use std::{collections::HashMap, sync::atomic::AtomicBool};
 use std::{str::FromStr, sync::atomic::Ordering};
 use uuid::Uuid;
 
+use crate::labels::LabelItem;
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 
@@ -1156,14 +1157,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         let contacts = self.storage.get_contacts()?;
 
+        let mut updated_contacts: Vec<(String, Value)> =
+            Vec::with_capacity(contacts.len() + metadata.len());
+
         for (id, contact) in contacts {
             if let Some(npub) = contact.npub {
-                // need to convert to nostr::XOnlyPublicKey
-                let npub = XOnlyPublicKey::from_slice(&npub.serialize()).unwrap();
                 if let Some(meta) = metadata.get(&npub) {
                     let updated = contact.update_with_metadata(meta.clone());
-                    self.storage.edit_contact(id, updated)?;
                     metadata.remove(&npub);
+                    updated_contacts.push((get_contact_key(id), serde_json::to_value(updated)?));
                 }
             }
         }
@@ -1179,8 +1181,17 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 continue;
             }
 
-            self.storage.create_new_contact(contact)?;
+            // generate a uuid, this will be the "label" that we use to store the contact
+            let id = Uuid::new_v4().to_string();
+            let key = get_contact_key(&id);
+            updated_contacts.push((key, serde_json::to_value(contact)?));
+
+            let key = labels::get_label_item_key(&id);
+            let label_item = LabelItem::default();
+            updated_contacts.push((key, serde_json::to_value(label_item)?));
         }
+
+        self.storage.set(updated_contacts)?;
 
         Ok(())
     }
