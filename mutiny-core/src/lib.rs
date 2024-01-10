@@ -1162,8 +1162,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         for (id, contact) in contacts {
             if let Some(npub) = contact.npub {
-                // need to convert to nostr::XOnlyPublicKey
-                let npub = XOnlyPublicKey::from_slice(&npub.serialize()).unwrap();
                 if let Some(meta) = metadata.get(&npub) {
                     let updated = contact.update_with_metadata(meta.clone());
                     metadata.remove(&npub);
