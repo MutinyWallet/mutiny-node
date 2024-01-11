@@ -1742,7 +1742,9 @@ mod tests {
 
     use crate::test_utils::*;
 
+    use crate::labels::{Contact, LabelStorage};
     use crate::storage::{MemoryStorage, MutinyStorage};
+    use crate::utils::parse_npub;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -1933,5 +1935,72 @@ mod tests {
 
         let new_node = mw.node_manager.new_node().await;
         assert!(new_node.is_err());
+    }
+
+    #[test]
+    async fn sync_nostr_contacts() {
+        let npub =
+            parse_npub("npub18s7md9ytv8r240jmag5j037huupk5jnsk94adykeaxtvc6lyftesuw5ydl").unwrap();
+        let ben =
+            parse_npub("npub1u8lnhlw5usp3t9vmpz60ejpyt649z33hu82wc2hpv6m5xdqmuxhs46turz").unwrap();
+        let tony =
+            parse_npub("npub1t0nyg64g5vwprva52wlcmt7fkdr07v5dr7s35raq9g0xgc0k4xcsedjgqv").unwrap();
+
+        // create wallet
+        let mnemonic = generate_seed(12).unwrap();
+        let network = Network::Regtest;
+        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
+        let storage = MemoryStorage::new(None, None, None);
+        let config = MutinyWalletConfigBuilder::new(xpriv)
+            .with_network(network)
+            .build();
+        let mw = MutinyWalletBuilder::new(xpriv, storage.clone())
+            .with_config(config)
+            .build()
+            .await
+            .expect("mutiny wallet should initialize");
+
+        // sync contacts
+        mw.sync_nostr_contacts(None, npub)
+            .await
+            .expect("synced contacts");
+
+        // first sync should yield just ben's contact
+        let contacts = mw
+            .storage
+            .get_contacts()
+            .unwrap()
+            .into_values()
+            .collect::<Vec<_>>();
+        assert_eq!(contacts.len(), 1);
+        let contact = contacts.first().unwrap();
+        assert_eq!(contact.npub, Some(ben));
+        assert!(!contact.archived.unwrap_or(false));
+        assert!(contact.image_url.is_some());
+        assert!(contact.ln_address.is_some());
+        assert!(!contact.name.is_empty());
+
+        // add tony as a contact with incomplete info
+        let incorrect_name = "incorrect name".to_string();
+        let new_contact = Contact {
+            name: incorrect_name.clone(),
+            npub: Some(tony),
+            ..Default::default()
+        };
+        let id = mw.storage.create_new_contact(new_contact).unwrap();
+
+        // sync contacts again, tony's contact should be correct
+        mw.sync_nostr_contacts(None, npub)
+            .await
+            .expect("synced contacts");
+
+        let contacts = mw.storage.get_contacts().unwrap();
+        assert_eq!(contacts.len(), 2);
+        let contact = contacts.get(&id).unwrap();
+        assert_eq!(contact.npub, Some(tony));
+        assert!(!contact.archived.unwrap_or(false));
+        assert!(contact.image_url.is_some());
+        assert!(contact.ln_address.is_some());
+        assert_ne!(contact.name, incorrect_name);
     }
 }
