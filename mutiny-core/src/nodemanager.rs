@@ -46,7 +46,7 @@ use lightning::util::logger::*;
 use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lightning_transaction_sync::EsploraSyncClient;
-use payjoin::{PjUri, PjUriExt};
+use payjoin::Uri;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -777,16 +777,15 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     pub async fn send_payjoin(
         &self,
-        uri: PjUri<'_>,
+        uri: Uri<'_, payjoin::bitcoin::address::NetworkChecked>,
         amount: u64,
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
         let address = Address::from_str(&uri.address.to_string())
-            .map_err(|_| MutinyError::PayjoinConfigError)?;
+            .map_err(|_| MutinyError::InvalidArgumentsError)?;
         let original_psbt = self.wallet.create_signed_psbt(address, amount, fee_rate)?;
 
-        let payout_scripts = std::iter::once(uri.address.script_pubkey());
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
         } else {
@@ -797,17 +796,18 @@ impl<S: MutinyStorage> NodeManager<S> {
         let original_psbt = payjoin::bitcoin::psbt::PartiallySignedTransaction::from_str(
             &original_psbt.to_string(),
         )
-        .map_err(|_| MutinyError::PayjoinConfigError)?;
-        let pj_params =
-            payjoin::send::Configuration::recommended(&original_psbt, payout_scripts, fee_rate)
-                .map_err(|_| MutinyError::PayjoinConfigError)?;
-
+        .map_err(|_| MutinyError::WalletOperationFailed)?;
         log_debug!(self.logger, "Creating payjoin request");
-        let (req, ctx) = uri.create_pj_request(original_psbt.clone(), pj_params)?;
+        let (req, ctx) =
+            payjoin::send::RequestBuilder::from_psbt_and_uri(original_psbt.clone(), uri)
+                .unwrap()
+                .build_recommended(fee_rate)
+                .map_err(|_| MutinyError::PayjoinCreateRequest)?
+                .extract_v1()?;
 
         let client = Client::builder()
             .build()
-            .map_err(|_| MutinyError::PayjoinConfigError)?;
+            .map_err(|e| MutinyError::Other(e.into()))?;
 
         log_debug!(self.logger, "Sending payjoin request");
         let res = client
@@ -825,7 +825,8 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         log_debug!(self.logger, "Processing payjoin response");
         let proposal_psbt = ctx.process_response(&mut cursor).map_err(|e| {
-            log_error!(self.logger, "Error processing payjoin response: {e}");
+            // unrecognized error contents may only appear in debug logs and will not Display
+            log_debug!(self.logger, "Payjoin response error: {:?}", e);
             e
         })?;
 

@@ -147,9 +147,9 @@ pub enum MutinyJsError {
     /// Payjoin request creation failed.
     #[error("Failed to create payjoin request.")]
     PayjoinCreateRequest,
-    /// Payjoin response validation failed.
-    #[error("Failed to validate payjoin response.")]
-    PayjoinValidateResponse,
+    // Payjoin request failed.
+    #[error("Payjoin response error: {0}")]
+    PayjoinResponse(String),
     /// Payjoin configuration error
     #[error("Payjoin configuration failed.")]
     PayjoinConfigError,
@@ -209,7 +209,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::NetworkMismatch => MutinyJsError::NetworkMismatch,
             MutinyError::PayjoinConfigError => MutinyJsError::PayjoinConfigError,
             MutinyError::PayjoinCreateRequest => MutinyJsError::PayjoinCreateRequest,
-            MutinyError::PayjoinValidateResponse(_) => MutinyJsError::PayjoinValidateResponse,
+            MutinyError::PayjoinResponse(e) => MutinyJsError::PayjoinResponse(e.to_string()),
         }
     }
 }
