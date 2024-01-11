@@ -10,8 +10,9 @@ use lightning::routing::router::{RouteHint, RouteHintHop};
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info};
 use lightning_invoice::{Bolt11Invoice, InvoiceBuilder};
-use lightning_liquidity::events;
-use lightning_liquidity::lsps2::{LSPS2Event, OpeningFeeParams};
+use lightning_liquidity::events::Event;
+use lightning_liquidity::lsps2::event::LSPS2ClientEvent;
+use lightning_liquidity::lsps2::msgs::OpeningFeeParams;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -111,9 +112,9 @@ impl<S: MutinyStorage> LspsClient<S> {
         Ok(client)
     }
 
-    pub(crate) async fn handle_event(&self, event: events::Event) {
+    pub(crate) async fn handle_event(&self, event: Event) {
         match event {
-            events::Event::LSPS2(LSPS2Event::GetInfoResponse {
+            Event::LSPS2Client(LSPS2ClientEvent::GetInfoResponse {
                 jit_channel_id,
                 opening_fee_params_menu,
                 user_channel_id,
@@ -140,15 +141,15 @@ impl<S: MutinyStorage> LspsClient<S> {
                     }
                 }
             }
-            events::Event::LSPS2(LSPS2Event::InvoiceGenerationReady {
-                scid,
+            Event::LSPS2Client(LSPS2ClientEvent::InvoiceGenerationReady {
+                intercept_scid,
                 cltv_expiry_delta,
                 user_channel_id,
                 counterparty_node_id,
                 payment_size_msat,
                 ..
             }) => {
-                log_debug!(self.logger, "received InvoiceGenerationReady with scid {}, cltv_expiry_delta {}, user_channel_id {}, counterparty_node_id {}, payment_size_msat {:?}", scid, cltv_expiry_delta, user_channel_id, counterparty_node_id, payment_size_msat);
+                log_debug!(self.logger, "received InvoiceGenerationReady with intercept_scid {}, cltv_expiry_delta {}, user_channel_id {}, counterparty_node_id {}, payment_size_msat {:?}", intercept_scid, cltv_expiry_delta, user_channel_id, counterparty_node_id, payment_size_msat);
 
                 let mut pending_buy_requests = self.pending_buy_requests.lock().unwrap();
 
@@ -197,7 +198,7 @@ impl<S: MutinyStorage> LspsClient<S> {
 
                     let lsp_route_hint = RouteHint(vec![RouteHintHop {
                         src_node_id: counterparty_node_id,
-                        short_channel_id: scid,
+                        short_channel_id: intercept_scid,
                         fees: RoutingFees {
                             base_msat: 0,
                             proportional_millionths: 0,
@@ -369,17 +370,17 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             &self.token
         );
 
-        self.liquidity_manager
-            .lsps2_create_invoice(
-                self.pubkey,
-                Some(fee_request.amount_msat),
-                self.token.clone(),
-                user_channel_id,
-            )
-            .map_err(|e| {
-                log_debug!(self.logger, "error creating lsps2 invoice: {:?}", e);
-                MutinyError::LspGenericError
-            })?;
+        let lsps2_client_handler = self
+            .liquidity_manager
+            .lsps2_client_handler()
+            .expect("to be configured with lsps2 client config");
+
+        lsps2_client_handler.create_invoice(
+            self.pubkey,
+            Some(fee_request.amount_msat),
+            self.token.clone(),
+            user_channel_id,
+        );
 
         let get_info_response = pending_fee_request_receiver.await.map_err(|e| {
             log_debug!(self.logger, "error receiving get info response: {:?}", e);
@@ -447,7 +448,12 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             (channel_info.channel_id, channel_info.fee_params.clone())
         };
 
-        self.liquidity_manager
+        let lsps2_client_handler = self
+            .liquidity_manager
+            .lsps2_client_handler()
+            .expect("to be configured with lsps2 client config");
+
+        lsps2_client_handler
             .opening_fee_params_selected(self.pubkey, channel_id, fee_params.clone())
             .map_err(|_| MutinyError::LspGenericError)?;
 

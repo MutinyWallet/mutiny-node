@@ -32,7 +32,7 @@ lightning-invoice = { version = "0.26.0", features = ["serde"] }
 lightning-rapid-gossip-sync = { version = "0.0.118" }
 lightning-background-processor = { version = "0.0.118", features = ["futures"] }
 lightning-transaction-sync = { version = "0.0.118", features = ["esplora-async-https"] }
-lightning-liquidity = { git = "https://github.com/lightningdevkit/lightning-liquidity.git", rev = "e00d917a8bb17e29493497538c7a4dda00bef151" }
+lightning-liquidity = { git = "https://github.com/johncantrell97/ldk-lsp-client.git", rev = "9e01757d20c04aa31c28de8c4ffab5442d547edc" }
 chrono = "0.4.22"
 futures-util = { version = "0.3", default-features = false }
 reqwest = { version = "0.11", default-features = false, features = ["json"] }
