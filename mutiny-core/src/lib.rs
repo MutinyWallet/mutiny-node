@@ -68,10 +68,11 @@ use crate::{
 };
 use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
-use ::nostr::{Event, EventBuilder, JsonUtil, Keys, Kind, Metadata, Tag};
+use ::nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
+use bitcoin::hashes::hex::ToHex;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{hashes::sha256, Network};
 use fedimint_core::{api::InviteCode, config::FederationId, BitcoinHash};
@@ -89,6 +90,7 @@ use std::{str::FromStr, sync::atomic::Ordering};
 use uuid::Uuid;
 
 use crate::labels::LabelItem;
+use crate::utils::parse_profile_metadata;
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 
@@ -1126,16 +1128,13 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(())
     }
 
-    /// Get contacts from the given npub and sync them to the wallet
-    pub async fn sync_nostr_contacts(
-        &self,
-        primal_url: Option<&str>,
-        npub: XOnlyPublicKey,
-    ) -> Result<(), MutinyError> {
-        let body = json!(["contact_list", { "pubkey": npub } ]);
-
-        let url = primal_url.unwrap_or("https://primal-cache.mutinywallet.com/api");
-        let data: Vec<Value> = reqwest::Client::new()
+    /// Makes a request to the primal api
+    async fn primal_request(
+        client: &reqwest::Client,
+        url: &str,
+        body: Value,
+    ) -> Result<Vec<Value>, MutinyError> {
+        client
             .post(url)
             .header("Content-Type", "application/json")
             .body(body.to_string())
@@ -1144,18 +1143,42 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .map_err(|_| MutinyError::NostrError)?
             .json()
             .await
-            .map_err(|_| MutinyError::NostrError)?;
+            .map_err(|_| MutinyError::NostrError)
+    }
 
-        let mut metadata = data
-            .into_iter()
-            .filter_map(|v| {
-                Event::from_value(v)
-                    .ok()
-                    .and_then(|e| Metadata::from_json(e.content).ok().map(|m| (e.pubkey, m)))
-            })
-            .collect::<HashMap<_, _>>();
+    /// Get contacts from the given npub and sync them to the wallet
+    pub async fn sync_nostr_contacts(
+        &self,
+        primal_url: Option<&str>,
+        npub: XOnlyPublicKey,
+    ) -> Result<(), MutinyError> {
+        let url = primal_url.unwrap_or("https://primal-cache.mutinywallet.com/api");
+        let client = reqwest::Client::new();
+
+        let body = json!(["contact_list", { "pubkey": npub } ]);
+        let data: Vec<Value> = Self::primal_request(&client, url, body).await?;
+        let mut metadata = parse_profile_metadata(data);
 
         let contacts = self.storage.get_contacts()?;
+
+        // get contacts that weren't in our npub contacts list
+        let missing_pks: Vec<String> = contacts
+            .iter()
+            .filter_map(|(_, c)| {
+                if c.npub.is_some_and(|n| metadata.get(&n).is_none()) {
+                    c.npub.map(|n| n.to_hex())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if !missing_pks.is_empty() {
+            let body = json!(["user_infos", {"pubkeys": missing_pks }]);
+            let data: Vec<Value> = Self::primal_request(&client, url, body).await?;
+            let missing_metadata = parse_profile_metadata(data);
+            metadata.extend(missing_metadata);
+        }
 
         let mut updated_contacts: Vec<(String, Value)> =
             Vec::with_capacity(contacts.len() + metadata.len());
