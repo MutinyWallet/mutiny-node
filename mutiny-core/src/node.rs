@@ -1057,6 +1057,8 @@ impl<S: MutinyStorage> Node<S> {
                             return Err(MutinyError::InvoiceCreationFailed);
                         }
 
+                        log_debug!(self.logger, "Got wrapped invoice from LSP: {lsp_invoice}");
+
                         Ok(lsp_invoice)
                     }
                     AnyLsp::Lsps(client) => {
