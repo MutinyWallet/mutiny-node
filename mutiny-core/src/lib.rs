@@ -797,6 +797,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             return Err(MutinyError::IncorrectNetwork(inv.network()));
         }
 
+        // check invoice is expired
+        if inv.would_expire(utils::now()) {
+            return Err(MutinyError::InvoiceExpired);
+        }
+
         // Check the amount specified in the invoice, we need one to make the payment
         let send_msat = inv
             .amount_milli_satoshis()
