@@ -574,6 +574,15 @@ impl MutinyWallet {
             .estimate_sweep_channel_open_fee(fee_rate)?)
     }
 
+    /// Bumps the given transaction by replacing the given tx with a transaction at
+    /// the new given fee rate in sats/vbyte
+    pub async fn bump_fee(&self, txid: String, fee_rate: f32) -> Result<String, MutinyJsError> {
+        let txid = Txid::from_str(&txid)?;
+        let result = self.inner.node_manager.bump_fee(txid, fee_rate).await?;
+
+        Ok(result.to_string())
+    }
+
     /// Checks if the given address has any transactions.
     /// If it does, it returns the details of the first transaction.
     ///
@@ -623,6 +632,13 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub fn list_utxos(&self) -> Result<JsValue, MutinyJsError> {
         Ok(JsValue::from_serde(&self.inner.node_manager.list_utxos()?)?)
+    }
+
+    /// Gets a fee estimate for an low priority transaction.
+    /// Value is in sat/vbyte.
+    #[wasm_bindgen]
+    pub fn estimate_fee_low(&self) -> u32 {
+        self.inner.node_manager.estimate_fee_low()
     }
 
     /// Gets a fee estimate for an average priority transaction.

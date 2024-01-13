@@ -50,6 +50,7 @@ use payjoin::{PjUri, PjUriExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cmp::max;
 use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -935,6 +936,22 @@ impl<S: MutinyStorage> NodeManager<S> {
         self.wallet.estimate_sweep_tx_fee(script, fee_rate)
     }
 
+    /// Bumps the given transaction by replacing the given tx with a transaction at
+    /// the new given fee rate in sats/vbyte
+    pub async fn bump_fee(&self, txid: Txid, new_fee_rate: f32) -> Result<Txid, MutinyError> {
+        // check that this is not a funding tx for any channels,
+        // bumping those can cause loss of funds
+        let channels = self.list_channels().await?;
+        if channels
+            .iter()
+            .any(|c| c.outpoint.is_some_and(|t| t.txid == txid))
+        {
+            return Err(MutinyError::ChannelCreationFailed);
+        }
+
+        self.wallet.bump_fee(txid, new_fee_rate).await
+    }
+
     /// Checks if the given address has any transactions.
     /// If it does, it returns the details of the first transaction.
     ///
@@ -1312,19 +1329,19 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Gets a fee estimate for a very low priority transaction.
     /// Value is in sat/vbyte.
     pub fn estimate_fee_low(&self) -> u32 {
-        self.fee_estimator.get_low_fee_rate() / 250
+        max(self.fee_estimator.get_low_fee_rate() / 250, 1)
     }
 
     /// Gets a fee estimate for an average priority transaction.
     /// Value is in sat/vbyte.
     pub fn estimate_fee_normal(&self) -> u32 {
-        self.fee_estimator.get_normal_fee_rate() / 250
+        max(self.fee_estimator.get_normal_fee_rate() / 250, 1)
     }
 
     /// Gets a fee estimate for an high priority transaction.
     /// Value is in sat/vbyte.
     pub fn estimate_fee_high(&self) -> u32 {
-        self.fee_estimator.get_high_fee_rate() / 250
+        max(self.fee_estimator.get_high_fee_rate() / 250, 1)
     }
 
     /// Creates a new lightning node and adds it to the manager.
