@@ -1505,9 +1505,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     .amount_milli_satoshis()
                     .is_some_and(|amt| msats == amt)
                 {
-                    // If we have a contact for this lnurl, add it to the labels as the first
-                    if let Some(label) = self.storage.get_contact_for_lnurl(lnurl)? {
-                        if !labels.contains(&label) {
+                    // If we don't have any labels, see if this matches a contact
+                    if labels.is_empty() {
+                        if let Some(label) = self.storage.get_contact_for_lnurl(lnurl)? {
                             labels.insert(0, label)
                         }
                     }
