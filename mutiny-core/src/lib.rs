@@ -823,7 +823,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         .pay_invoice(inv.clone(), labels.clone())
                         .await;
                     match payment_result {
-                        Ok(r) => return Ok(r),
+                        Ok(r) => {
+                            self.storage.set_invoice_labels(inv.clone(), labels)?;
+                            return Ok(r);
+                        }
                         Err(e) => match e {
                             MutinyError::PaymentTimeout => return Err(e),
                             MutinyError::RoutingFailed => {
@@ -859,9 +862,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .sum::<u64>()
             > 0
         {
-            self.node_manager
-                .pay_invoice(None, inv, amt_sats, labels)
-                .await
+            let res = self
+                .node_manager
+                .pay_invoice(None, inv, amt_sats, labels.clone())
+                .await?;
+            self.storage.set_invoice_labels(inv.clone(), labels)?;
+            Ok(res)
         } else {
             Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
         }
@@ -938,13 +944,19 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     .get_invoice(amount.unwrap_or_default(), labels.clone())
                     .await
                 {
+                    self.storage
+                        .set_invoice_labels(inv.bolt11.clone().expect("just created"), labels)?;
                     return Ok(inv);
                 }
             }
         }
 
         // Fallback to node_manager invoice creation if no federation invoice created
-        self.node_manager.create_invoice(amount, labels).await
+        let inv = self.node_manager.create_invoice(amount).await?;
+        self.storage
+            .set_invoice_labels(inv.bolt11.clone().expect("just created"), labels)?;
+
+        Ok(inv)
     }
 
     /// Gets the current balance of the wallet.
