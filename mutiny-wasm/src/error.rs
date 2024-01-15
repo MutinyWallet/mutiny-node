@@ -37,6 +37,9 @@ pub enum MutinyJsError {
     /// The given invoice is invalid.
     #[error("The given invoice is invalid.")]
     InvoiceInvalid,
+    /// The given invoice is expired.
+    #[error("The given invoice is expired.")]
+    InvoiceExpired,
     /// Invoice creation failed.
     #[error("Failed to create invoice.")]
     InvoiceCreationFailed,
@@ -170,6 +173,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::NonUniquePaymentHash => MutinyJsError::NonUniquePaymentHash,
             MutinyError::PaymentTimeout => MutinyJsError::PaymentTimeout,
             MutinyError::InvoiceInvalid => MutinyJsError::InvoiceInvalid,
+            MutinyError::InvoiceExpired => MutinyJsError::InvoiceExpired,
             MutinyError::InvoiceCreationFailed => MutinyJsError::InvoiceCreationFailed,
             MutinyError::ReserveAmountError => MutinyJsError::ReserveAmountError,
             MutinyError::InsufficientBalance => MutinyJsError::InsufficientBalance,

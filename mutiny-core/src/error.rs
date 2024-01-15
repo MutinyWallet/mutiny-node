@@ -1,5 +1,6 @@
 use aes::cipher::block_padding::UnpadError;
 use bitcoin::Network;
+use lightning::ln::channelmanager::RetryableSendFailure;
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning_invoice::payment::PaymentError;
 use lightning_invoice::ParseOrSemanticError;
@@ -44,6 +45,9 @@ pub enum MutinyError {
     /// The given invoice is invalid.
     #[error("The given invoice is invalid.")]
     InvoiceInvalid,
+    /// The given invoice is expired.
+    #[error("The given invoice is expired.")]
+    InvoiceExpired,
     /// Invoice creation failed.
     #[error("Failed to create invoice.")]
     InvoiceCreationFailed,
@@ -361,7 +365,11 @@ impl From<PaymentError> for MutinyError {
     fn from(e: PaymentError) -> Self {
         match e {
             PaymentError::Invoice(_) => Self::InvoiceInvalid,
-            PaymentError::Sending(_) => Self::RoutingFailed,
+            PaymentError::Sending(s) => match s {
+                RetryableSendFailure::PaymentExpired => Self::InvoiceExpired,
+                RetryableSendFailure::RouteNotFound => Self::RoutingFailed,
+                RetryableSendFailure::DuplicatePayment => Self::NonUniquePaymentHash,
+            },
         }
     }
 }
