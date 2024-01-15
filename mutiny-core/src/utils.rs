@@ -11,8 +11,10 @@ use lightning::routing::scoring::{LockableScore, ScoreLookUp, ScoreUpdate};
 use lightning::util::ser::Writeable;
 use lightning::util::ser::Writer;
 use nostr::key::XOnlyPublicKey;
-use nostr::FromBech32;
+use nostr::{Event, FromBech32, JsonUtil, Metadata};
 use reqwest::Client;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::str::FromStr;
 
 pub const FETCH_TIMEOUT: i32 = 30_000;
@@ -178,6 +180,16 @@ where
     F: future::Future<Output = ()> + Send + 'static,
 {
     tokio::spawn(future);
+}
+
+pub(crate) fn parse_profile_metadata(data: Vec<Value>) -> HashMap<XOnlyPublicKey, Metadata> {
+    data.into_iter()
+        .filter_map(|v| {
+            Event::from_value(v)
+                .ok()
+                .and_then(|e| Metadata::from_json(e.content).ok().map(|m| (e.pubkey, m)))
+        })
+        .collect()
 }
 
 pub fn parse_npub(str: &str) -> Result<XOnlyPublicKey, MutinyError> {
