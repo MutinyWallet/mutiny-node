@@ -286,6 +286,7 @@ impl From<bdk::Error> for MutinyError {
         match e {
             bdk::Error::Signer(_) => Self::WalletSigningFailed,
             bdk::Error::InsufficientFunds { .. } => Self::InsufficientBalance,
+            bdk::Error::TransactionNotFound => Self::NotFound,
             _ => Self::WalletOperationFailed,
         }
     }

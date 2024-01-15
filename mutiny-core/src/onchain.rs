@@ -628,6 +628,27 @@ impl<S: MutinyStorage> OnChainWallet<S> {
 
         psbt.fee_amount().ok_or(MutinyError::WalletOperationFailed)
     }
+
+    /// Bumps the given transaction by replacing the given tx with a transaction at
+    /// the new given fee rate in sats/vbyte
+    pub async fn bump_fee(&self, txid: Txid, new_fee_rate: f32) -> Result<Txid, MutinyError> {
+        let tx = {
+            let mut wallet = self.wallet.try_write()?;
+            // build RBF fee bump tx
+            let mut builder = wallet.build_fee_bump(txid)?;
+            builder.fee_rate(FeeRate::from_sat_per_vb(new_fee_rate));
+            let (mut psbt, _) = builder.finish()?;
+            wallet.sign(&mut psbt, SignOptions::default())?;
+
+            psbt.extract_tx()
+        };
+
+        let txid = tx.txid();
+
+        self.broadcast_transaction(tx).await?;
+        log_debug!(self.logger, "Fee bump Transaction broadcast! TXID: {txid}");
+        Ok(txid)
+    }
 }
 
 fn get_tr_descriptors_for_extended_key(
