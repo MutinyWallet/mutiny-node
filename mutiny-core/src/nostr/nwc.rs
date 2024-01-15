@@ -1175,7 +1175,7 @@ mod test {
 mod wasm_test {
     use super::*;
     use crate::logging::MutinyLogger;
-    use crate::nostr::ProfileType;
+    use crate::nostr::{NostrKeySource, ProfileType};
     use crate::storage::MemoryStorage;
     use crate::test_utils::{create_dummy_invoice, create_mutiny_wallet, create_nwc_request};
     use crate::MockInvoiceHandler;
@@ -1221,9 +1221,14 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager =
-            NostrManager::from_mnemonic(xprivkey, storage.clone(), mw.logger.clone(), stop)
-                .unwrap();
+        let nostr_manager = NostrManager::from_mnemonic(
+            xprivkey,
+            NostrKeySource::Derived,
+            storage.clone(),
+            mw.logger.clone(),
+            stop,
+        )
+        .unwrap();
 
         let profile = nostr_manager
             .create_new_profile(
@@ -1270,8 +1275,14 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager =
-            NostrManager::from_mnemonic(xprivkey, storage.clone(), logger.clone(), stop).unwrap();
+        let nostr_manager = NostrManager::from_mnemonic(
+            xprivkey,
+            NostrKeySource::Derived,
+            storage.clone(),
+            logger.clone(),
+            stop,
+        )
+        .unwrap();
 
         let profile = nostr_manager
             .create_new_profile(
@@ -1355,7 +1366,14 @@ mod wasm_test {
         // test invalid invoice
         let event = create_nwc_request(&uri, "invalid invoice".to_string());
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
-        assert_eq!(result.unwrap_err().to_string(), "Failed to parse invoice");
+        check_nwc_error_response(
+            result.unwrap().unwrap(),
+            &uri.secret,
+            NIP47Error {
+                code: ErrorCode::Other,
+                message: "Invalid invoice".to_string(),
+            },
+        );
         check_no_pending_invoices(&storage);
 
         // test expired invoice
@@ -1451,6 +1469,7 @@ mod wasm_test {
         let stop = Arc::new(AtomicBool::new(false));
         let nostr_manager = NostrManager::from_mnemonic(
             xprivkey,
+            NostrKeySource::Derived,
             storage.clone(),
             Arc::new(MutinyLogger::default()),
             stop,
@@ -1466,14 +1485,14 @@ mod wasm_test {
             index: Some(0),
             invoice: Bolt11Invoice::from_str(INVOICE).unwrap(),
             event_id: EventId::all_zeros(),
-            pubkey: nostr_manager.primary_key.public_key(),
+            pubkey: nostr_manager.public_key,
         };
         // add an unexpired invoice
         let unexpired = PendingNwcInvoice {
             index: Some(0),
             invoice: create_dummy_invoice(Some(1_000), Network::Regtest, None).0,
             event_id: EventId::all_zeros(),
-            pubkey: nostr_manager.primary_key.public_key(),
+            pubkey: nostr_manager.public_key,
         };
         storage
             .set_data(
@@ -1500,9 +1519,14 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager =
-            NostrManager::from_mnemonic(xprivkey, storage.clone(), mw.logger.clone(), stop)
-                .unwrap();
+        let nostr_manager = NostrManager::from_mnemonic(
+            xprivkey,
+            NostrKeySource::Derived,
+            storage.clone(),
+            mw.logger.clone(),
+            stop,
+        )
+        .unwrap();
 
         let budget = 10_000;
         let profile = nostr_manager
@@ -1582,8 +1606,14 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager =
-            NostrManager::from_mnemonic(xprivkey, storage.clone(), logger, stop).unwrap();
+        let nostr_manager = NostrManager::from_mnemonic(
+            xprivkey,
+            NostrKeySource::Derived,
+            storage.clone(),
+            logger,
+            stop,
+        )
+        .unwrap();
 
         let budget = 10_000;
         let profile = nostr_manager

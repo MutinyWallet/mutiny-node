@@ -2367,6 +2367,7 @@ dependencies = [
  "chacha20",
  "getrandom",
  "instant",
+ "js-sys",
  "negentropy",
  "once_cell",
  "reqwest",
@@ -2375,6 +2376,8 @@ dependencies = [
  "tracing",
  "url-fork",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

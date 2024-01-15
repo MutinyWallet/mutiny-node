@@ -94,6 +94,7 @@ use std::{str::FromStr, sync::atomic::Ordering};
 use uuid::Uuid;
 
 use crate::labels::LabelItem;
+use crate::nostr::NostrKeySource;
 use crate::utils::parse_profile_metadata;
 #[cfg(test)]
 use mockall::{automock, predicate::*};
@@ -550,6 +551,7 @@ pub struct MutinyWalletConfig {
 
 pub struct MutinyWalletBuilder<S: MutinyStorage> {
     xprivkey: ExtendedPrivKey,
+    nostr_key_source: NostrKeySource,
     storage: S,
     config: Option<MutinyWalletConfig>,
     session_id: Option<String>,
@@ -567,6 +569,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         MutinyWalletBuilder::<S> {
             xprivkey,
             storage,
+            nostr_key_source: NostrKeySource::Derived,
             config: None,
             session_id: None,
             network: None,
@@ -605,6 +608,10 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
 
     pub fn with_subscription_url(&mut self, subscription_url: String) {
         self.subscription_url = Some(subscription_url);
+    }
+
+    pub fn with_nostr_key_source(&mut self, key_source: NostrKeySource) {
+        self.nostr_key_source = key_source;
     }
 
     pub fn do_not_connect_peers(&mut self) {
@@ -664,6 +671,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         // create nostr manager
         let nostr = Arc::new(NostrManager::from_mnemonic(
             self.xprivkey,
+            self.nostr_key_source,
             self.storage.clone(),
             logger.clone(),
             stop.clone(),
@@ -836,7 +844,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     log_warn!(logger, "Failed to clear expired NWC invoices: {e}");
                 }
 
-                let client = Client::new(&nostr.primary_key);
+                let client = Client::new(nostr.primary_key.clone());
 
                 client
                     .add_relays(nostr.get_relays())

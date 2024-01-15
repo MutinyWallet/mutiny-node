@@ -127,6 +127,9 @@ pub enum MutinyJsError {
     /// Error getting nostr data
     #[error("Failed to get nostr data.")]
     NostrError,
+    /// Error with Nip07 Extension
+    #[error("Error with NIP-07 extension")]
+    Nip07Extension,
     /// Error getting the bitcoin price
     #[error("Failed to get the bitcoin price.")]
     BitcoinPriceError,
@@ -202,6 +205,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::IncorrectLnUrlFunction => MutinyJsError::IncorrectLnUrlFunction,
             MutinyError::BadAmountError => MutinyJsError::BadAmountError,
             MutinyError::NostrError => MutinyJsError::NostrError,
+            MutinyError::Nip07Extension => MutinyJsError::Nip07Extension,
             MutinyError::BitcoinPriceError => MutinyJsError::BitcoinPriceError,
             MutinyError::IncorrectPassword => MutinyJsError::IncorrectPassword,
             MutinyError::SamePassword => MutinyJsError::SamePassword,

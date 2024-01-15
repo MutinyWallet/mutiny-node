@@ -25,7 +25,7 @@ use nostr::key::{SecretKey, XOnlyPublicKey};
 use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
 use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Tag, Timestamp};
-use nostr_sdk::{Client, RelayPoolNotification};
+use nostr_sdk::{Client, ClientSigner, RelayPoolNotification};
 use std::collections::HashSet;
 use std::sync::{atomic::Ordering, Arc, RwLock};
 use std::time::Duration;
@@ -34,7 +34,9 @@ use std::{str::FromStr, sync::atomic::AtomicBool};
 pub mod nip49;
 pub mod nwc;
 
+const PROFILE_ACCOUNT_INDEX: u32 = 0;
 const NWC_ACCOUNT_INDEX: u32 = 1;
+
 const USER_NWC_PROFILE_START_INDEX: u32 = 1000;
 
 const NWC_STORAGE_KEY: &str = "nwc_profiles";
@@ -64,13 +66,26 @@ pub enum ProfileType {
     Normal { name: String },
 }
 
+#[derive(Debug, Clone)]
+pub enum NostrKeySource {
+    /// We derive the nostr key from our mutiny seed
+    Derived,
+    /// Import nsec from the user
+    Imported(Keys),
+    /// Get keys from NIP-07 extension
+    #[cfg(target_arch = "wasm32")]
+    Extension(XOnlyPublicKey),
+}
+
 /// Manages Nostr keys and has different utilities for nostr specific things
 #[derive(Clone)]
 pub struct NostrManager<S: MutinyStorage> {
     /// Extended private key that is the root seed of the wallet
     xprivkey: ExtendedPrivKey,
     /// Primary key used for nostr, this will be used for signing events
-    pub primary_key: Keys,
+    pub(crate) primary_key: ClientSigner,
+    /// Primary key's public key
+    pub public_key: XOnlyPublicKey,
     /// Separate profiles for each nostr wallet connect string
     pub(crate) nwc: Arc<RwLock<Vec<NostrWalletConnect>>>,
     pub storage: S,
@@ -118,7 +133,6 @@ impl<S: MutinyStorage> NostrManager<S> {
     fn get_dm_filter(&self) -> Result<Filter, MutinyError> {
         let contacts = self.storage.get_contacts()?;
         let last_sync_time = self.storage.get_dm_sync_time()?;
-        let me = self.primary_key.public_key();
         let npubs: HashSet<XOnlyPublicKey> = contacts.into_values().flat_map(|c| c.npub).collect();
 
         // if we haven't synced before, use now and save to storage
@@ -134,7 +148,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         let received_dm_filter = Filter::new()
             .kind(Kind::EncryptedDirectMessage)
             .authors(npubs)
-            .pubkey(me)
+            .pubkey(self.public_key)
             .since(time_stamp);
 
         Ok(received_dm_filter)
@@ -478,7 +492,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         });
 
         if let Some(info_event) = info_event {
-            let client = Client::new(&self.primary_key);
+            let client = Client::new(self.primary_key.clone());
 
             client
                 .add_relay(profile.relay.as_str())
@@ -538,7 +552,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         });
 
         if let Some(nwc) = nwc {
-            let client = Client::new(&self.primary_key);
+            let client = Client::new(self.primary_key.clone());
 
             client
                 .add_relays(vec![relay, profile.relay.to_string()])
@@ -611,7 +625,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         nwc: NostrWalletConnect,
         inv: PendingNwcInvoice,
     ) -> Result<EventId, MutinyError> {
-        let client = Client::new(&self.primary_key);
+        let client = Client::new(self.primary_key.clone());
 
         client
             .add_relay(nwc.profile.relay.as_str())
@@ -749,7 +763,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         // doesn't work in test environment
         #[cfg(not(test))]
         {
-            let client = Client::new(&self.primary_key);
+            let client = Client::new(self.primary_key.clone());
 
             client
                 .add_relays(self.get_relays())
@@ -855,12 +869,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         // update sync time
         self.storage.set_dm_sync_time(event.created_at.as_u64())?;
 
-        // todo we should handle NIP-44 as well
-        let decrypted = decrypt(
-            &self.primary_key.secret_key()?,
-            &event.pubkey,
-            &event.content,
-        )?;
+        let decrypted = self.decrypt_dm(event.pubkey, &event.content).await?;
 
         let invoice: Bolt11Invoice =
             match check_valid_nwc_invoice(&decrypted, invoice_handler).await {
@@ -1096,6 +1105,27 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(None)
     }
 
+    /// Decrypts a DM using the primary key
+    pub async fn decrypt_dm(
+        &self,
+        pubkey: XOnlyPublicKey,
+        message: &str,
+    ) -> Result<String, MutinyError> {
+        // todo we should handle NIP-44 as well
+        match &self.primary_key {
+            ClientSigner::Keys(key) => {
+                let secret = key.secret_key().expect("must have");
+                let decrypted = decrypt(&secret, &pubkey, message)?;
+                Ok(decrypted)
+            }
+            #[cfg(target_arch = "wasm32")]
+            ClientSigner::NIP07(nip07) => {
+                let decrypted = nip07.nip04_decrypt(pubkey, message).await?;
+                Ok(decrypted)
+            }
+        }
+    }
+
     /// Derives the client and server keys for Nostr Wallet Connect given a profile index
     /// The left key is the client key and the right key is the server key
     pub(crate) fn derive_nwc_keys<C: Signing>(
@@ -1149,14 +1179,34 @@ impl<S: MutinyStorage> NostrManager<S> {
     /// Creates a new NostrManager
     pub fn from_mnemonic(
         xprivkey: ExtendedPrivKey,
+        key_source: NostrKeySource,
         storage: S,
         logger: Arc<MutinyLogger>,
         stop: Arc<AtomicBool>,
     ) -> Result<Self, MutinyError> {
         let context = Secp256k1::new();
 
-        // generate the default primary key
-        let primary_key = Self::derive_nostr_key(&context, xprivkey, 0, None, None)?;
+        // use provided nsec, otherwise generate it from seed
+        let (primary_key, public_key) = match key_source {
+            NostrKeySource::Derived => {
+                let keys =
+                    Self::derive_nostr_key(&context, xprivkey, PROFILE_ACCOUNT_INDEX, None, None)?;
+                let public_key = keys.public_key();
+                let signer = ClientSigner::Keys(keys);
+                (signer, public_key)
+            }
+            NostrKeySource::Imported(keys) => {
+                let public_key = keys.public_key();
+                let signer = ClientSigner::Keys(keys);
+                (signer, public_key)
+            }
+            #[cfg(target_arch = "wasm32")]
+            NostrKeySource::Extension(public_key) => {
+                let nip07 = nostr::prelude::Nip07Signer::new()?;
+                let signer = ClientSigner::NIP07(nip07);
+                (signer, public_key)
+            }
+        };
 
         // get from storage
         let profiles: Vec<Profile> = storage.get_data(NWC_STORAGE_KEY)?.unwrap_or_default();
@@ -1170,6 +1220,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(Self {
             xprivkey,
             primary_key,
+            public_key,
             nwc: Arc::new(RwLock::new(nwc)),
             storage,
             pending_nwc_lock: Arc::new(Mutex::new(())),
@@ -1236,7 +1287,8 @@ mod test {
 
         let stop = Arc::new(AtomicBool::new(false));
 
-        NostrManager::from_mnemonic(xprivkey, storage, logger, stop).unwrap()
+        NostrManager::from_mnemonic(xprivkey, NostrKeySource::Derived, storage, logger, stop)
+            .unwrap()
     }
 
     #[test]
@@ -1260,7 +1312,7 @@ mod test {
         // make sure non-invoice is not added
         let dm = EventBuilder::encrypted_direct_msg(
             &user,
-            nostr_manager.primary_key.public_key(),
+            nostr_manager.public_key,
             "not an invoice",
             None,
         )
@@ -1321,7 +1373,7 @@ mod test {
         // valid invoice dm should be added
         let dm = EventBuilder::encrypted_direct_msg(
             &user,
-            nostr_manager.primary_key.public_key(),
+            nostr_manager.public_key,
             invoice.to_string(),
             None,
         )
