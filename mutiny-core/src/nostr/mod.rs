@@ -1,9 +1,9 @@
 use crate::logging::MutinyLogger;
 use crate::nostr::nip49::{NIP49BudgetPeriod, NIP49URI};
 use crate::nostr::nwc::{
-    BudgetPeriod, BudgetedSpendingConditions, NostrWalletConnect, NwcProfile, NwcProfileTag,
-    PendingNwcInvoice, Profile, SingleUseSpendingConditions, SpendingConditions,
-    PENDING_NWC_EVENTS_KEY,
+    check_valid_nwc_invoice, BudgetPeriod, BudgetedSpendingConditions, NostrWalletConnect,
+    NwcProfile, NwcProfileTag, PendingNwcInvoice, Profile, SingleUseSpendingConditions,
+    SpendingConditions, PENDING_NWC_EVENTS_KEY,
 };
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
@@ -19,12 +19,14 @@ use bitcoin::{
 use futures::{pin_mut, select, FutureExt};
 use futures_util::lock::Mutex;
 use lightning::util::logger::Logger;
-use lightning::{log_error, log_warn};
-use nostr::key::SecretKey;
+use lightning::{log_debug, log_error, log_warn};
+use lightning_invoice::Bolt11Invoice;
+use nostr::key::{SecretKey, XOnlyPublicKey};
 use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
-use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Tag};
+use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Tag, Timestamp};
 use nostr_sdk::{Client, RelayPoolNotification};
+use std::collections::HashSet;
 use std::sync::{atomic::Ordering, Arc, RwLock};
 use std::time::Duration;
 use std::{str::FromStr, sync::atomic::AtomicBool};
@@ -91,6 +93,10 @@ impl<S: MutinyStorage> NostrManager<S> {
             .map(|x| x.profile.relay.clone())
             .collect();
 
+        // add relays to pull DMs from
+        relays.push("wss://relay.primal.net".to_string());
+        relays.push("wss://relay.damus.io".to_string());
+
         // remove duplicates
         relays.sort();
         relays.dedup();
@@ -98,7 +104,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         relays
     }
 
-    pub fn get_nwc_filters(&self) -> Vec<Filter> {
+    fn get_nwc_filters(&self) -> Vec<Filter> {
         self.nwc
             .read()
             .unwrap()
@@ -106,6 +112,40 @@ impl<S: MutinyStorage> NostrManager<S> {
             .filter(|x| x.profile.active())
             .map(|nwc| nwc.create_nwc_filter())
             .collect()
+    }
+
+    /// Filters for getting DMs from our contacts
+    fn get_dm_filter(&self) -> Result<Filter, MutinyError> {
+        let contacts = self.storage.get_contacts()?;
+        let last_sync_time = self.storage.get_dm_sync_time()?;
+        let me = self.primary_key.public_key();
+        let npubs: HashSet<XOnlyPublicKey> = contacts.into_values().flat_map(|c| c.npub).collect();
+
+        // if we haven't synced before, use now and save to storage
+        let time_stamp = match last_sync_time {
+            None => {
+                let now = Timestamp::now();
+                self.storage.set_dm_sync_time(now.as_u64())?;
+                now
+            }
+            Some(time) => Timestamp::from(time),
+        };
+
+        let received_dm_filter = Filter::new()
+            .kind(Kind::EncryptedDirectMessage)
+            .authors(npubs)
+            .pubkey(me)
+            .since(time_stamp);
+
+        Ok(received_dm_filter)
+    }
+
+    pub fn get_filters(&self) -> Result<Vec<Filter>, MutinyError> {
+        let mut nwc = self.get_nwc_filters();
+        let dm = self.get_dm_filter()?;
+        nwc.push(dm);
+
+        Ok(nwc)
     }
 
     pub fn get_nwc_uri(&self, index: u32) -> Result<Option<NostrWalletConnectURI>, MutinyError> {
@@ -539,7 +579,7 @@ impl<S: MutinyStorage> NostrManager<S> {
     fn find_nwc_data(
         &self,
         hash: &sha256::Hash,
-    ) -> Result<(NostrWalletConnect, PendingNwcInvoice), MutinyError> {
+    ) -> Result<(Option<NostrWalletConnect>, PendingNwcInvoice), MutinyError> {
         let pending: Vec<PendingNwcInvoice> = self
             .storage
             .get_data(PENDING_NWC_EVENTS_KEY)?
@@ -550,14 +590,17 @@ impl<S: MutinyStorage> NostrManager<S> {
             .find(|x| x.invoice.payment_hash() == hash)
             .ok_or(MutinyError::NotFound)?;
 
-        let nwc = {
-            let profiles = self.nwc.read().unwrap();
-            profiles
-                .iter()
-                .find(|x| x.profile.index == inv.index)
-                .ok_or(MutinyError::NotFound)?
-                .clone()
-        };
+        let nwc = inv
+            .index
+            .map(|index| {
+                let profiles = self.nwc.read().unwrap();
+                profiles
+                    .iter()
+                    .find(|x| x.profile.index == index)
+                    .ok_or(MutinyError::NotFound)
+                    .cloned()
+            })
+            .transpose()?;
 
         Ok((nwc, inv.to_owned()))
     }
@@ -613,12 +656,32 @@ impl<S: MutinyStorage> NostrManager<S> {
         &self,
         hash: sha256::Hash,
         invoice_handler: &impl InvoiceHandler,
-    ) -> Result<EventId, MutinyError> {
+    ) -> Result<Option<EventId>, MutinyError> {
         let (nwc, inv) = self.find_nwc_data(&hash)?;
 
-        let resp = nwc.pay_nwc_invoice(invoice_handler, &inv.invoice).await?;
+        let event_id = match nwc {
+            Some(nwc) => {
+                let resp = nwc.pay_nwc_invoice(invoice_handler, &inv.invoice).await?;
+                Some(self.broadcast_nwc_response(resp, nwc, inv).await?)
+            }
+            None => {
+                // handle dm invoice
 
-        let event_id = self.broadcast_nwc_response(resp, nwc, inv).await?;
+                // find contact, tag invoice with id
+                let contacts = self.storage.get_contacts()?;
+                let label = contacts
+                    .into_iter()
+                    .find(|(_, c)| c.npub == Some(inv.pubkey))
+                    .map(|(id, _)| vec![id])
+                    .unwrap_or_default();
+                if let Err(e) = invoice_handler.pay_invoice(&inv.invoice, None, label).await {
+                    log_error!(invoice_handler.logger(), "failed to pay invoice: {e}");
+                    return Err(e);
+                }
+
+                None
+            }
+        };
 
         // get lock for writing
         self.pending_nwc_lock.lock().await;
@@ -652,7 +715,9 @@ impl<S: MutinyStorage> NostrManager<S> {
                 result: None,
             };
             let (nwc, inv) = self.find_nwc_data(&hash)?;
-            self.broadcast_nwc_response(resp, nwc, inv).await?;
+            if let Some(nwc) = nwc {
+                self.broadcast_nwc_response(resp, nwc, inv).await?;
+            }
         }
 
         // wait for lock
@@ -708,34 +773,36 @@ impl<S: MutinyStorage> NostrManager<S> {
                 };
                 let (nwc, inv) = self.find_nwc_data(invoice.invoice.payment_hash())?;
 
-                let encrypted = encrypt(
-                    &nwc.server_key.secret_key().unwrap(),
-                    &nwc.client_pubkey(),
-                    resp.as_json(),
-                )
-                .unwrap();
+                if let Some(nwc) = nwc {
+                    let encrypted = encrypt(
+                        &nwc.server_key.secret_key().unwrap(),
+                        &nwc.client_pubkey(),
+                        resp.as_json(),
+                    )
+                    .unwrap();
 
-                let p_tag = Tag::PublicKey {
-                    public_key: inv.pubkey,
-                    relay_url: None,
-                    alias: None,
-                    uppercase: false,
-                };
-                let e_tag = Tag::Event {
-                    event_id: inv.event_id,
-                    relay_url: None,
-                    marker: None,
-                };
-                let response =
-                    EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
-                        .to_event(&nwc.server_key)
-                        .map_err(|e| {
-                            MutinyError::Other(anyhow::anyhow!("Failed to create event: {e:?}"))
-                        })?;
+                    let p_tag = Tag::PublicKey {
+                        public_key: inv.pubkey,
+                        relay_url: None,
+                        alias: None,
+                        uppercase: false,
+                    };
+                    let e_tag = Tag::Event {
+                        event_id: inv.event_id,
+                        relay_url: None,
+                        marker: None,
+                    };
+                    let response =
+                        EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
+                            .to_event(&nwc.server_key)
+                            .map_err(|e| {
+                                MutinyError::Other(anyhow::anyhow!("Failed to create event: {e:?}"))
+                            })?;
 
-                client.send_event(response).await.map_err(|e| {
-                    MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}"))
-                })?;
+                    client.send_event(response).await.map_err(|e| {
+                        MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}"))
+                    })?;
+                }
             }
 
             let _ = client.disconnect().await;
@@ -766,6 +833,77 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         self.storage
             .set_data(PENDING_NWC_EVENTS_KEY.to_string(), invoices, None)?;
+
+        Ok(())
+    }
+
+    /// Handles an encrypted direct message. If it is an invoice we add it to our pending
+    /// invoice storage.
+    pub async fn handle_direct_message(
+        &self,
+        event: Event,
+        invoice_handler: &impl InvoiceHandler,
+    ) -> anyhow::Result<()> {
+        if event.kind != Kind::EncryptedDirectMessage {
+            anyhow::bail!("Not a direct message");
+        } else if event.pubkey == self.public_key {
+            return Ok(()); // don't process our own messages
+        }
+
+        log_debug!(self.logger, "processing dm: {}", event.id);
+
+        // update sync time
+        self.storage.set_dm_sync_time(event.created_at.as_u64())?;
+
+        // todo we should handle NIP-44 as well
+        let decrypted = decrypt(
+            &self.primary_key.secret_key()?,
+            &event.pubkey,
+            &event.content,
+        )?;
+
+        let invoice: Bolt11Invoice =
+            match check_valid_nwc_invoice(&decrypted, invoice_handler).await {
+                Ok(Some(invoice)) => invoice,
+                Ok(None) => return Ok(()),
+                Err(msg) => {
+                    log_debug!(self.logger, "Not adding DM'd invoice: {msg}");
+                    return Ok(());
+                }
+            };
+
+        self.save_pending_nwc_invoice(None, event.id, event.pubkey, invoice)
+            .await?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn save_pending_nwc_invoice(
+        &self,
+        profile_index: Option<u32>,
+        event_id: EventId,
+        event_pk: XOnlyPublicKey,
+        invoice: Bolt11Invoice,
+    ) -> anyhow::Result<()> {
+        let pending = PendingNwcInvoice {
+            index: profile_index,
+            invoice,
+            event_id,
+            pubkey: event_pk,
+        };
+        self.pending_nwc_lock.lock().await;
+
+        let mut current: Vec<PendingNwcInvoice> = self
+            .storage
+            .get_data(PENDING_NWC_EVENTS_KEY)?
+            .unwrap_or_default();
+
+        if !current.contains(&pending) {
+            current.push(pending);
+
+            self.storage
+                .set_data(PENDING_NWC_EVENTS_KEY.to_string(), current, None)?;
+        }
 
         Ok(())
     }
@@ -1072,13 +1210,19 @@ fn get_next_nwc_index(
 mod test {
     use super::*;
     use crate::storage::MemoryStorage;
+    use crate::utils::now;
+    use crate::MockInvoiceHandler;
     use bip39::Mnemonic;
     use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Network;
     use futures::executor::block_on;
-    use lightning_invoice::Bolt11Invoice;
+    use lightning::ln::PaymentSecret;
+    use lightning_invoice::{Bolt11Invoice, Currency, InvoiceBuilder};
+    use mockall::predicate::eq;
     use nostr::key::XOnlyPublicKey;
     use std::str::FromStr;
+
+    const EXPIRED_INVOICE: &str = "lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm";
 
     fn create_nostr_manager() -> NostrManager<MemoryStorage> {
         let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
@@ -1093,6 +1237,100 @@ mod test {
         let stop = Arc::new(AtomicBool::new(false));
 
         NostrManager::from_mnemonic(xprivkey, storage, logger, stop).unwrap()
+    }
+
+    #[test]
+    fn test_process_dm() {
+        let nostr_manager = create_nostr_manager();
+
+        let mut inv_handler = MockInvoiceHandler::new();
+        inv_handler
+            .expect_logger()
+            .return_const(MutinyLogger::default());
+        inv_handler.expect_skip_hodl_invoices().return_const(true);
+
+        #[allow(irrefutable_let_patterns)] // need this because enum with single variant
+        let nostr_keys = if let ClientSigner::Keys(ref keys) = nostr_manager.primary_key {
+            keys.clone()
+        } else {
+            panic!("unexpected keys")
+        };
+        let user = Keys::generate();
+
+        // make sure non-invoice is not added
+        let dm = EventBuilder::encrypted_direct_msg(
+            &user,
+            nostr_manager.primary_key.public_key(),
+            "not an invoice",
+            None,
+        )
+        .unwrap()
+        .to_event(&user)
+        .unwrap();
+        block_on(nostr_manager.handle_direct_message(dm, &inv_handler)).unwrap();
+        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        assert!(pending.is_empty());
+
+        // make sure expired invoice is not added
+        let dm = EventBuilder::encrypted_direct_msg(
+            &user,
+            nostr_manager.public_key,
+            EXPIRED_INVOICE,
+            None,
+        )
+        .unwrap()
+        .to_event(&user)
+        .unwrap();
+        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        assert!(pending.is_empty());
+        block_on(nostr_manager.handle_direct_message(dm, &inv_handler)).unwrap();
+
+        // create invoice
+        let secp = Secp256k1::new();
+        let sk = bitcoin::secp256k1::SecretKey::from_slice(&[2; 32]).unwrap();
+        let invoice = InvoiceBuilder::new(Currency::Regtest)
+            .description("Dummy invoice".to_string())
+            .duration_since_epoch(now())
+            .payment_hash(sha256::Hash::all_zeros())
+            .payment_secret(PaymentSecret([0; 32]))
+            .min_final_cltv_expiry_delta(144)
+            .amount_milli_satoshis(69_000)
+            .build_signed(|hash| secp.sign_ecdsa_recoverable(hash, &sk))
+            .unwrap();
+
+        // add handling for mock
+        inv_handler
+            .expect_get_outbound_payment_status()
+            .with(eq(invoice.payment_hash().into_32()))
+            .returning(move |_| None);
+
+        // make sure our own dms don't get added
+        let dm = EventBuilder::encrypted_direct_msg(
+            &nostr_keys,
+            user.public_key(),
+            invoice.to_string(),
+            None,
+        )
+        .unwrap()
+        .to_event(&nostr_keys)
+        .unwrap();
+        block_on(nostr_manager.handle_direct_message(dm, &inv_handler)).unwrap();
+        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        assert!(pending.is_empty());
+
+        // valid invoice dm should be added
+        let dm = EventBuilder::encrypted_direct_msg(
+            &user,
+            nostr_manager.primary_key.public_key(),
+            invoice.to_string(),
+            None,
+        )
+        .unwrap()
+        .to_event(&user)
+        .unwrap();
+        block_on(nostr_manager.handle_direct_message(dm, &inv_handler)).unwrap();
+        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        assert!(!pending.is_empty())
     }
 
     #[test]
@@ -1391,7 +1629,7 @@ mod test {
             .unwrap();
 
         let inv = PendingNwcInvoice {
-            index: profile.index,
+            index: Some(profile.index),
             invoice: Bolt11Invoice::from_str("lnbc923720n1pj9nrefpp5pczykgk37af5388n8dzynljpkzs7sje4melqgazlwv9y3apay8jqhp5rd8saxz3juve3eejq7z5fjttxmpaq88d7l92xv34n4h3mq6kwq2qcqzzsxqzfvsp5z0jwpehkuz9f2kv96h62p8x30nku76aj8yddpcust7g8ad0tr52q9qyyssqfy622q25helv8cj8hyxqltws4rdwz0xx2hw0uh575mn7a76cp3q4jcptmtjkjs4a34dqqxn8uy70d0qlxqleezv4zp84uk30pp5q3nqq4c9gkz").unwrap(),
             event_id: EventId::from_slice(&[0; 32]).unwrap(),
             pubkey: XOnlyPublicKey::from_str("552a9d06810f306bfc085cb1e1c26102554138a51fa3a7fdf98f5b03a945143a").unwrap(),

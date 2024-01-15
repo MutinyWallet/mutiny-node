@@ -1484,17 +1484,12 @@ impl MutinyWallet {
 
         let pending: Vec<PendingNwcInvoice> = pending
             .into_iter()
-            .flat_map(|inv| {
-                profiles
+            .flat_map(|inv| match inv.index {
+                Some(index) => profiles
                     .iter()
-                    .find_map(|p| {
-                        if inv.index == p.index {
-                            Some(p.name.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .map(|n| (inv, n).into())
+                    .find(|p| p.index == index)
+                    .map(|p| (inv, Some(p.name.clone())).into()),
+                None => Some((inv, None).into()),
             })
             .collect();
 

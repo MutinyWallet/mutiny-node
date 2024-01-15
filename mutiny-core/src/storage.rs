@@ -38,6 +38,7 @@ pub const DEVICE_LOCK_KEY: &str = "device_lock";
 pub(crate) const EXPECTED_NETWORK_KEY: &str = "network";
 const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
 const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
+pub const LAST_DM_SYNC_TIME_KEY: &str = "last_dm_sync_time";
 
 fn needs_encryption(key: &str) -> bool {
     match key {
@@ -407,6 +408,20 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
 
     fn set_done_first_sync(&self) -> Result<(), MutinyError> {
         self.set_data(FIRST_SYNC_KEY.to_string(), true, None)
+    }
+
+    fn get_dm_sync_time(&self) -> Result<Option<u64>, MutinyError> {
+        self.get_data(LAST_DM_SYNC_TIME_KEY)
+    }
+
+    fn set_dm_sync_time(&self, time: u64) -> Result<(), MutinyError> {
+        // only update if the time is newer
+        let current = self.get_dm_sync_time()?.unwrap_or_default();
+        if current < time {
+            self.set_data(LAST_DM_SYNC_TIME_KEY.to_string(), time, None)
+        } else {
+            Ok(())
+        }
     }
 
     fn get_device_id(&self) -> Result<String, MutinyError> {

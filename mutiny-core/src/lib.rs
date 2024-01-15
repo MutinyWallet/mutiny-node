@@ -748,8 +748,8 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             }
         };
 
-        // start the nostr wallet connect background process
-        mw.start_nostr_wallet_connect().await;
+        // start the nostr background process
+        mw.start_nostr().await;
 
         // start the federation background processor
         mw.start_fedimint_background_checker().await;
@@ -798,8 +798,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(())
     }
 
-    /// Starts a background process that will watch for nostr wallet connect events
-    pub(crate) async fn start_nostr_wallet_connect(&self) {
+    /// Starts a background process that will watch for nostr events
+    pub(crate) async fn start_nostr(&self) {
         let nostr = self.nostr.clone();
         let logger = self.logger.clone();
         let stop = self.stop.clone();
@@ -810,10 +810,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     break;
                 };
 
-                // if we have no relays, then there are no nwc profiles enabled
-                // wait 10 seconds and see if we do again
-                let relays = nostr.get_relays();
-                if relays.is_empty() {
+                // if we have no filters, then wait 10 seconds and see if we do again
+                let mut last_filters = nostr.get_filters().unwrap_or_default();
+                if last_filters.is_empty() {
                     utils::sleep(10_000).await;
                     continue;
                 }
@@ -845,7 +844,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     .expect("Failed to add relays");
                 client.connect().await;
 
-                let mut last_filters = nostr.get_nwc_filters();
                 client.subscribe(last_filters.clone()).await;
 
                 // handle NWC requests
@@ -871,17 +869,27 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         notification = read_fut => {
                             match notification {
                                 Ok(RelayPoolNotification::Event { event, .. }) => {
-                                    if event.kind == Kind::WalletConnectRequest && event.verify().is_ok() {
-                                        match nostr.handle_nwc_request(event, &self_clone).await {
-                                            Ok(Some(event)) => {
-                                                if let Err(e) = client.send_event(event).await {
-                                                    log_warn!(logger, "Error sending NWC event: {e}");
+                                    if event.verify().is_ok() {
+                                        match event.kind {
+                                            Kind::WalletConnectRequest => {
+                                                match nostr.handle_nwc_request(event, &self_clone).await {
+                                                    Ok(Some(event)) => {
+                                                        if let Err(e) = client.send_event(event).await {
+                                                            log_warn!(logger, "Error sending NWC event: {e}");
+                                                        }
+                                                    }
+                                                    Ok(None) => {} // no response
+                                                    Err(e) => {
+                                                        log_error!(logger, "Error handling NWC request: {e}");
+                                                    }
                                                 }
                                             }
-                                            Ok(None) => {} // no response
-                                            Err(e) => {
-                                                log_error!(logger, "Error handling NWC request: {e}");
+                                            Kind::EncryptedDirectMessage => {
+                                                if let Err(e) = nostr.handle_direct_message(event, &self_clone).await {
+                                                        log_error!(logger, "Error handling dm: {e}");
+                                                }
                                             }
+                                            kind => log_warn!(logger, "Received unexpected note of kind {kind}")
                                         }
                                     }
                                 },
@@ -899,11 +907,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         }
                         _ = filter_check_fut => {
                             // Check if the filters have changed
-                            let current_filters = nostr.get_nwc_filters();
-                            if current_filters != last_filters {
-                                log_debug!(logger, "subscribing to new nwc filters");
-                                client.subscribe(current_filters.clone()).await;
-                                last_filters = current_filters;
+                            if let Ok(current_filters) = nostr.get_filters() {
+                                if current_filters != last_filters {
+                                    log_debug!(logger, "subscribing to new nwc filters");
+                                    client.subscribe(current_filters.clone()).await;
+                                    last_filters = current_filters;
+                                }
                             }
                             // Set the time for the next filter check
                             next_filter_check = crate::utils::now().as_secs() + 5;
