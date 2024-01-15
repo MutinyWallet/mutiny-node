@@ -39,7 +39,7 @@ use fedimint_ln_client::{
 };
 use fedimint_ln_common::LightningCommonInit;
 use fedimint_mint_client::MintClientInit;
-use fedimint_wallet_client::WalletClientInit;
+use fedimint_wallet_client::{WalletClientInit, WalletClientModule};
 use futures::future::{self};
 use futures_util::{pin_mut, StreamExt};
 use lightning::{log_debug, log_error, log_info, log_trace, log_warn, util::logger::Logger};
@@ -173,6 +173,17 @@ impl FederationClient {
                 &federation_info.federation_id(),
             ))
             .await?;
+
+        // check federation is on expected network
+        let wallet_client = fedimint_client.get_first_module::<WalletClientModule>();
+        if network != wallet_client.get_network() {
+            log_error!(
+                logger,
+                "Fedimint on different network {}, expected: {network}",
+                wallet_client.get_network()
+            );
+            return Err(MutinyError::NetworkMismatch);
+        }
 
         log_debug!(logger, "Built fedimint client");
         Ok(FederationClient {
