@@ -1,5 +1,6 @@
 use bitcoin::Network;
 use lightning_invoice::ParseOrSemanticError;
+use log::error;
 use mutiny_core::error::{MutinyError, MutinyStorageError};
 use thiserror::Error;
 use wasm_bindgen::JsValue;
@@ -204,7 +205,10 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::BitcoinPriceError => MutinyJsError::BitcoinPriceError,
             MutinyError::IncorrectPassword => MutinyJsError::IncorrectPassword,
             MutinyError::SamePassword => MutinyJsError::SamePassword,
-            MutinyError::Other(_) => MutinyJsError::UnknownError,
+            MutinyError::Other(e) => {
+                error!("Got unhandled error: {e}");
+                MutinyJsError::UnknownError
+            }
             MutinyError::SubscriptionClientNotConfigured => {
                 MutinyJsError::SubscriptionClientNotConfigured
             }
