@@ -36,7 +36,7 @@ use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, Spendin
 use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
 use mutiny_core::utils::{now, parse_npub, sleep};
 use mutiny_core::vss::MutinyVssClient;
-use mutiny_core::{encrypt::encryption_key_from_pass, MutinyWalletConfigBuilder};
+use mutiny_core::{encrypt::encryption_key_from_pass, InvoiceHandler, MutinyWalletConfigBuilder};
 use mutiny_core::{labels::Contact, MutinyWalletBuilder};
 use mutiny_core::{
     labels::LabelStorage,
@@ -732,12 +732,7 @@ impl MutinyWallet {
         amount: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
-        Ok(self
-            .inner
-            .node_manager
-            .create_invoice(amount, labels)
-            .await?
-            .into())
+        Ok(self.inner.create_invoice(amount, labels).await?.into())
     }
 
     /// Pays a lightning invoice from the selected node.

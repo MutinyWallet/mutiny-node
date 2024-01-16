@@ -1505,11 +1505,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     ///
     /// If the manager has more than one node it will create a phantom invoice.
     /// If there is only one node it will create an invoice just for that node.
-    pub async fn create_invoice(
-        &self,
-        amount: Option<u64>,
-        labels: Vec<String>,
-    ) -> Result<MutinyInvoice, MutinyError> {
+    pub async fn create_invoice(&self, amount: Option<u64>) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
         let use_phantom = nodes.len() > 1 && self.lsp_config.is_none();
         if nodes.len() == 0 {
@@ -1532,9 +1528,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         } else {
             return Err(MutinyError::WalletOperationFailed);
         };
-        let invoice = first_node
-            .create_invoice(amount, labels, route_hints)
-            .await?;
+        let invoice = first_node.create_invoice(amount, route_hints).await?;
 
         Ok(invoice.into())
     }
