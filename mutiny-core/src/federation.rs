@@ -147,13 +147,25 @@ impl FederationClient {
     ) -> Result<Self, MutinyError> {
         log_info!(logger, "initializing a new federation client: {uuid}");
 
-        let federation_info = FederationInfo::from_invite_code(federation_code.clone()).await?;
+        let federation_info = FederationInfo::from_invite_code(federation_code.clone())
+            .await
+            .map_err(|e| {
+                log_error!(logger, "Could not parse invite code: {}", e);
+                e
+            })?;
+
+        log_debug!(
+            logger,
+            "parsed federation invite code: {:?}",
+            federation_info.invite_code()
+        );
 
         let mut client_builder = fedimint_client::Client::builder();
         client_builder.with_module(WalletClientInit(None));
         client_builder.with_module(MintClientInit);
         client_builder.with_module(LightningClientInit);
 
+        log_trace!(logger, "Building fedimint client db");
         let db = g
             .new_fedimint_client_db(federation_info.federation_id().to_string())
             .await?
@@ -165,6 +177,7 @@ impl FederationClient {
         client_builder.with_database(db);
         client_builder.with_primary_module(1);
 
+        log_trace!(logger, "Building fedimint client db");
         let secret = create_federation_secret(xprivkey, network)?;
 
         let fedimint_client = client_builder
@@ -173,6 +186,8 @@ impl FederationClient {
                 &federation_info.federation_id(),
             ))
             .await?;
+
+        log_trace!(logger, "Retrieving fedimint wallet client module");
 
         // check federation is on expected network
         let wallet_client = fedimint_client.get_first_module::<WalletClientModule>();
