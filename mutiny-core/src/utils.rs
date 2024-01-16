@@ -11,6 +11,7 @@ use lightning::routing::scoring::{LockableScore, ScoreLookUp, ScoreUpdate};
 use lightning::util::ser::Writeable;
 use lightning::util::ser::Writer;
 use nostr::key::XOnlyPublicKey;
+use nostr::nips::nip05;
 use nostr::{Event, FromBech32, JsonUtil, Metadata};
 use reqwest::Client;
 use serde_json::Value;
@@ -196,6 +197,19 @@ pub fn parse_npub(str: &str) -> Result<XOnlyPublicKey, MutinyError> {
     match XOnlyPublicKey::from_str(str) {
         Ok(x) => Ok(x),
         Err(_) => Ok(XOnlyPublicKey::from_bech32(str)?),
+    }
+}
+
+pub async fn parse_npub_or_nip05(str: &str) -> Result<XOnlyPublicKey, MutinyError> {
+    match XOnlyPublicKey::from_str(str) {
+        Ok(x) => Ok(x),
+        Err(_) => match XOnlyPublicKey::from_bech32(str) {
+            Ok(x) => Ok(x),
+            Err(_) => {
+                let profile = nip05::get_profile(str, None).await?;
+                Ok(profile.public_key)
+            }
+        },
     }
 }
 

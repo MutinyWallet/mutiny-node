@@ -2681,6 +2681,7 @@ dependencies = [
  "instant",
  "negentropy",
  "once_cell",
+ "reqwest",
  "serde",
  "serde_json",
  "tracing",

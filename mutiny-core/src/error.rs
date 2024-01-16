@@ -6,6 +6,7 @@ use lightning_invoice::payment::PaymentError;
 use lightning_invoice::ParseOrSemanticError;
 use lightning_rapid_gossip_sync::GraphSyncError;
 use lightning_transaction_sync::TxSyncError;
+use nostr::nips::nip05;
 use std::string::FromUtf8Error;
 use thiserror::Error;
 
@@ -459,6 +460,18 @@ impl From<nostr_sdk::client::Error> for MutinyError {
 impl From<nostr::nips::nip04::Error> for MutinyError {
     fn from(_e: nostr::nips::nip04::Error) -> Self {
         Self::NostrError
+    }
+}
+
+impl From<nip05::Error> for MutinyError {
+    fn from(e: nip05::Error) -> Self {
+        match e {
+            nip05::Error::InvalidFormat => Self::InvalidArgumentsError,
+            nip05::Error::ImpossibleToVerify => Self::NostrError,
+            nip05::Error::Reqwest(_) => Self::NostrError,
+            nip05::Error::Json(_) => Self::NostrError,
+            nip05::Error::Secp256k1(_) => Self::NostrError,
+        }
     }
 }
 
