@@ -1,6 +1,3 @@
-use crate::ldkstorage::{persist_monitor, ChannelOpenParams};
-use crate::lsp::{InvoiceRequest, LspConfig};
-use crate::messagehandler::MutinyMessageHandler;
 use crate::nodemanager::ChannelClosure;
 use crate::peermanager::LspMessageRouter;
 use crate::storage::MutinyStorage;
@@ -23,6 +20,15 @@ use crate::{
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
 use crate::{labels::LabelStorage, DEFAULT_PAYMENT_TIMEOUT};
+use crate::{
+    ldkstorage::{persist_monitor, ChannelOpenParams},
+    storage::persist_payment_info,
+};
+use crate::{
+    lsp::{InvoiceRequest, LspConfig},
+    storage::list_payment_info,
+};
+use crate::{messagehandler::MutinyMessageHandler, storage::read_payment_info};
 use anyhow::{anyhow, Context};
 use bdk::FeeRate;
 use bitcoin::hashes::{hex::ToHex, sha256::Hash as Sha256};
@@ -1183,12 +1189,16 @@ impl<S: MutinyStorage> Node<S> {
             payee_pubkey: None,
             last_update,
         };
-        self.persister
-            .persist_payment_info(&payment_hash.0, &payment_info, true)
-            .map_err(|e| {
-                log_error!(self.logger, "ERROR: could not persist payment info: {e}");
-                MutinyError::InvoiceCreationFailed
-            })?;
+        persist_payment_info(
+            self.persister.storage.clone(),
+            &payment_hash.0,
+            &payment_info,
+            true,
+        )
+        .map_err(|e| {
+            log_error!(self.logger, "ERROR: could not persist payment info: {e}");
+            MutinyError::InvoiceCreationFailed
+        })?;
 
         Ok(())
     }
@@ -1224,9 +1234,7 @@ impl<S: MutinyStorage> Node<S> {
         let now = utils::now();
         let labels_map = self.persister.storage.get_invoice_labels()?;
 
-        Ok(self
-            .persister
-            .list_payment_info(inbound)?
+        Ok(list_payment_info(&self.persister.storage, inbound)?
             .into_iter()
             .filter_map(|(h, i)| {
                 let labels = match i.bolt11.clone() {
@@ -1274,18 +1282,22 @@ impl<S: MutinyStorage> Node<S> {
         payment_hash: &bitcoin::hashes::sha256::Hash,
     ) -> Result<(PaymentInfo, bool), MutinyError> {
         // try inbound first
-        if let Some(payment_info) =
-            self.persister
-                .read_payment_info(payment_hash.as_inner(), true, &self.logger)
-        {
+        if let Some(payment_info) = read_payment_info(
+            &self.persister.storage,
+            payment_hash.as_inner(),
+            true,
+            &self.logger,
+        ) {
             return Ok((payment_info, true));
         }
 
         // if no inbound check outbound
-        match self
-            .persister
-            .read_payment_info(payment_hash.as_inner(), false, &self.logger)
-        {
+        match read_payment_info(
+            &self.persister.storage,
+            payment_hash.as_inner(),
+            false,
+            &self.logger,
+        ) {
             Some(payment_info) => Ok((payment_info, false)),
             None => Err(MutinyError::NotFound),
         }
@@ -1304,17 +1316,13 @@ impl<S: MutinyStorage> Node<S> {
     ) -> Result<(PaymentId, PaymentHash), MutinyError> {
         let payment_hash = invoice.payment_hash().as_inner();
 
-        if self
-            .persister
-            .read_payment_info(payment_hash, false, &self.logger)
+        if read_payment_info(&self.persister.storage, payment_hash, false, &self.logger)
             .is_some_and(|p| p.status != HTLCStatus::Failed)
         {
             return Err(MutinyError::NonUniquePaymentHash);
         }
 
-        if self
-            .persister
-            .read_payment_info(payment_hash, true, &self.logger)
+        if read_payment_info(&self.persister.storage, payment_hash, true, &self.logger)
             .is_some_and(|p| p.status != HTLCStatus::Failed)
         {
             return Err(MutinyError::NonUniquePaymentHash);
@@ -1385,8 +1393,12 @@ impl<S: MutinyStorage> Node<S> {
             last_update,
         };
 
-        self.persister
-            .persist_payment_info(payment_hash, &payment_info, false)?;
+        persist_payment_info(
+            self.persister.storage.clone(),
+            payment_hash,
+            &payment_info,
+            false,
+        )?;
 
         match pay_result {
             Ok(id) => Ok((id, PaymentHash(payment_hash.to_owned()))),
@@ -1401,8 +1413,12 @@ impl<S: MutinyStorage> Node<S> {
                 );
 
                 payment_info.status = HTLCStatus::Failed;
-                self.persister
-                    .persist_payment_info(payment_hash, &payment_info, false)?;
+                persist_payment_info(
+                    self.persister.storage.clone(),
+                    payment_hash,
+                    &payment_info,
+                    false,
+                )?;
 
                 Err(map_sending_failure(error, amt_msat, &current_channels))
             }
@@ -1466,9 +1482,12 @@ impl<S: MutinyStorage> Node<S> {
                 return Err(MutinyError::PaymentTimeout);
             }
 
-            let payment_info =
-                self.persister
-                    .read_payment_info(&payment_hash.0, false, &self.logger);
+            let payment_info = read_payment_info(
+                &self.persister.storage,
+                &payment_hash.0,
+                false,
+                &self.logger,
+            );
 
             if let Some(info) = payment_info {
                 match info.status {
@@ -1562,8 +1581,12 @@ impl<S: MutinyStorage> Node<S> {
             last_update,
         };
 
-        self.persister
-            .persist_payment_info(&payment_hash.0, &payment_info, false)?;
+        persist_payment_info(
+            self.persister.storage.clone(),
+            &payment_hash.0,
+            &payment_info,
+            false,
+        )?;
 
         match pay_result {
             Ok(_) => {
@@ -1573,8 +1596,12 @@ impl<S: MutinyStorage> Node<S> {
             }
             Err(error) => {
                 payment_info.status = HTLCStatus::Failed;
-                self.persister
-                    .persist_payment_info(&payment_hash.0, &payment_info, false)?;
+                persist_payment_info(
+                    self.persister.storage.clone(),
+                    &payment_hash.0,
+                    &payment_info,
+                    false,
+                )?;
                 let current_channels = self.channel_manager.list_channels();
                 Err(map_sending_failure(
                     PaymentError::Sending(error),
@@ -2495,9 +2522,13 @@ mod tests {
 
         // check that it still fails if it is inflight
 
-        node.persister
-            .persist_payment_info(&payment_hash.0, &payment_info, false)
-            .unwrap();
+        persist_payment_info(
+            node.persister.storage.clone(),
+            &payment_hash.0,
+            &payment_info,
+            false,
+        )
+        .unwrap();
 
         let result = node
             .await_payment(payment_id, payment_hash, 1, vec![])
@@ -2508,9 +2539,13 @@ mod tests {
         // check that we get proper error if it fails
 
         payment_info.status = HTLCStatus::Failed;
-        node.persister
-            .persist_payment_info(&payment_hash.0, &payment_info, false)
-            .unwrap();
+        persist_payment_info(
+            node.persister.storage.clone(),
+            &payment_hash.0,
+            &payment_info,
+            false,
+        )
+        .unwrap();
 
         let result = node
             .await_payment(payment_id, payment_hash, 1, vec![])
@@ -2521,9 +2556,13 @@ mod tests {
         // check that we get success
 
         payment_info.status = HTLCStatus::Succeeded;
-        node.persister
-            .persist_payment_info(&payment_hash.0, &payment_info, false)
-            .unwrap();
+        persist_payment_info(
+            node.persister.storage.clone(),
+            &payment_hash.0,
+            &payment_info,
+            false,
+        )
+        .unwrap();
 
         let result = node
             .await_payment(payment_id, payment_hash, 1, vec![])
@@ -2536,11 +2575,11 @@ mod tests {
 #[cfg(test)]
 #[cfg(target_arch = "wasm32")]
 mod wasm_test {
-    use crate::error::MutinyError;
     use crate::event::{MillisatAmount, PaymentInfo};
     use crate::storage::MemoryStorage;
     use crate::test_utils::create_node;
     use crate::HTLCStatus;
+    use crate::{error::MutinyError, storage::persist_payment_info};
     use bitcoin::hashes::hex::ToHex;
     use lightning::ln::channelmanager::PaymentId;
     use lightning::ln::PaymentHash;
@@ -2636,10 +2675,13 @@ mod wasm_test {
         };
 
         // check that it still fails if it is inflight
-
-        node.persister
-            .persist_payment_info(&payment_hash.0, &payment_info, false)
-            .unwrap();
+        persist_payment_info(
+            node.persister.storage.clone(),
+            &payment_hash.0,
+            &payment_info,
+            false,
+        )
+        .unwrap();
 
         let result = node
             .await_payment(payment_id, payment_hash, 1, vec![])
@@ -2650,9 +2692,13 @@ mod wasm_test {
         // check that we get proper error if it fails
 
         payment_info.status = HTLCStatus::Failed;
-        node.persister
-            .persist_payment_info(&payment_hash.0, &payment_info, false)
-            .unwrap();
+        persist_payment_info(
+            node.persister.storage.clone(),
+            &payment_hash.0,
+            &payment_info,
+            false,
+        )
+        .unwrap();
 
         let result = node
             .await_payment(payment_id, payment_hash, 1, vec![])
@@ -2663,9 +2709,13 @@ mod wasm_test {
         // check that we get success
 
         payment_info.status = HTLCStatus::Succeeded;
-        node.persister
-            .persist_payment_info(&payment_hash.0, &payment_info, false)
-            .unwrap();
+        persist_payment_info(
+            node.persister.storage.clone(),
+            &payment_hash.0,
+            &payment_info,
+            false,
+        )
+        .unwrap();
 
         let result = node
             .await_payment(payment_id, payment_hash, 1, vec![])
