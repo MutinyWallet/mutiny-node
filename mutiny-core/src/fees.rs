@@ -2,7 +2,7 @@ use crate::logging::MutinyLogger;
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, utils};
 use bdk::FeeRate;
-use bitcoin::Network;
+use bitcoin::Weight;
 use esplora_client::AsyncClient;
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::{
@@ -25,7 +25,6 @@ pub(crate) const TAPROOT_OUTPUT_SIZE: usize = 43;
 #[derive(Clone)]
 pub struct MutinyFeeEstimator<S: MutinyStorage> {
     storage: S,
-    network: Network,
     esplora: Arc<AsyncClient>,
     logger: Arc<MutinyLogger>,
     last_fee_update_time_secs: Arc<Mutex<Option<u64>>>,
@@ -34,13 +33,11 @@ pub struct MutinyFeeEstimator<S: MutinyStorage> {
 impl<S: MutinyStorage> MutinyFeeEstimator<S> {
     pub fn new(
         storage: S,
-        network: Network,
         esplora: Arc<AsyncClient>,
         logger: Arc<MutinyLogger>,
     ) -> MutinyFeeEstimator<S> {
         MutinyFeeEstimator {
             storage,
-            network,
             esplora,
             logger,
             last_fee_update_time_secs: Arc::new(Mutex::new(None)),
@@ -69,7 +66,9 @@ impl<S: MutinyStorage> MutinyFeeEstimator<S> {
             // Calculate the transaction weight
             (non_witness_size * 4) + witness_size
         };
-        FeeRate::from_sat_per_kwu(sats_per_kw as f32).fee_wu(expected_weight)
+
+        FeeRate::from_sat_per_kwu(sats_per_kw as f32)
+            .fee_wu(Weight::from_wu(expected_weight as u64))
     }
 
     async fn get_last_sync_time(&self) -> Option<u64> {
@@ -190,14 +189,6 @@ impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
 
         // any post processing we do after the we get the fee rate from the cache
         match confirmation_target {
-            ConfirmationTarget::MaxAllowedNonAnchorChannelRemoteFee => {
-                // multiply by 30 to help prevent force closes
-                // multiply by 100 on test networks because CLN sucks
-                match self.network {
-                    Network::Bitcoin => fee * 30,
-                    _ => fee * 100,
-                }
-            }
             ConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee => fee - 250, // helps with rounding errors
             _ => fee,
         }
@@ -211,7 +202,6 @@ fn num_blocks_from_conf_target(confirmation_target: ConfirmationTarget) -> usize
         ConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee => 1008,
         ConfirmationTarget::ChannelCloseMinimum => 1008,
         ConfirmationTarget::NonAnchorChannelFee => 6,
-        ConfirmationTarget::MaxAllowedNonAnchorChannelRemoteFee => 1,
         ConfirmationTarget::OnChainSweep => 1,
     }
 }
@@ -223,7 +213,6 @@ fn fallback_fee_from_conf_target(confirmation_target: ConfirmationTarget) -> u32
         ConfirmationTarget::ChannelCloseMinimum => 10 * 250,
         ConfirmationTarget::AnchorChannelFee => 10 * 250,
         ConfirmationTarget::NonAnchorChannelFee => 20 * 250,
-        ConfirmationTarget::MaxAllowedNonAnchorChannelRemoteFee => 50 * 250,
         ConfirmationTarget::OnChainSweep => 50 * 250,
     }
 }
@@ -250,7 +239,7 @@ mod test {
         );
         let logger = Arc::new(MutinyLogger::default());
 
-        MutinyFeeEstimator::new(storage, Network::Bitcoin, esplora, logger)
+        MutinyFeeEstimator::new(storage, esplora, logger)
     }
 
     #[test]

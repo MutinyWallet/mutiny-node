@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use bitcoin::hashes::{sha256, Hash};
-use bitcoin::secp256k1::{PublicKey, Secp256k1};
+use bitcoin::secp256k1::{PublicKey, Secp256k1, ThirtyTwoByteHash};
 use bitcoin::Network;
 use futures::channel::oneshot;
 use lightning::ln::channelmanager::MIN_FINAL_CLTV_EXPIRY_DELTA;
@@ -45,8 +45,11 @@ pub(crate) struct JitChannelInfo {
 
 #[derive(Clone, Debug)]
 pub(crate) struct GetInfoResponse {
-    pub jit_channel_id: u128,
     pub opening_fee_params_menu: Vec<OpeningFeeParams>,
+    /// The min payment size allowed when opening the channel.
+    pub min_payment_size_msat: u64,
+    /// The max payment size allowed when opening the channel.
+    pub max_payment_size_msat: u64,
 }
 
 pub(crate) struct PendingPaymentInfo {
@@ -67,7 +70,7 @@ pub struct LspsClient<S: MutinyStorage> {
     keys_manager: Arc<PhantomKeysManager<S>>,
     network: Network,
     logger: Arc<MutinyLogger>,
-    pending_fee_requests: Arc<Mutex<HashMap<u128, PendingFeeRequestSender>>>,
+    pending_fee_requests: Arc<Mutex<HashMap<PublicKey, PendingFeeRequestSender>>>,
     pending_buy_requests: Arc<Mutex<HashMap<u128, PendingBuyRequestSender>>>,
     pending_channel_info: Arc<Mutex<HashMap<u128, JitChannelInfo>>>,
     pending_payments: Arc<Mutex<HashMap<PaymentHash, PendingPaymentInfo>>>,
@@ -114,26 +117,27 @@ impl<S: MutinyStorage> LspsClient<S> {
 
     pub(crate) async fn handle_event(&self, event: Event) {
         match event {
-            Event::LSPS2Client(LSPS2ClientEvent::GetInfoResponse {
-                jit_channel_id,
+            Event::LSPS2Client(LSPS2ClientEvent::OpeningParametersReady {
+                counterparty_node_id,
                 opening_fee_params_menu,
-                user_channel_id,
-                ..
+                min_payment_size_msat,
+                max_payment_size_msat,
             }) => {
                 log_debug!(
                     self.logger,
-                    "received GetInfoResponse for jit_channel_id {}, user_channel_id {}",
-                    jit_channel_id,
-                    user_channel_id
+                    "received GetInfoResponse for counterparty_node_id {counterparty_node_id}",
                 );
 
                 let mut pending_fee_requests = self.pending_fee_requests.lock().unwrap();
 
-                if let Some(fee_response_sender) = pending_fee_requests.remove(&user_channel_id) {
+                if let Some(fee_response_sender) =
+                    pending_fee_requests.remove(&counterparty_node_id)
+                {
                     if fee_response_sender
                         .send(Ok(GetInfoResponse {
-                            jit_channel_id,
                             opening_fee_params_menu,
+                            min_payment_size_msat,
+                            max_payment_size_msat,
                         }))
                         .is_err()
                     {
@@ -141,7 +145,7 @@ impl<S: MutinyStorage> LspsClient<S> {
                     }
                 }
             }
-            Event::LSPS2Client(LSPS2ClientEvent::InvoiceGenerationReady {
+            Event::LSPS2Client(LSPS2ClientEvent::InvoiceParametersReady {
                 intercept_scid,
                 cltv_expiry_delta,
                 user_channel_id,
@@ -361,7 +365,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
 
         {
             let mut pending_fee_requests = self.pending_fee_requests.lock().unwrap();
-            pending_fee_requests.insert(user_channel_id, pending_fee_request_sender);
+            pending_fee_requests.insert(self.pubkey, pending_fee_request_sender);
         }
 
         log_debug!(
@@ -376,12 +380,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             .lsps2_client_handler()
             .expect("to be configured with lsps2 client config");
 
-        lsps2_client_handler.create_invoice(
-            self.pubkey,
-            Some(fee_request.amount_msat),
-            self.token.clone(),
-            user_channel_id,
-        );
+        lsps2_client_handler.request_opening_params(self.pubkey, self.token.clone());
 
         let get_info_response = pending_fee_request_receiver.await.map_err(|e| {
             log_debug!(self.logger, "error receiving get info response: {:?}", e);
@@ -395,9 +394,11 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
 
         log_debug!(
             self.logger,
-            "received fee information. min_fee_msat {} and proportional fee {}",
+            "received fee information. min_fee_msat {}, proportional fee {}, min payment {}msats, max payment {}msats",
             min_fee_msat,
-            proportional_fee
+            proportional_fee,
+            get_info_response.min_payment_size_msat,
+            get_info_response.max_payment_size_msat,
         );
 
         {
@@ -405,7 +406,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             pending_channel_info.insert(
                 user_channel_id,
                 JitChannelInfo {
-                    channel_id: get_info_response.jit_channel_id,
+                    channel_id: user_channel_id,
                     fee_params,
                 },
             );
@@ -455,14 +456,14 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             .expect("to be configured with lsps2 client config");
 
         lsps2_client_handler
-            .opening_fee_params_selected(self.pubkey, channel_id, fee_params.clone())
+            .select_opening_params(self.pubkey, channel_id, None, fee_params.clone())
             .map_err(|_| MutinyError::LspGenericError)?;
 
         let invoice = pending_buy_request_receiver
             .await
             .map_err(|_| MutinyError::LspGenericError)??;
 
-        let payment_hash = PaymentHash((*invoice.payment_hash()).into_inner());
+        let payment_hash = PaymentHash(invoice.payment_hash().into_32());
         let payment_amount = invoice.amount_milli_satoshis();
 
         let expected_fee_msat = payment_amount.and_then(|payment_amount| {

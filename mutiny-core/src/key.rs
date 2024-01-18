@@ -1,6 +1,6 @@
 use bitcoin::{
+    bip32::{ChildNumber, DerivationPath, ExtendedPrivKey},
     secp256k1::Secp256k1,
-    util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey},
 };
 
 use crate::error::MutinyError;

@@ -9,13 +9,10 @@ use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
 use crate::{labels::LabelStorage, InvoiceHandler};
 use crate::{utils, HTLCStatus};
+use bitcoin::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{Secp256k1, Signing};
-use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
-use bitcoin::{
-    hashes::hex::{FromHex, ToHex},
-    secp256k1::ThirtyTwoByteHash,
-};
+use bitcoin::{hashes::hex::FromHex, secp256k1::ThirtyTwoByteHash};
 use futures::{pin_mut, select, FutureExt};
 use futures_util::lock::Mutex;
 use lightning::util::logger::Logger;
@@ -417,8 +414,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             Some(identity) => {
                 let contacts = self.storage.get_contacts()?;
                 contacts.into_iter().find_map(|(id, c)| {
-                    // compare by to_hex because of different types across rust-bitcoin versions
-                    if c.npub.map(|x| x.to_hex()) == Some(identity.to_hex()) {
+                    if c.npub == Some(identity) {
                         Some(id)
                     } else {
                         None
@@ -1285,7 +1281,7 @@ mod test {
     use crate::utils::now;
     use crate::MockInvoiceHandler;
     use bip39::Mnemonic;
-    use bitcoin::util::bip32::ExtendedPrivKey;
+    use bitcoin::bip32::ExtendedPrivKey;
     use bitcoin::Network;
     use futures::executor::block_on;
     use lightning::ln::PaymentSecret;

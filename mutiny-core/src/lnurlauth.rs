@@ -1,9 +1,9 @@
 use crate::{error::MutinyError, logging::MutinyLogger};
 use anyhow::anyhow;
 use bdk_chain::collections::HashMap;
+use bitcoin::bip32::{DerivationPath, ExtendedPrivKey};
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::secp256k1::{ecdsa, All, Message, PublicKey, Secp256k1, SecretKey};
-use bitcoin::util::bip32::{DerivationPath, ExtendedPrivKey};
 use lightning::util::logger::*;
 use lightning::{log_error, log_info};
 use lnurl::lnurl::LnUrl;

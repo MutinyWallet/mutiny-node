@@ -11,12 +11,13 @@ use crate::utils;
 use crate::utils::{sleep, spawn};
 use crate::{chain::MutinyChain, scorer::HubPreferentialScorer};
 use anyhow::anyhow;
-use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::hashes::hex::FromHex;
 use bitcoin::Network;
 use bitcoin::{BlockHash, Transaction};
 use esplora_client::AsyncClient;
 use futures::{try_join, TryFutureExt};
 use futures_util::lock::Mutex;
+use hex_conservative::DisplayHex;
 use lightning::chain::chainmonitor::{MonitorUpdateId, Persist};
 use lightning::chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate};
 use lightning::chain::transaction::OutPoint;
@@ -25,7 +26,7 @@ use lightning::io::Cursor;
 use lightning::ln::channelmanager::{
     self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
 };
-use lightning::sign::{InMemorySigner, SpendableOutputDescriptor, WriteableEcdsaChannelSigner};
+use lightning::sign::{InMemorySigner, SpendableOutputDescriptor};
 use lightning::util::logger::Logger;
 use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
@@ -91,8 +92,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
     pub(crate) fn get_monitor_key(&self, funding_txo: &OutPoint) -> String {
         let key = format!(
             "{MONITORS_PREFIX_KEY}{}_{}",
-            funding_txo.txid.to_hex(),
-            funding_txo.index
+            funding_txo.txid, funding_txo.index
         );
         self.get_key(&key)
     }
@@ -365,7 +365,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
     ) -> Result<(), MutinyError> {
         let key = self.get_key(&format!(
             "{CHANNEL_CLOSURE_PREFIX}{}",
-            user_channel_id.to_be_bytes().to_hex()
+            user_channel_id.to_be_bytes().to_lower_hex_string()
         ));
         self.storage.set_data(key, closure, None)?;
         Ok(())
@@ -377,7 +377,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
     ) -> Result<Option<ChannelClosure>, MutinyError> {
         let key = self.get_key(&format!(
             "{CHANNEL_CLOSURE_PREFIX}{}",
-            user_channel_id.to_be_bytes().to_hex()
+            user_channel_id.to_be_bytes().to_lower_hex_string()
         ));
         self.storage.get_data(key)
     }
@@ -420,7 +420,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         // convert the failed descriptors to hex
         let failed_hex: Vec<String> = failed
             .into_iter()
-            .map(|desc| desc.encode().to_hex())
+            .map(|desc| desc.encode().to_lower_hex_string())
             .collect();
 
         // add the new descriptors
@@ -444,7 +444,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         // convert the failed descriptors to hex
         let descriptors_hex: Vec<String> = descriptors
             .into_iter()
-            .map(|desc| desc.encode().to_hex())
+            .map(|desc| desc.encode().to_lower_hex_string())
             .collect();
 
         self.storage.set_data(key, descriptors_hex, None)?;
@@ -572,7 +572,7 @@ impl<S: MutinyStorage>
 
         let value = VersionedValue {
             version,
-            value: serde_json::to_value(channel_manager.encode().to_hex()).unwrap(),
+            value: serde_json::to_value(channel_manager.encode().to_lower_hex_string()).unwrap(),
         };
 
         self.storage
@@ -588,20 +588,18 @@ impl<S: MutinyStorage>
         &self,
         scorer: &utils::Mutex<HubPreferentialScorer>,
     ) -> Result<(), lightning::io::Error> {
-        let scorer_str = scorer.encode().to_hex();
+        let scorer_str = scorer.encode().to_lower_hex_string();
         self.storage
             .set_data(PROB_SCORER_KEY.to_string(), scorer_str, None)
             .map_err(|_| lightning::io::ErrorKind::Other.into())
     }
 }
 
-impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<ChannelSigner>
-    for MutinyNodePersister<S>
-{
+impl<S: MutinyStorage> Persist<InMemorySigner> for MutinyNodePersister<S> {
     fn persist_new_channel(
         &self,
         funding_txo: OutPoint,
-        monitor: &ChannelMonitor<ChannelSigner>,
+        monitor: &ChannelMonitor<InMemorySigner>,
         monitor_update_id: MonitorUpdateId,
     ) -> ChannelMonitorUpdateStatus {
         let key = self.get_monitor_key(&funding_txo);
@@ -628,7 +626,7 @@ impl<ChannelSigner: WriteableEcdsaChannelSigner, S: MutinyStorage> Persist<Chann
         &self,
         funding_txo: OutPoint,
         _update: Option<&ChannelMonitorUpdate>,
-        monitor: &ChannelMonitor<ChannelSigner>,
+        monitor: &ChannelMonitor<InMemorySigner>,
         monitor_update_id: MonitorUpdateId,
     ) -> ChannelMonitorUpdateStatus {
         let key = self.get_monitor_key(&funding_txo);
@@ -693,9 +691,9 @@ mod test {
     use crate::{node::scoring_params, storage::persist_payment_info};
     use crate::{onchain::OnChainWallet, storage::read_payment_info};
     use bip39::Mnemonic;
+    use bitcoin::bip32::ExtendedPrivKey;
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::PublicKey;
-    use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Txid;
     use esplora_client::Builder;
     use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
@@ -717,6 +715,30 @@ mod test {
         let id = Uuid::new_v4().to_string();
         let storage = MemoryStorage::default();
         MutinyNodePersister::new(id, storage, Arc::new(MutinyLogger::default()))
+    }
+
+    #[test]
+    fn test_get_monitor_key() {
+        let test_name = "test_get_monitor_key";
+        log!("{}", test_name);
+
+        let persister = get_test_persister();
+        let outpoint = OutPoint {
+            txid: Txid::from_str(
+                "465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b",
+            )
+            .unwrap(),
+            index: 0,
+        };
+        let key = persister.get_monitor_key(&outpoint);
+
+        assert_eq!(
+            key,
+            format!(
+                "monitors/465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b_0_{}",
+                persister.node_id
+            )
+        );
     }
 
     #[test]
@@ -816,6 +838,7 @@ mod test {
                 index: 0,
             },
             output: Default::default(),
+            channel_keys_id: None,
         };
         let result = persister.persist_failed_spendable_outputs(vec![static_output_0.clone()]);
         assert!(result.is_ok());
@@ -829,6 +852,7 @@ mod test {
                 index: 1,
             },
             output: Default::default(),
+            channel_keys_id: None,
         };
         let result = persister.persist_failed_spendable_outputs(vec![static_output_1.clone()]);
         assert!(result.is_ok());
@@ -877,7 +901,6 @@ mod test {
         let esplora = Arc::new(Builder::new(&esplora_server_url).build_async().unwrap());
         let fees = Arc::new(MutinyFeeEstimator::new(
             persister.storage.clone(),
-            network,
             esplora.clone(),
             logger.clone(),
         ));

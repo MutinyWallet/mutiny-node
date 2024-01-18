@@ -16,15 +16,16 @@ use crate::error::MutinyJsError;
 use crate::indexed_db::IndexedDbStorage;
 use crate::models::*;
 use bip39::Mnemonic;
+use bitcoin::bip32::ExtendedPrivKey;
 use bitcoin::consensus::deserialize;
-use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
+use hex_conservative::DisplayHex;
 use lightning::{log_error, log_info, log_warn, routing::gossip::NodeId, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
@@ -543,8 +544,7 @@ impl MutinyWallet {
     ) -> Result<String, MutinyJsError> {
         // I know walia parses `pj=` and `pjos=` but payjoin::Uri parses the whole bip21 uri
         let pj_uri = payjoin::Uri::try_from(payjoin_uri.as_str())
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?
-            .assume_checked();
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self
             .inner
             .node_manager
@@ -581,7 +581,7 @@ impl MutinyWallet {
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<u64, MutinyJsError> {
-        let addr = Address::from_str(&destination_address)?;
+        let addr = Address::from_str(&destination_address)?.assume_checked();
         Ok(self
             .inner
             .node_manager
@@ -597,7 +597,7 @@ impl MutinyWallet {
         destination_address: String,
         fee_rate: Option<f32>,
     ) -> Result<u64, MutinyJsError> {
-        let addr = Address::from_str(&destination_address)?;
+        let addr = Address::from_str(&destination_address)?.assume_checked();
         Ok(self
             .inner
             .node_manager
@@ -669,7 +669,7 @@ impl MutinyWallet {
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
         let address = Address::from_str(&address)?;
         Ok(JsValue::from_serde(
-            &self.inner.node_manager.check_address(&address).await?,
+            &self.inner.node_manager.check_address(address).await?,
         )?)
     }
 
@@ -786,14 +786,15 @@ impl MutinyWallet {
     /// reconnect to the peer.
     #[wasm_bindgen]
     pub async fn delete_peer(&self, peer: String) -> Result<(), MutinyJsError> {
-        let peer = NodeId::from_str(&peer)?;
+        let peer = NodeId::from_str(&peer).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         Ok(self.inner.node_manager.delete_peer(None, &peer).await?)
     }
 
     /// Sets the label of a peer from the selected node.
     #[wasm_bindgen]
     pub fn label_peer(&self, node_id: String, label: Option<String>) -> Result<(), MutinyJsError> {
-        let node_id = NodeId::from_str(&node_id)?;
+        let node_id =
+            NodeId::from_str(&node_id).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
         self.inner.node_manager.label_peer(&node_id, label)?;
         Ok(())
     }
@@ -1194,7 +1195,7 @@ impl MutinyWallet {
         address: String,
         labels: Vec<String>,
     ) -> Result<(), MutinyJsError> {
-        let address = Address::from_str(&address)?;
+        let address = Address::from_str(&address)?.assume_checked();
         Ok(self
             .inner
             .node_manager
@@ -1818,7 +1819,7 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn npub_to_hexpub(npub: String) -> Result<String, MutinyJsError> {
         let npub = parse_npub_or_nip05(&npub).await?;
-        Ok(npub.to_hex())
+        Ok(npub.serialize().to_lower_hex_string())
     }
 
     /// Convert an hex string to a npub string
@@ -1832,8 +1833,7 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn is_potential_hodl_invoice(invoice: String) -> Result<bool, MutinyJsError> {
         let invoice = Bolt11Invoice::from_str(&invoice)?;
-        Ok(mutiny_core::utils::HODL_INVOICE_NODES
-            .contains(&invoice.recover_payee_pub_key().to_hex().as_str()))
+        Ok(mutiny_core::utils::is_hodl_invoice(&invoice))
     }
 }
 

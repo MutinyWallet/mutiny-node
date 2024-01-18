@@ -6,7 +6,9 @@ use crate::{error::MutinyError, fees::MutinyFeeEstimator};
 use crate::{gossip, ldkstorage::PhantomChannelManager, logging::MutinyLogger};
 use crate::{gossip::read_peer_info, node::PubkeyConnectionInfo};
 use crate::{keymanager::PhantomKeysManager, node::ConnectionType};
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::key::{Secp256k1, Verification};
+use bitcoin::secp256k1::{PublicKey, Signing};
+use lightning::blinded_path::BlindedPath;
 use lightning::events::{MessageSendEvent, MessageSendEventsProvider};
 use lightning::ln::features::{InitFeatures, NodeFeatures};
 use lightning::ln::msgs;
@@ -14,8 +16,9 @@ use lightning::ln::msgs::{LightningError, RoutingMessageHandler};
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning::ln::peer_handler::PeerManager as LdkPeerManager;
 use lightning::log_warn;
-use lightning::onion_message::{Destination, MessageRouter, OnionMessagePath};
+use lightning::onion_message::messenger::{Destination, MessageRouter, OnionMessagePath};
 use lightning::routing::gossip::NodeId;
+use lightning::sign::EntropySource;
 use lightning::util::logger::Logger;
 use lightning::{
     ln::{msgs::SocketAddress, peer_handler::SocketDescriptor as LdkSocketDescriptor},
@@ -327,13 +330,26 @@ impl MessageRouter for LspMessageRouter {
             Ok(OnionMessagePath {
                 intermediate_nodes: vec![],
                 destination,
+                first_node_addresses: None,
             })
         } else {
             Ok(OnionMessagePath {
                 intermediate_nodes: self.intermediate_nodes.clone(),
                 destination,
+                first_node_addresses: None,
             })
         }
+    }
+
+    fn create_blinded_paths<ES: EntropySource + ?Sized, T: Signing + Verification>(
+        &self,
+        _recipient: PublicKey,
+        _peers: Vec<PublicKey>,
+        _entropy_source: &ES,
+        _secp_ctx: &Secp256k1<T>,
+    ) -> Result<Vec<BlindedPath>, ()> {
+        // Bolt12 not yet supported
+        Err(())
     }
 }
 

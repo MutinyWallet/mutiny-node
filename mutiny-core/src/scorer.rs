@@ -1,4 +1,5 @@
 use crate::{logging::MutinyLogger, node::NetworkGraph};
+use lightning::routing::router::CandidateRouteHop;
 use lightning::{
     routing::{
         gossip::NodeId,
@@ -10,6 +11,7 @@ use lightning::{
     },
     util::ser::{Writeable, Writer},
 };
+use std::time::Duration;
 use std::{collections::HashSet, str::FromStr, sync::Arc};
 
 const HUB_BASE_DISCOUNT_PENALTY_MSAT: u64 = 100_000;
@@ -290,8 +292,44 @@ impl HubPreferentialScorer {
         }
     }
 
-    fn is_preferred_hub(&self, node_id: &NodeId) -> bool {
-        self.preferred_hubs_set.contains(node_id)
+    fn is_source_preferred_hub(&self, candidate: &CandidateRouteHop) -> bool {
+        match candidate {
+            CandidateRouteHop::FirstHop(_) => false, // source of first hop is us
+            CandidateRouteHop::PublicHop(hop) => {
+                self.preferred_hubs_set.contains(hop.info.source())
+            }
+            CandidateRouteHop::PrivateHop(hop) => {
+                let source = hop.hint.src_node_id;
+                let node_id = NodeId::from_pubkey(&source);
+                self.preferred_hubs_set.contains(&node_id)
+            }
+            CandidateRouteHop::Blinded(hop) => {
+                // we can prefer blinded paths with hub introduction points
+                let (_, path) = hop.hint;
+                let node_id = NodeId::from_pubkey(&path.introduction_node_id);
+                self.preferred_hubs_set.contains(&node_id)
+            }
+            CandidateRouteHop::OneHopBlinded(hop) => {
+                // one hop is just the introduction node which is a known node id
+                let (_, path) = hop.hint;
+                let node_id = NodeId::from_pubkey(&path.introduction_node_id);
+                self.preferred_hubs_set.contains(&node_id)
+            }
+        }
+    }
+
+    fn is_target_preferred_hub(&self, candidate: &CandidateRouteHop) -> bool {
+        match candidate {
+            CandidateRouteHop::FirstHop(hop) => self.preferred_hubs_set.contains(hop.payer_node_id),
+            CandidateRouteHop::PublicHop(hop) => {
+                self.preferred_hubs_set.contains(hop.info.target())
+            }
+            CandidateRouteHop::PrivateHop(hop) => {
+                self.preferred_hubs_set.contains(hop.target_node_id)
+            }
+            CandidateRouteHop::Blinded(_) => false, // the target of a blinded path is unknown
+            CandidateRouteHop::OneHopBlinded(_) => false, // the target of a blinded path is unknown
+        }
     }
 }
 
@@ -300,31 +338,31 @@ impl ScoreLookUp for HubPreferentialScorer {
 
     fn channel_penalty_msat(
         &self,
-        short_channel_id: u64,
-        source: &NodeId,
-        target: &NodeId,
+        candidate: &CandidateRouteHop,
         usage: ChannelUsage,
         score_params: &Self::ScoreParams,
     ) -> u64 {
         // normal penalty from the inner scorer
-        let mut penalty =
-            self.inner
-                .channel_penalty_msat(short_channel_id, source, target, usage, score_params);
+        let mut penalty = self
+            .inner
+            .channel_penalty_msat(candidate, usage, score_params);
 
         let hub_to_hub_min_penalty = (score_params.base_penalty_msat as f64 * 0.5) as u64;
         let entering_highway_min_penalty = (score_params.base_penalty_msat as f64 * 0.7) as u64;
 
-        if self.is_preferred_hub(source) && self.is_preferred_hub(target) {
+        let is_source_preferred_hub = self.is_source_preferred_hub(candidate);
+        let is_target_preferred_hub = self.is_target_preferred_hub(candidate);
+        if is_source_preferred_hub && is_target_preferred_hub {
             // Both the source and target are on the "hub highway"
             penalty = penalty.saturating_mul(5).saturating_div(10); // 50% discount
             penalty = penalty
                 .saturating_sub(HUB_BASE_DISCOUNT_PENALTY_MSAT)
                 .max(hub_to_hub_min_penalty); // Base fee discount
-        } else if self.is_preferred_hub(target) {
+        } else if is_target_preferred_hub {
             // Only the target is a preferred hub (entering the "hub highway")
             penalty = penalty.saturating_mul(7).saturating_div(10); // 30% discount
             penalty = penalty.max(entering_highway_min_penalty);
-        } else if self.is_preferred_hub(source) {
+        } else if is_source_preferred_hub {
             // Only the source is a preferred hub (leaving the "hub highway")
             // No discount here
             penalty = penalty.max(score_params.base_penalty_msat);
@@ -341,20 +379,32 @@ impl ScoreLookUp for HubPreferentialScorer {
 }
 
 impl ScoreUpdate for HubPreferentialScorer {
-    fn payment_path_failed(&mut self, path: &Path, short_channel_id: u64) {
-        self.inner.payment_path_failed(path, short_channel_id)
+    fn payment_path_failed(
+        &mut self,
+        path: &Path,
+        short_channel_id: u64,
+        duration_since_epoch: Duration,
+    ) {
+        self.inner
+            .payment_path_failed(path, short_channel_id, duration_since_epoch)
     }
 
-    fn payment_path_successful(&mut self, path: &Path) {
-        self.inner.payment_path_successful(path)
+    fn payment_path_successful(&mut self, path: &Path, duration_since_epoch: Duration) {
+        self.inner
+            .payment_path_successful(path, duration_since_epoch)
     }
 
-    fn probe_failed(&mut self, path: &Path, short_channel_id: u64) {
-        self.inner.probe_failed(path, short_channel_id)
+    fn probe_failed(&mut self, path: &Path, short_channel_id: u64, duration_since_epoch: Duration) {
+        self.inner
+            .probe_failed(path, short_channel_id, duration_since_epoch)
     }
 
-    fn probe_successful(&mut self, path: &Path) {
-        self.inner.probe_successful(path)
+    fn probe_successful(&mut self, path: &Path, duration_since_epoch: Duration) {
+        self.inner.probe_successful(path, duration_since_epoch)
+    }
+
+    fn time_passed(&mut self, duration_since_epoch: Duration) {
+        self.inner.time_passed(duration_since_epoch)
     }
 }
 

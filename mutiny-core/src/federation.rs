@@ -1,4 +1,4 @@
-use crate::utils::spawn;
+use crate::utils::{convert_from_fedimint_invoice, convert_to_fedimint_invoice, spawn};
 use crate::{
     error::{MutinyError, MutinyStorageError},
     event::PaymentInfo,
@@ -13,11 +13,11 @@ use crate::{
 };
 use async_trait::async_trait;
 use bip39::Mnemonic;
+use bitcoin::secp256k1::ThirtyTwoByteHash;
 use bitcoin::{
-    hashes::{hex::ToHex, sha256},
+    bip32::{ChildNumber, DerivationPath, ExtendedPrivKey},
+    hashes::sha256,
     secp256k1::Secp256k1,
-    util::bip32::ExtendedPrivKey,
-    util::bip32::{ChildNumber, DerivationPath},
     Network,
 };
 use core::fmt;
@@ -50,18 +50,19 @@ use fedimint_ln_client::{
     InternalPayState, LightningClientInit, LightningClientModule, LightningOperationMeta,
     LightningOperationMetaVariant, LnPayState, LnReceiveState,
 };
+use fedimint_ln_common::lightning_invoice::RoutingFees;
 use fedimint_ln_common::LightningCommonInit;
 use fedimint_mint_client::MintClientInit;
 use fedimint_wallet_client::{WalletClientInit, WalletClientModule};
 use futures::future::{self};
 use futures_util::{pin_mut, StreamExt};
-use hex::FromHex;
+use hex_conservative::{DisplayHex, FromHex};
 #[cfg(target_arch = "wasm32")]
 use instant::Instant;
 use lightning::{
     ln::PaymentHash, log_debug, log_error, log_info, log_trace, log_warn, util::logger::Logger,
 };
-use lightning_invoice::{Bolt11Invoice, RoutingFees};
+use lightning_invoice::Bolt11Invoice;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -246,7 +247,8 @@ impl<S: MutinyStorage> FederationClient<S> {
 
         // check federation is on expected network
         let wallet_client = fedimint_client.get_first_module::<WalletClientModule>();
-        if network != wallet_client.get_network() {
+        // compare magic bytes because different versions of rust-bitcoin
+        if network.magic().to_bytes() != wallet_client.get_network().magic().to_le_bytes() {
             log_error!(
                 logger,
                 "Fedimint on different network {}, expected: {network}",
@@ -325,6 +327,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         let (_id, invoice) = lightning_module
             .create_bolt11_invoice(Amount::from_sats(amount), String::new(), None, ())
             .await?;
+        let invoice = convert_from_fedimint_invoice(&invoice);
 
         // persist the invoice
         let mut stored_payment: MutinyInvoice = invoice.clone().into();
@@ -332,7 +335,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         stored_payment.labels = labels;
 
         log_trace!(self.logger, "Persiting payment");
-        let hash = *stored_payment.payment_hash.as_inner();
+        let hash = stored_payment.payment_hash.into_32();
         let payment_info = PaymentInfo::from(stored_payment);
         persist_payment_info(&self.storage, &hash, &payment_info, inbound)?;
         log_trace!(self.logger, "Persisted payment");
@@ -392,9 +395,9 @@ impl<S: MutinyStorage> FederationClient<S> {
         );
 
         let mut operation_map: HashMap<
-            sha256::Hash,
+            [u8; 32],
             (ChronologicalOperationLogKey, OperationLogEntry),
-        > = HashMap::new();
+        > = HashMap::with_capacity(operations.len());
         log_trace!(
             self.logger,
             "About to go through {} operations",
@@ -405,10 +408,12 @@ impl<S: MutinyStorage> FederationClient<S> {
                 let lightning_meta: LightningOperationMeta = entry.meta();
                 match lightning_meta.variant {
                     LightningOperationMetaVariant::Pay(pay_meta) => {
-                        operation_map.insert(*pay_meta.invoice.payment_hash(), (key, entry));
+                        let hash = pay_meta.invoice.payment_hash().into_inner();
+                        operation_map.insert(hash, (key, entry));
                     }
                     LightningOperationMetaVariant::Receive { invoice, .. } => {
-                        operation_map.insert(*invoice.payment_hash(), (key, entry));
+                        let hash = invoice.payment_hash().into_inner();
+                        operation_map.insert(hash, (key, entry));
                     }
                 }
             }
@@ -420,12 +425,12 @@ impl<S: MutinyStorage> FederationClient<S> {
             pending_invoices.len()
         );
         for invoice in pending_invoices {
-            let hash = invoice.payment_hash;
+            let hash = invoice.payment_hash.into_32();
             if let Some((key, entry)) = operation_map.get(&hash) {
                 if let Some(updated_invoice) = extract_invoice_from_entry(
                     self.logger.clone(),
                     entry,
-                    &hash,
+                    hash,
                     key.operation_id,
                     &lightning_module,
                 )
@@ -449,7 +454,7 @@ impl<S: MutinyStorage> FederationClient<S> {
             HTLCStatus::Succeeded | HTLCStatus::Failed
         ) {
             log_debug!(self.logger, "Saving updated payment");
-            let hash = *updated_invoice.payment_hash.as_inner();
+            let hash = updated_invoice.payment_hash.into_32();
             let inbound = updated_invoice.inbound;
             let payment_info = PaymentInfo::from(updated_invoice);
             persist_payment_info(&self.storage, &hash, &payment_info, inbound)?;
@@ -497,7 +502,7 @@ impl<S: MutinyStorage> FederationClient<S> {
                     if let Some(updated_invoice) = extract_invoice_from_entry(
                         self.logger.clone(),
                         &entry,
-                        hash,
+                        hash.into_32(),
                         key.operation_id,
                         &lightning_module,
                     )
@@ -519,7 +524,7 @@ impl<S: MutinyStorage> FederationClient<S> {
             // If the invoice is not InFlight or Pending, return it directly
             log_trace!(self.logger, "returning final invoice");
             // TODO labels
-            return MutinyInvoice::from(invoice, PaymentHash(hash.into_inner()), inbound, vec![]);
+            return MutinyInvoice::from(invoice, PaymentHash(hash.into_32()), inbound, vec![]);
         }
 
         log_debug!(self.logger, "could not find invoice");
@@ -537,15 +542,16 @@ impl<S: MutinyStorage> FederationClient<S> {
             .fedimint_client
             .get_first_module::<LightningClientModule>();
 
+        let fedimint_invoice = convert_to_fedimint_invoice(&invoice);
         let outgoing_payment = lightning_module
-            .pay_bolt11_invoice(invoice.clone(), ())
+            .pay_bolt11_invoice(fedimint_invoice, ())
             .await?;
 
         // Save after payment was initiated successfully
         let mut stored_payment: MutinyInvoice = invoice.clone().into();
         stored_payment.inbound = inbound;
         stored_payment.labels = labels;
-        let hash = *stored_payment.payment_hash.as_inner();
+        let hash = stored_payment.payment_hash.into_32();
         let payment_info = PaymentInfo::from(stored_payment);
         persist_payment_info(&self.storage, &hash, &payment_info, inbound)?;
 
@@ -638,13 +644,15 @@ fn sats_round_up(amount: &Amount) -> u64 {
 fn get_gateway_preference(
     gateways: Vec<fedimint_ln_common::LightningGatewayAnnouncement>,
     federation_id: FederationId,
-) -> Option<bitcoin::secp256k1::PublicKey> {
-    let mut active_choice: Option<bitcoin::secp256k1::PublicKey> = None;
+) -> Option<fedimint_ln_common::bitcoin::secp256k1::PublicKey> {
+    let mut active_choice: Option<fedimint_ln_common::bitcoin::secp256k1::PublicKey> = None;
 
     let signet_gateway_id =
-        bitcoin::secp256k1::PublicKey::from_str(SIGNET_GATEWAY).expect("should be valid pubkey");
+        fedimint_ln_common::bitcoin::secp256k1::PublicKey::from_str(SIGNET_GATEWAY)
+            .expect("should be valid pubkey");
     let mainnet_gateway_id =
-        bitcoin::secp256k1::PublicKey::from_str(MAINNET_GATEWAY).expect("should be valid pubkey");
+        fedimint_ln_common::bitcoin::secp256k1::PublicKey::from_str(MAINNET_GATEWAY)
+            .expect("should be valid pubkey");
     let signet_federation_id =
         FederationId::from_str(SIGNET_FEDERATION).expect("should be a valid federation id");
     let mainnet_federation_id =
@@ -713,7 +721,7 @@ pub(crate) fn mnemonic_from_xpriv(xpriv: ExtendedPrivKey) -> Result<Mnemonic, Mu
 async fn extract_invoice_from_entry(
     logger: Arc<MutinyLogger>,
     entry: &OperationLogEntry,
-    hash: &sha256::Hash,
+    hash: [u8; 32],
     operation_id: OperationId,
     lightning_module: &LightningClientModule,
 ) -> Option<MutinyInvoice> {
@@ -721,27 +729,29 @@ async fn extract_invoice_from_entry(
 
     match lightning_meta.variant {
         LightningOperationMetaVariant::Pay(pay_meta) => {
-            if pay_meta.invoice.payment_hash() == hash {
+            let invoice = convert_from_fedimint_invoice(&pay_meta.invoice);
+            if invoice.payment_hash().into_32() == hash {
                 match lightning_module.subscribe_ln_pay(operation_id).await {
                     Ok(o) => Some(
                         process_outcome(
                             o,
                             process_pay_state_ln,
-                            pay_meta.invoice,
+                            invoice,
                             false,
                             FEDIMINT_STATUS_TIMEOUT_CHECK_MS,
                             logger,
                         )
                         .await,
                     ),
-                    Err(_) => Some(pay_meta.invoice.into()),
+                    Err(_) => Some(invoice.into()),
                 }
             } else {
                 None
             }
         }
         LightningOperationMetaVariant::Receive { invoice, .. } => {
-            if invoice.payment_hash() == hash {
+            let invoice = convert_from_fedimint_invoice(&invoice);
+            if invoice.payment_hash().into_32() == hash {
                 match lightning_module.subscribe_ln_receive(operation_id).await {
                     Ok(o) => Some(
                         process_outcome(
@@ -765,7 +775,7 @@ async fn extract_invoice_from_entry(
 
 fn process_pay_state_internal(pay_state: InternalPayState, invoice: &mut MutinyInvoice) {
     invoice.preimage = if let InternalPayState::Preimage(ref preimage) = pay_state {
-        Some(preimage.0.to_hex())
+        Some(preimage.0.to_lower_hex_string())
     } else {
         None
     };
@@ -971,7 +981,7 @@ impl<'a, S: MutinyStorage> IRawDatabaseTransaction for IndexedDBPseudoTransactio
         self.mem.commit_tx().await?;
 
         let serialized_data = bincode::serialize(&key_value_pairs).map_err(anyhow::Error::new)?;
-        let hex_serialized_data = hex::encode(serialized_data);
+        let hex_serialized_data = serialized_data.to_lower_hex_string();
 
         let old = self.federation_version.fetch_add(1, Ordering::SeqCst);
         let version = old + 1;
@@ -1093,27 +1103,28 @@ fn fedimint_mnemonic_generation() {
 #[cfg(test)]
 fn gateway_preference() {
     use fedimint_core::util::SafeUrl;
+    use fedimint_ln_common::bitcoin::secp256k1::PublicKey;
     use fedimint_ln_common::{LightningGateway, LightningGatewayAnnouncement};
     use std::time::Duration;
 
     use super::*;
 
     const RANDOM_KEY: &str = "0218845781f631c48f1c9709e23092067d06837f30aa0cd0544ac887fe91ddd166";
-    let random_key = bitcoin::secp256k1::PublicKey::from_str(RANDOM_KEY).unwrap();
+    let random_key = PublicKey::from_str(RANDOM_KEY).unwrap();
 
     const VETTED_GATEWAY: &str =
         "02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b";
-    let vetted_gateway_pubkey = bitcoin::secp256k1::PublicKey::from_str(VETTED_GATEWAY).unwrap();
+    let vetted_gateway_pubkey = PublicKey::from_str(VETTED_GATEWAY).unwrap();
 
     const UNVETTED_GATEWAY_KEY_HIGH_FEE: &str =
         "0384526253c27c7aef56c7b71a5cd25bebb66dddda437826defc5b2568bde81f07";
     let unvetted_gateway_high_fee_pubkey =
-        bitcoin::secp256k1::PublicKey::from_str(UNVETTED_GATEWAY_KEY_HIGH_FEE).unwrap();
+        PublicKey::from_str(UNVETTED_GATEWAY_KEY_HIGH_FEE).unwrap();
 
     const UNVETTED_GATEWAY_KEY_LOW_FEE: &str =
         "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443";
     let unvetted_gateway_low_fee_pubkey =
-        bitcoin::secp256k1::PublicKey::from_str(UNVETTED_GATEWAY_KEY_LOW_FEE).unwrap();
+        PublicKey::from_str(UNVETTED_GATEWAY_KEY_LOW_FEE).unwrap();
 
     let random_federation_id = FederationId::dummy();
 
@@ -1121,7 +1132,7 @@ fn gateway_preference() {
     let signet_gateway = LightningGatewayAnnouncement {
         info: LightningGateway {
             mint_channel_id: 12345,
-            gateway_redeem_key: bitcoin::secp256k1::PublicKey::from_str(SIGNET_GATEWAY).unwrap(),
+            gateway_redeem_key: PublicKey::from_str(SIGNET_GATEWAY).unwrap(),
             node_pub_key: random_key,
             lightning_alias: "Signet Gateway".to_string(),
             api: SafeUrl::parse("http://localhost:8080").unwrap(),
@@ -1130,7 +1141,7 @@ fn gateway_preference() {
                 base_msat: 100,
                 proportional_millionths: 10,
             },
-            gateway_id: bitcoin::secp256k1::PublicKey::from_str(SIGNET_GATEWAY).unwrap(),
+            gateway_id: PublicKey::from_str(SIGNET_GATEWAY).unwrap(),
             supports_private_payments: true,
         },
         vetted: false,
@@ -1140,7 +1151,7 @@ fn gateway_preference() {
     let mainnet_gateway = LightningGatewayAnnouncement {
         info: LightningGateway {
             mint_channel_id: 12345,
-            gateway_redeem_key: bitcoin::secp256k1::PublicKey::from_str(MAINNET_GATEWAY).unwrap(),
+            gateway_redeem_key: PublicKey::from_str(MAINNET_GATEWAY).unwrap(),
             node_pub_key: random_key,
             lightning_alias: "Mainnet Gateway".to_string(),
             api: SafeUrl::parse("http://localhost:8080").unwrap(),
@@ -1149,7 +1160,7 @@ fn gateway_preference() {
                 base_msat: 100,
                 proportional_millionths: 10,
             },
-            gateway_id: bitcoin::secp256k1::PublicKey::from_str(MAINNET_GATEWAY).unwrap(),
+            gateway_id: PublicKey::from_str(MAINNET_GATEWAY).unwrap(),
             supports_private_payments: true,
         },
         vetted: false,
@@ -1225,13 +1236,13 @@ fn gateway_preference() {
     let signet_federation_id = FederationId::from_str(SIGNET_FEDERATION).unwrap();
     assert_eq!(
         get_gateway_preference(gateways.clone(), signet_federation_id),
-        Some(bitcoin::secp256k1::PublicKey::from_str(SIGNET_GATEWAY).unwrap())
+        Some(PublicKey::from_str(SIGNET_GATEWAY).unwrap())
     );
 
     let mainnet_federation_id = FederationId::from_str(MAINNET_FEDERATION).unwrap();
     assert_eq!(
         get_gateway_preference(gateways.clone(), mainnet_federation_id),
-        Some(bitcoin::secp256k1::PublicKey::from_str(MAINNET_GATEWAY).unwrap())
+        Some(PublicKey::from_str(MAINNET_GATEWAY).unwrap())
     );
 
     // Test that the method returns the first vetted gateway if none of the gateways match the federation ID

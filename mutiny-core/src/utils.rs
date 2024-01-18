@@ -7,9 +7,11 @@ use futures::{
     future::{self, Either},
     pin_mut,
 };
+use hex_conservative::DisplayHex;
 use lightning::routing::scoring::{LockableScore, ScoreLookUp, ScoreUpdate};
 use lightning::util::ser::Writeable;
 use lightning::util::ser::Writer;
+use lightning_invoice::Bolt11Invoice;
 use nostr::key::XOnlyPublicKey;
 use nostr::nips::nip05;
 use nostr::{Event, Filter, FromBech32, JsonUtil, Kind, Metadata};
@@ -24,6 +26,7 @@ pub(crate) fn min_lightning_amount(network: Network) -> u64 {
     match network {
         Network::Bitcoin => 100_000,
         Network::Testnet | Network::Signet | Network::Regtest => 10_000,
+        net => unreachable!("Unknown network {net}!"),
     }
 }
 
@@ -263,3 +266,26 @@ pub const HODL_INVOICE_NODES: [&str; 5] = [
     "0282eb467bc073833a039940392592bf10cf338a830ba4e392c1667d7697654c7e", // Robosats
     "037ff12b6a4e4bcb4b944b6d20af08cdff61b3461c1dff0d00a88697414d891bc7", // Robosats
 ];
+
+pub fn is_hodl_invoice(invoice: &Bolt11Invoice) -> bool {
+    let pubkey = invoice
+        .recover_payee_pub_key()
+        .serialize()
+        .to_lower_hex_string();
+    HODL_INVOICE_NODES.contains(&pubkey.as_str())
+}
+
+/// Coverts from our Bolt11Invoice type to fedimint's
+pub fn convert_to_fedimint_invoice(
+    invoice: &Bolt11Invoice,
+) -> fedimint_ln_common::lightning_invoice::Bolt11Invoice {
+    fedimint_ln_common::lightning_invoice::Bolt11Invoice::from_str(&invoice.to_string())
+        .expect("just converting types")
+}
+
+/// Coverts from fedimint's Bolt11Invoice type to ours
+pub fn convert_from_fedimint_invoice(
+    invoice: &fedimint_ln_common::lightning_invoice::Bolt11Invoice,
+) -> Bolt11Invoice {
+    Bolt11Invoice::from_str(&invoice.to_string()).expect("just converting types")
+}

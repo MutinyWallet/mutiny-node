@@ -2,8 +2,8 @@ use crate::auth::MutinyAuthClient;
 use crate::encrypt::{decrypt_with_key, encrypt_with_key};
 use crate::{error::MutinyError, logging::MutinyLogger};
 use anyhow::anyhow;
-use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
+use hex_conservative::DisplayHex;
 use lightning::util::logger::*;
 use lightning::{log_error, log_info};
 use reqwest::{Method, Url};
@@ -98,7 +98,10 @@ impl MutinyVssClient {
         logger: Arc<MutinyLogger>,
     ) -> Self {
         log_info!(logger, "Creating unauthenticated vss client");
-        let pk = encryption_key.public_key(&Secp256k1::new()).to_hex();
+        let pk = encryption_key
+            .public_key(&Secp256k1::new())
+            .serialize()
+            .to_lower_hex_string();
         Self {
             auth_client: None,
             client: Some(reqwest::Client::new()),
