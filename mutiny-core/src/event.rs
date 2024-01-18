@@ -297,7 +297,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                         saved_payment_info.amt_msat = MillisatAmount(Some(amount_msat));
                         saved_payment_info.last_update = crate::utils::now().as_secs();
                         match persist_payment_info(
-                            self.persister.storage.clone(),
+                            &self.persister.storage,
                             &payment_hash.0,
                             &saved_payment_info,
                             true,
@@ -325,7 +325,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                             last_update,
                         };
                         match persist_payment_info(
-                            self.persister.storage.clone(),
+                            &self.persister.storage,
                             &payment_hash.0,
                             &payment_info,
                             true,
@@ -363,7 +363,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                         saved_payment_info.fee_paid_msat = fee_paid_msat;
                         saved_payment_info.last_update = crate::utils::now().as_secs();
                         match persist_payment_info(
-                            self.persister.storage.clone(),
+                            &self.persister.storage,
                             &payment_hash.0,
                             &saved_payment_info,
                             false,
@@ -462,7 +462,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                         saved_payment_info.status = HTLCStatus::Failed;
                         saved_payment_info.last_update = crate::utils::now().as_secs();
                         match persist_payment_info(
-                            self.persister.storage.clone(),
+                            &self.persister.storage,
                             &payment_hash.0,
                             &saved_payment_info,
                             false,

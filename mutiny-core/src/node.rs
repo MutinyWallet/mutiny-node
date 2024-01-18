@@ -1190,7 +1190,7 @@ impl<S: MutinyStorage> Node<S> {
             last_update,
         };
         persist_payment_info(
-            self.persister.storage.clone(),
+            &self.persister.storage,
             &payment_hash.0,
             &payment_info,
             true,
@@ -1393,12 +1393,7 @@ impl<S: MutinyStorage> Node<S> {
             last_update,
         };
 
-        persist_payment_info(
-            self.persister.storage.clone(),
-            payment_hash,
-            &payment_info,
-            false,
-        )?;
+        persist_payment_info(&self.persister.storage, payment_hash, &payment_info, false)?;
 
         match pay_result {
             Ok(id) => Ok((id, PaymentHash(payment_hash.to_owned()))),
@@ -1413,12 +1408,7 @@ impl<S: MutinyStorage> Node<S> {
                 );
 
                 payment_info.status = HTLCStatus::Failed;
-                persist_payment_info(
-                    self.persister.storage.clone(),
-                    payment_hash,
-                    &payment_info,
-                    false,
-                )?;
+                persist_payment_info(&self.persister.storage, payment_hash, &payment_info, false)?;
 
                 Err(map_sending_failure(error, amt_msat, &current_channels))
             }
@@ -1582,7 +1572,7 @@ impl<S: MutinyStorage> Node<S> {
         };
 
         persist_payment_info(
-            self.persister.storage.clone(),
+            &self.persister.storage,
             &payment_hash.0,
             &payment_info,
             false,
@@ -1597,7 +1587,7 @@ impl<S: MutinyStorage> Node<S> {
             Err(error) => {
                 payment_info.status = HTLCStatus::Failed;
                 persist_payment_info(
-                    self.persister.storage.clone(),
+                    &self.persister.storage,
                     &payment_hash.0,
                     &payment_info,
                     false,
@@ -2523,7 +2513,7 @@ mod tests {
         // check that it still fails if it is inflight
 
         persist_payment_info(
-            node.persister.storage.clone(),
+            &node.persister.storage,
             &payment_hash.0,
             &payment_info,
             false,
@@ -2540,7 +2530,7 @@ mod tests {
 
         payment_info.status = HTLCStatus::Failed;
         persist_payment_info(
-            node.persister.storage.clone(),
+            &node.persister.storage,
             &payment_hash.0,
             &payment_info,
             false,
@@ -2557,7 +2547,7 @@ mod tests {
 
         payment_info.status = HTLCStatus::Succeeded;
         persist_payment_info(
-            node.persister.storage.clone(),
+            &node.persister.storage,
             &payment_hash.0,
             &payment_info,
             false,
@@ -2676,7 +2666,7 @@ mod wasm_test {
 
         // check that it still fails if it is inflight
         persist_payment_info(
-            node.persister.storage.clone(),
+            &node.persister.storage,
             &payment_hash.0,
             &payment_info,
             false,
@@ -2693,7 +2683,7 @@ mod wasm_test {
 
         payment_info.status = HTLCStatus::Failed;
         persist_payment_info(
-            node.persister.storage.clone(),
+            &node.persister.storage,
             &payment_hash.0,
             &payment_info,
             false,
@@ -2710,7 +2700,7 @@ mod wasm_test {
 
         payment_info.status = HTLCStatus::Succeeded;
         persist_payment_info(
-            node.persister.storage.clone(),
+            &node.persister.storage,
             &payment_hash.0,
             &payment_info,
             false,

@@ -1655,7 +1655,6 @@ impl MutinyWallet {
         let storage = IndexedDbStorage::new(password, cipher, None, logger.clone()).await?;
         mutiny_core::MutinyWallet::<IndexedDbStorage>::restore_mnemonic(
             storage,
-            None, // FIXME: We dont currently support deleting glue_db yet due to safari bug
             Mnemonic::from_str(&m).map_err(|_| MutinyJsError::InvalidMnemonic)?,
         )
         .await?;

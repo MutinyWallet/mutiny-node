@@ -1,13 +1,17 @@
 use crate::{
-    error::MutinyError,
+    error::{MutinyError, MutinyStorageError},
+    event::PaymentInfo,
     key::{create_root_child_key, ChildKey},
     logging::MutinyLogger,
     nodemanager::MutinyInvoice,
     onchain::coin_type_from_network,
-    sql::{glue::GlueDB, ApplicationStore},
-    utils::{self, sleep},
-    ActivityItem, HTLCStatus, DEFAULT_PAYMENT_TIMEOUT,
+    storage::{
+        get_payment_info, list_payment_info, persist_payment_info, MutinyStorage, VersionedValue,
+    },
+    utils::sleep,
+    HTLCStatus, DEFAULT_PAYMENT_TIMEOUT,
 };
+use async_trait::async_trait;
 use bip39::Mnemonic;
 use bitcoin::{
     hashes::{hex::ToHex, sha256},
@@ -16,6 +20,7 @@ use bitcoin::{
     util::bip32::{ChildNumber, DerivationPath},
     Network,
 };
+use core::fmt;
 use fedimint_bip39::Bip39RootSecretStrategy;
 use fedimint_client::{
     db::ChronologicalOperationLogKey,
@@ -33,6 +38,14 @@ use fedimint_core::{
     task::{MaybeSend, MaybeSync},
     Amount,
 };
+use fedimint_core::{
+    db::{
+        mem_impl::{MemDatabase, MemTransaction},
+        IDatabaseTransactionOps, IDatabaseTransactionOpsCore, IRawDatabase,
+        IRawDatabaseTransaction, PrefixStream,
+    },
+    BitcoinHash,
+};
 use fedimint_ln_client::{
     InternalPayState, LightningClientInit, LightningClientModule, LightningOperationMeta,
     LightningOperationMetaVariant, LnPayState, LnReceiveState,
@@ -42,9 +55,13 @@ use fedimint_mint_client::MintClientInit;
 use fedimint_wallet_client::{WalletClientInit, WalletClientModule};
 use futures::future::{self};
 use futures_util::{pin_mut, StreamExt};
-use lightning::{log_debug, log_error, log_info, log_trace, log_warn, util::logger::Logger};
+use hex::FromHex;
+use lightning::{
+    ln::PaymentHash, log_debug, log_error, log_info, log_trace, log_warn, util::logger::Logger,
+};
 use lightning_invoice::Bolt11Invoice;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 // The amount of time in milliseconds to wait for
@@ -128,20 +145,20 @@ pub struct FedimintBalance {
     pub amount: u64,
 }
 
-pub(crate) struct FederationClient {
+pub(crate) struct FederationClient<S: MutinyStorage> {
     pub(crate) uuid: String,
     pub(crate) fedimint_client: ClientArc,
-    g: GlueDB,
+    storage: S,
     pub(crate) logger: Arc<MutinyLogger>,
 }
 
-impl FederationClient {
+impl<S: MutinyStorage> FederationClient<S> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
         uuid: String,
         federation_code: InviteCode,
         xprivkey: ExtendedPrivKey,
-        g: GlueDB,
+        storage: &S,
         network: Network,
         logger: Arc<MutinyLogger>,
     ) -> Result<Self, MutinyError> {
@@ -166,10 +183,14 @@ impl FederationClient {
         client_builder.with_module(LightningClientInit);
 
         log_trace!(logger, "Building fedimint client db");
-        let db = g
-            .new_fedimint_client_db(federation_info.federation_id().to_string())
-            .await?
-            .into();
+        let db = FedimintStorage::new(
+            storage.clone(),
+            federation_info.federation_id().to_string(),
+            logger.clone(),
+        )
+        .await?
+        .into();
+
         if get_config_from_db(&db).await.is_none() {
             client_builder.with_federation_info(federation_info.clone());
         }
@@ -204,7 +225,7 @@ impl FederationClient {
         Ok(FederationClient {
             uuid,
             fedimint_client,
-            g,
+            storage: storage.clone(),
             logger,
         })
     }
@@ -227,7 +248,9 @@ impl FederationClient {
         stored_payment.labels = labels;
 
         log_trace!(self.logger, "Persiting payment");
-        self.g.save_payment(stored_payment).await?;
+        let hash = *stored_payment.payment_hash.as_inner();
+        let payment_info = PaymentInfo::from(stored_payment);
+        persist_payment_info(&self.storage, &hash, &payment_info, true)?;
         log_trace!(self.logger, "Persisted payment");
 
         Ok(invoice.into())
@@ -238,19 +261,36 @@ impl FederationClient {
         Ok(self.fedimint_client.get_balance().await.msats / 1_000)
     }
 
-    pub async fn get_activity(&self) -> Result<Vec<ActivityItem>, MutinyError> {
+    pub async fn check_activity(&self) -> Result<(), MutinyError> {
         log_trace!(self.logger, "Getting activity");
-        let payments = self.g.list_payments().await?;
 
-        let mut payments_map: HashMap<sha256::Hash, MutinyInvoice> = HashMap::new();
-        let mut pending_invoices: Vec<&MutinyInvoice> = Vec::new();
+        let mut pending_invoices = Vec::new();
+        // inbound
+        pending_invoices.extend(
+            list_payment_info(&self.storage, true)?
+                .into_iter()
+                .filter_map(|(h, i)| {
+                    let mutiny_invoice = MutinyInvoice::from(i.clone(), h, true, vec![]).ok();
 
-        for payment in payments.iter() {
-            payments_map.insert(payment.payment_hash, payment.clone());
-            if matches!(payment.status, HTLCStatus::InFlight | HTLCStatus::Pending) {
-                pending_invoices.push(payment);
-            }
-        }
+                    // filter out finalized invoices
+                    mutiny_invoice.filter(|invoice| {
+                        matches!(invoice.status, HTLCStatus::InFlight | HTLCStatus::Pending)
+                    })
+                }),
+        );
+        // outbound
+        pending_invoices.extend(
+            list_payment_info(&self.storage, false)?
+                .into_iter()
+                .filter_map(|(h, i)| {
+                    let mutiny_invoice = MutinyInvoice::from(i.clone(), h, false, vec![]).ok();
+
+                    // filter out finalized invoices
+                    mutiny_invoice.filter(|invoice| {
+                        matches!(invoice.status, HTLCStatus::InFlight | HTLCStatus::Pending)
+                    })
+                }),
+        );
 
         let operations = if !pending_invoices.is_empty() {
             log_trace!(self.logger, "pending invoices, going to list operations");
@@ -309,30 +349,11 @@ impl FederationClient {
                 {
                     self.maybe_update_after_checking_fedimint(updated_invoice.clone())
                         .await?;
-                    payments_map.insert(hash, updated_invoice);
                 }
             }
         }
 
-        let updated_payments = payments_map.into_values().collect::<Vec<_>>();
-
-        let activity_items = updated_payments
-            .into_iter()
-            .filter_map(|invoice| {
-                if !invoice
-                    .bolt11
-                    .as_ref()
-                    .is_some_and(|b| b.would_expire(utils::now()))
-                    && matches!(invoice.status, HTLCStatus::Succeeded | HTLCStatus::InFlight)
-                {
-                    Some(ActivityItem::Lightning(Box::new(invoice)))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-
-        Ok(activity_items)
+        Ok(())
     }
 
     async fn maybe_update_after_checking_fedimint(
@@ -344,21 +365,10 @@ impl FederationClient {
             HTLCStatus::Succeeded | HTLCStatus::Failed
         ) {
             log_debug!(self.logger, "Saving updated payment");
-            self.g
-                .update_payment_status(
-                    &updated_invoice.payment_hash,
-                    updated_invoice.status.clone(),
-                )
-                .await?;
-            self.g
-                .update_payment_fee(&updated_invoice.payment_hash, updated_invoice.fees_paid)
-                .await?;
-            self.g
-                .update_payment_preimage(
-                    &updated_invoice.payment_hash,
-                    updated_invoice.preimage.clone(),
-                )
-                .await?;
+            let hash = *updated_invoice.payment_hash.as_inner();
+            let inbound = updated_invoice.inbound;
+            let payment_info = PaymentInfo::from(updated_invoice);
+            persist_payment_info(&self.storage, &hash, &payment_info, inbound)?;
         }
         Ok(())
     }
@@ -370,7 +380,7 @@ impl FederationClient {
         log_trace!(self.logger, "get_invoice_by_hash");
 
         // Try to get the invoice from storage first
-        let invoice = match self.g.get_payment(hash).await {
+        let (invoice, inbound) = match get_payment_info(&self.storage, hash, &self.logger) {
             Ok(i) => i,
             Err(e) => {
                 log_error!(self.logger, "could not get invoice by hash: {e}");
@@ -378,55 +388,54 @@ impl FederationClient {
             }
         };
 
-        if let Some(invoice) = invoice {
-            log_trace!(self.logger, "retrieved invoice by hash");
+        log_trace!(self.logger, "retrieved invoice by hash");
 
-            if matches!(invoice.status, HTLCStatus::InFlight | HTLCStatus::Pending) {
-                log_trace!(self.logger, "invoice still in flight, getting operations");
-                // If the invoice is InFlight or Pending, check the operation log for updates
-                let lightning_module = self
-                    .fedimint_client
-                    .get_first_module::<LightningClientModule>();
+        if matches!(invoice.status, HTLCStatus::InFlight | HTLCStatus::Pending) {
+            log_trace!(self.logger, "invoice still in flight, getting operations");
+            // If the invoice is InFlight or Pending, check the operation log for updates
+            let lightning_module = self
+                .fedimint_client
+                .get_first_module::<LightningClientModule>();
 
-                let operations = self
-                    .fedimint_client
-                    .operation_log()
-                    .list_operations(FEDIMINT_OPERATIONS_LIST_MAX, None)
-                    .await;
+            let operations = self
+                .fedimint_client
+                .operation_log()
+                .list_operations(FEDIMINT_OPERATIONS_LIST_MAX, None)
+                .await;
 
-                log_trace!(
-                    self.logger,
-                    "going to go through {} operations",
-                    operations.len()
-                );
-                for (key, entry) in operations {
-                    if entry.operation_module_kind() == LightningCommonInit::KIND.as_str() {
-                        if let Some(updated_invoice) = extract_invoice_from_entry(
-                            self.logger.clone(),
-                            &entry,
-                            hash,
-                            key.operation_id,
-                            &lightning_module,
-                        )
-                        .await
-                        {
-                            self.maybe_update_after_checking_fedimint(updated_invoice.clone())
-                                .await?;
-                            return Ok(updated_invoice);
-                        }
-                    } else {
-                        log_warn!(
-                            self.logger,
-                            "Unsupported module: {}",
-                            entry.operation_module_kind()
-                        );
+            log_trace!(
+                self.logger,
+                "going to go through {} operations",
+                operations.len()
+            );
+            for (key, entry) in operations {
+                if entry.operation_module_kind() == LightningCommonInit::KIND.as_str() {
+                    if let Some(updated_invoice) = extract_invoice_from_entry(
+                        self.logger.clone(),
+                        &entry,
+                        hash,
+                        key.operation_id,
+                        &lightning_module,
+                    )
+                    .await
+                    {
+                        self.maybe_update_after_checking_fedimint(updated_invoice.clone())
+                            .await?;
+                        return Ok(updated_invoice);
                     }
+                } else {
+                    log_warn!(
+                        self.logger,
+                        "Unsupported module: {}",
+                        entry.operation_module_kind()
+                    );
                 }
-            } else {
-                // If the invoice is not InFlight or Pending, return it directly
-                log_trace!(self.logger, "returning final invoice");
-                return Ok(invoice);
             }
+        } else {
+            // If the invoice is not InFlight or Pending, return it directly
+            log_trace!(self.logger, "returning final invoice");
+            // TODO labels
+            return MutinyInvoice::from(invoice, PaymentHash(hash.into_inner()), inbound, vec![]);
         }
 
         log_debug!(self.logger, "could not find invoice");
@@ -450,7 +459,9 @@ impl FederationClient {
         let mut stored_payment: MutinyInvoice = invoice.clone().into();
         stored_payment.inbound = false;
         stored_payment.labels = labels;
-        self.g.save_payment(stored_payment.clone()).await?;
+        let hash = *stored_payment.payment_hash.as_inner();
+        let payment_info = PaymentInfo::from(stored_payment);
+        persist_payment_info(&self.storage, &hash, &payment_info, true)?;
 
         // Subscribe and process outcome based on payment type
         let mut inv = match outgoing_payment.payment_type {
@@ -681,6 +692,182 @@ where
     }
 
     invoice
+}
+
+#[derive(Clone)]
+pub struct FedimintStorage<S: MutinyStorage> {
+    pub(crate) storage: S,
+    fedimint_memory: Arc<MemDatabase>,
+    federation_id: String,
+    federation_version: Arc<AtomicU32>,
+}
+
+impl<S: MutinyStorage> fmt::Debug for FedimintStorage<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FedimintDB").finish()
+    }
+}
+
+impl<S: MutinyStorage> FedimintStorage<S> {
+    pub async fn new(
+        storage: S,
+        federation_id: String,
+        logger: Arc<MutinyLogger>,
+    ) -> Result<Self, MutinyError> {
+        log_debug!(logger, "initializing fedimint storage");
+
+        let fedimint_memory = MemDatabase::new();
+
+        let key = key_id(&federation_id);
+
+        let federation_version = match storage.get_data::<VersionedValue>(&key) {
+            Ok(Some(versioned_value)) => {
+                // get the value/version and load it into fedimint memory
+                let hex: String = serde_json::from_value(versioned_value.value.clone())?;
+                if !hex.is_empty() {
+                    let bytes: Vec<u8> =
+                        FromHex::from_hex(&hex).map_err(|e| MutinyError::ReadError {
+                            source: MutinyStorageError::Other(anyhow::Error::new(e)),
+                        })?;
+                    let key_value_pairs: Vec<(Vec<u8>, Vec<u8>)> = bincode::deserialize(&bytes)
+                        .map_err(|e| MutinyError::ReadError {
+                            source: MutinyStorageError::Other(e.into()),
+                        })?;
+
+                    let mut mem_db_tx = fedimint_memory.begin_transaction().await;
+                    for (key, value) in key_value_pairs {
+                        mem_db_tx
+                            .raw_insert_bytes(&key, &value)
+                            .await
+                            .map_err(|_| {
+                                MutinyError::write_err(MutinyStorageError::IndexedDBError)
+                            })?;
+                    }
+                    mem_db_tx
+                        .commit_tx()
+                        .await
+                        .map_err(|_| MutinyError::write_err(MutinyStorageError::IndexedDBError))?;
+                }
+                versioned_value.version
+            }
+            Ok(None) => 0,
+            Err(e) => {
+                panic!("unparsable value in federation storage: {e}")
+            }
+        };
+
+        log_debug!(logger, "done setting up FedimintDB for fedimint");
+
+        Ok(Self {
+            storage,
+            federation_id,
+            federation_version: Arc::new(federation_version.into()),
+            fedimint_memory: Arc::new(fedimint_memory),
+        })
+    }
+}
+
+fn key_id(federation_id: &str) -> String {
+    format!("fedimint_key_{}", federation_id)
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+impl<S: MutinyStorage> IRawDatabase for FedimintStorage<S> {
+    type Transaction<'a> = IndexedDBPseudoTransaction<'a, S>;
+
+    async fn begin_transaction<'a>(&'a self) -> IndexedDBPseudoTransaction<S> {
+        IndexedDBPseudoTransaction {
+            storage: self.storage.clone(),
+            federation_id: self.federation_id.clone(),
+            federation_version: self.federation_version.clone(),
+            mem: self.fedimint_memory.begin_transaction().await,
+        }
+    }
+}
+
+pub struct IndexedDBPseudoTransaction<'a, S: MutinyStorage> {
+    pub(crate) storage: S,
+    federation_version: Arc<AtomicU32>,
+    federation_id: String,
+    mem: MemTransaction<'a>,
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+impl<'a, S: MutinyStorage> IRawDatabaseTransaction for IndexedDBPseudoTransaction<'a, S> {
+    async fn commit_tx(mut self) -> anyhow::Result<()> {
+        let key_value_pairs = self
+            .mem
+            .raw_find_by_prefix(&[])
+            .await?
+            .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
+            .await;
+        self.mem.commit_tx().await?;
+
+        let serialized_data = bincode::serialize(&key_value_pairs).map_err(anyhow::Error::new)?;
+        let hex_serialized_data = hex::encode(serialized_data);
+
+        let old = self.federation_version.fetch_add(1, Ordering::SeqCst);
+        let version = old + 1;
+        let value = VersionedValue {
+            version,
+            value: serde_json::to_value(hex_serialized_data).unwrap(),
+        };
+        self.storage
+            .set_data(key_id(&self.federation_id), value, None)?;
+
+        Ok(())
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+impl<'a, S: MutinyStorage> IDatabaseTransactionOpsCore for IndexedDBPseudoTransaction<'a, S> {
+    async fn raw_insert_bytes(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        self.mem.raw_insert_bytes(key, value).await
+    }
+
+    async fn raw_get_bytes(&mut self, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+        self.mem.raw_get_bytes(key).await
+    }
+
+    async fn raw_remove_entry(&mut self, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+        self.mem.raw_remove_entry(key).await
+    }
+
+    async fn raw_find_by_prefix(&mut self, key_prefix: &[u8]) -> anyhow::Result<PrefixStream<'_>> {
+        self.mem.raw_find_by_prefix(key_prefix).await
+    }
+
+    async fn raw_remove_by_prefix(&mut self, key_prefix: &[u8]) -> anyhow::Result<()> {
+        self.mem.raw_remove_by_prefix(key_prefix).await
+    }
+
+    async fn raw_find_by_prefix_sorted_descending(
+        &mut self,
+        key_prefix: &[u8],
+    ) -> anyhow::Result<PrefixStream<'_>> {
+        self.mem
+            .raw_find_by_prefix_sorted_descending(key_prefix)
+            .await
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+impl<'a, S: MutinyStorage> IDatabaseTransactionOps for IndexedDBPseudoTransaction<'a, S> {
+    async fn rollback_tx_to_savepoint(&mut self) -> anyhow::Result<()> {
+        self.mem.rollback_tx_to_savepoint().await
+    }
+
+    async fn set_tx_savepoint(&mut self) -> anyhow::Result<()> {
+        self.mem.set_tx_savepoint().await
+    }
 }
 
 #[cfg(test)]

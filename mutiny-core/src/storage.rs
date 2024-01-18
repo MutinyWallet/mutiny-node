@@ -1,3 +1,5 @@
+use crate::ldkstorage::CHANNEL_MANAGER_KEY;
+use crate::logging::MutinyLogger;
 use crate::nodemanager::{NodeStorage, DEVICE_LOCK_INTERVAL_SECS};
 use crate::utils::{now, spawn};
 use crate::vss::{MutinyVssClient, VssKeyValueItem};
@@ -9,11 +11,11 @@ use crate::{
     error::{MutinyError, MutinyStorageError},
     event::PaymentInfo,
 };
-use crate::{ldkstorage::CHANNEL_MANAGER_KEY, logging::MutinyLogger};
 use async_trait::async_trait;
 use bdk::chain::{Append, PersistBackend};
 use bip39::Mnemonic;
 use bitcoin::hashes::hex::ToHex;
+use bitcoin::hashes::Hash;
 use hex::FromHex;
 use lightning::{ln::PaymentHash, util::logger::Logger};
 use lightning::{log_error, log_trace};
@@ -677,7 +679,7 @@ fn payment_key(inbound: bool, payment_hash: &[u8; 32]) -> String {
 }
 
 pub(crate) fn persist_payment_info<S: MutinyStorage>(
-    storage: S,
+    storage: &S,
     payment_hash: &[u8; 32],
     payment_info: &PaymentInfo,
     inbound: bool,
@@ -686,6 +688,23 @@ pub(crate) fn persist_payment_info<S: MutinyStorage>(
     storage
         .set_data(key, payment_info, None)
         .map_err(std::io::Error::other)
+}
+
+pub(crate) fn get_payment_info<S: MutinyStorage>(
+    storage: &S,
+    payment_hash: &bitcoin::hashes::sha256::Hash,
+    logger: &MutinyLogger,
+) -> Result<(PaymentInfo, bool), MutinyError> {
+    // try inbound first
+    if let Some(payment_info) = read_payment_info(storage, payment_hash.as_inner(), true, logger) {
+        return Ok((payment_info, true));
+    }
+
+    // if no inbound check outbound
+    match read_payment_info(storage, payment_hash.as_inner(), false, logger) {
+        Some(payment_info) => Ok((payment_info, false)),
+        None => Err(MutinyError::NotFound),
+    }
 }
 
 pub(crate) fn read_payment_info<S: MutinyStorage>(

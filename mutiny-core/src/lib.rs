@@ -53,7 +53,6 @@ use crate::{
     federation::{FederationClient, FederationIdentity, FederationIndex, FederationStorage},
     labels::{get_contact_key, Contact, LabelStorage},
     nodemanager::NodeBalance,
-    sql::glue::GlueDB,
 };
 use crate::{
     lnurlauth::make_lnurl_auth_connection,
@@ -400,7 +399,6 @@ pub struct MutinyWalletConfig {
 pub struct MutinyWalletBuilder<S: MutinyStorage> {
     xprivkey: ExtendedPrivKey,
     storage: S,
-    glue_db: Option<GlueDB>,
     config: Option<MutinyWalletConfig>,
     session_id: Option<String>,
     network: Option<Network>,
@@ -417,7 +415,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         MutinyWalletBuilder::<S> {
             xprivkey,
             storage,
-            glue_db: None,
             config: None,
             session_id: None,
             network: None,
@@ -440,10 +437,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         self.subscription_url = config.subscription_url.clone();
         self.config = Some(config);
         self
-    }
-
-    pub fn with_glue_db(&mut self, glue_db: GlueDB) {
-        self.glue_db = Some(glue_db);
     }
 
     pub fn with_session_id(&mut self, session_id: String) {
@@ -526,25 +519,10 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
 
         // create federation module if any exist
         let federation_storage = self.storage.get_federations()?;
-        let (federations, glue_db) = if !federation_storage.federations.is_empty() {
-            // create gluedb storage
-            let glue_db = GlueDB::new(
-                #[cfg(target_arch = "wasm32")]
-                None,
-                logger.clone(),
-            )
-            .await?;
-
-            let federations = create_federations(
-                federation_storage.clone(),
-                &config,
-                glue_db.clone(),
-                &logger,
-            )
-            .await?;
-            (federations, Some(glue_db))
+        let federations = if !federation_storage.federations.is_empty() {
+            create_federations(federation_storage.clone(), &config, &self.storage, &logger).await?
         } else {
-            (Arc::new(RwLock::new(HashMap::new())), None)
+            Arc::new(RwLock::new(HashMap::new()))
         };
 
         if !self.skip_hodl_invoices {
@@ -581,7 +559,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             xprivkey: self.xprivkey,
             config,
             storage: self.storage,
-            glue_db,
             node_manager,
             nostr,
             federation_storage: Arc::new(RwLock::new(federation_storage)),
@@ -622,6 +599,9 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         // start the nostr wallet connect background process
         mw.start_nostr_wallet_connect().await;
 
+        // start the federation background processor
+        mw.start_fedimint_background_checker().await;
+
         Ok(mw)
     }
 }
@@ -634,11 +614,10 @@ pub struct MutinyWallet<S: MutinyStorage> {
     xprivkey: ExtendedPrivKey,
     config: MutinyWalletConfig,
     pub(crate) storage: S,
-    glue_db: Option<GlueDB>,
     pub node_manager: Arc<NodeManager<S>>,
     pub nostr: Arc<NostrManager<S>>,
     pub federation_storage: Arc<RwLock<FederationStorage>>,
-    pub(crate) federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient>>>>,
+    pub(crate) federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>,
     lnurl_client: Arc<LnUrlClient>,
     auth: AuthManager,
     subscription_client: Option<Arc<MutinySubscriptionClient>>,
@@ -977,13 +956,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // Get activities from node manager
         let mut activities = self.node_manager.get_activity().await?;
 
-        // Directly iterate over federation clients to get their activities
-        let federations = self.federations.read().await;
-        for (_fed_id, federation) in federations.iter() {
-            let federation_activities = federation.get_activity().await?;
-            activities.extend(federation_activities);
-        }
-
         // Sort all activities, newest first
         activities.sort_by(|a, b| b.cmp(a));
 
@@ -1298,12 +1270,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(())
     }
 
-    /// Deletes all the storage and gluedb data
+    /// Deletes all the storage
     pub async fn delete_all(&self) -> Result<(), MutinyError> {
         self.storage.delete_all().await?;
-        if let Some(glue_db) = self.glue_db.as_ref() {
-            glue_db.delete_all().await?;
-        }
         Ok(())
     }
 
@@ -1311,11 +1280,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     ///
     /// Backup the state beforehand. Does not restore lightning data.
     /// Should refresh or restart afterwards. Wallet should be stopped.
-    pub async fn restore_mnemonic(
-        mut storage: S,
-        glue_db: Option<GlueDB>,
-        m: Mnemonic,
-    ) -> Result<(), MutinyError> {
+    pub async fn restore_mnemonic(mut storage: S, m: Mnemonic) -> Result<(), MutinyError> {
         // Delete our storage but insert some device specific data
         let device_id = storage.get_device_id()?;
         let logs: Option<Vec<String>> = storage.get_data(LOGGING_KEY)?;
@@ -1326,12 +1291,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         storage.set_data(NEED_FULL_SYNC_KEY.to_string(), true, None)?;
         storage.set_data(DEVICE_ID_KEY.to_string(), device_id, None)?;
         storage.set_data(LOGGING_KEY.to_string(), logs, None)?;
-
-        // Delete all of glue_db storage
-        // FIXME: on Safari this will clash with previous storage setup
-        if let Some(glue_db) = glue_db.as_ref() {
-            glue_db.delete_all().await?;
-        }
 
         Ok(())
     }
@@ -1355,21 +1314,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         &mut self,
         federation_code: InviteCode,
     ) -> Result<FederationIdentity, MutinyError> {
-        // if we have not init glue_db yet, do it now
-        if self.glue_db.is_none() {
-            let glue_db = GlueDB::new(
-                #[cfg(target_arch = "wasm32")]
-                None,
-                self.logger.clone(),
-            )
-            .await?;
-            self.glue_db = Some(glue_db);
-        }
-
         create_new_federation(
             self.xprivkey,
             self.storage.clone(),
-            self.glue_db.as_ref().expect("just created this").clone(),
             self.network,
             self.logger.clone(),
             self.federation_storage.clone(),
@@ -1456,6 +1403,47 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         Ok(FederationBalances { balances })
+    }
+
+    /// Starts a background process that will check pending fedimint operations
+    pub(crate) async fn start_fedimint_background_checker(&self) {
+        let logger = self.logger.clone();
+        let stop = self.stop.clone();
+        let self_clone = self.clone();
+        utils::spawn(async move {
+            loop {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                };
+
+                sleep(1000).await;
+                let federation_lock = self_clone.federations.read().await;
+
+                match self_clone.list_federation_ids().await {
+                    Ok(federation_ids) => {
+                        for fed_id in federation_ids {
+                            match federation_lock.get(&fed_id) {
+                                Some(fedimint_client) => {
+                                    let _ = fedimint_client.check_activity().await.map_err(|e| {
+                                        log_error!(logger, "error checking activity: {e}")
+                                    });
+                                }
+                                None => {
+                                    log_error!(
+                                        logger,
+                                        "could not get a federation from the lock: {}",
+                                        fed_id
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log_error!(logger, "could not list federations: {e}")
+                    }
+                }
+            }
+        });
     }
 
     /// Calls upon a LNURL to get the parameters for it.
@@ -1642,12 +1630,12 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
     }
 }
 
-async fn create_federations(
+async fn create_federations<S: MutinyStorage>(
     federation_storage: FederationStorage,
     c: &MutinyWalletConfig,
-    g: GlueDB,
+    storage: &S,
     logger: &Arc<MutinyLogger>,
-) -> Result<Arc<RwLock<HashMap<FederationId, Arc<FederationClient>>>>, MutinyError> {
+) -> Result<Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>, MutinyError> {
     let federations = federation_storage.federations.into_iter();
     let mut federation_map = HashMap::new();
     for federation_item in federations {
@@ -1655,7 +1643,7 @@ async fn create_federations(
             federation_item.0,
             federation_item.1.federation_code.clone(),
             c.xprivkey,
-            g.clone(),
+            storage,
             c.network,
             logger.clone(),
         )
@@ -1674,11 +1662,10 @@ async fn create_federations(
 pub(crate) async fn create_new_federation<S: MutinyStorage>(
     xprivkey: ExtendedPrivKey,
     storage: S,
-    g: GlueDB,
     network: Network,
     logger: Arc<MutinyLogger>,
     federation_storage: Arc<RwLock<FederationStorage>>,
-    federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient>>>>,
+    federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>,
     federation_code: InviteCode,
 ) -> Result<FederationIdentity, MutinyError> {
     // Begin with a mutex lock so that nothing else can
@@ -1717,7 +1704,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         next_federation_uuid.clone(),
         federation_code,
         xprivkey,
-        g.clone(),
+        &storage,
         network,
         logger.clone(),
     )
@@ -1745,12 +1732,9 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use crate::{
-        encrypt::encryption_key_from_pass, generate_seed, logging::MutinyLogger,
-        nodemanager::NodeManager, sql::glue::GlueDB, MutinyWallet, MutinyWalletBuilder,
-        MutinyWalletConfigBuilder,
+        encrypt::encryption_key_from_pass, generate_seed, nodemanager::NodeManager, MutinyWallet,
+        MutinyWalletBuilder, MutinyWalletConfigBuilder,
     };
     use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Network;
@@ -1895,15 +1879,7 @@ mod tests {
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage3 = MemoryStorage::new(Some(pass), Some(cipher), None);
 
-        let logger = Arc::new(MutinyLogger::default());
-        let glue_db = GlueDB::new(
-            #[cfg(target_arch = "wasm32")]
-            Some(test_name.to_string()),
-            logger.clone(),
-        )
-        .await
-        .unwrap();
-        MutinyWallet::restore_mnemonic(storage3.clone(), Some(glue_db), mnemonic.clone())
+        MutinyWallet::restore_mnemonic(storage3.clone(), mnemonic.clone())
             .await
             .expect("mutiny wallet should restore");
 

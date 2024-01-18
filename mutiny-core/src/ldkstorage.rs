@@ -742,12 +742,7 @@ mod test {
             secret: None,
             last_update: utils::now().as_secs(),
         };
-        let result = persist_payment_info(
-            persister.storage.clone(),
-            &payment_hash.0,
-            &payment_info,
-            true,
-        );
+        let result = persist_payment_info(&persister.storage, &payment_hash.0, &payment_info, true);
         assert!(result.is_ok());
 
         let result = read_payment_info(

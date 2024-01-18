@@ -1,4 +1,4 @@
-use crate::event::{HTLCStatus, PaymentInfo};
+use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
 use crate::labels::LabelStorage;
 use crate::logging::LOGGING_KEY;
 use crate::utils::{sleep, spawn};
@@ -153,6 +153,40 @@ impl From<Bolt11Invoice> for MutinyInvoice {
             inbound: true,
             labels: vec![],
             last_updated: timestamp,
+        }
+    }
+}
+
+impl From<MutinyInvoice> for PaymentInfo {
+    fn from(invoice: MutinyInvoice) -> Self {
+        let preimage = invoice
+            .preimage
+            .map(|s| hex::decode(s).expect("preimage should decode"))
+            .map(|v| {
+                let mut arr = [0; 32];
+                arr[..].copy_from_slice(&v);
+                arr
+            });
+        let secret = None;
+        let status = invoice.status;
+        let amt_msat = invoice
+            .amount_sats
+            .map(|s| MillisatAmount(Some(s)))
+            .unwrap_or(MillisatAmount(None));
+        let fee_paid_msat = invoice.fees_paid;
+        let bolt11 = invoice.bolt11;
+        let payee_pubkey = invoice.payee_pubkey;
+        let last_update = invoice.last_updated;
+
+        PaymentInfo {
+            preimage,
+            secret,
+            status,
+            amt_msat,
+            fee_paid_msat,
+            bolt11,
+            payee_pubkey,
+            last_update,
         }
     }
 }
