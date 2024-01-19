@@ -819,9 +819,9 @@ impl<'a, S: MutinyStorage> IRawDatabaseTransaction for IndexedDBPseudoTransactio
             version,
             value: serde_json::to_value(hex_serialized_data).unwrap(),
         };
+        // TODO await on persisting remotely
         self.storage
-            .set_data_async(key_id(&self.federation_id), value, Some(version))
-            .await?;
+            .set_data(key_id(&self.federation_id), value, Some(version))?;
 
         Ok(())
     }
