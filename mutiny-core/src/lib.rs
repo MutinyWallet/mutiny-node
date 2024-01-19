@@ -329,7 +329,7 @@ impl From<MutinyInvoice> for PaymentInfo {
             .amount_sats
             .map(|s| MillisatAmount(Some(s)))
             .unwrap_or(MillisatAmount(None));
-        let fee_paid_msat = invoice.fees_paid;
+        let fee_paid_msat = invoice.fees_paid.map(|f| f * 1_000);
         let bolt11 = invoice.bolt11;
         let payee_pubkey = invoice.payee_pubkey;
         let last_update = invoice.last_updated;

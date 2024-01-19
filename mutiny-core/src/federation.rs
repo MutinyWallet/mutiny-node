@@ -236,6 +236,8 @@ impl<S: MutinyStorage> FederationClient<S> {
         amount: u64,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
+        let inbound = true;
+
         let lightning_module = self
             .fedimint_client
             .get_first_module::<LightningClientModule>();
@@ -245,13 +247,13 @@ impl<S: MutinyStorage> FederationClient<S> {
 
         // persist the invoice
         let mut stored_payment: MutinyInvoice = invoice.clone().into();
-        stored_payment.inbound = true;
+        stored_payment.inbound = inbound;
         stored_payment.labels = labels;
 
         log_trace!(self.logger, "Persiting payment");
         let hash = *stored_payment.payment_hash.as_inner();
         let payment_info = PaymentInfo::from(stored_payment);
-        persist_payment_info(&self.storage, &hash, &payment_info, true)?;
+        persist_payment_info(&self.storage, &hash, &payment_info, inbound)?;
         log_trace!(self.logger, "Persisted payment");
 
         Ok(invoice.into())
@@ -448,6 +450,8 @@ impl<S: MutinyStorage> FederationClient<S> {
         invoice: Bolt11Invoice,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
+        let inbound = false;
+
         let lightning_module = self
             .fedimint_client
             .get_first_module::<LightningClientModule>();
@@ -458,11 +462,11 @@ impl<S: MutinyStorage> FederationClient<S> {
 
         // Save after payment was initiated successfully
         let mut stored_payment: MutinyInvoice = invoice.clone().into();
-        stored_payment.inbound = false;
+        stored_payment.inbound = inbound;
         stored_payment.labels = labels;
         let hash = *stored_payment.payment_hash.as_inner();
         let payment_info = PaymentInfo::from(stored_payment);
-        persist_payment_info(&self.storage, &hash, &payment_info, true)?;
+        persist_payment_info(&self.storage, &hash, &payment_info, inbound)?;
 
         // Subscribe and process outcome based on payment type
         let mut inv = match outgoing_payment.payment_type {
@@ -473,7 +477,7 @@ impl<S: MutinyStorage> FederationClient<S> {
                             o,
                             process_pay_state_internal,
                             invoice.clone(),
-                            true,
+                            inbound,
                             DEFAULT_PAYMENT_TIMEOUT * 1_000,
                             Arc::clone(&self.logger),
                         )
@@ -489,7 +493,7 @@ impl<S: MutinyStorage> FederationClient<S> {
                             o,
                             process_pay_state_ln,
                             invoice.clone(),
-                            false,
+                            inbound,
                             DEFAULT_PAYMENT_TIMEOUT * 1_000,
                             Arc::clone(&self.logger),
                         )
