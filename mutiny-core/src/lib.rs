@@ -32,7 +32,6 @@ pub mod nostr;
 mod onchain;
 mod peermanager;
 pub mod scorer;
-pub mod sql;
 pub mod storage;
 mod subscription;
 pub mod utils;
