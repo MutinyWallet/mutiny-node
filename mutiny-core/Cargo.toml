@@ -84,7 +84,6 @@ js-sys = "0.3.65"
 gloo-net = { version = "0.4.0" }
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 getrandom = { version = "0.2", features = ["js"] }
-gluesql = { version = "0.15", default-features = false, features = ["idb-storage"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["rt"] }
