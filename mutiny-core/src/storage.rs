@@ -1,5 +1,5 @@
-use crate::error::{MutinyError, MutinyStorageError};
 use crate::ldkstorage::CHANNEL_MANAGER_KEY;
+use crate::logging::MutinyLogger;
 use crate::nodemanager::{NodeStorage, DEVICE_LOCK_INTERVAL_SECS};
 use crate::utils::{now, spawn};
 use crate::vss::{MutinyVssClient, VssKeyValueItem};
@@ -7,11 +7,18 @@ use crate::{
     encrypt::{decrypt_with_password, encrypt, encryption_key_from_pass, Cipher},
     federation::FederationStorage,
 };
+use crate::{
+    error::{MutinyError, MutinyStorageError},
+    event::PaymentInfo,
+};
 use async_trait::async_trait;
 use bdk::chain::{Append, PersistBackend};
 use bip39::Mnemonic;
-use lightning::log_error;
-use lightning::util::logger::Logger;
+use bitcoin::hashes::hex::ToHex;
+use bitcoin::hashes::Hash;
+use hex::FromHex;
+use lightning::{ln::PaymentHash, util::logger::Logger};
+use lightning::{log_error, log_trace};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -29,6 +36,8 @@ const FIRST_SYNC_KEY: &str = "first_sync";
 pub(crate) const DEVICE_ID_KEY: &str = "device_id";
 pub const DEVICE_LOCK_KEY: &str = "device_lock";
 pub(crate) const EXPECTED_NETWORK_KEY: &str = "network";
+const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
+const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
 
 fn needs_encryption(key: &str) -> bool {
     match key {
@@ -363,9 +372,10 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
     }
 
     /// Inserts the federation indexes into storage
-    fn insert_federations(&self, federations: FederationStorage) -> Result<(), MutinyError> {
+    async fn insert_federations(&self, federations: FederationStorage) -> Result<(), MutinyError> {
         let version = Some(federations.version);
-        self.set_data(FEDERATIONS_KEY.to_string(), federations, version)
+        self.set_data_async(FEDERATIONS_KEY.to_string(), federations, version)
+            .await
     }
 
     /// Get the current fee estimates from storage
@@ -651,6 +661,97 @@ impl MutinyStorage for () {
     async fn fetch_device_lock(&self) -> Result<Option<DeviceLock>, MutinyError> {
         self.get_device_lock()
     }
+}
+
+fn payment_key(inbound: bool, payment_hash: &[u8; 32]) -> String {
+    if inbound {
+        format!(
+            "{}{}",
+            PAYMENT_INBOUND_PREFIX_KEY,
+            payment_hash.to_hex().as_str()
+        )
+    } else {
+        format!(
+            "{}{}",
+            PAYMENT_OUTBOUND_PREFIX_KEY,
+            payment_hash.to_hex().as_str()
+        )
+    }
+}
+
+pub(crate) fn persist_payment_info<S: MutinyStorage>(
+    storage: &S,
+    payment_hash: &[u8; 32],
+    payment_info: &PaymentInfo,
+    inbound: bool,
+) -> std::io::Result<()> {
+    let key = payment_key(inbound, payment_hash);
+    storage
+        .set_data(key, payment_info, None)
+        .map_err(std::io::Error::other)
+}
+
+pub(crate) fn get_payment_info<S: MutinyStorage>(
+    storage: &S,
+    payment_hash: &bitcoin::hashes::sha256::Hash,
+    logger: &MutinyLogger,
+) -> Result<(PaymentInfo, bool), MutinyError> {
+    // try inbound first
+    if let Some(payment_info) = read_payment_info(storage, payment_hash.as_inner(), true, logger) {
+        return Ok((payment_info, true));
+    }
+
+    // if no inbound check outbound
+    match read_payment_info(storage, payment_hash.as_inner(), false, logger) {
+        Some(payment_info) => Ok((payment_info, false)),
+        None => Err(MutinyError::NotFound),
+    }
+}
+
+pub(crate) fn read_payment_info<S: MutinyStorage>(
+    storage: &S,
+    payment_hash: &[u8; 32],
+    inbound: bool,
+    logger: &MutinyLogger,
+) -> Option<PaymentInfo> {
+    let key = payment_key(inbound, payment_hash);
+    log_trace!(logger, "Trace: checking payment key: {key}");
+    match storage.get_data(&key).transpose() {
+        Some(Ok(v)) => Some(v),
+        _ => {
+            // To scan for the old format that had `_{node_id}` at the end
+            if let Ok(map) = storage.scan(&key, None) {
+                map.into_values().next()
+            } else {
+                None
+            }
+        }
+    }
+}
+
+pub(crate) fn list_payment_info<S: MutinyStorage>(
+    storage: &S,
+    inbound: bool,
+) -> Result<Vec<(PaymentHash, PaymentInfo)>, MutinyError> {
+    let prefix = match inbound {
+        true => PAYMENT_INBOUND_PREFIX_KEY,
+        false => PAYMENT_OUTBOUND_PREFIX_KEY,
+    };
+    let map: HashMap<String, PaymentInfo> = storage.scan(prefix, None)?;
+
+    // convert keys to PaymentHash
+    Ok(map
+        .into_iter()
+        .map(|(key, value)| {
+            let payment_hash_str = key
+                .trim_start_matches(prefix)
+                .splitn(2, '_') // To support the old format that had `_{node_id}` at the end
+                .collect::<Vec<&str>>()[0];
+            let hash: [u8; 32] =
+                FromHex::from_hex(payment_hash_str).expect("key should be a sha256 hash");
+            (PaymentHash(hash), value)
+        })
+        .collect())
 }
 
 #[derive(Clone)]

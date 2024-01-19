@@ -1,8 +1,9 @@
-use crate::event::{HTLCStatus, PaymentInfo};
+use crate::event::HTLCStatus;
 use crate::labels::LabelStorage;
 use crate::logging::LOGGING_KEY;
 use crate::utils::{sleep, spawn};
 use crate::ActivityItem;
+use crate::MutinyInvoice;
 use crate::MutinyWalletConfig;
 use crate::{
     chain::MutinyChain,
@@ -27,7 +28,7 @@ use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::{wallet::AddressIndex, FeeRate, LocalUtxo};
 use bitcoin::blockdata::script;
 use bitcoin::hashes::hex::ToHex;
-use bitcoin::hashes::{sha256, Hash};
+use bitcoin::hashes::sha256;
 use bitcoin::psbt::PartiallySignedTransaction;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
@@ -39,12 +40,12 @@ use lightning::chain::Confirm;
 use lightning::events::ClosureReason;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
 use lightning::ln::script::ShutdownScript;
-use lightning::ln::{ChannelId, PaymentHash};
+use lightning::ln::ChannelId;
 use lightning::routing::gossip::NodeId;
 use lightning::sign::{NodeSigner, Recipient};
 use lightning::util::logger::*;
 use lightning::{log_debug, log_error, log_info, log_warn};
-use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
+use lightning_invoice::Bolt11Invoice;
 use lightning_transaction_sync::EsploraSyncClient;
 use payjoin::Uri;
 use reqwest::Client;
@@ -96,121 +97,6 @@ pub struct MutinyBip21RawMaterials {
     pub invoice: Option<Bolt11Invoice>,
     pub btc_amount: Option<String>,
     pub labels: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
-pub struct MutinyInvoice {
-    pub bolt11: Option<Bolt11Invoice>,
-    pub description: Option<String>,
-    pub payment_hash: sha256::Hash,
-    pub preimage: Option<String>,
-    pub payee_pubkey: Option<PublicKey>,
-    pub amount_sats: Option<u64>,
-    pub expire: u64,
-    pub status: HTLCStatus,
-    pub fees_paid: Option<u64>,
-    pub inbound: bool,
-    pub labels: Vec<String>,
-    pub last_updated: u64,
-}
-
-impl MutinyInvoice {
-    pub fn paid(&self) -> bool {
-        self.status == HTLCStatus::Succeeded
-    }
-}
-
-impl From<Bolt11Invoice> for MutinyInvoice {
-    fn from(value: Bolt11Invoice) -> Self {
-        let description = match value.description() {
-            Bolt11InvoiceDescription::Direct(a) => {
-                if a.is_empty() {
-                    None
-                } else {
-                    Some(a.to_string())
-                }
-            }
-            Bolt11InvoiceDescription::Hash(_) => None,
-        };
-
-        let timestamp = value.duration_since_epoch().as_secs();
-        let expiry = timestamp + value.expiry_time().as_secs();
-
-        let payment_hash = value.payment_hash().to_owned();
-        let payee_pubkey = value.payee_pub_key().map(|p| p.to_owned());
-        let amount_sats = value.amount_milli_satoshis().map(|m| m / 1000);
-
-        MutinyInvoice {
-            bolt11: Some(value),
-            description,
-            payment_hash,
-            preimage: None,
-            payee_pubkey,
-            amount_sats,
-            expire: expiry,
-            status: HTLCStatus::Pending,
-            fees_paid: None,
-            inbound: true,
-            labels: vec![],
-            last_updated: timestamp,
-        }
-    }
-}
-
-impl MutinyInvoice {
-    pub(crate) fn from(
-        i: PaymentInfo,
-        payment_hash: PaymentHash,
-        inbound: bool,
-        labels: Vec<String>,
-    ) -> Result<Self, MutinyError> {
-        match i.bolt11 {
-            Some(invoice) => {
-                // Construct an invoice from a bolt11, easy
-                let amount_sats = if let Some(inv_amt) = invoice.amount_milli_satoshis() {
-                    if inv_amt == 0 {
-                        i.amt_msat.0.map(|a| a / 1_000)
-                    } else {
-                        Some(inv_amt / 1_000)
-                    }
-                } else {
-                    i.amt_msat.0.map(|a| a / 1_000)
-                };
-                Ok(MutinyInvoice {
-                    inbound,
-                    last_updated: i.last_update,
-                    status: i.status,
-                    labels,
-                    amount_sats,
-                    payee_pubkey: i.payee_pubkey,
-                    preimage: i.preimage.map(|p| p.to_hex()),
-                    fees_paid: i.fee_paid_msat.map(|f| f / 1_000),
-                    ..invoice.into()
-                })
-            }
-            None => {
-                let amount_sats: Option<u64> = i.amt_msat.0.map(|s| s / 1_000);
-                let fees_paid = i.fee_paid_msat.map(|f| f / 1_000);
-                let preimage = i.preimage.map(|p| p.to_hex());
-                let payment_hash = sha256::Hash::from_inner(payment_hash.0);
-                let invoice = MutinyInvoice {
-                    bolt11: None,
-                    description: None,
-                    payment_hash,
-                    preimage,
-                    payee_pubkey: i.payee_pubkey,
-                    amount_sats,
-                    expire: i.last_update,
-                    status: i.status,
-                    fees_paid,
-                    inbound,
-                    labels,
-                    last_updated: i.last_update,
-                };
-                Ok(invoice)
-            }
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
@@ -1032,17 +918,13 @@ impl<S: MutinyStorage> NodeManager<S> {
     }
 
     /// Returns all the on-chain and lightning activity from the wallet.
-    pub(crate) async fn get_activity(&self) -> Result<Vec<ActivityItem>, MutinyError> {
+    pub(crate) async fn get_activity(
+        &self,
+    ) -> Result<(Vec<ChannelClosure>, Vec<TransactionDetails>), MutinyError> {
         // todo add contacts to the activity
-        let (lightning, closures) =
-            futures_util::join!(self.list_invoices(), self.list_channel_closures());
-        let lightning = lightning
-            .map_err(|e| {
-                log_warn!(self.logger, "Failed to get lightning activity: {e}");
-                e
-            })
-            .unwrap_or_default();
-        let closures = closures
+        let closures = self
+            .list_channel_closures()
+            .await
             .map_err(|e| {
                 log_warn!(self.logger, "Failed to get channel closures: {e}");
                 e
@@ -1056,24 +938,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             })
             .unwrap_or_default();
 
-        let mut activity = Vec::with_capacity(lightning.len() + onchain.len() + closures.len());
-        for ln in lightning {
-            // Only show paid and in-flight invoices
-            match ln.status {
-                HTLCStatus::Succeeded | HTLCStatus::InFlight => {
-                    activity.push(ActivityItem::Lightning(Box::new(ln)));
-                }
-                HTLCStatus::Pending | HTLCStatus::Failed => {}
-            }
-        }
-        for on in onchain {
-            activity.push(ActivityItem::OnChain(on));
-        }
-        for chan in closures {
-            activity.push(ActivityItem::ChannelClosed(chan));
-        }
-
-        Ok(activity)
+        Ok((closures, onchain))
     }
 
     /// Returns all the on-chain and lightning activity for a given label
@@ -1578,19 +1443,6 @@ impl<S: MutinyStorage> NodeManager<S> {
         }
 
         Err(MutinyError::NotFound)
-    }
-
-    /// Gets an invoice from the node manager.
-    /// This includes sent and received invoices.
-    pub async fn list_invoices(&self) -> Result<Vec<MutinyInvoice>, MutinyError> {
-        let mut invoices: Vec<MutinyInvoice> = vec![];
-        let nodes = self.nodes.lock().await;
-        for (_, node) in nodes.iter() {
-            if let Ok(mut invs) = node.list_invoices() {
-                invoices.append(&mut invs)
-            }
-        }
-        Ok(invoices)
     }
 
     pub async fn get_channel_closure(

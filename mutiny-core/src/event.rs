@@ -1,5 +1,3 @@
-use crate::fees::MutinyFeeEstimator;
-use crate::keymanager::PhantomKeysManager;
 use crate::ldkstorage::{MutinyNodePersister, PhantomChannelManager};
 use crate::logging::MutinyLogger;
 use crate::lsp::{AnyLsp, Lsp};
@@ -8,6 +6,8 @@ use crate::nodemanager::ChannelClosure;
 use crate::onchain::OnChainWallet;
 use crate::storage::MutinyStorage;
 use crate::utils::sleep;
+use crate::{fees::MutinyFeeEstimator, storage::read_payment_info};
+use crate::{keymanager::PhantomKeysManager, storage::persist_payment_info};
 use anyhow::anyhow;
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::secp256k1::PublicKey;
@@ -282,10 +282,12 @@ impl<S: MutinyStorage> EventHandler<S> {
                     } => (payment_preimage, Some(payment_secret)),
                     PaymentPurpose::SpontaneousPayment(preimage) => (Some(preimage), None),
                 };
-                match self
-                    .persister
-                    .read_payment_info(&payment_hash.0, true, &self.logger)
-                {
+                match read_payment_info(
+                    &self.persister.storage,
+                    &payment_hash.0,
+                    true,
+                    &self.logger,
+                ) {
                     Some(mut saved_payment_info) => {
                         let payment_preimage = payment_preimage.map(|p| p.0);
                         let payment_secret = payment_secret.map(|p| p.0);
@@ -294,7 +296,8 @@ impl<S: MutinyStorage> EventHandler<S> {
                         saved_payment_info.secret = payment_secret;
                         saved_payment_info.amt_msat = MillisatAmount(Some(amount_msat));
                         saved_payment_info.last_update = crate::utils::now().as_secs();
-                        match self.persister.persist_payment_info(
+                        match persist_payment_info(
+                            &self.persister.storage,
                             &payment_hash.0,
                             &saved_payment_info,
                             true,
@@ -321,7 +324,8 @@ impl<S: MutinyStorage> EventHandler<S> {
                             bolt11: None,
                             last_update,
                         };
-                        match self.persister.persist_payment_info(
+                        match persist_payment_info(
+                            &self.persister.storage,
                             &payment_hash.0,
                             &payment_info,
                             true,
@@ -347,16 +351,19 @@ impl<S: MutinyStorage> EventHandler<S> {
                     payment_hash.0.to_hex()
                 );
 
-                match self
-                    .persister
-                    .read_payment_info(&payment_hash.0, false, &self.logger)
-                {
+                match read_payment_info(
+                    &self.persister.storage,
+                    &payment_hash.0,
+                    false,
+                    &self.logger,
+                ) {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Succeeded;
                         saved_payment_info.preimage = Some(payment_preimage.0);
                         saved_payment_info.fee_paid_msat = fee_paid_msat;
                         saved_payment_info.last_update = crate::utils::now().as_secs();
-                        match self.persister.persist_payment_info(
+                        match persist_payment_info(
+                            &self.persister.storage,
                             &payment_hash.0,
                             &saved_payment_info,
                             false,
@@ -445,14 +452,17 @@ impl<S: MutinyStorage> EventHandler<S> {
                     payment_hash.0.to_hex()
                 );
 
-                match self
-                    .persister
-                    .read_payment_info(&payment_hash.0, false, &self.logger)
-                {
+                match read_payment_info(
+                    &self.persister.storage,
+                    &payment_hash.0,
+                    false,
+                    &self.logger,
+                ) {
                     Some(mut saved_payment_info) => {
                         saved_payment_info.status = HTLCStatus::Failed;
                         saved_payment_info.last_update = crate::utils::now().as_secs();
-                        match self.persister.persist_payment_info(
+                        match persist_payment_info(
+                            &self.persister.storage,
                             &payment_hash.0,
                             &saved_payment_info,
                             false,

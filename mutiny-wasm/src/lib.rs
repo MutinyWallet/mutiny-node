@@ -860,9 +860,7 @@ impl MutinyWallet {
     /// This includes sent and received invoices.
     #[wasm_bindgen]
     pub async fn list_invoices(&self) -> Result<JsValue /* Vec<MutinyInvoice> */, MutinyJsError> {
-        Ok(JsValue::from_serde(
-            &self.inner.node_manager.list_invoices().await?,
-        )?)
+        Ok(JsValue::from_serde(&self.inner.list_invoices()?)?)
     }
 
     /// Gets an channel closure from the node manager.
@@ -1655,7 +1653,6 @@ impl MutinyWallet {
         let storage = IndexedDbStorage::new(password, cipher, None, logger.clone()).await?;
         mutiny_core::MutinyWallet::<IndexedDbStorage>::restore_mnemonic(
             storage,
-            None, // FIXME: We dont currently support deleting glue_db yet due to safari bug
             Mnemonic::from_str(&m).map_err(|_| MutinyJsError::InvalidMnemonic)?,
         )
         .await?;

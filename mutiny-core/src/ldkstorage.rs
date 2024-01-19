@@ -1,5 +1,4 @@
 use crate::error::{MutinyError, MutinyStorageError};
-use crate::event::PaymentInfo;
 use crate::fees::MutinyFeeEstimator;
 use crate::gossip::PROB_SCORER_KEY;
 use crate::keymanager::PhantomKeysManager;
@@ -26,12 +25,11 @@ use lightning::io::Cursor;
 use lightning::ln::channelmanager::{
     self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
 };
-use lightning::ln::PaymentHash;
 use lightning::sign::{InMemorySigner, SpendableOutputDescriptor, WriteableEcdsaChannelSigner};
 use lightning::util::logger::Logger;
 use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
-use lightning::{log_debug, log_error, log_trace};
+use lightning::{log_debug, log_error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
@@ -40,8 +38,6 @@ use std::sync::Arc;
 
 pub const CHANNEL_MANAGER_KEY: &str = "manager";
 pub const MONITORS_PREFIX_KEY: &str = "monitors/";
-const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
-const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
 const CHANNEL_OPENING_PARAMS_PREFIX: &str = "chan_open_params/";
 const CHANNEL_CLOSURE_PREFIX: &str = "channel_closure/";
 const FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY: &str = "failed_spendable_outputs";
@@ -362,54 +358,6 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         })
     }
 
-    pub(crate) fn persist_payment_info(
-        &self,
-        payment_hash: &[u8; 32],
-        payment_info: &PaymentInfo,
-        inbound: bool,
-    ) -> io::Result<()> {
-        let key = self.get_key(payment_key(inbound, payment_hash).as_str());
-        self.storage
-            .set_data(key, payment_info, None)
-            .map_err(io::Error::other)
-    }
-
-    pub(crate) fn read_payment_info(
-        &self,
-        payment_hash: &[u8; 32],
-        inbound: bool,
-        logger: &MutinyLogger,
-    ) -> Option<PaymentInfo> {
-        let key = self.get_key(payment_key(inbound, payment_hash).as_str());
-        log_trace!(logger, "Trace: checking payment key: {key}");
-        let deserialized_value: Result<Option<PaymentInfo>, MutinyError> =
-            self.storage.get_data(key);
-        deserialized_value.ok().flatten()
-    }
-
-    pub(crate) fn list_payment_info(
-        &self,
-        inbound: bool,
-    ) -> Result<Vec<(PaymentHash, PaymentInfo)>, MutinyError> {
-        let prefix = match inbound {
-            true => PAYMENT_INBOUND_PREFIX_KEY,
-            false => PAYMENT_OUTBOUND_PREFIX_KEY,
-        };
-        let suffix = format!("_{}", self.node_id);
-        let map: HashMap<String, PaymentInfo> = self.storage.scan(prefix, Some(&suffix))?;
-
-        // convert keys to PaymentHash
-        Ok(map
-            .into_iter()
-            .map(|(key, value)| {
-                let payment_hash_str = key.trim_start_matches(prefix).trim_end_matches(&suffix);
-                let hash: [u8; 32] =
-                    FromHex::from_hex(payment_hash_str).expect("key should be a sha256 hash");
-                (PaymentHash(hash), value)
-            })
-            .collect())
-    }
-
     pub(crate) fn persist_channel_closure(
         &self,
         user_channel_id: u128,
@@ -600,22 +548,6 @@ impl ChannelOpenParams {
     }
 }
 
-fn payment_key(inbound: bool, payment_hash: &[u8; 32]) -> String {
-    if inbound {
-        format!(
-            "{}{}",
-            PAYMENT_INBOUND_PREFIX_KEY,
-            payment_hash.to_hex().as_str()
-        )
-    } else {
-        format!(
-            "{}{}",
-            PAYMENT_OUTBOUND_PREFIX_KEY,
-            payment_hash.to_hex().as_str()
-        )
-    }
-}
-
 impl<S: MutinyStorage>
     Persister<
         '_,
@@ -749,23 +681,26 @@ pub(crate) async fn persist_monitor(
 
 #[cfg(test)]
 mod test {
-    use crate::node::scoring_params;
-    use crate::onchain::OnChainWallet;
-    use crate::storage::MemoryStorage;
+    use crate::{
+        event::PaymentInfo,
+        storage::{list_payment_info, MemoryStorage},
+    };
     use crate::{
         event::{HTLCStatus, MillisatAmount},
         scorer::HubPreferentialScorer,
     };
     use crate::{keymanager::create_keys_manager, scorer::ProbScorer};
+    use crate::{node::scoring_params, storage::persist_payment_info};
+    use crate::{onchain::OnChainWallet, storage::read_payment_info};
     use bip39::Mnemonic;
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::PublicKey;
     use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Txid;
     use esplora_client::Builder;
-    use lightning::routing::router::DefaultRouter;
     use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
     use lightning::sign::EntropySource;
+    use lightning::{ln::PaymentHash, routing::router::DefaultRouter};
     use lightning_transaction_sync::EsploraSyncClient;
     use std::str::FromStr;
     use std::sync::atomic::AtomicBool;
@@ -807,27 +742,37 @@ mod test {
             secret: None,
             last_update: utils::now().as_secs(),
         };
-        let result = persister.persist_payment_info(&payment_hash.0, &payment_info, true);
+        let result = persist_payment_info(&persister.storage, &payment_hash.0, &payment_info, true);
         assert!(result.is_ok());
 
-        let result = persister.read_payment_info(&payment_hash.0, true, &MutinyLogger::default());
+        let result = read_payment_info(
+            &persister.storage,
+            &payment_hash.0,
+            true,
+            &MutinyLogger::default(),
+        );
 
         assert!(result.is_some());
         assert_eq!(result.clone().unwrap().preimage, Some(preimage));
         assert_eq!(result.unwrap().status, HTLCStatus::Succeeded);
 
-        let list = persister.list_payment_info(true).unwrap();
+        let list = list_payment_info(&persister.storage, true).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].0, payment_hash);
         assert_eq!(list[0].1.preimage, Some(preimage));
 
-        let result = persister.read_payment_info(&payment_hash.0, true, &MutinyLogger::default());
+        let result = read_payment_info(
+            &persister.storage,
+            &payment_hash.0,
+            true,
+            &MutinyLogger::default(),
+        );
 
         assert!(result.is_some());
         assert_eq!(result.clone().unwrap().preimage, Some(preimage));
         assert_eq!(result.unwrap().status, HTLCStatus::Succeeded);
 
-        let list = persister.list_payment_info(true).unwrap();
+        let list = list_payment_info(&persister.storage, true).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].0, payment_hash);
         assert_eq!(list[0].1.preimage, Some(preimage));

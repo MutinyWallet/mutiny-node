@@ -5,8 +5,6 @@ use gloo_utils::format::JsValueSerdeExt;
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error};
 use log::error;
-use mutiny_core::logging::MutinyLogger;
-use mutiny_core::nodemanager::NodeStorage;
 use mutiny_core::storage::*;
 use mutiny_core::vss::*;
 use mutiny_core::*;
@@ -14,6 +12,8 @@ use mutiny_core::{
     encrypt::Cipher,
     error::{MutinyError, MutinyStorageError},
 };
+use mutiny_core::{federation::FederationStorage, logging::MutinyLogger};
+use mutiny_core::{federation::FEDIMINTS_PREFIX_KEY, nodemanager::NodeStorage};
 use rexie::{ObjectStore, Rexie, TransactionMode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -294,10 +294,17 @@ impl IndexedDbStorage {
                     futs.push(Self::handle_vss_key(kv, vss, &map, logger));
                 }
                 let results = futures::future::join_all(futs).await;
+                let mut items_vector = Vec::new();
                 for result in results {
                     if let Some((key, value)) = result? {
-                        map.set_data(key, value, None)?;
+                        // save to memory and batch the write to local storage
+                        map.set_data(key.clone(), value.clone(), None)?;
+                        items_vector.push((key, value));
                     }
+                }
+                if !items_vector.is_empty() {
+                    // write them so we don't have to pull them down again
+                    Self::save_to_indexed_db(indexed_db, &items_vector).await?;
                 }
                 let final_map = map.memory.read().unwrap();
                 Ok(final_map.clone())
@@ -326,6 +333,25 @@ impl IndexedDbStorage {
                         if local.version < kv.version {
                             let obj = vss.get_object(&kv.key).await?;
                             if serde_json::from_value::<NodeStorage>(obj.value.clone()).is_ok() {
+                                return Ok(Some((kv.key, obj.value)));
+                            }
+                        }
+                    }
+                    None => {
+                        let obj = vss.get_object(&kv.key).await?;
+                        return Ok(Some((kv.key, obj.value)));
+                    }
+                }
+            }
+            FEDERATIONS_KEY => {
+                // we can get version from federation storage, so we should compare
+                match current.get_data::<FederationStorage>(&kv.key)? {
+                    Some(local) => {
+                        if local.version < kv.version {
+                            let obj = vss.get_object(&kv.key).await?;
+                            if serde_json::from_value::<FederationStorage>(obj.value.clone())
+                                .is_ok()
+                            {
                                 return Ok(Some((kv.key, obj.value)));
                             }
                         }
@@ -382,6 +408,35 @@ impl IndexedDbStorage {
                     }
                 } else if key.starts_with(CHANNEL_MANAGER_KEY) {
                     // we can get versions from channel manager, so we should compare
+                    match current.get_data::<VersionedValue>(&kv.key)? {
+                        Some(local) => {
+                            if local.version < kv.version {
+                                let obj = vss.get_object(&kv.key).await?;
+                                if serde_json::from_value::<VersionedValue>(obj.value.clone())
+                                    .is_ok()
+                                {
+                                    return Ok(Some((kv.key, obj.value)));
+                                }
+                            } else {
+                                log_debug!(
+                                    logger,
+                                    "Skipping vss key {} with version {}, current version is {}",
+                                    kv.key,
+                                    kv.version,
+                                    local.version
+                                );
+                                return Ok(None);
+                            }
+                        }
+                        None => {
+                            let obj = vss.get_object(&kv.key).await?;
+                            if serde_json::from_value::<VersionedValue>(obj.value.clone()).is_ok() {
+                                return Ok(Some((kv.key, obj.value)));
+                            }
+                        }
+                    }
+                } else if key.starts_with(FEDIMINTS_PREFIX_KEY) {
+                    // we can get versions from each fedimint, so we should compare
                     match current.get_data::<VersionedValue>(&kv.key)? {
                         Some(local) => {
                             if local.version < kv.version {

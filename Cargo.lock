@@ -1663,7 +1663,6 @@ checksum = "45dfe66dc370c1d234bf8d0a22b7e62062af674f304ed3e347e3ad4e8f8224d3"
 dependencies = [
  "gluesql-core",
  "gluesql-idb-storage",
- "gluesql_memory_storage",
 ]
 
 [[package]]
@@ -1724,18 +1723,6 @@ dependencies = [
  "futures",
  "indexmap 1.9.3",
  "pin-project",
-]
-
-[[package]]
-name = "gluesql_memory_storage"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19ae7ac5bf854a6c966f26e58dda1bc5408260c772499731596428d12492b245"
-dependencies = [
- "async-trait",
- "futures",
- "gluesql-core",
- "serde",
 ]
 
 [[package]]
@@ -2554,7 +2541,6 @@ dependencies = [
  "getrandom",
  "gloo-net",
  "gluesql",
- "gluesql-core",
  "hex",
  "instant",
  "itertools 0.11.0",
