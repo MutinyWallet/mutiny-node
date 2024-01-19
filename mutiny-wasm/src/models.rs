@@ -6,6 +6,7 @@ use gloo_utils::format::JsValueSerdeExt;
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
+use mutiny_core::event::HTLCStatus;
 use mutiny_core::labels::Contact as MutinyContact;
 use mutiny_core::nostr::nwc::SpendingConditions;
 use mutiny_core::*;
@@ -172,8 +173,8 @@ impl MutinyInvoice {
     }
 }
 
-impl From<nodemanager::MutinyInvoice> for MutinyInvoice {
-    fn from(m: nodemanager::MutinyInvoice) -> Self {
+impl From<mutiny_core::MutinyInvoice> for MutinyInvoice {
+    fn from(m: mutiny_core::MutinyInvoice) -> Self {
         let potential_hodl_invoice = match m.bolt11 {
             Some(ref b) => {
                 utils::HODL_INVOICE_NODES.contains(&b.recover_payee_pub_key().to_hex().as_str())

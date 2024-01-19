@@ -860,9 +860,7 @@ impl MutinyWallet {
     /// This includes sent and received invoices.
     #[wasm_bindgen]
     pub async fn list_invoices(&self) -> Result<JsValue /* Vec<MutinyInvoice> */, MutinyJsError> {
-        Ok(JsValue::from_serde(
-            &self.inner.node_manager.list_invoices().await?,
-        )?)
+        Ok(JsValue::from_serde(&self.inner.list_invoices()?)?)
     }
 
     /// Gets an channel closure from the node manager.

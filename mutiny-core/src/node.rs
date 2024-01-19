@@ -1,3 +1,4 @@
+use crate::lsp::{InvoiceRequest, LspConfig};
 use crate::nodemanager::ChannelClosure;
 use crate::peermanager::LspMessageRouter;
 use crate::storage::MutinyStorage;
@@ -12,10 +13,11 @@ use crate::{
     ldkstorage::{MutinyNodePersister, PhantomChannelManager},
     logging::MutinyLogger,
     lsp::{AnyLsp, FeeRequest, Lsp},
-    nodemanager::{MutinyInvoice, NodeIndex},
+    nodemanager::NodeIndex,
     onchain::OnChainWallet,
     peermanager::{GossipMessageHandler, PeerManagerImpl},
     utils::{self, sleep},
+    MutinyInvoice,
 };
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
@@ -23,10 +25,6 @@ use crate::{labels::LabelStorage, DEFAULT_PAYMENT_TIMEOUT};
 use crate::{
     ldkstorage::{persist_monitor, ChannelOpenParams},
     storage::persist_payment_info,
-};
-use crate::{
-    lsp::{InvoiceRequest, LspConfig},
-    storage::list_payment_info,
 };
 use crate::{messagehandler::MutinyMessageHandler, storage::read_payment_info};
 use anyhow::{anyhow, Context};
@@ -1218,38 +1216,6 @@ impl<S: MutinyStorage> Node<S> {
             inbound,
             labels,
         )
-    }
-
-    pub fn list_invoices(&self) -> Result<Vec<MutinyInvoice>, MutinyError> {
-        let mut inbound_invoices = self.list_payment_info_from_persisters(true)?;
-        let mut outbound_invoices = self.list_payment_info_from_persisters(false)?;
-        inbound_invoices.append(&mut outbound_invoices);
-        Ok(inbound_invoices)
-    }
-
-    fn list_payment_info_from_persisters(
-        &self,
-        inbound: bool,
-    ) -> Result<Vec<MutinyInvoice>, MutinyError> {
-        let now = utils::now();
-        let labels_map = self.persister.storage.get_invoice_labels()?;
-
-        Ok(list_payment_info(&self.persister.storage, inbound)?
-            .into_iter()
-            .filter_map(|(h, i)| {
-                let labels = match i.bolt11.clone() {
-                    None => vec![],
-                    Some(i) => labels_map.get(&i).cloned().unwrap_or_default(),
-                };
-                let mutiny_invoice = MutinyInvoice::from(i.clone(), h, inbound, labels).ok();
-
-                // filter out expired invoices
-                mutiny_invoice.filter(|invoice| {
-                    !invoice.bolt11.as_ref().is_some_and(|b| b.would_expire(now))
-                        || matches!(i.status, HTLCStatus::Succeeded | HTLCStatus::InFlight)
-                })
-            })
-            .collect())
     }
 
     /// Gets all the closed channels for this node

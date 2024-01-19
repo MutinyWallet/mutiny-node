@@ -1190,11 +1190,11 @@ mod test {
 mod wasm_test {
     use super::*;
     use crate::logging::MutinyLogger;
-    use crate::nodemanager::MutinyInvoice;
     use crate::nostr::ProfileType;
     use crate::storage::MemoryStorage;
     use crate::test_utils::{create_dummy_invoice, create_mutiny_wallet, create_nwc_request};
     use crate::MockInvoiceHandler;
+    use crate::MutinyInvoice;
     use bitcoin::secp256k1::ONE_KEY;
     use bitcoin::Network;
     use mockall::predicate::eq;

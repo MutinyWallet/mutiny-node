@@ -13,7 +13,7 @@ pub mod auth;
 mod chain;
 pub mod encrypt;
 pub mod error;
-mod event;
+pub mod event;
 pub mod federation;
 mod fees;
 mod gossip;
@@ -40,12 +40,13 @@ pub mod vss;
 #[cfg(test)]
 mod test_utils;
 
-pub use crate::event::HTLCStatus;
+use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
-
-use crate::storage::{MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY};
+use crate::storage::{
+    list_payment_info, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY,
+};
 use crate::{auth::MutinyAuthClient, logging::MutinyLogger};
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{
@@ -55,7 +56,7 @@ use crate::{
 };
 use crate::{
     lnurlauth::make_lnurl_auth_connection,
-    nodemanager::{ChannelClosure, MutinyBip21RawMaterials, MutinyInvoice, TransactionDetails},
+    nodemanager::{ChannelClosure, MutinyBip21RawMaterials, TransactionDetails},
 };
 use crate::{lnurlauth::AuthManager, nostr::MUTINY_PLUS_SUBSCRIPTION_LABEL};
 use crate::{logging::LOGGING_KEY, nodemanager::NodeManagerBuilder};
@@ -73,13 +74,16 @@ use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
 use bitcoin::hashes::hex::ToHex;
+use bitcoin::hashes::{sha256, Hash};
+use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
-use bitcoin::{hashes::sha256, Network};
-use fedimint_core::{api::InviteCode, config::FederationId, BitcoinHash};
+use bitcoin::Network;
+use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::{pin_mut, select, FutureExt};
+use lightning::ln::PaymentHash;
 use lightning::{log_debug, util::logger::Logger};
 use lightning::{log_error, log_info, log_warn};
-use lightning_invoice::Bolt11Invoice;
+use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::{lnurl::LnUrl, AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use nostr_sdk::{Client, RelayPoolNotification};
 use serde::{Deserialize, Serialize};
@@ -247,6 +251,155 @@ impl Ord for ActivityItem {
                 .unwrap()
                 .cmp(&serde_json::to_string(other).unwrap())
         })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
+pub struct MutinyInvoice {
+    pub bolt11: Option<Bolt11Invoice>,
+    pub description: Option<String>,
+    pub payment_hash: sha256::Hash,
+    pub preimage: Option<String>,
+    pub payee_pubkey: Option<PublicKey>,
+    pub amount_sats: Option<u64>,
+    pub expire: u64,
+    pub status: HTLCStatus,
+    pub fees_paid: Option<u64>,
+    pub inbound: bool,
+    pub labels: Vec<String>,
+    pub last_updated: u64,
+}
+
+impl MutinyInvoice {
+    pub fn paid(&self) -> bool {
+        self.status == HTLCStatus::Succeeded
+    }
+}
+
+impl From<Bolt11Invoice> for MutinyInvoice {
+    fn from(value: Bolt11Invoice) -> Self {
+        let description = match value.description() {
+            Bolt11InvoiceDescription::Direct(a) => {
+                if a.is_empty() {
+                    None
+                } else {
+                    Some(a.to_string())
+                }
+            }
+            Bolt11InvoiceDescription::Hash(_) => None,
+        };
+
+        let timestamp = value.duration_since_epoch().as_secs();
+        let expiry = timestamp + value.expiry_time().as_secs();
+
+        let payment_hash = value.payment_hash().to_owned();
+        let payee_pubkey = value.payee_pub_key().map(|p| p.to_owned());
+        let amount_sats = value.amount_milli_satoshis().map(|m| m / 1000);
+
+        MutinyInvoice {
+            bolt11: Some(value),
+            description,
+            payment_hash,
+            preimage: None,
+            payee_pubkey,
+            amount_sats,
+            expire: expiry,
+            status: HTLCStatus::Pending,
+            fees_paid: None,
+            inbound: true,
+            labels: vec![],
+            last_updated: timestamp,
+        }
+    }
+}
+
+impl From<MutinyInvoice> for PaymentInfo {
+    fn from(invoice: MutinyInvoice) -> Self {
+        let preimage = invoice
+            .preimage
+            .map(|s| hex::decode(s).expect("preimage should decode"))
+            .map(|v| {
+                let mut arr = [0; 32];
+                arr[..].copy_from_slice(&v);
+                arr
+            });
+        let secret = None;
+        let status = invoice.status;
+        let amt_msat = invoice
+            .amount_sats
+            .map(|s| MillisatAmount(Some(s)))
+            .unwrap_or(MillisatAmount(None));
+        let fee_paid_msat = invoice.fees_paid;
+        let bolt11 = invoice.bolt11;
+        let payee_pubkey = invoice.payee_pubkey;
+        let last_update = invoice.last_updated;
+
+        PaymentInfo {
+            preimage,
+            secret,
+            status,
+            amt_msat,
+            fee_paid_msat,
+            bolt11,
+            payee_pubkey,
+            last_update,
+        }
+    }
+}
+
+impl MutinyInvoice {
+    pub(crate) fn from(
+        i: PaymentInfo,
+        payment_hash: PaymentHash,
+        inbound: bool,
+        labels: Vec<String>,
+    ) -> Result<Self, MutinyError> {
+        match i.bolt11 {
+            Some(invoice) => {
+                // Construct an invoice from a bolt11, easy
+                let amount_sats = if let Some(inv_amt) = invoice.amount_milli_satoshis() {
+                    if inv_amt == 0 {
+                        i.amt_msat.0.map(|a| a / 1_000)
+                    } else {
+                        Some(inv_amt / 1_000)
+                    }
+                } else {
+                    i.amt_msat.0.map(|a| a / 1_000)
+                };
+                Ok(MutinyInvoice {
+                    inbound,
+                    last_updated: i.last_update,
+                    status: i.status,
+                    labels,
+                    amount_sats,
+                    payee_pubkey: i.payee_pubkey,
+                    preimage: i.preimage.map(|p| p.to_hex()),
+                    fees_paid: i.fee_paid_msat.map(|f| f / 1_000),
+                    ..invoice.into()
+                })
+            }
+            None => {
+                let amount_sats: Option<u64> = i.amt_msat.0.map(|s| s / 1_000);
+                let fees_paid = i.fee_paid_msat.map(|f| f / 1_000);
+                let preimage = i.preimage.map(|p| p.to_hex());
+                let payment_hash = sha256::Hash::from_inner(payment_hash.0);
+                let invoice = MutinyInvoice {
+                    bolt11: None,
+                    description: None,
+                    payment_hash,
+                    preimage,
+                    payee_pubkey: i.payee_pubkey,
+                    amount_sats,
+                    expire: i.last_update,
+                    status: i.status,
+                    fees_paid,
+                    inbound,
+                    labels,
+                    last_updated: i.last_update,
+                };
+                Ok(invoice)
+            }
+        }
     }
 }
 
@@ -952,13 +1105,71 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     /// Get the sorted activity list for lightning payments, channels, and txs.
     pub async fn get_activity(&self) -> Result<Vec<ActivityItem>, MutinyError> {
+        // Get activity for lightning invoices
+        let lightning = self
+            .list_invoices()
+            .map_err(|e| {
+                log_warn!(self.logger, "Failed to get lightning activity: {e}");
+                e
+            })
+            .unwrap_or_default();
+
         // Get activities from node manager
-        let mut activities = self.node_manager.get_activity().await?;
+        let (closures, onchain) = self.node_manager.get_activity().await?;
+
+        let mut activities = Vec::with_capacity(lightning.len() + onchain.len() + closures.len());
+        for ln in lightning {
+            // Only show paid and in-flight invoices
+            match ln.status {
+                HTLCStatus::Succeeded | HTLCStatus::InFlight => {
+                    activities.push(ActivityItem::Lightning(Box::new(ln)));
+                }
+                HTLCStatus::Pending | HTLCStatus::Failed => {}
+            }
+        }
+        for on in onchain {
+            activities.push(ActivityItem::OnChain(on));
+        }
+        for chan in closures {
+            activities.push(ActivityItem::ChannelClosed(chan));
+        }
 
         // Sort all activities, newest first
         activities.sort_by(|a, b| b.cmp(a));
 
         Ok(activities)
+    }
+
+    pub fn list_invoices(&self) -> Result<Vec<MutinyInvoice>, MutinyError> {
+        let mut inbound_invoices = self.list_payment_info_from_persisters(true)?;
+        let mut outbound_invoices = self.list_payment_info_from_persisters(false)?;
+        inbound_invoices.append(&mut outbound_invoices);
+        Ok(inbound_invoices)
+    }
+
+    fn list_payment_info_from_persisters(
+        &self,
+        inbound: bool,
+    ) -> Result<Vec<MutinyInvoice>, MutinyError> {
+        let now = utils::now();
+        let labels_map = self.storage.get_invoice_labels()?;
+
+        Ok(list_payment_info(&self.storage, inbound)?
+            .into_iter()
+            .filter_map(|(h, i)| {
+                let labels = match i.bolt11.clone() {
+                    None => vec![],
+                    Some(i) => labels_map.get(&i).cloned().unwrap_or_default(),
+                };
+                let mutiny_invoice = MutinyInvoice::from(i.clone(), h, inbound, labels).ok();
+
+                // filter out expired invoices
+                mutiny_invoice.filter(|invoice| {
+                    !invoice.bolt11.as_ref().is_some_and(|b| b.would_expire(now))
+                        || matches!(invoice.status, HTLCStatus::Succeeded | HTLCStatus::InFlight)
+                })
+            })
+            .collect())
     }
 
     /// Gets an invoice.

@@ -3,13 +3,12 @@ use crate::{
     event::PaymentInfo,
     key::{create_root_child_key, ChildKey},
     logging::MutinyLogger,
-    nodemanager::MutinyInvoice,
     onchain::coin_type_from_network,
     storage::{
         get_payment_info, list_payment_info, persist_payment_info, MutinyStorage, VersionedValue,
     },
     utils::sleep,
-    HTLCStatus, DEFAULT_PAYMENT_TIMEOUT,
+    HTLCStatus, MutinyInvoice, DEFAULT_PAYMENT_TIMEOUT,
 };
 use async_trait::async_trait;
 use bip39::Mnemonic;
