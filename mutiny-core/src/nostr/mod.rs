@@ -587,6 +587,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             public_key: inv.pubkey,
             relay_url: None,
             alias: None,
+            uppercase: false,
         };
         let e_tag = Tag::Event {
             event_id: inv.event_id,
@@ -718,6 +719,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                     public_key: inv.pubkey,
                     relay_url: None,
                     alias: None,
+                    uppercase: false,
                 };
                 let e_tag = Tag::Event {
                     event_id: inv.event_id,
@@ -855,6 +857,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             public_key: nwc.public_key,
             relay_url: None,
             alias: None,
+            uppercase: false,
         };
         let request_event =
             EventBuilder::new(Kind::WalletConnectRequest, encrypted, [p_tag]).to_event(&secret)?;

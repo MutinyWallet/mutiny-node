@@ -30,7 +30,7 @@ lightning-invoice = { version = "0.26.0" }
 thiserror = "1.0"
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 lnurl-rs = { version = "0.3.1", default-features = false }
-nostr = { version = "0.26.0", default-features = false }
+nostr = { version = "0.27.0", default-features = false }
 wasm-logger = "0.2.0"
 log = "0.4.17"
 rexie = "0.5.0"

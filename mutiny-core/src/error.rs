@@ -463,6 +463,12 @@ impl From<nostr::nips::nip04::Error> for MutinyError {
     }
 }
 
+impl From<nostr::nips::nip57::Error> for MutinyError {
+    fn from(_e: nostr::nips::nip57::Error) -> Self {
+        Self::NostrError
+    }
+}
+
 impl From<nip05::Error> for MutinyError {
     fn from(e: nip05::Error) -> Self {
         match e {
