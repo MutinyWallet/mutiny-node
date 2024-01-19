@@ -72,9 +72,8 @@ use lightning_invoice::{
     utils::{create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice},
     Bolt11Invoice,
 };
-use lightning_liquidity::{
-    JITChannelsConfig, LiquidityManager as LDKLSPLiquidityManager, LiquidityProviderConfig,
-};
+use lightning_liquidity::lsps2::client::LSPS2ClientConfig;
+use lightning_liquidity::{LiquidityClientConfig, LiquidityManager as LDKLSPLiquidityManager};
 
 #[cfg(test)]
 use mockall::predicate::*;
@@ -114,7 +113,6 @@ pub(crate) type OnionMessenger<S: MutinyStorage> = LdkOnionMessenger<
 pub type LiquidityManager<S> = LDKLSPLiquidityManager<
     Arc<PhantomKeysManager<S>>,
     Arc<PhantomChannelManager<S>>,
-    Arc<PeerManagerImpl<S>>,
     Arc<dyn Filter + Send + Sync>,
 >;
 
@@ -437,16 +435,13 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             Some(LspConfig::Lsps(lsps_config)) => {
                 let liquidity_manager = Arc::new(LiquidityManager::new(
                     keys_manager.clone(),
-                    Some(LiquidityProviderConfig {
-                        lsps2_config: Some(JITChannelsConfig {
-                            promise_secret: [0; 32],
-                            min_payment_size_msat: 0,
-                            max_payment_size_msat: 9999999999,
-                        }),
-                    }),
                     channel_manager.clone(),
                     None,
                     None,
+                    None,
+                    Some(LiquidityClientConfig {
+                        lsps2_client_config: Some(LSPS2ClientConfig {}),
+                    }),
                 ));
 
                 (
@@ -488,7 +483,9 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             chan_handler: channel_manager.clone(),
             route_handler,
             onion_message_handler,
-            custom_message_handler: Arc::new(MutinyMessageHandler { liquidity }),
+            custom_message_handler: Arc::new(MutinyMessageHandler {
+                liquidity: liquidity.clone(),
+            }),
         };
 
         let bump_tx_event_handler = Arc::new(BumpTransactionEventHandler::new(
@@ -515,6 +512,13 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             ln_msg_handler,
             logger.clone(),
         ));
+
+        if let Some(liquidity) = liquidity {
+            let process_msgs_pm = peer_man.clone();
+            liquidity.set_process_msgs_callback(move || {
+                process_msgs_pm.process_events();
+            });
+        }
 
         // sync to chain tip
         if read_channel_manager.is_restarting {
