@@ -75,6 +75,8 @@ const FEDIMINT_STATUS_TIMEOUT_CHECK_MS: u64 = 30;
 // their internal list.
 const FEDIMINT_OPERATIONS_LIST_MAX: usize = 100;
 
+pub const FEDIMINTS_PREFIX_KEY: &str = "fedimints/";
+
 impl From<LnReceiveState> for HTLCStatus {
     fn from(state: LnReceiveState) -> Self {
         match state {
@@ -768,7 +770,7 @@ impl<S: MutinyStorage> FedimintStorage<S> {
 }
 
 fn key_id(federation_id: &str) -> String {
-    format!("fedimint_key_{}", federation_id)
+    format!("{}{}", FEDIMINTS_PREFIX_KEY, federation_id)
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
@@ -815,7 +817,8 @@ impl<'a, S: MutinyStorage> IRawDatabaseTransaction for IndexedDBPseudoTransactio
             value: serde_json::to_value(hex_serialized_data).unwrap(),
         };
         self.storage
-            .set_data(key_id(&self.federation_id), value, None)?;
+            .set_data_async(key_id(&self.federation_id), value, Some(version))
+            .await?;
 
         Ok(())
     }

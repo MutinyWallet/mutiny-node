@@ -372,9 +372,10 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
     }
 
     /// Inserts the federation indexes into storage
-    fn insert_federations(&self, federations: FederationStorage) -> Result<(), MutinyError> {
+    async fn insert_federations(&self, federations: FederationStorage) -> Result<(), MutinyError> {
         let version = Some(federations.version);
-        self.set_data(FEDERATIONS_KEY.to_string(), federations, version)
+        self.set_data_async(FEDERATIONS_KEY.to_string(), federations, version)
+            .await
     }
 
     /// Get the current fee estimates from storage
