@@ -48,6 +48,7 @@ pub fn create_nwc_request(nwc: &NostrWalletConnectURI, invoice: String) -> Event
         public_key: nwc.public_key,
         relay_url: None,
         alias: None,
+        uppercase: false,
     };
 
     EventBuilder::new(Kind::WalletConnectRequest, encrypted, [p_tag])

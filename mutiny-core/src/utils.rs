@@ -188,7 +188,7 @@ pub(crate) fn parse_profile_metadata(data: Vec<Value>) -> HashMap<XOnlyPublicKey
         .filter_map(|v| {
             Event::from_value(v)
                 .ok()
-                .and_then(|e| Metadata::from_json(e.content).ok().map(|m| (e.pubkey, m)))
+                .and_then(|e| Metadata::from_json(&e.content).ok().map(|m| (e.pubkey, m)))
         })
         .collect()
 }

@@ -68,7 +68,9 @@ use crate::{
 };
 use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
-use ::nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
+use ::nostr::nips::nip57;
+use ::nostr::prelude::ZapRequestData;
+use ::nostr::{JsonUtil, Kind};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
@@ -1511,25 +1513,21 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 // if user's npub is given, do an anon zap
                 let (zap_request, comment) = match zap_npub {
                     Some(zap_npub) => {
-                        let tags = vec![
-                            Tag::PublicKey {
-                                public_key: zap_npub,
-                                relay_url: None,
-                                alias: None,
-                            },
-                            Tag::Amount {
-                                millisats: msats,
-                                bolt11: None,
-                            },
-                            Tag::Lnurl(lnurl.to_string()),
-                            Tag::Relays(vec!["wss://nostr.mutinywallet.com".into()]),
-                            Tag::Anon { msg: comment },
-                        ];
-                        let event = EventBuilder::new(Kind::ZapRequest, "", tags)
-                            .to_event(&Keys::generate())?
-                            .as_json();
+                        let data = ZapRequestData {
+                            public_key: zap_npub,
+                            relays: vec![
+                                "wss://nostr.mutinywallet.com".into(),
+                                "wss://relay.primal.net".into(),
+                            ],
+                            message: comment.unwrap_or_default(),
+                            amount: Some(msats),
+                            lnurl: Some(lnurl.encode()),
+                            event_id: None,
+                            event_coordinate: None,
+                        };
+                        let event = nip57::anonymous_zap_request(data)?;
 
-                        (Some(event), None)
+                        (Some(event.as_json()), None)
                     }
                     None => (None, comment.filter(|c| !c.is_empty())),
                 };

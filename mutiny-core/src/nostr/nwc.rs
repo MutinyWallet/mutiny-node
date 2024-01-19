@@ -390,6 +390,7 @@ impl NostrWalletConnect {
             public_key: event.pubkey,
             relay_url: None,
             alias: None,
+            uppercase: false,
         };
         let e_tag = Tag::Event {
             event_id: event.id,
@@ -625,6 +626,7 @@ impl NostrWalletConnect {
                         public_key: event.pubkey,
                         relay_url: None,
                         alias: None,
+                        uppercase: false,
                     };
                     let e_tag = Tag::Event {
                         event_id: event.id,
@@ -794,6 +796,7 @@ impl NostrWalletConnect {
                         public_key: event.pubkey,
                         relay_url: None,
                         alias: None,
+                        uppercase: false,
                     };
                     let e_tag = Tag::Event {
                         event_id: event.id,
@@ -1318,6 +1321,7 @@ mod wasm_test {
                 public_key: uri.public_key,
                 relay_url: None,
                 alias: None,
+                uppercase: false,
             };
             EventBuilder::new(Kind::WalletConnectRequest, encrypted, [p_tag])
                 .to_event(&Keys::new(uri.secret))
@@ -1346,6 +1350,7 @@ mod wasm_test {
                 public_key: uri.public_key,
                 relay_url: None,
                 alias: None,
+                uppercase: false,
             };
             EventBuilder::new(Kind::WalletConnectRequest, encrypted, [p_tag])
                 .to_event(&Keys::new(uri.secret))

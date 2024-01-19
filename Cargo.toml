@@ -20,5 +20,3 @@ lightning-invoice = { git = 'https://github.com/MutinyWallet/rust-lightning.git'
 lightning-rapid-gossip-sync = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "686a84236f54bf8d7270a5fbec07801e5281691f" }
 lightning-background-processor = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "686a84236f54bf8d7270a5fbec07801e5281691f" }
 lightning-transaction-sync  = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "686a84236f54bf8d7270a5fbec07801e5281691f" }
-nostr  = { git = 'https://github.com/benthecarman/nostr.git', rev = "7195b8d537db5fe0612b3d94794893bc0021aa11" }
-nostr-sdk  = { git = 'https://github.com/benthecarman/nostr.git', rev = "7195b8d537db5fe0612b3d94794893bc0021aa11" }
