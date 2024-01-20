@@ -1607,14 +1607,24 @@ impl MutinyWallet {
         Ok(())
     }
 
-    /// Decrypts a DM using the primary key
-    pub async fn decrypt_dm(
+    /// Get dm conversation between us and given npub
+    /// Returns a vector of messages sorted by newest first
+    pub async fn get_dm_conversation(
         &self,
-        pubkey: String,
-        message: String,
-    ) -> Result<String, MutinyJsError> {
-        let pubkey = parse_npub(&pubkey)?;
-        Ok(self.inner.nostr.decrypt_dm(pubkey, &message).await?)
+        primal_url: Option<String>,
+        npub: String,
+        limit: u64,
+        until: Option<u64>,
+        since: Option<u64>,
+    ) -> Result<JsValue /* Vec<DirectMessage> */, MutinyJsError> {
+        let npub = parse_npub(&npub)?;
+        let vec = self
+            .inner
+            .get_dm_conversation(npub, limit, until, since)
+            .await?;
+
+        let dms: Vec<DirectMessage> = vec.into_iter().map(|i| i.into()).collect();
+        Ok(JsValue::from_serde(&dms)?)
     }
 
     /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.

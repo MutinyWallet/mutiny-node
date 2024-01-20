@@ -1107,3 +1107,22 @@ impl TryFrom<nostr::nwc::BudgetPeriod> for BudgetPeriod {
         }
     }
 }
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DirectMessage {
+    pub from: String,
+    pub to: String,
+    pub message: String,
+    pub date: u64,
+}
+
+impl From<mutiny_core::DirectMessage> for DirectMessage {
+    fn from(value: mutiny_core::DirectMessage) -> Self {
+        Self {
+            from: value.from.to_bech32().expect("bech32"),
+            to: value.to.to_bech32().expect("bech32"),
+            message: value.message,
+            date: value.date,
+        }
+    }
+}

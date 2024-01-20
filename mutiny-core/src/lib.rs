@@ -69,7 +69,7 @@ use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
 use ::nostr::nips::nip57;
 use ::nostr::prelude::ZapRequestData;
-use ::nostr::{JsonUtil, Kind};
+use ::nostr::{Event, JsonUtil, Kind};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
@@ -421,6 +421,31 @@ pub struct MutinyWalletConfigBuilder {
     skip_device_lock: bool,
     pub safe_mode: bool,
     skip_hodl_invoices: bool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DirectMessage {
+    pub from: XOnlyPublicKey,
+    pub to: XOnlyPublicKey,
+    pub message: String,
+    pub date: u64,
+}
+
+impl PartialOrd for DirectMessage {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DirectMessage {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        // order by date, then the message, the keys
+        self.date
+            .cmp(&other.date)
+            .then_with(|| self.message.cmp(&other.message))
+            .then_with(|| self.from.cmp(&other.from))
+            .then_with(|| self.to.cmp(&other.to))
+    }
 }
 
 impl MutinyWalletConfigBuilder {
@@ -1437,6 +1462,71 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(())
     }
 
+    /// Get dm conversation between us and given npub
+    /// Returns a vector of messages sorted by newest first
+    pub async fn get_dm_conversation(
+        &self,
+        primal_url: Option<&str>,
+        npub: XOnlyPublicKey,
+        limit: u64,
+        until: Option<u64>,
+        since: Option<u64>,
+    ) -> Result<Vec<DirectMessage>, MutinyError> {
+        let url = primal_url.unwrap_or("https://primal-cache.mutinywallet.com/api");
+        let client = reqwest::Client::new();
+
+        // api is a little weird, has sender and receiver but still gives full conversation
+        let body = match (until, since) {
+            (Some(until), Some(since)) => {
+                json!(["get_directmsgs", { "sender": npub.to_hex(), "receiver": self.nostr.public_key.to_hex(), "limit": limit, "until": until, "since": since }])
+            }
+            (None, Some(since)) => {
+                json!(["get_directmsgs", { "sender": npub.to_hex(), "receiver": self.nostr.public_key.to_hex(), "limit": limit, "since": since }])
+            }
+            (Some(until), None) => {
+                json!(["get_directmsgs", { "sender": npub.to_hex(), "receiver": self.nostr.public_key.to_hex(), "limit": limit, "until": until }])
+            }
+            (None, None) => {
+                json!(["get_directmsgs", { "sender": npub.to_hex(), "receiver": self.nostr.public_key.to_hex(), "limit": limit, "since": 0 }])
+            }
+        };
+        let data: Vec<Value> = Self::primal_request(&client, url, body).await?;
+
+        let mut messages = Vec::with_capacity(data.len());
+        for d in data {
+            let event = Event::from_value(d)
+                .ok()
+                .filter(|e| e.kind == Kind::EncryptedDirectMessage);
+
+            if let Some(event) = event {
+                // verify signature
+                if event.verify().is_err() {
+                    continue;
+                }
+
+                let message = self.nostr.decrypt_dm(npub, &event.content).await?;
+
+                let to = if event.pubkey == npub {
+                    self.nostr.public_key
+                } else {
+                    npub
+                };
+                let dm = DirectMessage {
+                    from: event.pubkey,
+                    to,
+                    message,
+                    date: event.created_at.as_u64(),
+                };
+                messages.push(dm);
+            }
+        }
+
+        // sort messages, newest first
+        messages.sort_by(|a, b| b.cmp(a));
+
+        Ok(messages)
+    }
+
     /// Stops all of the nodes and background processes.
     /// Returns after node has been stopped.
     pub async fn stop(&self) -> Result<(), MutinyError> {
@@ -1972,8 +2062,11 @@ mod tests {
     use crate::test_utils::*;
 
     use crate::labels::{Contact, LabelStorage};
+    use crate::nostr::NostrKeySource;
     use crate::storage::{MemoryStorage, MutinyStorage};
     use crate::utils::parse_npub;
+    use nostr::key::FromSkStr;
+    use nostr::Keys;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -2223,5 +2316,56 @@ mod tests {
         assert!(contact.image_url.is_some());
         assert!(contact.ln_address.is_some());
         assert_ne!(contact.name, incorrect_name);
+    }
+
+    #[test]
+    async fn get_dm_conversation_test() {
+        // test nsec I made and sent dms to
+        let nsec =
+            Keys::from_sk_str("nsec1w2cy7vmq8urw9ae6wjaujrmztndad7e65hja52zk0c9x4yxgk0xsfuqk6s")
+                .unwrap();
+        let npub =
+            parse_npub("npub18s7md9ytv8r240jmag5j037huupk5jnsk94adykeaxtvc6lyftesuw5ydl").unwrap();
+
+        // create wallet
+        let mnemonic = generate_seed(12).unwrap();
+        let network = Network::Regtest;
+        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
+        let storage = MemoryStorage::new(None, None, None);
+        let config = MutinyWalletConfigBuilder::new(xpriv)
+            .with_network(network)
+            .build();
+        let mut mw = MutinyWalletBuilder::new(xpriv, storage.clone()).with_config(config);
+        mw.with_nostr_key_source(NostrKeySource::Imported(nsec));
+        let mw = mw.build().await.expect("mutiny wallet should initialize");
+
+        // get messages
+        let limit = 5;
+        let messages = mw
+            .get_dm_conversation(npub, limit, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(messages.len(), 5);
+
+        for x in &messages {
+            log!("{}", x.message);
+        }
+
+        // get next messages
+        let limit = 2;
+        let util = messages.iter().min_by_key(|m| m.date).unwrap().date - 1;
+        let next = mw
+            .get_dm_conversation(npub, limit, Some(util), None)
+            .await
+            .unwrap();
+
+        for x in next.iter() {
+            log!("{}", x.message);
+        }
+
+        // check that we got different messages
+        assert_eq!(next.len(), 2);
+        assert!(next.iter().all(|m| !messages.contains(m)))
     }
 }
