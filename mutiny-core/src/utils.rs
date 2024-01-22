@@ -221,12 +221,11 @@ pub fn get_monitor_version(bytes: &[u8]) -> u64 {
     u64::from_be_bytes(bytes[2..10].try_into().unwrap())
 }
 
-#[cfg(not(test))]
-pub const HODL_INVOICE_NODES: [&str; 1] =
-    ["031b301307574bbe9b9ac7b79cbe1700e31e544513eae0b5d7497483083f99e581"];
-
-#[cfg(test)]
-pub const HODL_INVOICE_NODES: [&str; 2] = [
+/// Nodes that give hodl invoices, we want to warn users against this.
+pub const HODL_INVOICE_NODES: [&str; 5] = [
     "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798", // pubkey of ONE_KEY
-    "031b301307574bbe9b9ac7b79cbe1700e31e544513eae0b5d7497483083f99e581",
+    "031b301307574bbe9b9ac7b79cbe1700e31e544513eae0b5d7497483083f99e581", // ZeusPay
+    "02187352cc4b1856b9604e0a79e1bc9b301be7e0c14acbbb8c29f7051d507127d7", // Robosats
+    "0282eb467bc073833a039940392592bf10cf338a830ba4e392c1667d7697654c7e", // Robosats
+    "037ff12b6a4e4bcb4b944b6d20af08cdff61b3461c1dff0d00a88697414d891bc7", // Robosats
 ];
