@@ -1059,7 +1059,14 @@ impl<S: MutinyStorage> Node<S> {
 
                         if lsp_invoice.payment_hash() != invoice.payment_hash()
                             || lsp_invoice.recover_payee_pub_key() != client.get_lsp_pubkey()
+                            || lsp_invoice.amount_milli_satoshis() != Some(amount_sat * 1_000)
                         {
+                            log_error!(
+                                self.logger,
+                                "Received unexpected invoice from LSP: {:?} != {}",
+                                lsp_invoice.amount_milli_satoshis(),
+                                amount_sat * 1_000
+                            );
                             return Err(MutinyError::InvoiceCreationFailed);
                         }
 
