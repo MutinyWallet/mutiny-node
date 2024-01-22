@@ -71,9 +71,7 @@ wasm-bindgen-test = "0.3.33"
 mockall = "0.11.2"
 
 [features]
-default = ["async-interface"]
-# needed to make async ldk esplora work
-async-interface = []
+default = []
 ignored_tests = []
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
