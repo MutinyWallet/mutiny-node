@@ -417,6 +417,7 @@ pub struct MutinyWalletConfigBuilder {
     auth_client: Option<Arc<MutinyAuthClient>>,
     subscription_url: Option<String>,
     scorer_url: Option<String>,
+    primal_url: Option<String>,
     do_not_connect_peers: bool,
     skip_device_lock: bool,
     pub safe_mode: bool,
@@ -463,6 +464,7 @@ impl MutinyWalletConfigBuilder {
             auth_client: None,
             subscription_url: None,
             scorer_url: None,
+            primal_url: None,
             do_not_connect_peers: false,
             skip_device_lock: false,
             safe_mode: false,
@@ -513,6 +515,10 @@ impl MutinyWalletConfigBuilder {
         self.scorer_url = Some(scorer_url);
     }
 
+    pub fn with_primal_url(&mut self, primal_url: String) {
+        self.primal_url = Some(primal_url);
+    }
+
     pub fn do_not_connect_peers(&mut self) {
         self.do_not_connect_peers = true;
     }
@@ -546,6 +552,7 @@ impl MutinyWalletConfigBuilder {
             auth_client: self.auth_client,
             subscription_url: self.subscription_url,
             scorer_url: self.scorer_url,
+            primal_url: self.primal_url,
             do_not_connect_peers: self.do_not_connect_peers,
             skip_device_lock: self.skip_device_lock,
             safe_mode: self.safe_mode,
@@ -568,6 +575,7 @@ pub struct MutinyWalletConfig {
     auth_client: Option<Arc<MutinyAuthClient>>,
     subscription_url: Option<String>,
     scorer_url: Option<String>,
+    primal_url: Option<String>,
     do_not_connect_peers: bool,
     skip_device_lock: bool,
     pub safe_mode: bool,
@@ -1390,12 +1398,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Get contacts from the given npub and sync them to the wallet
-    pub async fn sync_nostr_contacts(
-        &self,
-        primal_url: Option<&str>,
-        npub: XOnlyPublicKey,
-    ) -> Result<(), MutinyError> {
-        let url = primal_url.unwrap_or("https://primal-cache.mutinywallet.com/api");
+    pub async fn sync_nostr_contacts(&self, npub: XOnlyPublicKey) -> Result<(), MutinyError> {
+        let url = self
+            .config
+            .primal_url
+            .as_deref()
+            .unwrap_or("https://primal-cache.mutinywallet.com/api");
         let client = reqwest::Client::new();
 
         let body = json!(["contact_list", { "pubkey": npub } ]);
@@ -1466,13 +1474,16 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Returns a vector of messages sorted by newest first
     pub async fn get_dm_conversation(
         &self,
-        primal_url: Option<&str>,
         npub: XOnlyPublicKey,
         limit: u64,
         until: Option<u64>,
         since: Option<u64>,
     ) -> Result<Vec<DirectMessage>, MutinyError> {
-        let url = primal_url.unwrap_or("https://primal-cache.mutinywallet.com/api");
+        let url = self
+            .config
+            .primal_url
+            .as_deref()
+            .unwrap_or("https://primal-cache.mutinywallet.com/api");
         let client = reqwest::Client::new();
 
         // api is a little weird, has sender and receiver but still gives full conversation
@@ -2275,9 +2286,7 @@ mod tests {
             .expect("mutiny wallet should initialize");
 
         // sync contacts
-        mw.sync_nostr_contacts(None, npub)
-            .await
-            .expect("synced contacts");
+        mw.sync_nostr_contacts(npub).await.expect("synced contacts");
 
         // first sync should yield just ben's contact
         let contacts = mw
@@ -2304,9 +2313,7 @@ mod tests {
         let id = mw.storage.create_new_contact(new_contact).unwrap();
 
         // sync contacts again, tony's contact should be correct
-        mw.sync_nostr_contacts(None, npub)
-            .await
-            .expect("synced contacts");
+        mw.sync_nostr_contacts(npub).await.expect("synced contacts");
 
         let contacts = mw.storage.get_contacts().unwrap();
         assert_eq!(contacts.len(), 2);

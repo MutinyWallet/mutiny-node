@@ -103,6 +103,7 @@ impl MutinyWallet {
         skip_hodl_invoices: Option<bool>,
         nsec_override: Option<String>,
         nip_07_key: Option<String>,
+        primal_url: Option<String>,
     ) -> Result<MutinyWallet, MutinyJsError> {
         // if both are set throw an error
         // todo default to nsec if both are for same key?
@@ -138,6 +139,7 @@ impl MutinyWallet {
             skip_hodl_invoices,
             nsec_override,
             nip_07_key,
+            primal_url,
         )
         .await
         {
@@ -171,6 +173,7 @@ impl MutinyWallet {
         skip_hodl_invoices: Option<bool>,
         nsec_override: Option<String>,
         nip_07_key: Option<String>,
+        primal_url: Option<String>,
     ) -> Result<MutinyWallet, MutinyJsError> {
         let safe_mode = safe_mode.unwrap_or(false);
         let logger = Arc::new(MutinyLogger::default());
@@ -263,6 +266,9 @@ impl MutinyWallet {
         }
         if let Some(url) = scorer_url {
             config_builder.with_scorer_url(url);
+        }
+        if let Some(url) = primal_url {
+            config_builder.with_primal_url(url);
         }
         if let Some(true) = skip_device_lock {
             config_builder.with_skip_device_lock();
@@ -1595,15 +1601,9 @@ impl MutinyWallet {
     }
 
     /// Get contacts from the given npub and sync them to the wallet
-    pub async fn sync_nostr_contacts(
-        &self,
-        primal_url: Option<String>,
-        npub_str: String,
-    ) -> Result<(), MutinyJsError> {
+    pub async fn sync_nostr_contacts(&self, npub_str: String) -> Result<(), MutinyJsError> {
         let npub = parse_npub_or_nip05(&npub_str).await?;
-        self.inner
-            .sync_nostr_contacts(primal_url.as_deref(), npub)
-            .await?;
+        self.inner.sync_nostr_contacts(npub).await?;
         Ok(())
     }
 
@@ -1611,7 +1611,6 @@ impl MutinyWallet {
     /// Returns a vector of messages sorted by newest first
     pub async fn get_dm_conversation(
         &self,
-        primal_url: Option<String>,
         npub: String,
         limit: u64,
         until: Option<u64>,
@@ -1806,6 +1805,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1840,6 +1840,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1853,6 +1854,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1909,6 +1911,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1921,6 +1924,7 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1984,6 +1988,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2015,6 +2020,7 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -2063,6 +2069,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await;
 
@@ -2085,6 +2092,7 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
@@ -2167,6 +2175,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -2208,6 +2217,7 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
             None,
             None,
             None,
