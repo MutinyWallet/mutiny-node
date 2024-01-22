@@ -237,6 +237,7 @@ impl<S: MutinyStorage> LspsClient<S> {
                         .payment_secret(payment_secret)
                         .duration_since_epoch(utils::now())
                         .payee_pub_key(payee_pub_key)
+                        .basic_mpp()
                         .min_final_cltv_expiry_delta(MIN_FINAL_CLTV_EXPIRY_DELTA.into())
                         .private_route(lsp_route_hint);
 
