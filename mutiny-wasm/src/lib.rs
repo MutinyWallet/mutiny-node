@@ -1705,6 +1705,14 @@ impl MutinyWallet {
         let npub = parse_npub_or_nip05(&npub).await?;
         Ok(npub.to_bech32().expect("bech32"))
     }
+
+    /// If the invoice is from a node that gives hodl invoices
+    #[wasm_bindgen]
+    pub async fn is_potential_hodl_invoice(invoice: String) -> Result<bool, MutinyJsError> {
+        let invoice = Bolt11Invoice::from_str(&invoice)?;
+        Ok(mutiny_core::utils::HODL_INVOICE_NODES
+            .contains(&invoice.recover_payee_pub_key().to_hex().as_str()))
+    }
 }
 
 #[cfg(test)]
