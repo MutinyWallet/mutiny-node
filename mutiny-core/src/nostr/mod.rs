@@ -1,4 +1,6 @@
+use crate::dlc::DlcHandler;
 use crate::logging::MutinyLogger;
+use crate::nostr::dlc::NostrDlcHandler;
 use crate::nostr::nip49::{NIP49BudgetPeriod, NIP49URI};
 use crate::nostr::nwc::{
     BudgetPeriod, BudgetedSpendingConditions, NostrWalletConnect, NwcProfile, NwcProfileTag,
@@ -23,16 +25,19 @@ use lightning::{log_error, log_warn};
 use nostr::key::SecretKey;
 use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
+use nostr::Url;
 use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Tag};
 use nostr_sdk::{Client, RelayPoolNotification};
 use std::sync::{atomic::Ordering, Arc, RwLock};
 use std::time::Duration;
 use std::{str::FromStr, sync::atomic::AtomicBool};
 
+pub mod dlc;
 pub mod nip49;
 pub mod nwc;
 
 const NWC_ACCOUNT_INDEX: u32 = 1;
+const DLC_ACCOUNT_INDEX: u32 = 1;
 const USER_NWC_PROFILE_START_INDEX: u32 = 1000;
 
 const NWC_STORAGE_KEY: &str = "nwc_profiles";
@@ -71,6 +76,9 @@ pub struct NostrManager<S: MutinyStorage> {
     pub primary_key: Keys,
     /// Separate profiles for each nostr wallet connect string
     pub(crate) nwc: Arc<RwLock<Vec<NostrWalletConnect>>>,
+    /// Handler for DLC messages
+    pub(crate) dlc_handler: Arc<NostrDlcHandler<S>>,
+    /// Storage
     pub storage: S,
     /// Lock for pending nwc invoices
     pending_nwc_lock: Arc<Mutex<()>>,
@@ -90,6 +98,8 @@ impl<S: MutinyStorage> NostrManager<S> {
             .filter(|x| x.profile.active())
             .map(|x| x.profile.relay.clone())
             .collect();
+
+        relays.push(self.dlc_handler.relay.to_string());
 
         // remove duplicates
         relays.sort();
@@ -1011,6 +1021,7 @@ impl<S: MutinyStorage> NostrManager<S> {
     /// Creates a new NostrManager
     pub fn from_mnemonic(
         xprivkey: ExtendedPrivKey,
+        dlc: Arc<DlcHandler<S>>,
         storage: S,
         logger: Arc<MutinyLogger>,
         stop: Arc<AtomicBool>,
@@ -1029,10 +1040,15 @@ impl<S: MutinyStorage> NostrManager<S> {
             .map(|profile| NostrWalletConnect::new(&context, xprivkey, profile).unwrap())
             .collect();
 
+        let dlc_key = Self::derive_nostr_key(&context, xprivkey, DLC_ACCOUNT_INDEX, None, None)?;
+        let relay = Url::parse("wss://relay.damus.io").unwrap();
+        let dlc_handler = NostrDlcHandler::new(dlc_key, relay, dlc, logger.clone());
+
         Ok(Self {
             xprivkey,
             primary_key,
             nwc: Arc::new(RwLock::new(nwc)),
+            dlc_handler: Arc::new(dlc_handler),
             storage,
             pending_nwc_lock: Arc::new(Mutex::new(())),
             logger,
@@ -1071,20 +1087,24 @@ fn get_next_nwc_index(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::fees::MutinyFeeEstimator;
+    use crate::onchain::OnChainWallet;
     use crate::storage::MemoryStorage;
     use bip39::Mnemonic;
     use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Network;
+    use esplora_client::Builder;
     use futures::executor::block_on;
     use lightning_invoice::Bolt11Invoice;
     use nostr::key::XOnlyPublicKey;
     use std::str::FromStr;
+    use std::sync::atomic::AtomicBool;
 
     fn create_nostr_manager() -> NostrManager<MemoryStorage> {
         let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
 
         let xprivkey =
-            ExtendedPrivKey::new_master(Network::Bitcoin, &mnemonic.to_seed("")).unwrap();
+            ExtendedPrivKey::new_master(Network::Regtest, &mnemonic.to_seed("")).unwrap();
 
         let storage = MemoryStorage::new(None, None, None);
 
@@ -1092,7 +1112,30 @@ mod test {
 
         let stop = Arc::new(AtomicBool::new(false));
 
-        NostrManager::from_mnemonic(xprivkey, storage, logger, stop).unwrap()
+        let esplora = Arc::new(
+            Builder::new("https://mutinynet.com/api")
+                .build_async()
+                .unwrap(),
+        );
+        let fees = MutinyFeeEstimator::new(
+            storage.clone(),
+            Network::Regtest,
+            esplora.clone(),
+            logger.clone(),
+        );
+        let wallet = OnChainWallet::new(
+            xprivkey,
+            storage.clone(),
+            Network::Regtest,
+            esplora.clone(),
+            Arc::new(fees),
+            Arc::new(AtomicBool::default()),
+            logger.clone(),
+        )
+        .unwrap();
+        let dlc = DlcHandler::new(Arc::new(wallet), logger.clone()).unwrap();
+
+        NostrManager::from_mnemonic(xprivkey, Arc::new(dlc), storage, logger, stop).unwrap()
     }
 
     #[test]

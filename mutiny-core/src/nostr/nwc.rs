@@ -1189,10 +1189,14 @@ mod test {
 #[cfg(target_arch = "wasm32")]
 mod wasm_test {
     use super::*;
+    use crate::dlc::DlcHandler;
     use crate::logging::MutinyLogger;
     use crate::nostr::ProfileType;
     use crate::storage::MemoryStorage;
-    use crate::test_utils::{create_dummy_invoice, create_mutiny_wallet, create_nwc_request};
+    use crate::test_utils::{
+        create_dummy_invoice, create_mutiny_wallet, create_node, create_nwc_request,
+        create_onchain_wallet,
+    };
     use crate::MockInvoiceHandler;
     use crate::MutinyInvoice;
     use bitcoin::secp256k1::ONE_KEY;
@@ -1236,8 +1240,10 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
+        let dlc =
+            Arc::new(DlcHandler::new(mw.node_manager.wallet.clone(), mw.logger.clone()).unwrap());
         let nostr_manager =
-            NostrManager::from_mnemonic(xprivkey, storage.clone(), mw.logger.clone(), stop)
+            NostrManager::from_mnemonic(xprivkey, dlc, storage.clone(), mw.logger.clone(), stop)
                 .unwrap();
 
         let profile = nostr_manager
@@ -1285,8 +1291,11 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
+        let wallet = Arc::new(create_onchain_wallet(storage.clone()));
+        let dlc = Arc::new(DlcHandler::new(wallet, logger.clone()).unwrap());
         let nostr_manager =
-            NostrManager::from_mnemonic(xprivkey, storage.clone(), logger.clone(), stop).unwrap();
+            NostrManager::from_mnemonic(xprivkey, dlc, storage.clone(), logger.clone(), stop)
+                .unwrap();
 
         let profile = nostr_manager
             .create_new_profile(
@@ -1462,10 +1471,13 @@ mod wasm_test {
     #[test]
     async fn test_clear_expired_pending_invoices() {
         let storage = MemoryStorage::default();
+        let node = create_node(storage.clone()).await;
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
+        let dlc = Arc::new(DlcHandler::new(node.wallet.clone(), node.logger.clone()).unwrap());
         let stop = Arc::new(AtomicBool::new(false));
         let nostr_manager = NostrManager::from_mnemonic(
             xprivkey,
+            dlc,
             storage.clone(),
             Arc::new(MutinyLogger::default()),
             stop,
@@ -1511,13 +1523,15 @@ mod wasm_test {
     #[test]
     async fn test_failed_process_nwc_event_budget() {
         let storage = MemoryStorage::default();
+        let logger = Arc::new(MutinyLogger::default());
         let mw = create_mutiny_wallet(storage.clone()).await;
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
+        let wallet = Arc::new(create_onchain_wallet(storage.clone()));
+        let dlc = Arc::new(DlcHandler::new(wallet, logger.clone()).unwrap());
         let nostr_manager =
-            NostrManager::from_mnemonic(xprivkey, storage.clone(), mw.logger.clone(), stop)
-                .unwrap();
+            NostrManager::from_mnemonic(xprivkey, dlc, storage.clone(), logger, stop).unwrap();
 
         let budget = 10_000;
         let profile = nostr_manager
@@ -1597,8 +1611,11 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
+        let wallet = Arc::new(create_onchain_wallet(storage.clone()));
+        let dlc = Arc::new(DlcHandler::new(wallet, logger.clone()).unwrap());
         let nostr_manager =
-            NostrManager::from_mnemonic(xprivkey, storage.clone(), logger, stop).unwrap();
+            NostrManager::from_mnemonic(xprivkey, dlc, storage.clone(), logger.clone(), stop)
+                .unwrap();
 
         let budget = 10_000;
         let profile = nostr_manager

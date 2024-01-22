@@ -69,6 +69,37 @@ pub(crate) async fn create_mutiny_wallet<S: MutinyStorage>(storage: S) -> Mutiny
         .expect("mutiny wallet should initialize")
 }
 
+pub(crate) fn create_onchain_wallet<S: MutinyStorage>(storage: S) -> OnChainWallet<S> {
+    let logger = Arc::new(MutinyLogger::default());
+    let network = Network::Regtest;
+    let seed = generate_seed(12).unwrap();
+    let xprivkey = ExtendedPrivKey::new_master(network, &seed.to_seed("")).unwrap();
+
+    let esplora_server_url = get_esplora_url(network, None);
+    let esplora = Arc::new(
+        esplora_client::Builder::new(&esplora_server_url)
+            .build_async()
+            .unwrap(),
+    );
+    let fee_estimator = Arc::new(MutinyFeeEstimator::new(
+        storage.clone(),
+        network,
+        esplora.clone(),
+        logger.clone(),
+    ));
+
+    OnChainWallet::new(
+        xprivkey,
+        storage,
+        network,
+        esplora,
+        fee_estimator,
+        Arc::new(AtomicBool::new(false)),
+        logger,
+    )
+    .unwrap()
+}
+
 pub(crate) async fn create_node<S: MutinyStorage>(storage: S) -> Node<S> {
     // mark first sync as done so we can execute node functions
     storage.set_done_first_sync().unwrap();

@@ -319,6 +319,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bdk_coin_select"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0320167c3655e83f0415d52f39618902e449186ffc7dfb090f922f79675c316"
+
+[[package]]
 name = "bdk_esplora"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -760,6 +766,57 @@ dependencies = [
  "block-buffer 0.10.4",
  "crypto-common",
  "subtle",
+]
+
+[[package]]
+name = "dlc"
+version = "0.4.0"
+source = "git+https://github.com/benthecarman/rust-dlc?branch=mutiny#09904107517c2b5c55bfab2fb14f702841565aa3"
+dependencies = [
+ "bitcoin 0.29.2",
+ "miniscript",
+ "secp256k1-sys 0.6.1",
+ "secp256k1-zkp",
+ "serde",
+]
+
+[[package]]
+name = "dlc-manager"
+version = "0.4.0"
+source = "git+https://github.com/benthecarman/rust-dlc?branch=mutiny#09904107517c2b5c55bfab2fb14f702841565aa3"
+dependencies = [
+ "async-trait",
+ "bitcoin 0.29.2",
+ "dlc",
+ "dlc-messages",
+ "dlc-trie",
+ "lightning",
+ "log",
+ "secp256k1-zkp",
+ "serde",
+]
+
+[[package]]
+name = "dlc-messages"
+version = "0.4.0"
+source = "git+https://github.com/benthecarman/rust-dlc?branch=mutiny#09904107517c2b5c55bfab2fb14f702841565aa3"
+dependencies = [
+ "bitcoin 0.29.2",
+ "dlc",
+ "lightning",
+ "secp256k1-zkp",
+ "serde",
+]
+
+[[package]]
+name = "dlc-trie"
+version = "0.4.0"
+source = "git+https://github.com/benthecarman/rust-dlc?branch=mutiny#09904107517c2b5c55bfab2fb14f702841565aa3"
+dependencies = [
+ "bitcoin 0.29.2",
+ "dlc",
+ "secp256k1-zkp",
+ "serde",
 ]
 
 [[package]]
@@ -2237,6 +2294,7 @@ dependencies = [
  "bdk",
  "bdk-macros",
  "bdk_chain",
+ "bdk_coin_select",
  "bdk_esplora",
  "bincode",
  "bip39",
@@ -2244,6 +2302,10 @@ dependencies = [
  "cbc",
  "cfg-if",
  "chrono",
+ "dlc",
+ "dlc-manager",
+ "dlc-messages",
+ "dlc-trie",
  "esplora-client",
  "fedimint-bip39",
  "fedimint-client",

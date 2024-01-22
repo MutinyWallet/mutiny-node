@@ -7,6 +7,7 @@ use lightning::{log_debug, log_error};
 use log::error;
 use mutiny_core::storage::*;
 use mutiny_core::vss::*;
+use mutiny_core::DLC_CONTRACT_KEY_PREFIX;
 use mutiny_core::*;
 use mutiny_core::{
     encrypt::Cipher,
@@ -380,6 +381,9 @@ impl IndexedDbStorage {
                     }
                 }
             }
+            DLC_KEY_INDEX_KEY => {
+                return Self::handle_versioned_value(kv, vss, current, logger).await;
+            }
             key => {
                 if key.starts_with(MONITORS_PREFIX_KEY) {
                     // we can get versions from monitors, so we should compare
@@ -404,35 +408,6 @@ impl IndexedDbStorage {
                         None => {
                             let obj = vss.get_object(&kv.key).await?;
                             return Ok(Some((kv.key, obj.value)));
-                        }
-                    }
-                } else if key.starts_with(CHANNEL_MANAGER_KEY) {
-                    // we can get versions from channel manager, so we should compare
-                    match current.get_data::<VersionedValue>(&kv.key)? {
-                        Some(local) => {
-                            if local.version < kv.version {
-                                let obj = vss.get_object(&kv.key).await?;
-                                if serde_json::from_value::<VersionedValue>(obj.value.clone())
-                                    .is_ok()
-                                {
-                                    return Ok(Some((kv.key, obj.value)));
-                                }
-                            } else {
-                                log_debug!(
-                                    logger,
-                                    "Skipping vss key {} with version {}, current version is {}",
-                                    kv.key,
-                                    kv.version,
-                                    local.version
-                                );
-                                return Ok(None);
-                            }
-                        }
-                        None => {
-                            let obj = vss.get_object(&kv.key).await?;
-                            if serde_json::from_value::<VersionedValue>(obj.value.clone()).is_ok() {
-                                return Ok(Some((kv.key, obj.value)));
-                            }
                         }
                     }
                 } else if key.starts_with(FEDIMINTS_PREFIX_KEY) {
@@ -464,6 +439,10 @@ impl IndexedDbStorage {
                             }
                         }
                     }
+                } else if key.starts_with(CHANNEL_MANAGER_KEY)
+                    || key.starts_with(DLC_CONTRACT_KEY_PREFIX)
+                {
+                    return Self::handle_versioned_value(kv, vss, current, logger).await;
                 }
             }
         }
@@ -474,6 +453,42 @@ impl IndexedDbStorage {
             kv.key,
             kv.version
         );
+
+        Ok(None)
+    }
+
+    async fn handle_versioned_value(
+        kv: KeyVersion,
+        vss: &MutinyVssClient,
+        current: &MemoryStorage,
+        logger: &MutinyLogger,
+    ) -> Result<Option<(String, Value)>, MutinyError> {
+        // we can get versions from VersionedValue so we should compare
+        match current.get_data::<VersionedValue>(&kv.key)? {
+            Some(local) => {
+                if local.version < kv.version {
+                    let obj = vss.get_object(&kv.key).await?;
+                    if serde_json::from_value::<VersionedValue>(obj.value.clone()).is_ok() {
+                        return Ok(Some((kv.key, obj.value)));
+                    }
+                } else {
+                    log_debug!(
+                        logger,
+                        "Skipping vss key {} with version {}, current version is {}",
+                        kv.key,
+                        kv.version,
+                        local.version
+                    );
+                    return Ok(None);
+                }
+            }
+            None => {
+                let obj = vss.get_object(&kv.key).await?;
+                if serde_json::from_value::<VersionedValue>(obj.value.clone()).is_ok() {
+                    return Ok(Some((kv.key, obj.value)));
+                }
+            }
+        }
 
         Ok(None)
     }
