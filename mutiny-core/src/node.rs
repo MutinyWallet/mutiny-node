@@ -994,6 +994,8 @@ impl<S: MutinyStorage> Node<S> {
                     .map(|c| c.inbound_capacity_msat)
                     .sum();
 
+                log_debug!(self.logger, "Current inbound liquidity {inbound_capacity_msat}msats, creating invoice for {}msats", amount_sat * 1000);
+
                 let has_inbound_capacity = inbound_capacity_msat > amount_sat * 1_000;
 
                 let min_amount_sat = if has_inbound_capacity {
