@@ -95,9 +95,19 @@ pub struct NostrManager<S: MutinyStorage> {
     pub logger: Arc<MutinyLogger>,
     /// Atomic stop signal
     pub stop: Arc<AtomicBool>,
+    /// Nostr client
+    pub client: Client,
 }
 
 impl<S: MutinyStorage> NostrManager<S> {
+    /// Connect to the nostr relays
+    pub async fn connect(&self) -> Result<(), MutinyError> {
+        self.client.add_relays(self.get_relays()).await?;
+        self.client.connect().await;
+
+        Ok(())
+    }
+
     pub fn get_relays(&self) -> Vec<String> {
         let mut relays: Vec<String> = self
             .nwc
@@ -111,6 +121,9 @@ impl<S: MutinyStorage> NostrManager<S> {
         // add relays to pull DMs from
         relays.push("wss://relay.primal.net".to_string());
         relays.push("wss://relay.damus.io".to_string());
+
+        // add blastr for default sending
+        relays.push("wss://nostr.mutinywallet.com".to_string());
 
         // remove duplicates
         relays.sort();
@@ -482,6 +495,8 @@ impl<S: MutinyStorage> NostrManager<S> {
         tag: NwcProfileTag,
     ) -> Result<NwcProfile, MutinyError> {
         let profile = self.create_new_profile(profile_type, spending_conditions, tag)?;
+        // add relay if needed
+        self.client.add_relay(profile.relay.as_str()).await?;
 
         let info_event = self.nwc.read().unwrap().iter().find_map(|nwc| {
             if nwc.profile.index == profile.index {
@@ -492,19 +507,12 @@ impl<S: MutinyStorage> NostrManager<S> {
         });
 
         if let Some(info_event) = info_event {
-            let client = Client::new(self.primary_key.clone());
-
-            client
-                .add_relay(profile.relay.as_str())
+            self.client
+                .send_event_to(profile.relay.as_str(), info_event)
                 .await
-                .expect("Failed to add relays");
-            client.connect().await;
-
-            client.send_event(info_event).await.map_err(|e| {
-                MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}"))
-            })?;
-
-            let _ = client.disconnect().await;
+                .map_err(|e| {
+                    MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}"))
+                })?;
         }
 
         Ok(profile)
@@ -625,14 +633,6 @@ impl<S: MutinyStorage> NostrManager<S> {
         nwc: NostrWalletConnect,
         inv: PendingNwcInvoice,
     ) -> Result<EventId, MutinyError> {
-        let client = Client::new(self.primary_key.clone());
-
-        client
-            .add_relay(nwc.profile.relay.as_str())
-            .await
-            .expect("Failed to add relays");
-        client.connect().await;
-
         let encrypted = encrypt(
             &nwc.server_key.secret_key().unwrap(),
             &nwc.client_pubkey(),
@@ -655,12 +655,11 @@ impl<S: MutinyStorage> NostrManager<S> {
             .to_event(&nwc.server_key)
             .map_err(|e| MutinyError::Other(anyhow::anyhow!("Failed to create event: {e:?}")))?;
 
-        let event_id = client
-            .send_event(response)
+        let event_id = self
+            .client
+            .send_event_to(nwc.profile.relay.as_str(), response)
             .await
             .map_err(|e| MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}")))?;
-
-        let _ = client.disconnect().await;
 
         Ok(event_id)
     }
@@ -763,14 +762,6 @@ impl<S: MutinyStorage> NostrManager<S> {
         // doesn't work in test environment
         #[cfg(not(test))]
         {
-            let client = Client::new(self.primary_key.clone());
-
-            client
-                .add_relays(self.get_relays())
-                .await
-                .expect("Failed to add relays");
-            client.connect().await;
-
             let invoices: Vec<PendingNwcInvoice> = self
                 .storage
                 .get_data(PENDING_NWC_EVENTS_KEY)?
@@ -813,13 +804,11 @@ impl<S: MutinyStorage> NostrManager<S> {
                                 MutinyError::Other(anyhow::anyhow!("Failed to create event: {e:?}"))
                             })?;
 
-                    client.send_event(response).await.map_err(|e| {
+                    self.client.send_event(response).await.map_err(|e| {
                         MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}"))
                     })?;
                 }
             }
-
-            let _ = client.disconnect().await;
         }
 
         // need to define the type here, otherwise it will be ambiguous
@@ -1217,6 +1206,8 @@ impl<S: MutinyStorage> NostrManager<S> {
             .map(|profile| NostrWalletConnect::new(&context, xprivkey, profile).unwrap())
             .collect();
 
+        let client = Client::new(primary_key.clone());
+
         Ok(Self {
             xprivkey,
             primary_key,
@@ -1226,6 +1217,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             pending_nwc_lock: Arc::new(Mutex::new(())),
             logger,
             stop,
+            client,
         })
     }
 }
@@ -1257,6 +1249,7 @@ fn get_next_nwc_index(
     Ok((name, index, child_key_index))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod test {
     use super::*;
@@ -1291,8 +1284,8 @@ mod test {
             .unwrap()
     }
 
-    #[test]
-    fn test_process_dm() {
+    #[tokio::test]
+    async fn test_process_dm() {
         let nostr_manager = create_nostr_manager();
 
         let mut inv_handler = MockInvoiceHandler::new();
@@ -1385,8 +1378,8 @@ mod test {
         assert!(!pending.is_empty())
     }
 
-    #[test]
-    fn test_create_profile() {
+    #[tokio::test]
+    async fn test_create_profile() {
         let nostr_manager = create_nostr_manager();
 
         let name = "test".to_string();
@@ -1428,8 +1421,8 @@ mod test {
         assert_eq!(profiles[0].index, 1000);
     }
 
-    #[test]
-    fn test_create_reserve_profile() {
+    #[tokio::test]
+    async fn test_create_reserve_profile() {
         let nostr_manager = create_nostr_manager();
 
         let name = MUTINY_PLUS_SUBSCRIPTION_LABEL.to_string();
@@ -1541,8 +1534,8 @@ mod test {
         assert_ne!(original_nwc_uri, changed_nwc.get_nwc_uri().unwrap());
     }
 
-    #[test]
-    fn test_create_nwa_profile() {
+    #[tokio::test]
+    async fn test_create_nwa_profile() {
         let nostr_manager = create_nostr_manager();
 
         let name = "test nwa".to_string();
@@ -1593,8 +1586,8 @@ mod test {
         assert_eq!(profiles[0].client_key, Some(uri.public_key));
     }
 
-    #[test]
-    fn test_edit_profile() {
+    #[tokio::test]
+    async fn test_edit_profile() {
         let nostr_manager = create_nostr_manager();
 
         let name = "test".to_string();
@@ -1634,8 +1627,8 @@ mod test {
         assert_eq!(profiles[0].index, 1000);
     }
 
-    #[test]
-    fn test_delete_profile() {
+    #[tokio::test]
+    async fn test_delete_profile() {
         let nostr_manager = create_nostr_manager();
 
         let name = "test".to_string();
@@ -1666,8 +1659,8 @@ mod test {
         assert_eq!(profiles.len(), 0);
     }
 
-    #[test]
-    fn test_deny_invoice() {
+    #[tokio::test]
+    async fn test_deny_invoice() {
         let nostr_manager = create_nostr_manager();
 
         let name = "test".to_string();

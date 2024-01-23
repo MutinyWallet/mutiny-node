@@ -710,6 +710,10 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             stop.clone(),
         )?);
 
+        // connect to relays when not in tests
+        #[cfg(not(test))]
+        nostr.connect().await?;
+
         // create federation module if any exist
         let federation_storage = self.storage.get_federations()?;
         let federations = if !federation_storage.federations.is_empty() {
