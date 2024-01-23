@@ -33,6 +33,7 @@ pub const FEDERATIONS_KEY: &str = "federations";
 const FEE_ESTIMATES_KEY: &str = "fee_estimates";
 pub const BITCOIN_PRICE_CACHE_KEY: &str = "bitcoin_price_cache";
 const FIRST_SYNC_KEY: &str = "first_sync";
+pub const LAST_NWC_SYNC_TIME_KEY: &str = "last_nwc_sync_time";
 pub(crate) const DEVICE_ID_KEY: &str = "device_id";
 pub const DEVICE_LOCK_KEY: &str = "device_lock";
 pub(crate) const EXPECTED_NETWORK_KEY: &str = "network";
@@ -419,6 +420,20 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
         let current = self.get_dm_sync_time()?.unwrap_or_default();
         if current < time {
             self.set_data(LAST_DM_SYNC_TIME_KEY.to_string(), time, None)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn get_nwc_sync_time(&self) -> Result<Option<u64>, MutinyError> {
+        self.get_data(LAST_NWC_SYNC_TIME_KEY)
+    }
+
+    fn set_nwc_sync_time(&self, time: u64) -> Result<(), MutinyError> {
+        // only update if the time is newer
+        let current = self.get_nwc_sync_time()?.unwrap_or_default();
+        if current < time {
+            self.set_data(LAST_NWC_SYNC_TIME_KEY.to_string(), time, None)
         } else {
             Ok(())
         }
