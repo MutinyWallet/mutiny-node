@@ -23,7 +23,7 @@ use lightning::{log_error, log_warn};
 use nostr::key::SecretKey;
 use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
-use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Tag};
+use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Tag, Timestamp};
 use nostr_sdk::{Client, RelayPoolNotification};
 use std::sync::{atomic::Ordering, Arc, RwLock};
 use std::time::Duration;
@@ -98,14 +98,27 @@ impl<S: MutinyStorage> NostrManager<S> {
         relays
     }
 
-    pub fn get_nwc_filters(&self) -> Vec<Filter> {
-        self.nwc
+    pub fn get_nwc_filters(&self) -> Result<Vec<Filter>, MutinyError> {
+        // if we haven't synced before, use now and save to storage
+        let time_stamp = match self.storage.get_nwc_sync_time()? {
+            None => {
+                let now = Timestamp::now();
+                self.storage.set_nwc_sync_time(now.as_u64())?;
+                now
+            }
+            Some(time) => Timestamp::from(time),
+        };
+
+        let vec = self
+            .nwc
             .read()
             .unwrap()
             .iter()
             .filter(|x| x.profile.active())
-            .map(|nwc| nwc.create_nwc_filter())
-            .collect()
+            .map(|nwc| nwc.create_nwc_filter(time_stamp))
+            .collect();
+
+        Ok(vec)
     }
 
     pub fn get_nwc_uri(&self, index: u32) -> Result<Option<NostrWalletConnectURI>, MutinyError> {
@@ -781,6 +794,8 @@ impl<S: MutinyStorage> NostrManager<S> {
                 .find(|nwc| nwc.client_pubkey() == event.pubkey)
                 .cloned()
         };
+
+        self.storage.set_nwc_sync_time(event.created_at.as_u64())?;
 
         if let Some(mut nwc) = nwc {
             let event = nwc.handle_nwc_request(event, invoice_handler, self).await?;

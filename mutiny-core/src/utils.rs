@@ -12,10 +12,10 @@ use lightning::util::ser::Writeable;
 use lightning::util::ser::Writer;
 use nostr::key::XOnlyPublicKey;
 use nostr::nips::nip05;
-use nostr::{Event, FromBech32, JsonUtil, Metadata};
+use nostr::{Event, Filter, FromBech32, JsonUtil, Kind, Metadata};
 use reqwest::Client;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 pub const FETCH_TIMEOUT: i32 = 30_000;
@@ -211,6 +211,33 @@ pub async fn parse_npub_or_nip05(str: &str) -> Result<XOnlyPublicKey, MutinyErro
             }
         },
     }
+}
+
+/// Compares a list of filters and checks if they are effectively equal
+/// The main thing we do not care about is the timestamps
+pub fn compare_filters_vec(a: &[Filter], b: &[Filter]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+
+    // compare that we have all the same kinds
+    let agg_kinds_a: HashSet<Kind> = a.iter().flat_map(|i| i.kinds.clone()).collect();
+    let agg_kinds_b: HashSet<Kind> = b.iter().flat_map(|i| i.kinds.clone()).collect();
+
+    if agg_kinds_a != agg_kinds_b {
+        return false;
+    }
+
+    // compare same authors
+    let agg_authors_a: HashSet<XOnlyPublicKey> = a.iter().flat_map(|i| i.authors.clone()).collect();
+    let agg_authors_b: HashSet<XOnlyPublicKey> = b.iter().flat_map(|i| i.authors.clone()).collect();
+
+    if agg_authors_a != agg_authors_b {
+        return false;
+    }
+
+    // if we have the same authors and kinds they are effectively the same filters to us
+    true
 }
 
 /// Returns the version of a channel monitor from a serialized version

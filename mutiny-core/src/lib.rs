@@ -845,7 +845,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     .expect("Failed to add relays");
                 client.connect().await;
 
-                let mut last_filters = nostr.get_nwc_filters();
+                let mut last_filters = nostr.get_nwc_filters().unwrap_or_default();
                 client.subscribe(last_filters.clone()).await;
 
                 // handle NWC requests
@@ -899,11 +899,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         }
                         _ = filter_check_fut => {
                             // Check if the filters have changed
-                            let current_filters = nostr.get_nwc_filters();
-                            if current_filters != last_filters {
-                                log_debug!(logger, "subscribing to new nwc filters");
-                                client.subscribe(current_filters.clone()).await;
-                                last_filters = current_filters;
+                            if let Ok(current_filters) = nostr.get_nwc_filters() {
+                                if !utils::compare_filters_vec(&current_filters, &last_filters) {
+                                    log_debug!(logger, "subscribing to new nwc filters");
+                                    client.subscribe(current_filters.clone()).await;
+                                    last_filters = current_filters;
+                                }
                             }
                             // Set the time for the next filter check
                             next_filter_check = crate::utils::now().as_secs() + 5;
