@@ -17,7 +17,7 @@ use lightning_invoice::Bolt11Invoice;
 use nostr::key::XOnlyPublicKey;
 use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
-use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Tag};
+use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Tag, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::str::FromStr;
@@ -266,11 +266,12 @@ impl NostrWalletConnect {
         self.server_key.public_key()
     }
 
-    pub fn create_nwc_filter(&self) -> Filter {
+    pub fn create_nwc_filter(&self, timestamp: Timestamp) -> Filter {
         Filter::new()
             .kinds(vec![Kind::WalletConnectRequest])
             .author(self.client_pubkey())
             .pubkey(self.server_pubkey())
+            .since(timestamp)
     }
 
     /// Create Nostr Wallet Connect Info event

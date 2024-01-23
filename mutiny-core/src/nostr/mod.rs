@@ -132,14 +132,27 @@ impl<S: MutinyStorage> NostrManager<S> {
         relays
     }
 
-    fn get_nwc_filters(&self) -> Vec<Filter> {
-        self.nwc
+    fn get_nwc_filters(&self) -> Result<Vec<Filter>, MutinyError> {
+        // if we haven't synced before, use now and save to storage
+        let time_stamp = match self.storage.get_nwc_sync_time()? {
+            None => {
+                let now = Timestamp::now();
+                self.storage.set_nwc_sync_time(now.as_u64())?;
+                now
+            }
+            Some(time) => Timestamp::from(time),
+        };
+
+        let vec = self
+            .nwc
             .read()
             .unwrap()
             .iter()
             .filter(|x| x.profile.active())
-            .map(|nwc| nwc.create_nwc_filter())
-            .collect()
+            .map(|nwc| nwc.create_nwc_filter(time_stamp))
+            .collect();
+
+        Ok(vec)
     }
 
     /// Filters for getting DMs from our contacts
@@ -168,7 +181,7 @@ impl<S: MutinyStorage> NostrManager<S> {
     }
 
     pub fn get_filters(&self) -> Result<Vec<Filter>, MutinyError> {
-        let mut nwc = self.get_nwc_filters();
+        let mut nwc = self.get_nwc_filters()?;
         let dm = self.get_dm_filter()?;
         nwc.push(dm);
 
@@ -917,6 +930,8 @@ impl<S: MutinyStorage> NostrManager<S> {
                 .find(|nwc| nwc.client_pubkey() == event.pubkey)
                 .cloned()
         };
+
+        self.storage.set_nwc_sync_time(event.created_at.as_u64())?;
 
         if let Some(mut nwc) = nwc {
             let event = nwc.handle_nwc_request(event, invoice_handler, self).await?;

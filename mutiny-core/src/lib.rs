@@ -953,7 +953,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         _ = filter_check_fut => {
                             // Check if the filters have changed
                             if let Ok(current_filters) = nostr.get_filters() {
-                                if current_filters != last_filters {
+                                if !utils::compare_filters_vec(&current_filters, &last_filters) {
                                     log_debug!(logger, "subscribing to new nwc filters");
                                     client.subscribe(current_filters.clone()).await;
                                     last_filters = current_filters;
