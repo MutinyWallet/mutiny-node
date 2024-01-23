@@ -973,8 +973,11 @@ impl From<nostr::nwc::NwcProfile> for NwcProfile {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[wasm_bindgen]
 pub struct PendingNwcInvoice {
-    /// Index of the profile that received the invoice
-    pub index: u32,
+    /// Index of the profile that received the invoice.
+    /// None if invoice is from a DM
+    pub index: Option<u32>,
+    /// If this is a DM, this is who sent us the request
+    npub: Option<String>,
     /// The invoice that awaiting approval
     invoice: String,
     /// The id of the invoice, this is the payment hash
@@ -984,13 +987,18 @@ pub struct PendingNwcInvoice {
     /// The description of the invoice
     invoice_description: Option<String>,
     /// Name of the NWC Profile that received the invoice
-    profile_name: String,
+    profile_name: Option<String>,
     /// Invoice expire time in seconds since epoch
     pub expiry: u64,
 }
 
 #[wasm_bindgen]
 impl PendingNwcInvoice {
+    #[wasm_bindgen(getter)]
+    pub fn npub(&self) -> Option<String> {
+        self.npub.clone()
+    }
+
     #[wasm_bindgen(getter)]
     pub fn invoice(&self) -> String {
         self.invoice.clone()
@@ -1008,16 +1016,21 @@ impl PendingNwcInvoice {
 
     /// Name of the NWC Profile that received the invoice
     #[wasm_bindgen(getter)]
-    pub fn profile_name(&self) -> String {
+    pub fn profile_name(&self) -> Option<String> {
         self.profile_name.clone()
     }
 }
 
-impl From<(nostr::nwc::PendingNwcInvoice, String)> for PendingNwcInvoice {
-    fn from((value, profile_name): (nostr::nwc::PendingNwcInvoice, String)) -> Self {
+impl From<(nostr::nwc::PendingNwcInvoice, Option<String>)> for PendingNwcInvoice {
+    fn from((value, profile_name): (nostr::nwc::PendingNwcInvoice, Option<String>)) -> Self {
         let invoice_description = match value.invoice.description() {
             Bolt11InvoiceDescription::Direct(desc) => Some(desc.to_string()),
             Bolt11InvoiceDescription::Hash(_) => None,
+        };
+        let npub = if profile_name.is_none() {
+            Some(value.pubkey.to_bech32().expect("bech32"))
+        } else {
+            None
         };
 
         let timestamp = value.invoice.duration_since_epoch().as_secs();
@@ -1025,6 +1038,7 @@ impl From<(nostr::nwc::PendingNwcInvoice, String)> for PendingNwcInvoice {
 
         PendingNwcInvoice {
             index: value.index,
+            npub,
             invoice: value.invoice.to_string(),
             id: value.invoice.payment_hash().to_hex(),
             amount_sats: value.invoice.amount_milli_satoshis().unwrap_or_default() / 1_000,
@@ -1090,6 +1104,25 @@ impl TryFrom<nostr::nwc::BudgetPeriod> for BudgetPeriod {
             nostr::nwc::BudgetPeriod::Month => Ok(Self::Month),
             nostr::nwc::BudgetPeriod::Year => Ok(Self::Year),
             nostr::nwc::BudgetPeriod::Seconds(_) => Err(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DirectMessage {
+    pub from: String,
+    pub to: String,
+    pub message: String,
+    pub date: u64,
+}
+
+impl From<mutiny_core::DirectMessage> for DirectMessage {
+    fn from(value: mutiny_core::DirectMessage) -> Self {
+        Self {
+            from: value.from.to_bech32().expect("bech32"),
+            to: value.to.to_bech32().expect("bech32"),
+            message: value.message,
+            date: value.date,
         }
     }
 }

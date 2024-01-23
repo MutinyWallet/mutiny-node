@@ -33,6 +33,7 @@ use mutiny_core::auth::MutinyAuthClient;
 use mutiny_core::lnurlauth::AuthManager;
 use mutiny_core::nostr::nip49::NIP49URI;
 use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
+use mutiny_core::nostr::NostrKeySource;
 use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
 use mutiny_core::utils::{now, parse_npub, parse_npub_or_nip05, sleep};
 use mutiny_core::vss::MutinyVssClient;
@@ -43,7 +44,8 @@ use mutiny_core::{
     nodemanager::{create_lsp_config, NodeManager},
 };
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
-use nostr::ToBech32;
+use nostr::key::{FromSkStr, Secp256k1, SecretKey};
+use nostr::{FromBech32, Keys, ToBech32};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{
@@ -99,7 +101,16 @@ impl MutinyWallet {
         skip_device_lock: Option<bool>,
         safe_mode: Option<bool>,
         skip_hodl_invoices: Option<bool>,
+        nsec_override: Option<String>,
+        nip_07_key: Option<String>,
+        primal_url: Option<String>,
     ) -> Result<MutinyWallet, MutinyJsError> {
+        // if both are set throw an error
+        // todo default to nsec if both are for same key?
+        if nsec_override.is_some() && nip_07_key.is_some() {
+            return Err(MutinyJsError::InvalidArgumentsError);
+        }
+
         utils::set_panic_hook();
         let mut init = INITIALIZED.lock().await;
         if *init {
@@ -126,6 +137,9 @@ impl MutinyWallet {
             skip_device_lock,
             safe_mode,
             skip_hodl_invoices,
+            nsec_override,
+            nip_07_key,
+            primal_url,
         )
         .await
         {
@@ -157,6 +171,9 @@ impl MutinyWallet {
         skip_device_lock: Option<bool>,
         safe_mode: Option<bool>,
         skip_hodl_invoices: Option<bool>,
+        nsec_override: Option<String>,
+        nip_07_key: Option<String>,
+        primal_url: Option<String>,
     ) -> Result<MutinyWallet, MutinyJsError> {
         let safe_mode = safe_mode.unwrap_or(false);
         let logger = Arc::new(MutinyLogger::default());
@@ -250,6 +267,9 @@ impl MutinyWallet {
         if let Some(url) = scorer_url {
             config_builder.with_scorer_url(url);
         }
+        if let Some(url) = primal_url {
+            config_builder.with_primal_url(url);
+        }
         if let Some(true) = skip_device_lock {
             config_builder.with_skip_device_lock();
         }
@@ -266,7 +286,17 @@ impl MutinyWallet {
 
         let mut mw_builder = MutinyWalletBuilder::new(xprivkey, storage).with_config(config);
         mw_builder.with_session_id(logger.session_id.clone());
+        if let Some(nsec) = nsec_override {
+            let keys =
+                Keys::from_sk_str(&nsec).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+            mw_builder.with_nostr_key_source(NostrKeySource::Imported(keys));
+        }
+        if let Some(key) = nip_07_key {
+            let npub = parse_npub(&key)?;
+            mw_builder.with_nostr_key_source(NostrKeySource::Extension(npub));
+        }
         let inner = mw_builder.build().await?;
+
         Ok(MutinyWallet { mnemonic, inner })
     }
 
@@ -387,6 +417,12 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub fn show_seed(&self) -> String {
         self.mnemonic.to_string()
+    }
+
+    /// Returns the npub for receiving dms
+    #[wasm_bindgen]
+    pub fn get_npub(&self) -> String {
+        self.inner.nostr.public_key.to_bech32().expect("bech32")
     }
 
     /// Returns the network of the wallet.
@@ -1484,17 +1520,12 @@ impl MutinyWallet {
 
         let pending: Vec<PendingNwcInvoice> = pending
             .into_iter()
-            .flat_map(|inv| {
-                profiles
+            .flat_map(|inv| match inv.index {
+                Some(index) => profiles
                     .iter()
-                    .find_map(|p| {
-                        if inv.index == p.index {
-                            Some(p.name.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .map(|n| (inv, n).into())
+                    .find(|p| p.index == index)
+                    .map(|p| (inv, Some(p.name.clone())).into()),
+                None => Some((inv, None).into()),
             })
             .collect();
 
@@ -1570,16 +1601,36 @@ impl MutinyWallet {
     }
 
     /// Get contacts from the given npub and sync them to the wallet
-    pub async fn sync_nostr_contacts(
-        &self,
-        primal_url: Option<String>,
-        npub_str: String,
-    ) -> Result<(), MutinyJsError> {
+    pub async fn sync_nostr_contacts(&self, npub_str: String) -> Result<(), MutinyJsError> {
         let npub = parse_npub_or_nip05(&npub_str).await?;
-        self.inner
-            .sync_nostr_contacts(primal_url.as_deref(), npub)
-            .await?;
+        self.inner.sync_nostr_contacts(npub).await?;
         Ok(())
+    }
+
+    /// Get dm conversation between us and given npub
+    /// Returns a vector of messages sorted by newest first
+    pub async fn get_dm_conversation(
+        &self,
+        npub: String,
+        limit: u64,
+        until: Option<u64>,
+        since: Option<u64>,
+    ) -> Result<JsValue /* Vec<DirectMessage> */, MutinyJsError> {
+        let npub = parse_npub(&npub)?;
+        let vec = self
+            .inner
+            .get_dm_conversation(npub, limit, until, since)
+            .await?;
+
+        let dms: Vec<DirectMessage> = vec.into_iter().map(|i| i.into()).collect();
+        Ok(JsValue::from_serde(&dms)?)
+    }
+
+    /// Sends a DM to the given npub
+    pub async fn send_dm(&self, npub: String, message: String) -> Result<String, MutinyJsError> {
+        let npub = parse_npub(&npub)?;
+        let event_id = self.inner.nostr.send_dm(npub, message).await?;
+        Ok(event_id.to_hex())
     }
 
     /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.
@@ -1694,6 +1745,18 @@ impl MutinyWallet {
 
     /// Convert an npub string to a hex string
     #[wasm_bindgen]
+    pub async fn nsec_to_npub(nsec: String) -> Result<String, MutinyJsError> {
+        let nsec =
+            SecretKey::from_bech32(nsec).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        Ok(nsec
+            .x_only_public_key(&Secp256k1::new())
+            .0
+            .to_bech32()
+            .expect("bech32"))
+    }
+
+    /// Convert an npub string to a hex string
+    #[wasm_bindgen]
     pub async fn npub_to_hexpub(npub: String) -> Result<String, MutinyJsError> {
         let npub = parse_npub_or_nip05(&npub).await?;
         Ok(npub.to_hex())
@@ -1755,6 +1818,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1787,6 +1853,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1800,6 +1869,9 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -1852,6 +1924,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -1864,6 +1939,9 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -1923,6 +2001,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -1967,6 +2048,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -1985,6 +2069,9 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -2020,6 +2107,9 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -2098,6 +2188,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -2139,6 +2232,9 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
+            None,
+            None,
             None,
             None,
             None,

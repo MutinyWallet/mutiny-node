@@ -69,7 +69,7 @@ use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
 use ::nostr::nips::nip57;
 use ::nostr::prelude::ZapRequestData;
-use ::nostr::{JsonUtil, Kind};
+use ::nostr::{Event, JsonUtil, Kind};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
@@ -94,6 +94,7 @@ use std::{str::FromStr, sync::atomic::Ordering};
 use uuid::Uuid;
 
 use crate::labels::LabelItem;
+use crate::nostr::NostrKeySource;
 use crate::utils::parse_profile_metadata;
 #[cfg(test)]
 use mockall::{automock, predicate::*};
@@ -416,10 +417,36 @@ pub struct MutinyWalletConfigBuilder {
     auth_client: Option<Arc<MutinyAuthClient>>,
     subscription_url: Option<String>,
     scorer_url: Option<String>,
+    primal_url: Option<String>,
     do_not_connect_peers: bool,
     skip_device_lock: bool,
     pub safe_mode: bool,
     skip_hodl_invoices: bool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DirectMessage {
+    pub from: XOnlyPublicKey,
+    pub to: XOnlyPublicKey,
+    pub message: String,
+    pub date: u64,
+}
+
+impl PartialOrd for DirectMessage {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DirectMessage {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        // order by date, then the message, the keys
+        self.date
+            .cmp(&other.date)
+            .then_with(|| self.message.cmp(&other.message))
+            .then_with(|| self.from.cmp(&other.from))
+            .then_with(|| self.to.cmp(&other.to))
+    }
 }
 
 impl MutinyWalletConfigBuilder {
@@ -437,6 +464,7 @@ impl MutinyWalletConfigBuilder {
             auth_client: None,
             subscription_url: None,
             scorer_url: None,
+            primal_url: None,
             do_not_connect_peers: false,
             skip_device_lock: false,
             safe_mode: false,
@@ -487,6 +515,10 @@ impl MutinyWalletConfigBuilder {
         self.scorer_url = Some(scorer_url);
     }
 
+    pub fn with_primal_url(&mut self, primal_url: String) {
+        self.primal_url = Some(primal_url);
+    }
+
     pub fn do_not_connect_peers(&mut self) {
         self.do_not_connect_peers = true;
     }
@@ -520,6 +552,7 @@ impl MutinyWalletConfigBuilder {
             auth_client: self.auth_client,
             subscription_url: self.subscription_url,
             scorer_url: self.scorer_url,
+            primal_url: self.primal_url,
             do_not_connect_peers: self.do_not_connect_peers,
             skip_device_lock: self.skip_device_lock,
             safe_mode: self.safe_mode,
@@ -542,6 +575,7 @@ pub struct MutinyWalletConfig {
     auth_client: Option<Arc<MutinyAuthClient>>,
     subscription_url: Option<String>,
     scorer_url: Option<String>,
+    primal_url: Option<String>,
     do_not_connect_peers: bool,
     skip_device_lock: bool,
     pub safe_mode: bool,
@@ -550,6 +584,7 @@ pub struct MutinyWalletConfig {
 
 pub struct MutinyWalletBuilder<S: MutinyStorage> {
     xprivkey: ExtendedPrivKey,
+    nostr_key_source: NostrKeySource,
     storage: S,
     config: Option<MutinyWalletConfig>,
     session_id: Option<String>,
@@ -567,6 +602,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         MutinyWalletBuilder::<S> {
             xprivkey,
             storage,
+            nostr_key_source: NostrKeySource::Derived,
             config: None,
             session_id: None,
             network: None,
@@ -605,6 +641,10 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
 
     pub fn with_subscription_url(&mut self, subscription_url: String) {
         self.subscription_url = Some(subscription_url);
+    }
+
+    pub fn with_nostr_key_source(&mut self, key_source: NostrKeySource) {
+        self.nostr_key_source = key_source;
     }
 
     pub fn do_not_connect_peers(&mut self) {
@@ -664,10 +704,15 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         // create nostr manager
         let nostr = Arc::new(NostrManager::from_mnemonic(
             self.xprivkey,
+            self.nostr_key_source,
             self.storage.clone(),
             logger.clone(),
             stop.clone(),
         )?);
+
+        // connect to relays when not in tests
+        #[cfg(not(test))]
+        nostr.connect().await?;
 
         // create federation module if any exist
         let federation_storage = self.storage.get_federations()?;
@@ -748,8 +793,8 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             }
         };
 
-        // start the nostr wallet connect background process
-        mw.start_nostr_wallet_connect().await;
+        // start the nostr background process
+        mw.start_nostr().await;
 
         // start the federation background processor
         mw.start_fedimint_background_checker().await;
@@ -798,8 +843,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(())
     }
 
-    /// Starts a background process that will watch for nostr wallet connect events
-    pub(crate) async fn start_nostr_wallet_connect(&self) {
+    /// Starts a background process that will watch for nostr events
+    pub(crate) async fn start_nostr(&self) {
         let nostr = self.nostr.clone();
         let logger = self.logger.clone();
         let stop = self.stop.clone();
@@ -810,10 +855,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     break;
                 };
 
-                // if we have no relays, then there are no nwc profiles enabled
-                // wait 10 seconds and see if we do again
-                let relays = nostr.get_relays();
-                if relays.is_empty() {
+                // if we have no filters, then wait 10 seconds and see if we do again
+                let mut last_filters = nostr.get_filters().unwrap_or_default();
+                if last_filters.is_empty() {
                     utils::sleep(10_000).await;
                     continue;
                 }
@@ -837,7 +881,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     log_warn!(logger, "Failed to clear expired NWC invoices: {e}");
                 }
 
-                let client = Client::new(&nostr.primary_key);
+                let client = Client::new(nostr.primary_key.clone());
 
                 client
                     .add_relays(nostr.get_relays())
@@ -845,7 +889,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     .expect("Failed to add relays");
                 client.connect().await;
 
-                let mut last_filters = nostr.get_nwc_filters();
                 client.subscribe(last_filters.clone()).await;
 
                 // handle NWC requests
@@ -871,17 +914,27 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         notification = read_fut => {
                             match notification {
                                 Ok(RelayPoolNotification::Event { event, .. }) => {
-                                    if event.kind == Kind::WalletConnectRequest && event.verify().is_ok() {
-                                        match nostr.handle_nwc_request(event, &self_clone).await {
-                                            Ok(Some(event)) => {
-                                                if let Err(e) = client.send_event(event).await {
-                                                    log_warn!(logger, "Error sending NWC event: {e}");
+                                    if event.verify().is_ok() {
+                                        match event.kind {
+                                            Kind::WalletConnectRequest => {
+                                                match nostr.handle_nwc_request(event, &self_clone).await {
+                                                    Ok(Some(event)) => {
+                                                        if let Err(e) = client.send_event(event).await {
+                                                            log_warn!(logger, "Error sending NWC event: {e}");
+                                                        }
+                                                    }
+                                                    Ok(None) => {} // no response
+                                                    Err(e) => {
+                                                        log_error!(logger, "Error handling NWC request: {e}");
+                                                    }
                                                 }
                                             }
-                                            Ok(None) => {} // no response
-                                            Err(e) => {
-                                                log_error!(logger, "Error handling NWC request: {e}");
+                                            Kind::EncryptedDirectMessage => {
+                                                if let Err(e) = nostr.handle_direct_message(event, &self_clone).await {
+                                                        log_error!(logger, "Error handling dm: {e}");
+                                                }
                                             }
+                                            kind => log_warn!(logger, "Received unexpected note of kind {kind}")
                                         }
                                     }
                                 },
@@ -899,11 +952,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         }
                         _ = filter_check_fut => {
                             // Check if the filters have changed
-                            let current_filters = nostr.get_nwc_filters();
-                            if current_filters != last_filters {
-                                log_debug!(logger, "subscribing to new nwc filters");
-                                client.subscribe(current_filters.clone()).await;
-                                last_filters = current_filters;
+                            if let Ok(current_filters) = nostr.get_filters() {
+                                if current_filters != last_filters {
+                                    log_debug!(logger, "subscribing to new nwc filters");
+                                    client.subscribe(current_filters.clone()).await;
+                                    last_filters = current_filters;
+                                }
                             }
                             // Set the time for the next filter check
                             next_filter_check = crate::utils::now().as_secs() + 5;
@@ -1348,12 +1402,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Get contacts from the given npub and sync them to the wallet
-    pub async fn sync_nostr_contacts(
-        &self,
-        primal_url: Option<&str>,
-        npub: XOnlyPublicKey,
-    ) -> Result<(), MutinyError> {
-        let url = primal_url.unwrap_or("https://primal-cache.mutinywallet.com/api");
+    pub async fn sync_nostr_contacts(&self, npub: XOnlyPublicKey) -> Result<(), MutinyError> {
+        let url = self
+            .config
+            .primal_url
+            .as_deref()
+            .unwrap_or("https://primal-cache.mutinywallet.com/api");
         let client = reqwest::Client::new();
 
         let body = json!(["contact_list", { "pubkey": npub } ]);
@@ -1418,6 +1472,74 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         self.storage.set(updated_contacts)?;
 
         Ok(())
+    }
+
+    /// Get dm conversation between us and given npub
+    /// Returns a vector of messages sorted by newest first
+    pub async fn get_dm_conversation(
+        &self,
+        npub: XOnlyPublicKey,
+        limit: u64,
+        until: Option<u64>,
+        since: Option<u64>,
+    ) -> Result<Vec<DirectMessage>, MutinyError> {
+        let url = self
+            .config
+            .primal_url
+            .as_deref()
+            .unwrap_or("https://primal-cache.mutinywallet.com/api");
+        let client = reqwest::Client::new();
+
+        // api is a little weird, has sender and receiver but still gives full conversation
+        let body = match (until, since) {
+            (Some(until), Some(since)) => {
+                json!(["get_directmsgs", { "sender": npub.to_hex(), "receiver": self.nostr.public_key.to_hex(), "limit": limit, "until": until, "since": since }])
+            }
+            (None, Some(since)) => {
+                json!(["get_directmsgs", { "sender": npub.to_hex(), "receiver": self.nostr.public_key.to_hex(), "limit": limit, "since": since }])
+            }
+            (Some(until), None) => {
+                json!(["get_directmsgs", { "sender": npub.to_hex(), "receiver": self.nostr.public_key.to_hex(), "limit": limit, "until": until }])
+            }
+            (None, None) => {
+                json!(["get_directmsgs", { "sender": npub.to_hex(), "receiver": self.nostr.public_key.to_hex(), "limit": limit, "since": 0 }])
+            }
+        };
+        let data: Vec<Value> = Self::primal_request(&client, url, body).await?;
+
+        let mut messages = Vec::with_capacity(data.len());
+        for d in data {
+            let event = Event::from_value(d)
+                .ok()
+                .filter(|e| e.kind == Kind::EncryptedDirectMessage);
+
+            if let Some(event) = event {
+                // verify signature
+                if event.verify().is_err() {
+                    continue;
+                }
+
+                let message = self.nostr.decrypt_dm(npub, &event.content).await?;
+
+                let to = if event.pubkey == npub {
+                    self.nostr.public_key
+                } else {
+                    npub
+                };
+                let dm = DirectMessage {
+                    from: event.pubkey,
+                    to,
+                    message,
+                    date: event.created_at.as_u64(),
+                };
+                messages.push(dm);
+            }
+        }
+
+        // sort messages, newest first
+        messages.sort_by(|a, b| b.cmp(a));
+
+        Ok(messages)
     }
 
     /// Stops all of the nodes and background processes.
@@ -1955,8 +2077,11 @@ mod tests {
     use crate::test_utils::*;
 
     use crate::labels::{Contact, LabelStorage};
+    use crate::nostr::NostrKeySource;
     use crate::storage::{MemoryStorage, MutinyStorage};
     use crate::utils::parse_npub;
+    use nostr::key::FromSkStr;
+    use nostr::Keys;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -2165,9 +2290,7 @@ mod tests {
             .expect("mutiny wallet should initialize");
 
         // sync contacts
-        mw.sync_nostr_contacts(None, npub)
-            .await
-            .expect("synced contacts");
+        mw.sync_nostr_contacts(npub).await.expect("synced contacts");
 
         // first sync should yield just ben's contact
         let contacts = mw
@@ -2194,9 +2317,7 @@ mod tests {
         let id = mw.storage.create_new_contact(new_contact).unwrap();
 
         // sync contacts again, tony's contact should be correct
-        mw.sync_nostr_contacts(None, npub)
-            .await
-            .expect("synced contacts");
+        mw.sync_nostr_contacts(npub).await.expect("synced contacts");
 
         let contacts = mw.storage.get_contacts().unwrap();
         assert_eq!(contacts.len(), 2);
@@ -2206,5 +2327,56 @@ mod tests {
         assert!(contact.image_url.is_some());
         assert!(contact.ln_address.is_some());
         assert_ne!(contact.name, incorrect_name);
+    }
+
+    #[test]
+    async fn get_dm_conversation_test() {
+        // test nsec I made and sent dms to
+        let nsec =
+            Keys::from_sk_str("nsec1w2cy7vmq8urw9ae6wjaujrmztndad7e65hja52zk0c9x4yxgk0xsfuqk6s")
+                .unwrap();
+        let npub =
+            parse_npub("npub18s7md9ytv8r240jmag5j037huupk5jnsk94adykeaxtvc6lyftesuw5ydl").unwrap();
+
+        // create wallet
+        let mnemonic = generate_seed(12).unwrap();
+        let network = Network::Regtest;
+        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
+        let storage = MemoryStorage::new(None, None, None);
+        let config = MutinyWalletConfigBuilder::new(xpriv)
+            .with_network(network)
+            .build();
+        let mut mw = MutinyWalletBuilder::new(xpriv, storage.clone()).with_config(config);
+        mw.with_nostr_key_source(NostrKeySource::Imported(nsec));
+        let mw = mw.build().await.expect("mutiny wallet should initialize");
+
+        // get messages
+        let limit = 5;
+        let messages = mw
+            .get_dm_conversation(npub, limit, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(messages.len(), 5);
+
+        for x in &messages {
+            log!("{}", x.message);
+        }
+
+        // get next messages
+        let limit = 2;
+        let util = messages.iter().min_by_key(|m| m.date).unwrap().date - 1;
+        let next = mw
+            .get_dm_conversation(npub, limit, Some(util), None)
+            .await
+            .unwrap();
+
+        for x in next.iter() {
+            log!("{}", x.message);
+        }
+
+        // check that we got different messages
+        assert_eq!(next.len(), 2);
+        assert!(next.iter().all(|m| !messages.contains(m)))
     }
 }

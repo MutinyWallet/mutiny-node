@@ -343,28 +343,9 @@ impl NostrWalletConnect {
         event_pk: XOnlyPublicKey,
         invoice: Bolt11Invoice,
     ) -> anyhow::Result<()> {
-        let pending = PendingNwcInvoice {
-            index: self.profile.index,
-            invoice,
-            event_id,
-            pubkey: event_pk,
-        };
-        nostr_manager.pending_nwc_lock.lock().await;
-
-        let mut current: Vec<PendingNwcInvoice> = nostr_manager
-            .storage
-            .get_data(PENDING_NWC_EVENTS_KEY)?
-            .unwrap_or_default();
-
-        if !current.contains(&pending) {
-            current.push(pending);
-
-            nostr_manager
-                .storage
-                .set_data(PENDING_NWC_EVENTS_KEY.to_string(), current, None)?;
-        }
-
-        Ok(())
+        nostr_manager
+            .save_pending_nwc_invoice(Some(self.profile.index), event_id, event_pk, invoice)
+            .await
     }
 
     fn get_skipped_error_event(
@@ -450,67 +431,20 @@ impl NostrWalletConnect {
                     .map(Some);
             }
 
-            let invoice = match req.params {
-                RequestParams::PayInvoice(params) => Bolt11Invoice::from_str(&params.invoice)
-                    .map_err(|_| anyhow!("Failed to parse invoice"))?,
+            let invoice_str = match req.params {
+                RequestParams::PayInvoice(params) => params.invoice,
                 _ => return Err(anyhow!("Invalid request params for pay invoice")),
             };
 
-            // if the invoice has expired, skip it
-            if invoice.would_expire(utils::now()) {
-                return self
-                    .get_skipped_error_event(
-                        &event,
-                        ErrorCode::Other,
-                        "Invoice expired".to_string(),
-                    )
-                    .map(Some);
-            }
-
-            // if the invoice has no amount, we cannot pay it
-            if invoice.amount_milli_satoshis().is_none() {
-                log_warn!(
-                    node.logger(),
-                    "NWC Invoice amount not set, cannot pay: {invoice}"
-                );
-                return self
-                    .get_skipped_error_event(
-                        &event,
-                        ErrorCode::Other,
-                        "Invoice amount not set".to_string(),
-                    )
-                    .map(Some);
-            }
-
-            if node.skip_hodl_invoices() {
-                // Skip potential hodl invoices as they can cause force closes
-                if utils::HODL_INVOICE_NODES
-                    .contains(&invoice.recover_payee_pub_key().to_hex().as_str())
-                {
-                    log_warn!(
-                        node.logger(),
-                        "Received potential hodl invoice, skipping..."
-                    );
+            let invoice: Bolt11Invoice = match check_valid_nwc_invoice(&invoice_str, node).await {
+                Ok(Some(invoice)) => invoice,
+                Ok(None) => return Ok(None),
+                Err(err_string) => {
                     return self
-                        .get_skipped_error_event(
-                            &event,
-                            ErrorCode::Other,
-                            "Paying hodl invoices disabled".to_string(),
-                        )
-                        .map(Some);
+                        .get_skipped_error_event(&event, ErrorCode::Other, err_string)
+                        .map(Some)
                 }
-            }
-
-            // if we have already paid or are attempting to pay this invoice, skip it
-            if node
-                .get_outbound_payment_status(&invoice.payment_hash().into_32())
-                .await
-                .is_some_and(|status| {
-                    matches!(status, HTLCStatus::Succeeded | HTLCStatus::InFlight)
-                })
-            {
-                return Ok(None);
-            }
+            };
 
             // if we need approval, just save in the db for later
             match self.profile.spending_conditions.clone() {
@@ -886,13 +820,15 @@ impl NwcProfile {
 /// An invoice received over Nostr Wallet Connect that is pending approval or rejection
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PendingNwcInvoice {
-    /// Index of the profile that received the invoice
-    pub index: u32,
+    /// Index of the profile that received the invoice.
+    /// None if invoice is from a DM
+    pub index: Option<u32>,
     /// The invoice that awaiting approval
     pub invoice: Bolt11Invoice,
     /// The nostr event id of the request
     pub event_id: EventId,
     /// The nostr pubkey of the request
+    /// If this is a DM, this is who sent us the request
     pub pubkey: XOnlyPublicKey,
 }
 
@@ -912,6 +848,55 @@ impl PendingNwcInvoice {
     pub fn is_expired(&self) -> bool {
         self.invoice.would_expire(utils::now())
     }
+}
+
+/// Checks if it is a valid invoice
+/// Return an error string if invalid
+/// Otherwise returns an optional invoice that should be processed
+pub(crate) async fn check_valid_nwc_invoice(
+    invoice: &str,
+    invoice_handler: &impl InvoiceHandler,
+) -> Result<Option<Bolt11Invoice>, String> {
+    let invoice = match Bolt11Invoice::from_str(invoice) {
+        Ok(invoice) => invoice,
+        Err(_) => return Err("Invalid invoice".to_string()),
+    };
+
+    // if the invoice has expired, skip it
+    if invoice.would_expire(utils::now()) {
+        return Err("Invoice expired".to_string());
+    }
+
+    // if the invoice has no amount, we cannot pay it
+    if invoice.amount_milli_satoshis().is_none() {
+        log_warn!(
+            invoice_handler.logger(),
+            "NWC Invoice amount not set, cannot pay: {invoice}"
+        );
+        return Err("Invoice amount not set".to_string());
+    }
+
+    if invoice_handler.skip_hodl_invoices() {
+        // Skip potential hodl invoices as they can cause force closes
+        if utils::HODL_INVOICE_NODES.contains(&invoice.recover_payee_pub_key().to_hex().as_str()) {
+            log_warn!(
+                invoice_handler.logger(),
+                "Received potential hodl invoice, skipping..."
+            );
+            return Err("Paying hodl invoices disabled".to_string());
+        }
+    }
+
+    // if we have already paid or are attempting to pay this invoice, skip it
+    if invoice_handler
+        .get_outbound_payment_status(&invoice.payment_hash().into_32())
+        .await
+        .is_some_and(|status| matches!(status, HTLCStatus::Succeeded | HTLCStatus::InFlight))
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(invoice))
 }
 
 #[cfg(test)]
@@ -1190,7 +1175,7 @@ mod test {
 mod wasm_test {
     use super::*;
     use crate::logging::MutinyLogger;
-    use crate::nostr::ProfileType;
+    use crate::nostr::{NostrKeySource, ProfileType};
     use crate::storage::MemoryStorage;
     use crate::test_utils::{create_dummy_invoice, create_mutiny_wallet, create_nwc_request};
     use crate::MockInvoiceHandler;
@@ -1236,9 +1221,14 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager =
-            NostrManager::from_mnemonic(xprivkey, storage.clone(), mw.logger.clone(), stop)
-                .unwrap();
+        let nostr_manager = NostrManager::from_mnemonic(
+            xprivkey,
+            NostrKeySource::Derived,
+            storage.clone(),
+            mw.logger.clone(),
+            stop,
+        )
+        .unwrap();
 
         let profile = nostr_manager
             .create_new_profile(
@@ -1271,7 +1261,7 @@ mod wasm_test {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].invoice.to_string(), invoice);
         assert_eq!(pending[0].event_id, event.id);
-        assert_eq!(pending[0].index, nwc.profile.index);
+        assert_eq!(pending[0].index, Some(nwc.profile.index));
         assert_eq!(pending[0].pubkey, event.pubkey);
     }
 
@@ -1285,8 +1275,14 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager =
-            NostrManager::from_mnemonic(xprivkey, storage.clone(), logger.clone(), stop).unwrap();
+        let nostr_manager = NostrManager::from_mnemonic(
+            xprivkey,
+            NostrKeySource::Derived,
+            storage.clone(),
+            logger.clone(),
+            stop,
+        )
+        .unwrap();
 
         let profile = nostr_manager
             .create_new_profile(
@@ -1370,7 +1366,14 @@ mod wasm_test {
         // test invalid invoice
         let event = create_nwc_request(&uri, "invalid invoice".to_string());
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
-        assert_eq!(result.unwrap_err().to_string(), "Failed to parse invoice");
+        check_nwc_error_response(
+            result.unwrap().unwrap(),
+            &uri.secret,
+            NIP47Error {
+                code: ErrorCode::Other,
+                message: "Invalid invoice".to_string(),
+            },
+        );
         check_no_pending_invoices(&storage);
 
         // test expired invoice
@@ -1455,7 +1458,7 @@ mod wasm_test {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].invoice, invoice);
         assert_eq!(pending[0].event_id, event.id);
-        assert_eq!(pending[0].index, nwc.profile.index);
+        assert_eq!(pending[0].index, Some(nwc.profile.index));
         assert_eq!(pending[0].pubkey, event.pubkey);
     }
 
@@ -1466,6 +1469,7 @@ mod wasm_test {
         let stop = Arc::new(AtomicBool::new(false));
         let nostr_manager = NostrManager::from_mnemonic(
             xprivkey,
+            NostrKeySource::Derived,
             storage.clone(),
             Arc::new(MutinyLogger::default()),
             stop,
@@ -1478,17 +1482,17 @@ mod wasm_test {
 
         // add an expired invoice
         let expired = PendingNwcInvoice {
-            index: 0,
+            index: Some(0),
             invoice: Bolt11Invoice::from_str(INVOICE).unwrap(),
             event_id: EventId::all_zeros(),
-            pubkey: nostr_manager.primary_key.public_key(),
+            pubkey: nostr_manager.public_key,
         };
         // add an unexpired invoice
         let unexpired = PendingNwcInvoice {
-            index: 0,
+            index: Some(0),
             invoice: create_dummy_invoice(Some(1_000), Network::Regtest, None).0,
             event_id: EventId::all_zeros(),
-            pubkey: nostr_manager.primary_key.public_key(),
+            pubkey: nostr_manager.public_key,
         };
         storage
             .set_data(
@@ -1515,9 +1519,14 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager =
-            NostrManager::from_mnemonic(xprivkey, storage.clone(), mw.logger.clone(), stop)
-                .unwrap();
+        let nostr_manager = NostrManager::from_mnemonic(
+            xprivkey,
+            NostrKeySource::Derived,
+            storage.clone(),
+            mw.logger.clone(),
+            stop,
+        )
+        .unwrap();
 
         let budget = 10_000;
         let profile = nostr_manager
@@ -1550,7 +1559,7 @@ mod wasm_test {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].invoice, invoice);
         assert_eq!(pending[0].event_id, event.id);
-        assert_eq!(pending[0].index, nwc.profile.index);
+        assert_eq!(pending[0].index, Some(nwc.profile.index));
         assert_eq!(pending[0].pubkey, event.pubkey);
 
         // clear pending
@@ -1567,7 +1576,7 @@ mod wasm_test {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].invoice, invoice);
         assert_eq!(pending[0].event_id, event.id);
-        assert_eq!(pending[0].index, nwc.profile.index);
+        assert_eq!(pending[0].index, Some(nwc.profile.index));
         assert_eq!(pending[0].pubkey, event.pubkey);
     }
 
@@ -1597,8 +1606,14 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager =
-            NostrManager::from_mnemonic(xprivkey, storage.clone(), logger, stop).unwrap();
+        let nostr_manager = NostrManager::from_mnemonic(
+            xprivkey,
+            NostrKeySource::Derived,
+            storage.clone(),
+            logger,
+            stop,
+        )
+        .unwrap();
 
         let budget = 10_000;
         let profile = nostr_manager

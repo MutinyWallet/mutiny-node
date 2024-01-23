@@ -143,6 +143,9 @@ pub enum MutinyError {
     /// Error getting nostr data
     #[error("Failed to get nostr data.")]
     NostrError,
+    /// Error with Nip07 Extension
+    #[error("Error with NIP-07 extension")]
+    Nip07Extension,
     /// Incorrect password entered.
     #[error("Incorrect password entered.")]
     IncorrectPassword,
@@ -460,6 +463,13 @@ impl From<nostr_sdk::client::Error> for MutinyError {
 impl From<nostr::nips::nip04::Error> for MutinyError {
     fn from(_e: nostr::nips::nip04::Error) -> Self {
         Self::NostrError
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl From<nostr::nips::nip07::Error> for MutinyError {
+    fn from(_e: nostr::nips::nip07::Error) -> Self {
+        Self::Nip07Extension
     }
 }
 
