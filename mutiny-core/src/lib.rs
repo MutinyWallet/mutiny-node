@@ -1373,7 +1373,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     ln_address: None,
                     lnurl: None,
                     image_url: Some("https://void.cat/d/CZPXhnwjqRhULSjPJ3sXTE.webp".to_string()),
-                    archived: None,
                     last_used: utils::now().as_secs(),
                 };
                 self.storage.set_data(key, contact, None)?;
@@ -2302,7 +2301,6 @@ mod tests {
         assert_eq!(contacts.len(), 1);
         let contact = contacts.first().unwrap();
         assert_eq!(contact.npub, Some(ben));
-        assert!(!contact.archived.unwrap_or(false));
         assert!(contact.image_url.is_some());
         assert!(contact.ln_address.is_some());
         assert!(!contact.name.is_empty());
@@ -2323,7 +2321,6 @@ mod tests {
         assert_eq!(contacts.len(), 2);
         let contact = contacts.get(&id).unwrap();
         assert_eq!(contact.npub, Some(tony));
-        assert!(!contact.archived.unwrap_or(false));
         assert!(contact.image_url.is_some());
         assert!(contact.ln_address.is_some());
         assert_ne!(contact.name, incorrect_name);

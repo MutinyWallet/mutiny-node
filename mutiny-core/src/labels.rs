@@ -7,6 +7,7 @@ use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
 use nostr::{key::XOnlyPublicKey, Metadata};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::str::FromStr;
 use uuid::Uuid;
@@ -37,8 +38,6 @@ pub struct Contact {
     pub lnurl: Option<LnUrl>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub archived: Option<bool>,
     pub last_used: u64,
 }
 
@@ -140,8 +139,8 @@ pub trait LabelStorage {
     ) -> Result<String, MutinyError>;
     /// Create a new contact and return the identifying label
     fn create_new_contact(&self, contact: Contact) -> Result<String, MutinyError>;
-    /// Marks a contact as archived
-    fn archive_contact(&self, id: impl AsRef<str>) -> Result<(), MutinyError>;
+    /// Deletes a contact and all labels associated with it
+    fn delete_contact(&self, id: impl AsRef<str>) -> Result<(), MutinyError>;
     /// Edits an existing contact and replaces the existing contact
     fn edit_contact(&self, id: impl AsRef<str>, contact: Contact) -> Result<(), MutinyError>;
     /// Gets all the existing tags (labels and contacts)
@@ -287,10 +286,6 @@ impl<S: MutinyStorage> LabelStorage for S {
         let mut contacts = HashMap::with_capacity(all.len());
         for (key, contact) in all {
             let label = key.replace(CONTACT_PREFIX, "");
-            // skip archived contacts
-            if contact.archived.unwrap_or(false) {
-                continue;
-            }
             contacts.insert(label, contact);
         }
 
@@ -375,12 +370,32 @@ impl<S: MutinyStorage> LabelStorage for S {
         Ok(id)
     }
 
-    fn archive_contact(&self, id: impl AsRef<str>) -> Result<(), MutinyError> {
-        let contact = self.get_contact(&id)?;
-        if let Some(mut contact) = contact {
-            contact.archived = Some(true);
-            self.set_data(get_contact_key(&id), contact, None)?;
+    fn delete_contact(&self, id: impl AsRef<str>) -> Result<(), MutinyError> {
+        // first remove from all labels
+        let mut inv_labels = self.get_invoice_labels()?;
+        for value in inv_labels.values_mut() {
+            value.retain(|s| *s != id.as_ref());
         }
+        let mut addr_labels = self.get_address_labels()?;
+        for value in addr_labels.values_mut() {
+            value.retain(|s| *s != id.as_ref());
+        }
+        let to_set: Vec<(String, Value)> = vec![
+            (
+                ADDRESS_LABELS_MAP_KEY.to_string(),
+                serde_json::to_value(addr_labels)?,
+            ),
+            (
+                INVOICE_LABELS_MAP_KEY.to_string(),
+                serde_json::to_value(inv_labels)?,
+            ),
+        ];
+        self.set(to_set)?;
+
+        // then delete actual label
+        let contact_key = get_contact_key(&id);
+        let label_item_key = get_label_item_key(&id);
+        self.delete(&[contact_key, label_item_key])?;
         Ok(())
     }
 
@@ -466,8 +481,8 @@ impl<S: MutinyStorage> LabelStorage for NodeManager<S> {
         self.storage.create_new_contact(contact)
     }
 
-    fn archive_contact(&self, id: impl AsRef<str>) -> Result<(), MutinyError> {
-        self.storage.archive_contact(id)
+    fn delete_contact(&self, id: impl AsRef<str>) -> Result<(), MutinyError> {
+        self.storage.delete_contact(id)
     }
 
     fn edit_contact(&self, id: impl AsRef<str>, contact: Contact) -> Result<(), MutinyError> {
@@ -566,7 +581,6 @@ mod tests {
                 npub: None,
                 ln_address: None,
                 lnurl: None,
-                archived: Some(false),
                 image_url: None,
                 last_used: 0,
             },
@@ -578,7 +592,6 @@ mod tests {
                 npub: None,
                 ln_address: None,
                 lnurl: None,
-                archived: Some(false),
                 image_url: None,
                 last_used: 0,
             },
@@ -590,7 +603,6 @@ mod tests {
                 npub: None,
                 ln_address: None,
                 lnurl: None,
-                archived: Some(false),
                 image_url: None,
                 last_used: 0,
             },
@@ -744,7 +756,6 @@ mod tests {
             npub: None,
             ln_address: None,
             lnurl: None,
-            archived: Some(false),
             image_url: None,
             last_used: 0,
         };
@@ -766,7 +777,6 @@ mod tests {
             npub: None,
             ln_address: None,
             lnurl: None,
-            archived: Some(false),
             image_url: None,
             last_used: 0,
         };
@@ -781,8 +791,8 @@ mod tests {
     }
 
     #[test]
-    fn test_archive_contact() {
-        let test_name = "test_archive_contact";
+    fn test_delete_contact() {
+        let test_name = "test_delete_contact";
         log!("{}", test_name);
 
         let storage = MemoryStorage::default();
@@ -792,21 +802,41 @@ mod tests {
             npub: None,
             ln_address: None,
             lnurl: None,
-            archived: Some(false),
             image_url: None,
             last_used: 0,
         };
         let id = storage.create_new_contact(contact).unwrap();
+        let contact = storage.get_contact(&id).unwrap();
+        assert!(contact.is_some());
 
-        let mut contact = storage.get_contact(&id).unwrap().unwrap();
-        contact.archived = Some(true);
-        storage.archive_contact(&id).unwrap();
+        // set labels for invoice and address
+        let invoice = Bolt11Invoice::from_str(INVOICE).unwrap();
+        storage
+            .set_invoice_labels(invoice.clone(), vec![id.clone()])
+            .unwrap();
+        let address = Address::from_str(ADDRESS).unwrap();
+        storage
+            .set_address_labels(address, vec![id.clone()])
+            .unwrap();
 
+        // delete contact
+        storage.delete_contact(&id).unwrap();
+
+        // make sure it is deleted
         let result = storage.get_contact(&id).unwrap();
-        assert_eq!(result.unwrap(), contact);
-
+        assert!(result.is_none());
         let contacts = storage.get_contacts().unwrap();
         assert!(contacts.get(&id).is_none());
+
+        // check invoice labels are empty
+        let inv_labels = storage.get_invoice_labels().unwrap();
+        let labels = inv_labels.get(&invoice).cloned().unwrap_or_default();
+        assert!(labels.is_empty());
+
+        // check address labels are empty
+        let addr_labels = storage.get_address_labels().unwrap();
+        let labels = addr_labels.get(ADDRESS).cloned().unwrap_or_default();
+        assert!(labels.is_empty());
     }
 
     #[test]

@@ -1214,7 +1214,6 @@ impl MutinyWallet {
                 .transpose()?,
             lnurl: lnurl.map(|l| LnUrl::from_str(&l)).transpose()?,
             image_url,
-            archived: None,
             last_used: now().as_secs(),
         };
 
@@ -1240,14 +1239,13 @@ impl MutinyWallet {
                 .transpose()?,
             lnurl: lnurl.map(|l| LnUrl::from_str(&l)).transpose()?,
             image_url,
-            archived: None,
             last_used: now().as_secs(),
         };
         Ok(self.inner.node_manager.create_new_contact(contact)?)
     }
 
-    pub fn archive_contact(&self, id: String) -> Result<(), MutinyJsError> {
-        Ok(self.inner.node_manager.archive_contact(id)?)
+    pub fn delete_contact(&self, id: String) -> Result<(), MutinyJsError> {
+        Ok(self.inner.node_manager.delete_contact(id)?)
     }
 
     pub fn edit_contact(
@@ -1267,7 +1265,6 @@ impl MutinyWallet {
                 .transpose()?,
             lnurl: lnurl.map(|l| LnUrl::from_str(&l)).transpose()?,
             image_url,
-            archived: None,
             last_used: now().as_secs(),
         };
 
