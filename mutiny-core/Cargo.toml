@@ -38,8 +38,8 @@ futures-util = { version = "0.3", default-features = false }
 reqwest = { version = "0.11", default-features = false, features = ["json"] }
 async-trait = "0.1.68"
 url = { version = "2.3.1", features = ["serde"] }
-nostr = { version = "0.27.0", default-features = false, features = ["nip05", "nip47", "nip57"] }
-nostr-sdk = { version = "0.27.0", default-features = false, features = ["nip05", "nip47", "nip57"] }
+nostr = { version = "0.27.0", default-features = false, features = ["nip04", "nip05", "nip47", "nip57"] }
+nostr-sdk = { version = "0.27.0", default-features = false, features = ["nip04", "nip05", "nip47", "nip57"] }
 cbc = { version = "0.1", features = ["alloc"] }
 aes = { version = "0.8" }
 jwt-compact = { version = "0.8.0-beta.1", features = ["es256k"] }
@@ -85,8 +85,8 @@ gloo-net = { version = "0.4.0" }
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 getrandom = { version = "0.2", features = ["js"] }
 # add nip07 feature for wasm32
-nostr = { version = "0.27.0", default-features = false, features = ["nip05", "nip07", "nip47", "nip57"] }
-nostr-sdk = { version = "0.27.0", default-features = false, features = ["nip05", "nip07", "nip47", "nip57"] }
+nostr = { version = "0.27.0", default-features = false, features = ["nip04", "nip05", "nip07", "nip47", "nip57"] }
+nostr-sdk = { version = "0.27.0", default-features = false, features = ["nip04", "nip05", "nip07", "nip47", "nip57"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["rt"] }

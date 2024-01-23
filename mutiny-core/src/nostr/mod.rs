@@ -1115,6 +1115,15 @@ impl<S: MutinyStorage> NostrManager<S> {
         }
     }
 
+    pub async fn send_dm(
+        &self,
+        pubkey: XOnlyPublicKey,
+        message: String,
+    ) -> Result<EventId, MutinyError> {
+        let event_id = self.client.send_direct_msg(pubkey, message, None).await?;
+        Ok(event_id)
+    }
+
     /// Derives the client and server keys for Nostr Wallet Connect given a profile index
     /// The left key is the client key and the right key is the server key
     pub(crate) fn derive_nwc_keys<C: Signing>(

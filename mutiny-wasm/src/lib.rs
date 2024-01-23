@@ -1626,6 +1626,13 @@ impl MutinyWallet {
         Ok(JsValue::from_serde(&dms)?)
     }
 
+    /// Sends a DM to the given npub
+    pub async fn send_dm(&self, npub: String, message: String) -> Result<String, MutinyJsError> {
+        let npub = parse_npub(&npub)?;
+        let event_id = self.inner.nostr.send_dm(npub, message).await?;
+        Ok(event_id.to_hex())
+    }
+
     /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.
     #[wasm_bindgen]
     pub async fn reset_router(&self) -> Result<(), MutinyJsError> {
