@@ -69,7 +69,7 @@ use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
 use ::nostr::nips::nip57;
 use ::nostr::prelude::ZapRequestData;
-use ::nostr::{Event, JsonUtil, Kind};
+use ::nostr::{Event, EventId, JsonUtil, Kind};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
@@ -430,6 +430,7 @@ pub struct DirectMessage {
     pub to: XOnlyPublicKey,
     pub message: String,
     pub date: u64,
+    pub event_id: EventId,
 }
 
 impl PartialOrd for DirectMessage {
@@ -1530,6 +1531,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     to,
                     message,
                     date: event.created_at.as_u64(),
+                    event_id: event.id,
                 };
                 messages.push(dm);
             }
