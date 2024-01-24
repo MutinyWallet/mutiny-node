@@ -1114,6 +1114,7 @@ pub struct DirectMessage {
     pub to: String,
     pub message: String,
     pub date: u64,
+    pub event_id: String,
 }
 
 impl From<mutiny_core::DirectMessage> for DirectMessage {
@@ -1123,6 +1124,7 @@ impl From<mutiny_core::DirectMessage> for DirectMessage {
             to: value.to.to_bech32().expect("bech32"),
             message: value.message,
             date: value.date,
+            event_id: value.event_id.to_hex(),
         }
     }
 }
