@@ -1940,7 +1940,7 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
     }
 
     async fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus> {
-        self.get_invoice_by_hash(&sha256::Hash::hash(payment_hash))
+        self.get_invoice_by_hash(&sha256::Hash::from_inner(*payment_hash))
             .await
             .ok()
             .map(|p| p.status)
