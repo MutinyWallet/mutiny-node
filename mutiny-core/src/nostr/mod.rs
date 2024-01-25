@@ -140,7 +140,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                 self.storage.set_nwc_sync_time(now.as_u64())?;
                 now
             }
-            Some(time) => Timestamp::from(time),
+            Some(time) => Timestamp::from(time + 1), // add one so we get only new events
         };
 
         let vec = self
@@ -168,7 +168,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                 self.storage.set_dm_sync_time(now.as_u64())?;
                 now
             }
-            Some(time) => Timestamp::from(time),
+            Some(time) => Timestamp::from(time + 1), // add one so we get only new events
         };
 
         let received_dm_filter = Filter::new()
