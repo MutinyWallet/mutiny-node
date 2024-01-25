@@ -1061,11 +1061,12 @@ impl<S: MutinyStorage> Node<S> {
 
                         if lsp_invoice.payment_hash() != invoice.payment_hash()
                             || lsp_invoice.recover_payee_pub_key() != client.get_lsp_pubkey()
-                            || lsp_invoice.amount_milli_satoshis() != Some(amount_sat * 1_000)
+                            || (lsp_invoice.amount_milli_satoshis() != Some(amount_sat * 1_000)
+                                && amount_sat != amount_minus_fee)
                         {
                             log_error!(
                                 self.logger,
-                                "Received unexpected invoice from LSP: {:?} != {}",
+                                "Received unexpected invoice from LSP: {:?} when amount was {}",
                                 lsp_invoice.amount_milli_satoshis(),
                                 amount_sat * 1_000
                             );
