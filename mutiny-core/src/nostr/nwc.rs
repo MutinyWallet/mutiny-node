@@ -1236,7 +1236,7 @@ mod wasm_test {
         .unwrap();
 
         let profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Normal {
                     name: "test".to_string(),
                 },
@@ -1293,7 +1293,7 @@ mod wasm_test {
         .unwrap();
 
         let profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Normal {
                     name: "test".to_string(),
                 },
@@ -1541,7 +1541,7 @@ mod wasm_test {
 
         let budget = 10_000;
         let profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Normal {
                     name: "test".to_string(),
                 },
@@ -1628,7 +1628,7 @@ mod wasm_test {
 
         let budget = 10_000;
         let profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Normal {
                     name: "test".to_string(),
                 },

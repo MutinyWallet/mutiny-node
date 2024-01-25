@@ -294,7 +294,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(())
     }
 
-    pub fn edit_profile(&self, profile: NwcProfile) -> Result<NwcProfile, MutinyError> {
+    pub fn edit_nwc_profile(&self, profile: NwcProfile) -> Result<NwcProfile, MutinyError> {
         let mut profiles = self.nwc.write().unwrap();
         let index = profile.index;
 
@@ -363,7 +363,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(nwc_profile)
     }
 
-    pub fn get_profile(&self, index: u32) -> Result<NwcProfile, MutinyError> {
+    pub fn get_nwc_profile(&self, index: u32) -> Result<NwcProfile, MutinyError> {
         let profiles = self.nwc.read().unwrap();
 
         let nwc = profiles
@@ -456,7 +456,7 @@ impl<S: MutinyStorage> NostrManager<S> {
     }
 
     /// Creates a new NWC profile and saves to storage
-    pub(crate) fn create_new_profile(
+    pub(crate) fn create_new_nwc_profile_internal(
         &self,
         profile_type: ProfileType,
         spending_conditions: SpendingConditions,
@@ -504,7 +504,8 @@ impl<S: MutinyStorage> NostrManager<S> {
         spending_conditions: SpendingConditions,
         tag: NwcProfileTag,
     ) -> Result<NwcProfile, MutinyError> {
-        let profile = self.create_new_profile(profile_type, spending_conditions, tag)?;
+        let profile =
+            self.create_new_nwc_profile_internal(profile_type, spending_conditions, tag)?;
         // add relay if needed
         let needs_connect = self.client.add_relay(profile.relay.as_str()).await?;
         if needs_connect {
@@ -1409,7 +1410,7 @@ mod test {
         let name = "test".to_string();
 
         let profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Normal { name: name.clone() },
                 SpendingConditions::default(),
                 Default::default(),
@@ -1452,7 +1453,7 @@ mod test {
         let name = MUTINY_PLUS_SUBSCRIPTION_LABEL.to_string();
 
         let profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Reserved(ReservedProfile::MutinySubscription),
                 SpendingConditions::default(),
                 Default::default(),
@@ -1485,7 +1486,7 @@ mod test {
         let name = "test".to_string();
 
         let profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Normal { name: name.clone() },
                 SpendingConditions::default(),
                 Default::default(),
@@ -1617,7 +1618,7 @@ mod test {
         let name = "test".to_string();
 
         let mut profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Normal { name: name.clone() },
                 SpendingConditions::default(),
                 Default::default(),
@@ -1630,7 +1631,7 @@ mod test {
 
         profile.relay = "wss://relay.damus.io".to_string();
 
-        nostr_manager.edit_profile(profile).unwrap();
+        nostr_manager.edit_nwc_profile(profile).unwrap();
 
         let profiles = nostr_manager.profiles();
         assert_eq!(profiles.len(), 1);
@@ -1658,7 +1659,7 @@ mod test {
         let name = "test".to_string();
 
         let profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Normal { name: name.clone() },
                 SpendingConditions::default(),
                 Default::default(),
@@ -1690,7 +1691,7 @@ mod test {
         let name = "test".to_string();
 
         let profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Normal { name },
                 SpendingConditions::default(),
                 Default::default(),

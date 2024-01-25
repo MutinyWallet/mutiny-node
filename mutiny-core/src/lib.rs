@@ -1612,7 +1612,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 if profile.tag != NwcProfileTag::Subscription {
                     let mut nwc = profile.clone();
                     nwc.tag = NwcProfileTag::Subscription;
-                    self.nostr.edit_profile(nwc)?;
+                    self.nostr.edit_nwc_profile(nwc)?;
                 }
             }
         }
