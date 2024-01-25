@@ -509,7 +509,10 @@ impl<S: MutinyStorage> NostrManager<S> {
     ) -> Result<NwcProfile, MutinyError> {
         let profile = self.create_new_profile(profile_type, spending_conditions, tag)?;
         // add relay if needed
-        self.client.add_relay(profile.relay.as_str()).await?;
+        let needs_connect = self.client.add_relay(profile.relay.as_str()).await?;
+        if needs_connect {
+            self.client.connect_relay(profile.relay.as_str()).await?;
+        }
 
         let info_event = self.nwc.read().unwrap().iter().find_map(|nwc| {
             if nwc.profile.index == profile.index {
