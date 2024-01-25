@@ -732,28 +732,27 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             );
         }
 
-        let lnurl_client = Arc::new(
-            lnurl::Builder::default()
-                .build_async()
-                .expect("failed to make lnurl client"),
-        );
-
-        let (subscription_client, auth) = if let Some(auth_client) = self.auth_client.clone() {
-            if let Some(subscription_url) = self.subscription_url {
+        let (subscription_client, auth, lnurl_client) =
+            if let Some(auth_client) = self.auth_client.clone() {
                 let auth = auth_client.auth.clone();
-                let s = Arc::new(MutinySubscriptionClient::new(
-                    auth_client,
-                    subscription_url,
-                    logger.clone(),
-                ));
-                (Some(s), auth)
+                let lnurl = auth_client.lnurl_client.clone();
+                let sub = self.subscription_url.map(|url| {
+                    Arc::new(MutinySubscriptionClient::new(
+                        auth_client,
+                        url,
+                        logger.clone(),
+                    ))
+                });
+                (sub, auth, lnurl)
             } else {
-                (None, auth_client.auth.clone())
-            }
-        } else {
-            let auth_manager = AuthManager::new(self.xprivkey)?;
-            (None, auth_manager)
-        };
+                let auth_manager = AuthManager::new(self.xprivkey)?;
+                let lnurl_client = Arc::new(
+                    lnurl::Builder::default()
+                        .build_async()
+                        .expect("failed to make lnurl client"),
+                );
+                (None, auth_manager, lnurl_client)
+            };
 
         let price_cache = self
             .storage
@@ -1395,11 +1394,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Makes a request to the primal api
-    async fn primal_request(
-        client: &reqwest::Client,
-        url: &str,
-        body: Value,
-    ) -> Result<Vec<Value>, MutinyError> {
+    async fn primal_request(&self, url: &str, body: Value) -> Result<Vec<Value>, MutinyError> {
+        // just use lnurl_client's request client so we don't have to initialize another one
+        let client = &self.lnurl_client.client;
+
         client
             .post(url)
             .header("Content-Type", "application/json")
@@ -1419,10 +1417,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .primal_url
             .as_deref()
             .unwrap_or("https://primal-cache.mutinywallet.com/api");
-        let client = reqwest::Client::new();
 
         let body = json!(["contact_list", { "pubkey": npub } ]);
-        let data: Vec<Value> = Self::primal_request(&client, url, body).await?;
+        let data: Vec<Value> = self.primal_request(url, body).await?;
         let mut metadata = parse_profile_metadata(data);
 
         let contacts = self.storage.get_contacts()?;
@@ -1441,7 +1438,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         if !missing_pks.is_empty() {
             let body = json!(["user_infos", {"pubkeys": missing_pks }]);
-            let data: Vec<Value> = Self::primal_request(&client, url, body).await?;
+            let data: Vec<Value> = self.primal_request(url, body).await?;
             let missing_metadata = parse_profile_metadata(data);
             metadata.extend(missing_metadata);
         }
@@ -1499,7 +1496,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .primal_url
             .as_deref()
             .unwrap_or("https://primal-cache.mutinywallet.com/api");
-        let client = reqwest::Client::new();
 
         // api is a little weird, has sender and receiver but still gives full conversation
         let body = match (until, since) {
@@ -1516,7 +1512,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 json!(["get_directmsgs", { "sender": npub.to_hex(), "receiver": self.nostr.public_key.to_hex(), "limit": limit, "since": 0 }])
             }
         };
-        let data: Vec<Value> = Self::primal_request(&client, url, body).await?;
+        let data: Vec<Value> = self.primal_request(url, body).await?;
 
         let mut messages = Vec::with_capacity(data.len());
         for d in data {
@@ -1576,9 +1572,17 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 let cache = self.bitcoin_price_cache.clone();
                 let storage = self.storage.clone();
                 let logger = self.logger.clone();
+                let client = self.lnurl_client.client.clone();
                 spawn(async move {
-                    if let Err(e) =
-                        Self::fetch_and_cache_price(fiat, now, cache, storage, logger.clone()).await
+                    if let Err(e) = Self::fetch_and_cache_price(
+                        &client,
+                        fiat,
+                        now,
+                        cache,
+                        storage,
+                        logger.clone(),
+                    )
+                    .await
                     {
                         log_warn!(logger, "failed to fetch bitcoin price: {e:?}");
                     }
@@ -1594,6 +1598,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             _ => {
                 // Cache is either expired, empty, or doesn't have the desired fiat value
                 Self::fetch_and_cache_price(
+                    &self.lnurl_client.client,
                     fiat,
                     now,
                     self.bitcoin_price_cache.clone(),
@@ -1606,13 +1611,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     async fn fetch_and_cache_price(
+        client: &reqwest::Client,
         fiat: String,
         now: Duration,
         bitcoin_price_cache: Arc<RwLock<HashMap<String, (f32, Duration)>>>,
         storage: S,
         logger: Arc<MutinyLogger>,
     ) -> Result<f32, MutinyError> {
-        match Self::fetch_bitcoin_price(&fiat).await {
+        match Self::fetch_bitcoin_price(client, &fiat).await {
             Ok(new_price) => {
                 let mut cache = bitcoin_price_cache.write().await;
                 let cache_entry = (new_price, now);
@@ -1648,19 +1654,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
     }
 
-    async fn fetch_bitcoin_price(fiat: &str) -> Result<f32, MutinyError> {
+    async fn fetch_bitcoin_price(client: &reqwest::Client, fiat: &str) -> Result<f32, MutinyError> {
         let api_url = format!("https://price.mutinywallet.com/price/{fiat}");
-
-        let client = reqwest::Client::builder()
-            .build()
-            .map_err(|_| MutinyError::BitcoinPriceError)?;
 
         let request = client
             .get(api_url)
             .build()
             .map_err(|_| MutinyError::BitcoinPriceError)?;
 
-        let resp: reqwest::Response = utils::fetch_with_timeout(&client, request).await?;
+        let resp: reqwest::Response = utils::fetch_with_timeout(client, request).await?;
 
         let response: BitcoinPriceResponse = resp
             .error_for_status()

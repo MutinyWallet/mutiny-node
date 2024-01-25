@@ -24,7 +24,7 @@ struct CustomClaims {
 
 pub struct MutinyAuthClient {
     pub auth: AuthManager,
-    lnurl_client: Arc<LnUrlClient>,
+    pub lnurl_client: Arc<LnUrlClient>,
     url: String,
     http_client: Client,
     jwt: RwLock<Option<String>>,
@@ -38,7 +38,7 @@ impl MutinyAuthClient {
         logger: Arc<MutinyLogger>,
         url: String,
     ) -> Self {
-        let http_client = Client::new();
+        let http_client = lnurl_client.client.clone();
         Self {
             auth,
             lnurl_client,
