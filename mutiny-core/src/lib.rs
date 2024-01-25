@@ -1838,7 +1838,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         let data = ZapRequestData {
                             public_key: zap_npub,
                             relays: vec![
-                                "wss://nostr.mutinywallet.com".into(),
+                                "wss://relay.mutinywallet.com".into(),
                                 "wss://relay.primal.net".into(),
                             ],
                             message: comment.unwrap_or_default(),

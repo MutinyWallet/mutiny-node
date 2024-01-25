@@ -123,7 +123,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         relays.push("wss://relay.damus.io".to_string());
 
         // add blastr for default sending
-        relays.push("wss://nostr.mutinywallet.com".to_string());
+        relays.push("wss://relay.mutinywallet.com".to_string());
 
         // remove duplicates
         relays.sort();
@@ -432,7 +432,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             index,
             client_key: Some(uri.public_key),
             child_key_index,
-            relay: "wss://nostr.mutinywallet.com".to_string(), // override with our relay
+            relay: "wss://relay.mutinywallet.com".to_string(), // override with our relay
             enabled: None,
             archived: None,
             spending_conditions,
@@ -473,7 +473,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             name,
             index,
             child_key_index,
-            relay: "wss://nostr.mutinywallet.com".to_string(),
+            relay: "wss://relay.mutinywallet.com".to_string(),
             enabled: None,
             archived: None,
             spending_conditions,
@@ -1504,7 +1504,7 @@ mod test {
             name,
             index: 1001,
             client_key: None,
-            relay: "wss://nostr.mutinywallet.com".to_string(),
+            relay: "wss://relay.mutinywallet.com".to_string(),
             enabled: None,
             archived: None,
             child_key_index: None,
@@ -1629,7 +1629,7 @@ mod test {
 
         assert_eq!(profile.name, name);
         assert_eq!(profile.index, 1000);
-        assert_eq!(profile.relay.as_str(), "wss://nostr.mutinywallet.com");
+        assert_eq!(profile.relay.as_str(), "wss://relay.mutinywallet.com");
 
         profile.relay = "wss://relay.damus.io".to_string();
 
@@ -1670,7 +1670,7 @@ mod test {
 
         assert_eq!(profile.name, name);
         assert_eq!(profile.index, 1000);
-        assert_eq!(profile.relay.as_str(), "wss://nostr.mutinywallet.com");
+        assert_eq!(profile.relay.as_str(), "wss://relay.mutinywallet.com");
 
         nostr_manager.delete_nwc_profile(profile.index).unwrap();
 
