@@ -140,7 +140,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                 self.storage.set_nwc_sync_time(now.as_u64())?;
                 now
             }
-            Some(time) => Timestamp::from(time),
+            Some(time) => Timestamp::from(time + 1), // add one so we get only new events
         };
 
         let vec = self
@@ -168,7 +168,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                 self.storage.set_dm_sync_time(now.as_u64())?;
                 now
             }
-            Some(time) => Timestamp::from(time),
+            Some(time) => Timestamp::from(time + 1), // add one so we get only new events
         };
 
         let received_dm_filter = Filter::new()
@@ -509,7 +509,10 @@ impl<S: MutinyStorage> NostrManager<S> {
     ) -> Result<NwcProfile, MutinyError> {
         let profile = self.create_new_profile(profile_type, spending_conditions, tag)?;
         // add relay if needed
-        self.client.add_relay(profile.relay.as_str()).await?;
+        let needs_connect = self.client.add_relay(profile.relay.as_str()).await?;
+        if needs_connect {
+            self.client.connect_relay(profile.relay.as_str()).await?;
+        }
 
         let info_event = self.nwc.read().unwrap().iter().find_map(|nwc| {
             if nwc.profile.index == profile.index {
