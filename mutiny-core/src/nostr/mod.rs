@@ -122,8 +122,9 @@ impl<S: MutinyStorage> NostrManager<S> {
         relays.push("wss://relay.primal.net".to_string());
         relays.push("wss://relay.damus.io".to_string());
 
-        // add blastr for default sending
-        relays.push("wss://relay.mutinywallet.com".to_string());
+        // add relays for default sending
+        relays.push("wss://nostr.mutinywallet.com".to_string()); // blastr
+        relays.push("wss://relay.mutinywallet.com".to_string()); // strfry
 
         // remove duplicates
         relays.sort();
