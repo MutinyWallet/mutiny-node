@@ -1,7 +1,7 @@
 use crate::event::HTLCStatus;
 use crate::labels::LabelStorage;
 use crate::logging::LOGGING_KEY;
-use crate::utils::{sleep, spawn};
+use crate::utils::sleep;
 use crate::ActivityItem;
 use crate::MutinyInvoice;
 use crate::MutinyWalletConfig;
@@ -33,7 +33,6 @@ use bitcoin::psbt::PartiallySignedTransaction;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
-use core::time::Duration;
 use esplora_client::{AsyncClient, Builder};
 use futures::{future::join_all, lock::Mutex};
 use lightning::chain::Confirm;
@@ -58,7 +57,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 use uuid::Uuid;
 
-const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 pub const DEVICE_LOCK_INTERVAL_SECS: u64 = 30;
 
 // This is the NodeStorage object saved to the DB
@@ -456,13 +454,6 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             Arc::new(Mutex::new(nodes_map))
         };
 
-        let price_cache = self
-            .storage
-            .get_bitcoin_price_cache()?
-            .into_iter()
-            .map(|(k, v)| (k, (v, Duration::from_secs(0))))
-            .collect();
-
         let nm = NodeManager {
             stop,
             xprivkey: self.xprivkey,
@@ -481,7 +472,6 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             esplora,
             lsp_config,
             logger,
-            bitcoin_price_cache: Arc::new(Mutex::new(price_cache)),
             do_not_connect_peers: c.do_not_connect_peers,
             safe_mode: c.safe_mode,
         };
@@ -515,7 +505,6 @@ pub struct NodeManager<S: MutinyStorage> {
     pub(crate) nodes: Arc<Mutex<HashMap<PublicKey, Arc<Node<S>>>>>,
     pub(crate) lsp_config: Option<LspConfig>,
     pub(crate) logger: Arc<MutinyLogger>,
-    bitcoin_price_cache: Arc<Mutex<HashMap<String, (f32, Duration)>>>,
     do_not_connect_peers: bool,
     pub safe_mode: bool,
 }
@@ -1739,118 +1728,6 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(storage_peers)
     }
 
-    /// Gets the current bitcoin price in USD.
-    pub async fn get_bitcoin_price(&self, fiat: Option<String>) -> Result<f32, MutinyError> {
-        let now = crate::utils::now();
-        let fiat = fiat.unwrap_or("usd".to_string());
-
-        let cache_result = {
-            let cache = self.bitcoin_price_cache.lock().await;
-            cache.get(&fiat).cloned()
-        };
-
-        match cache_result {
-            Some((price, timestamp)) if timestamp == Duration::from_secs(0) => {
-                // Cache is from previous run, return it but fetch a new price in the background
-                let cache = self.bitcoin_price_cache.clone();
-                let storage = self.storage.clone();
-                let logger = self.logger.clone();
-                spawn(async move {
-                    if let Err(e) =
-                        Self::fetch_and_cache_price(fiat, now, cache, storage, logger.clone()).await
-                    {
-                        log_warn!(logger, "failed to fetch bitcoin price: {e:?}");
-                    }
-                });
-                Ok(price)
-            }
-            Some((price, timestamp))
-                if timestamp + Duration::from_secs(BITCOIN_PRICE_CACHE_SEC) > now =>
-            {
-                // Cache is not expired
-                Ok(price)
-            }
-            _ => {
-                // Cache is either expired, empty, or doesn't have the desired fiat value
-                Self::fetch_and_cache_price(
-                    fiat,
-                    now,
-                    self.bitcoin_price_cache.clone(),
-                    self.storage.clone(),
-                    self.logger.clone(),
-                )
-                .await
-            }
-        }
-    }
-
-    async fn fetch_and_cache_price(
-        fiat: String,
-        now: Duration,
-        bitcoin_price_cache: Arc<Mutex<HashMap<String, (f32, Duration)>>>,
-        storage: S,
-        logger: Arc<MutinyLogger>,
-    ) -> Result<f32, MutinyError> {
-        match Self::fetch_bitcoin_price(&fiat).await {
-            Ok(new_price) => {
-                let mut cache = bitcoin_price_cache.lock().await;
-                let cache_entry = (new_price, now);
-                cache.insert(fiat.clone(), cache_entry);
-
-                // save to storage in the background
-                let cache_clone = cache.clone();
-                spawn(async move {
-                    let cache = cache_clone
-                        .into_iter()
-                        .map(|(k, (price, _))| (k, price))
-                        .collect();
-
-                    if let Err(e) = storage.insert_bitcoin_price_cache(cache) {
-                        log_error!(logger, "failed to save bitcoin price cache: {e:?}");
-                    }
-                });
-
-                Ok(new_price)
-            }
-            Err(e) => {
-                // If fetching price fails, return the cached price (if any)
-                let cache = bitcoin_price_cache.lock().await;
-                if let Some((price, _)) = cache.get(&fiat) {
-                    log_warn!(logger, "price api failed, returning cached price");
-                    Ok(*price)
-                } else {
-                    // If there is no cached price, return the error
-                    log_error!(logger, "no cached price and price api failed for {fiat}");
-                    Err(e)
-                }
-            }
-        }
-    }
-
-    async fn fetch_bitcoin_price(fiat: &str) -> Result<f32, MutinyError> {
-        let api_url = format!("https://price.mutinywallet.com/price/{fiat}");
-
-        let client = Client::builder()
-            .build()
-            .map_err(|_| MutinyError::BitcoinPriceError)?;
-
-        let request = client
-            .get(api_url)
-            .build()
-            .map_err(|_| MutinyError::BitcoinPriceError)?;
-
-        let resp: reqwest::Response = utils::fetch_with_timeout(&client, request).await?;
-
-        let response: BitcoinPriceResponse = resp
-            .error_for_status()
-            .map_err(|_| MutinyError::BitcoinPriceError)?
-            .json()
-            .await
-            .map_err(|_| MutinyError::BitcoinPriceError)?;
-
-        Ok(response.price)
-    }
-
     /// Retrieves the logs from storage.
     pub fn get_logs(
         storage: S,
@@ -1928,11 +1805,6 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         Ok(Value::Object(serde_map))
     }
-}
-
-#[derive(Deserialize, Clone, Copy, Debug)]
-struct BitcoinPriceResponse {
-    pub price: f32,
 }
 
 // This will create a new node with a node manager and return the PublicKey of the node created.

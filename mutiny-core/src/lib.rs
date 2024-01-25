@@ -89,16 +89,18 @@ use nostr_sdk::{Client, RelayPoolNotification};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
+use std::time::Duration;
 use std::{collections::HashMap, sync::atomic::AtomicBool};
 use std::{str::FromStr, sync::atomic::Ordering};
 use uuid::Uuid;
 
 use crate::labels::LabelItem;
 use crate::nostr::NostrKeySource;
-use crate::utils::parse_profile_metadata;
+use crate::utils::{parse_profile_metadata, spawn};
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 
+const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 
 #[cfg_attr(test, automock)]
@@ -753,6 +755,13 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             (None, auth_manager)
         };
 
+        let price_cache = self
+            .storage
+            .get_bitcoin_price_cache()?
+            .into_iter()
+            .map(|(k, v)| (k, (v, Duration::from_secs(0))))
+            .collect();
+
         let mw = MutinyWallet {
             xprivkey: self.xprivkey,
             config,
@@ -767,6 +776,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             stop,
             logger,
             network,
+            bitcoin_price_cache: Arc::new(RwLock::new(price_cache)),
             skip_hodl_invoices: self.skip_hodl_invoices,
             safe_mode: self.safe_mode,
         };
@@ -822,6 +832,7 @@ pub struct MutinyWallet<S: MutinyStorage> {
     pub stop: Arc<AtomicBool>,
     pub logger: Arc<MutinyLogger>,
     network: Network,
+    bitcoin_price_cache: Arc<RwLock<HashMap<String, (f32, Duration)>>>,
     skip_hodl_invoices: bool,
     safe_mode: bool,
 }
@@ -1549,6 +1560,118 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         self.node_manager.stop().await
     }
 
+    /// Gets the current bitcoin price in USD.
+    pub async fn get_bitcoin_price(&self, fiat: Option<String>) -> Result<f32, MutinyError> {
+        let now = utils::now();
+        let fiat = fiat.unwrap_or("usd".to_string());
+
+        let cache_result = {
+            let cache = self.bitcoin_price_cache.read().await;
+            cache.get(&fiat).copied()
+        };
+
+        match cache_result {
+            Some((price, timestamp)) if timestamp == Duration::from_secs(0) => {
+                // Cache is from previous run, return it but fetch a new price in the background
+                let cache = self.bitcoin_price_cache.clone();
+                let storage = self.storage.clone();
+                let logger = self.logger.clone();
+                spawn(async move {
+                    if let Err(e) =
+                        Self::fetch_and_cache_price(fiat, now, cache, storage, logger.clone()).await
+                    {
+                        log_warn!(logger, "failed to fetch bitcoin price: {e:?}");
+                    }
+                });
+                Ok(price)
+            }
+            Some((price, timestamp))
+                if timestamp + Duration::from_secs(BITCOIN_PRICE_CACHE_SEC) > now =>
+            {
+                // Cache is not expired
+                Ok(price)
+            }
+            _ => {
+                // Cache is either expired, empty, or doesn't have the desired fiat value
+                Self::fetch_and_cache_price(
+                    fiat,
+                    now,
+                    self.bitcoin_price_cache.clone(),
+                    self.storage.clone(),
+                    self.logger.clone(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn fetch_and_cache_price(
+        fiat: String,
+        now: Duration,
+        bitcoin_price_cache: Arc<RwLock<HashMap<String, (f32, Duration)>>>,
+        storage: S,
+        logger: Arc<MutinyLogger>,
+    ) -> Result<f32, MutinyError> {
+        match Self::fetch_bitcoin_price(&fiat).await {
+            Ok(new_price) => {
+                let mut cache = bitcoin_price_cache.write().await;
+                let cache_entry = (new_price, now);
+                cache.insert(fiat, cache_entry);
+
+                // save to storage in the background
+                let cache_clone = cache.clone();
+                spawn(async move {
+                    let cache = cache_clone
+                        .into_iter()
+                        .map(|(k, (price, _))| (k, price))
+                        .collect();
+
+                    if let Err(e) = storage.insert_bitcoin_price_cache(cache) {
+                        log_error!(logger, "failed to save bitcoin price cache: {e:?}");
+                    }
+                });
+
+                Ok(new_price)
+            }
+            Err(e) => {
+                // If fetching price fails, return the cached price (if any)
+                let cache = bitcoin_price_cache.read().await;
+                if let Some((price, _)) = cache.get(&fiat) {
+                    log_warn!(logger, "price api failed, returning cached price");
+                    Ok(*price)
+                } else {
+                    // If there is no cached price, return the error
+                    log_error!(logger, "no cached price and price api failed for {fiat}");
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    async fn fetch_bitcoin_price(fiat: &str) -> Result<f32, MutinyError> {
+        let api_url = format!("https://price.mutinywallet.com/price/{fiat}");
+
+        let client = reqwest::Client::builder()
+            .build()
+            .map_err(|_| MutinyError::BitcoinPriceError)?;
+
+        let request = client
+            .get(api_url)
+            .build()
+            .map_err(|_| MutinyError::BitcoinPriceError)?;
+
+        let resp: reqwest::Response = utils::fetch_with_timeout(&client, request).await?;
+
+        let response: BitcoinPriceResponse = resp
+            .error_for_status()
+            .map_err(|_| MutinyError::BitcoinPriceError)?
+            .json()
+            .await
+            .map_err(|_| MutinyError::BitcoinPriceError)?;
+
+        Ok(response.price)
+    }
+
     pub async fn change_password(
         &mut self,
         old: Option<String>,
@@ -2064,6 +2187,11 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         federation_expiry_timestamp,
         welcome_message,
     })
+}
+
+#[derive(Deserialize, Clone, Copy, Debug)]
+struct BitcoinPriceResponse {
+    pub price: f32,
 }
 
 #[cfg(test)]
