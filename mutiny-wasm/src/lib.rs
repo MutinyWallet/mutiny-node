@@ -438,7 +438,7 @@ impl MutinyWallet {
         self.mnemonic.to_string()
     }
 
-    /// Returns the npub for receiving dms
+    /// Returns the user's npub
     #[wasm_bindgen]
     pub fn get_npub(&self) -> String {
         self.inner.nostr.public_key.to_bech32().expect("bech32")
@@ -1637,6 +1637,50 @@ impl MutinyWallet {
         self.inner
             .pay_subscription_invoice(&invoice, autopay)
             .await?;
+        Ok(())
+    }
+
+    /// Returns the user's nostr profile data
+    #[wasm_bindgen]
+    pub fn get_nostr_profile(&self) -> Result<JsValue, MutinyJsError> {
+        let profile = self.inner.nostr.get_profile()?;
+        Ok(JsValue::from_serde(&profile)?)
+    }
+
+    /// Sets the user's nostr profile data
+    #[wasm_bindgen]
+    pub async fn edit_nostr_profile(
+        &self,
+        name: Option<String>,
+        img_url: Option<String>,
+        lnurl: Option<String>,
+        nip05: Option<String>,
+    ) -> Result<JsValue, MutinyJsError> {
+        let img_url = img_url
+            .map(|i| nostr::url::Url::from_str(&i))
+            .transpose()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+
+        let lnurl = lnurl
+            .map(|l| {
+                LightningAddress::from_str(&l)
+                    .map(|a| a.lnurl())
+                    .or(LnUrl::from_str(&l))
+            })
+            .transpose()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+
+        let profile = self
+            .inner
+            .nostr
+            .edit_profile(name, img_url, lnurl, nip05)
+            .await?;
+        Ok(JsValue::from_serde(&profile)?)
+    }
+
+    /// Syncs all of our nostr data from the configured primal instance
+    pub async fn sync_nostr(&self) -> Result<(), MutinyJsError> {
+        self.inner.sync_nostr().await?;
         Ok(())
     }
 

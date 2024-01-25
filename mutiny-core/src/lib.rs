@@ -75,7 +75,7 @@ use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
 use ::nostr::nips::nip57;
 use ::nostr::prelude::ZapRequestData;
-use ::nostr::{Event, EventId, JsonUtil, Kind};
+use ::nostr::{Event, EventId, JsonUtil, Kind, Metadata};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
@@ -85,6 +85,7 @@ use bitcoin::secp256k1::PublicKey;
 use bitcoin::{hashes::sha256, Network};
 use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::{pin_mut, select, FutureExt};
+use futures_util::join;
 use hex_conservative::{DisplayHex, FromHex};
 #[cfg(target_arch = "wasm32")]
 use instant::Instant;
@@ -1653,6 +1654,45 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .json()
             .await
             .map_err(|_| MutinyError::NostrError)
+    }
+
+    /// Syncs all of our nostr data from the configured primal instance
+    pub async fn sync_nostr(&self) -> Result<(), MutinyError> {
+        let contacts_fut = self.sync_nostr_contacts(self.nostr.public_key);
+        let profile_fut = self.sync_nostr_profile();
+
+        // join futures and handle result
+        let (contacts_res, profile_res) = join!(contacts_fut, profile_fut);
+        contacts_res?;
+        profile_res?;
+
+        Ok(())
+    }
+
+    /// Fetches our latest nostr profile from primal and saves to storage
+    async fn sync_nostr_profile(&self) -> Result<(), MutinyError> {
+        let url = self
+            .config
+            .primal_url
+            .as_deref()
+            .unwrap_or("https://primal-cache.mutinywallet.com/api");
+        let client = reqwest::Client::new();
+
+        let body = json!(["user_profile", { "pubkey": self.nostr.public_key } ]);
+        let data: Vec<Value> = Self::primal_request(&client, url, body).await?;
+
+        if let Some(json) = data.first().cloned() {
+            let event: Event = serde_json::from_value(json).map_err(|_| MutinyError::NostrError)?;
+            if event.kind != Kind::Metadata {
+                return Ok(());
+            }
+
+            let metadata: Metadata =
+                serde_json::from_str(&event.content).map_err(|_| MutinyError::NostrError)?;
+            self.storage.set_nostr_profile(metadata)?;
+        }
+
+        Ok(())
     }
 
     /// Get contacts from the given npub and sync them to the wallet
