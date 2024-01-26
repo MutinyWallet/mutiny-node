@@ -998,6 +998,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .or(amt_sats.map(|x| x * 1_000))
             .ok_or(MutinyError::InvoiceInvalid)?;
 
+        // set labels now, need to set it before in case the payment times out
+        self.storage
+            .set_invoice_labels(inv.clone(), labels.clone())?;
+
         // Try each federation first
         let federation_ids = self.list_federation_ids().await?;
         let mut last_federation_error = None;
@@ -1012,7 +1016,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         .await;
                     match payment_result {
                         Ok(r) => {
-                            self.storage.set_invoice_labels(inv.clone(), labels)?;
                             return Ok(r);
                         }
                         Err(e) => match e {
@@ -1050,12 +1053,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .sum::<u64>()
             > 0
         {
-            let res = self
-                .node_manager
-                .pay_invoice(None, inv, amt_sats, labels.clone())
-                .await?;
-            self.storage.set_invoice_labels(inv.clone(), labels)?;
-            Ok(res)
+            self.node_manager
+                .pay_invoice(None, inv, amt_sats, labels)
+                .await
         } else {
             Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
         }
