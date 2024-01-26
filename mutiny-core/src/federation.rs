@@ -150,6 +150,7 @@ pub(crate) struct FederationClient<S: MutinyStorage> {
     pub(crate) uuid: String,
     pub(crate) fedimint_client: ClientArc,
     storage: S,
+    fedimint_storage: FedimintStorage<S>,
     pub(crate) logger: Arc<MutinyLogger>,
 }
 
@@ -184,13 +185,13 @@ impl<S: MutinyStorage> FederationClient<S> {
         client_builder.with_module(LightningClientInit);
 
         log_trace!(logger, "Building fedimint client db");
-        let db = FedimintStorage::new(
+        let fedimint_storage = FedimintStorage::new(
             storage.clone(),
             federation_info.federation_id().to_string(),
             logger.clone(),
         )
-        .await?
-        .into();
+        .await?;
+        let db = fedimint_storage.clone().into();
 
         if get_config_from_db(&db).await.is_none() {
             client_builder.with_federation_info(federation_info.clone());
@@ -226,6 +227,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         Ok(FederationClient {
             uuid,
             fedimint_client,
+            fedimint_storage,
             storage: storage.clone(),
             logger,
         })
@@ -527,6 +529,10 @@ impl<S: MutinyStorage> FederationClient<S> {
             welcome_message: self.fedimint_client.get_meta("welcome_message"),
         }
     }
+
+    pub async fn delete_fedimint_storage(&self) -> Result<(), MutinyError> {
+        self.fedimint_storage.delete_store().await
+    }
 }
 
 // A federation private key will be derived from
@@ -769,6 +775,15 @@ impl<S: MutinyStorage> FedimintStorage<S> {
             federation_version: Arc::new(federation_version.into()),
             fedimint_memory: Arc::new(fedimint_memory),
         })
+    }
+
+    pub async fn delete_store(&self) -> Result<(), MutinyError> {
+        let mut mem_db_tx = self.begin_transaction().await;
+        mem_db_tx.raw_remove_by_prefix(&[]).await?;
+        mem_db_tx
+            .commit_tx()
+            .await
+            .map_err(|_| MutinyError::write_err(MutinyStorageError::IndexedDBError))
     }
 }
 

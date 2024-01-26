@@ -1702,6 +1702,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 self.storage
                     .insert_federations(federation_storage_guard.clone())
                     .await?;
+                fedimint_client.delete_fedimint_storage().await?;
                 federations_guard.remove(&federation_id);
             } else {
                 return Err(MutinyError::NotFound);
