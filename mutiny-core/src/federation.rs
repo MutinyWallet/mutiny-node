@@ -533,6 +533,17 @@ impl<S: MutinyStorage> FederationClient<S> {
     pub async fn delete_fedimint_storage(&self) -> Result<(), MutinyError> {
         self.fedimint_storage.delete_store().await
     }
+
+    pub async fn recover_backup(&self) -> Result<(), MutinyError> {
+        self.fedimint_client
+            .restore_from_backup(None)
+            .await
+            .map_err(|e| {
+                log_error!(self.logger, "Could not restore from backup: {}", e);
+                e
+            })?;
+        Ok(())
+    }
 }
 
 // A federation private key will be derived from

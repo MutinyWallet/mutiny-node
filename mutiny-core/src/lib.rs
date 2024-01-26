@@ -1714,6 +1714,23 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(())
     }
 
+    pub async fn recover_federation_backups(&self) -> Result<(), MutinyError> {
+        let federation_ids = self.list_federation_ids().await?;
+
+        let federations = self.federations.read().await;
+        for fed_id in federation_ids {
+            federations
+                .get(&fed_id)
+                .ok_or(MutinyError::NotFound)?
+                .recover_backup()
+                .await?;
+
+            log_info!(self.logger, "Scanned federation backups: {}", fed_id);
+        }
+
+        Ok(())
+    }
+
     pub async fn get_total_federation_balance(&self) -> Result<u64, MutinyError> {
         let federation_ids = self.list_federation_ids().await?;
         let mut total_balance = 0;

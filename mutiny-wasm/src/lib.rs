@@ -1116,6 +1116,14 @@ impl MutinyWallet {
         Ok(self.inner.get_federation_balances().await?.into())
     }
 
+    /// Scans all federations for user ecash.
+    ///
+    /// This can be useful if you think you have some federation funds missing.
+    #[wasm_bindgen]
+    pub async fn recover_federation_backups(&mut self) -> Result<(), MutinyJsError> {
+        Ok(self.inner.recover_federation_backups().await?)
+    }
+
     pub fn get_address_labels(
         &self,
     ) -> Result<JsValue /* Map<Address, Vec<String>> */, MutinyJsError> {
