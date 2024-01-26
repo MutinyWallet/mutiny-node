@@ -40,7 +40,6 @@ pub mod vss;
 #[cfg(test)]
 mod test_utils;
 
-use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
@@ -49,6 +48,10 @@ use crate::storage::{
 };
 use crate::{auth::MutinyAuthClient, logging::MutinyLogger};
 use crate::{error::MutinyError, nostr::ReservedProfile};
+use crate::{
+    event::{HTLCStatus, MillisatAmount, PaymentInfo},
+    onchain::FULL_SYNC_STOP_GAP,
+};
 use crate::{
     federation::{FederationClient, FederationIdentity, FederationIndex, FederationStorage},
     labels::{get_contact_key, Contact, LabelStorage},
@@ -775,7 +778,10 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         {
             // if we need a full sync from a restore
             if mw.storage.get(NEED_FULL_SYNC_KEY)?.unwrap_or_default() {
-                mw.node_manager.wallet.full_sync().await?;
+                mw.node_manager
+                    .wallet
+                    .full_sync(crate::onchain::RESTORE_SYNC_STOP_GAP)
+                    .await?;
                 mw.storage.delete(&[NEED_FULL_SYNC_KEY])?;
             }
         }
@@ -1598,7 +1604,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         self.start().await?;
 
-        self.node_manager.wallet.full_sync().await?;
+        self.node_manager
+            .wallet
+            .full_sync(FULL_SYNC_STOP_GAP)
+            .await?;
 
         Ok(())
     }
