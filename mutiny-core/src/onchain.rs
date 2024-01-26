@@ -27,8 +27,10 @@ use crate::logging::MutinyLogger;
 use crate::storage::{MutinyStorage, OnChainStorage};
 use crate::utils::{now, sleep};
 
-const DEFAULT_STOP_GAP: usize = 20;
-const FULL_SYNC_STOP_GAP: usize = 150;
+pub(crate) const DEFAULT_STOP_GAP: usize = 10;
+pub(crate) const FULL_SYNC_STOP_GAP: usize = 150;
+#[cfg(not(test))]
+pub(crate) const RESTORE_SYNC_STOP_GAP: usize = 20;
 
 #[derive(Clone)]
 pub struct OnChainWallet<S: MutinyStorage> {
@@ -195,7 +197,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         Err(MutinyError::WalletOperationFailed)
     }
 
-    pub async fn full_sync(&self) -> Result<(), MutinyError> {
+    pub async fn full_sync(&self, gap: usize) -> Result<(), MutinyError> {
         // get first wallet lock that only needs to read
         let (checkpoints, spks) = {
             if let Ok(wallet) = self.wallet.try_read() {
@@ -216,7 +218,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                 spks,
                 core::iter::empty(),
                 core::iter::empty(),
-                FULL_SYNC_STOP_GAP,
+                gap,
                 5,
             )
             .await?;
