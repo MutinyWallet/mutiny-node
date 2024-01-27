@@ -60,8 +60,11 @@ use lightning::{
 };
 use lightning_invoice::Bolt11Invoice;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
+use std::{
+    str::FromStr,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 // The amount of time in milliseconds to wait for
 // checking the status of a fedimint payment. This
@@ -75,6 +78,12 @@ const FEDIMINT_STATUS_TIMEOUT_CHECK_MS: u64 = 30;
 const FEDIMINT_OPERATIONS_LIST_MAX: usize = 100;
 
 pub const FEDIMINTS_PREFIX_KEY: &str = "fedimints/";
+
+// Default signet/mainnet federation gateway info
+const SIGNET_GATEWAY: &str = "0256f5ef1d986e9abf559651b7167de28bfd954683cd0f14703be12d1421aedc55";
+const MAINNET_GATEWAY: &str = "025b9f090d3daab012346701f27d1c220d6d290f6b498255cddc492c255532a09d";
+const SIGNET_FEDERATION: &str = "c8d423964c7ad944d30f57359b6e5b260e211dcfdb945140e28d4df51fd572d2";
+const MAINNET_FEDERATION: &str = "c36038cce5a97e3467f03336fa8e7e3410960b81d1865cda2a609f70a8f51efb";
 
 impl From<LnReceiveState> for HTLCStatus {
     fn from(state: LnReceiveState) -> Self {
@@ -221,6 +230,37 @@ impl<S: MutinyStorage> FederationClient<S> {
                 wallet_client.get_network()
             );
             return Err(MutinyError::NetworkMismatch);
+        }
+
+        // Set active gateway preference
+        let lightning_module = fedimint_client.get_first_module::<LightningClientModule>();
+        let gateways = lightning_module
+            .fetch_registered_gateways()
+            .await
+            .map_err(|e| {
+                log_warn!(
+                    logger,
+                    "Could not fetch gateways from federation {}: {e}",
+                    federation_info.federation_id()
+                )
+            });
+
+        if let Ok(gateways) = gateways {
+            if let Some(a) = get_gateway_preference(gateways, fedimint_client.federation_id()) {
+                log_info!(
+                    logger,
+                    "Setting active gateway for federation {}: {:?}",
+                    federation_info.federation_id(),
+                    a
+                );
+                let _ = lightning_module.set_active_gateway(&a).await.map_err(|e| {
+                    log_warn!(
+                        logger,
+                        "Could not set gateway for federation {}: {e}",
+                        federation_info.federation_id()
+                    )
+                });
+            }
         }
 
         log_debug!(logger, "Built fedimint client");
@@ -544,6 +584,52 @@ impl<S: MutinyStorage> FederationClient<S> {
             })?;
         Ok(())
     }
+}
+
+// Get a preferred gateway from a federation
+fn get_gateway_preference(
+    gateways: Vec<fedimint_ln_common::LightningGatewayAnnouncement>,
+    federation_id: FederationId,
+) -> Option<bitcoin::secp256k1::PublicKey> {
+    let mut active_choice: Option<bitcoin::secp256k1::PublicKey> = None;
+
+    let signet_gateway_id =
+        bitcoin::secp256k1::PublicKey::from_str(SIGNET_GATEWAY).expect("should be valid pubkey");
+    let mainnet_gateway_id =
+        bitcoin::secp256k1::PublicKey::from_str(MAINNET_GATEWAY).expect("should be valid pubkey");
+    let signet_federation_id =
+        FederationId::from_str(SIGNET_FEDERATION).expect("should be a valid federation id");
+    let mainnet_federation_id =
+        FederationId::from_str(MAINNET_FEDERATION).expect("should be a valid federation id");
+
+    for g in gateways {
+        let g_id = g.info.gateway_id;
+
+        // if the gateway node ID matches what we expect for our signet/mainnet
+        // these take the highest priority
+        if (g_id == signet_gateway_id && federation_id == signet_federation_id)
+            || (g_id == mainnet_gateway_id && federation_id == mainnet_federation_id)
+        {
+            return Some(g_id);
+        }
+
+        // if vetted, set up as current active choice
+        if g.vetted {
+            active_choice = Some(g_id);
+            continue;
+        }
+
+        // if not vetted, make sure fee is high enough
+        if active_choice.is_none() {
+            let fees = g.info.fees;
+            if fees.base_msat >= 1_000 && fees.proportional_millionths >= 100 {
+                active_choice = Some(g_id);
+                continue;
+            }
+        }
+    }
+
+    active_choice
 }
 
 // A federation private key will be derived from
@@ -957,6 +1043,178 @@ fn fedimint_mnemonic_generation() {
 }
 
 #[cfg(test)]
+fn gateway_preference() {
+    use fedimint_core::util::SafeUrl;
+    use fedimint_ln_common::{LightningGateway, LightningGatewayAnnouncement};
+    use lightning_invoice::RoutingFees;
+    use std::time::Duration;
+
+    use super::*;
+
+    const RANDOM_KEY: &str = "0218845781f631c48f1c9709e23092067d06837f30aa0cd0544ac887fe91ddd166";
+    let random_key = bitcoin::secp256k1::PublicKey::from_str(RANDOM_KEY).unwrap();
+
+    const VETTED_GATEWAY: &str =
+        "02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b";
+    let vetted_gateway_pubkey = bitcoin::secp256k1::PublicKey::from_str(VETTED_GATEWAY).unwrap();
+
+    const UNVETTED_GATEWAY_KEY_HIGH_FEE: &str =
+        "0384526253c27c7aef56c7b71a5cd25bebb66dddda437826defc5b2568bde81f07";
+    let unvetted_gateway_high_fee_pubkey =
+        bitcoin::secp256k1::PublicKey::from_str(UNVETTED_GATEWAY_KEY_HIGH_FEE).unwrap();
+
+    const UNVETTED_GATEWAY_KEY_LOW_FEE: &str =
+        "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443";
+    let unvetted_gateway_low_fee_pubkey =
+        bitcoin::secp256k1::PublicKey::from_str(UNVETTED_GATEWAY_KEY_LOW_FEE).unwrap();
+
+    let random_federation_id = FederationId::dummy();
+
+    // Create some sample LightningGatewayAnnouncement structs to test with
+    let signet_gateway = LightningGatewayAnnouncement {
+        info: LightningGateway {
+            mint_channel_id: 12345,
+            gateway_redeem_key: bitcoin::secp256k1::PublicKey::from_str(SIGNET_GATEWAY).unwrap(),
+            node_pub_key: random_key,
+            lightning_alias: "Signet Gateway".to_string(),
+            api: SafeUrl::parse("http://localhost:8080").unwrap(),
+            route_hints: vec![],
+            fees: RoutingFees {
+                base_msat: 100,
+                proportional_millionths: 10,
+            },
+            gateway_id: bitcoin::secp256k1::PublicKey::from_str(SIGNET_GATEWAY).unwrap(),
+            supports_private_payments: true,
+        },
+        vetted: false,
+        ttl: Duration::from_secs(3600),
+    };
+
+    let mainnet_gateway = LightningGatewayAnnouncement {
+        info: LightningGateway {
+            mint_channel_id: 12345,
+            gateway_redeem_key: bitcoin::secp256k1::PublicKey::from_str(MAINNET_GATEWAY).unwrap(),
+            node_pub_key: random_key,
+            lightning_alias: "Mainnet Gateway".to_string(),
+            api: SafeUrl::parse("http://localhost:8080").unwrap(),
+            route_hints: vec![],
+            fees: RoutingFees {
+                base_msat: 100,
+                proportional_millionths: 10,
+            },
+            gateway_id: bitcoin::secp256k1::PublicKey::from_str(MAINNET_GATEWAY).unwrap(),
+            supports_private_payments: true,
+        },
+        vetted: false,
+        ttl: Duration::from_secs(3600),
+    };
+
+    let vetted_gateway = LightningGatewayAnnouncement {
+        info: LightningGateway {
+            mint_channel_id: 12345,
+            gateway_redeem_key: random_key,
+            node_pub_key: vetted_gateway_pubkey,
+            lightning_alias: "Vetted Gateway".to_string(),
+            api: SafeUrl::parse("http://localhost:8080").unwrap(),
+            route_hints: vec![],
+            fees: RoutingFees {
+                base_msat: 200,
+                proportional_millionths: 20,
+            },
+            gateway_id: vetted_gateway_pubkey,
+            supports_private_payments: true,
+        },
+        vetted: true,
+        ttl: Duration::from_secs(3600),
+    };
+
+    let unvetted_gateway_high_fee = LightningGatewayAnnouncement {
+        info: LightningGateway {
+            mint_channel_id: 12345,
+            gateway_redeem_key: random_key,
+            node_pub_key: unvetted_gateway_high_fee_pubkey,
+            lightning_alias: "Unvetted Gateway".to_string(),
+            api: SafeUrl::parse("http://localhost:8080").unwrap(),
+            route_hints: vec![],
+            fees: RoutingFees {
+                base_msat: 200,
+                proportional_millionths: 20,
+            },
+            gateway_id: unvetted_gateway_high_fee_pubkey,
+            supports_private_payments: true,
+        },
+        vetted: false,
+        ttl: Duration::from_secs(3600),
+    };
+
+    let unvetted_gateway_low_fee = LightningGatewayAnnouncement {
+        info: LightningGateway {
+            mint_channel_id: 12345,
+            gateway_redeem_key: random_key,
+            node_pub_key: unvetted_gateway_low_fee_pubkey,
+            lightning_alias: "Unvetted Gateway".to_string(),
+            api: SafeUrl::parse("http://localhost:8080").unwrap(),
+            route_hints: vec![],
+            fees: RoutingFees {
+                base_msat: 10,
+                proportional_millionths: 1,
+            },
+            gateway_id: unvetted_gateway_low_fee_pubkey,
+            supports_private_payments: true,
+        },
+        vetted: false,
+        ttl: Duration::from_secs(3600),
+    };
+
+    let gateways = vec![
+        signet_gateway.clone(),
+        mainnet_gateway.clone(),
+        vetted_gateway.clone(),
+        unvetted_gateway_low_fee.clone(),
+        unvetted_gateway_high_fee.clone(),
+    ];
+
+    // Test that the method returns a Gateway ID when given a matching federation ID and gateway ID
+    let signet_federation_id = FederationId::from_str(SIGNET_FEDERATION).unwrap();
+    assert_eq!(
+        get_gateway_preference(gateways.clone(), signet_federation_id),
+        Some(bitcoin::secp256k1::PublicKey::from_str(SIGNET_GATEWAY).unwrap())
+    );
+
+    let mainnet_federation_id = FederationId::from_str(MAINNET_FEDERATION).unwrap();
+    assert_eq!(
+        get_gateway_preference(gateways.clone(), mainnet_federation_id),
+        Some(bitcoin::secp256k1::PublicKey::from_str(MAINNET_GATEWAY).unwrap())
+    );
+
+    // Test that the method returns the first vetted gateway if none of the gateways match the federation ID
+    assert_eq!(
+        get_gateway_preference(gateways, random_federation_id),
+        Some(vetted_gateway_pubkey)
+    );
+
+    // Test that the method returns the first vetted gateway if none of the gateways match the federation ID
+    let gateways = vec![
+        unvetted_gateway_low_fee.clone(),
+        unvetted_gateway_high_fee.clone(),
+        vetted_gateway.clone(),
+    ];
+    assert_eq!(
+        get_gateway_preference(gateways, random_federation_id),
+        Some(vetted_gateway_pubkey)
+    );
+
+    // Test that the method returns None when given a non-matching federation ID and gateway ID,
+    // and no unvetted gateways with a high enough fee
+    let gateways = vec![
+        signet_gateway,
+        mainnet_gateway,
+        unvetted_gateway_low_fee.clone(),
+    ];
+    assert_eq!(get_gateway_preference(gateways, random_federation_id), None);
+}
+
+#[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
@@ -969,6 +1227,11 @@ mod tests {
     #[test]
     fn test_fedimint_mnemonic_generation() {
         fedimint_mnemonic_generation();
+    }
+
+    #[test]
+    fn test_gateway_preference() {
+        gateway_preference();
     }
 }
 
@@ -989,5 +1252,10 @@ mod wasm_tests {
     #[test]
     fn test_fedimint_mnemonic_generation() {
         fedimint_mnemonic_generation();
+    }
+
+    #[test]
+    fn test_gateway_preference() {
+        gateway_preference();
     }
 }
