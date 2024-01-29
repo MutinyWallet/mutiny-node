@@ -696,6 +696,8 @@ pub struct TagItem {
     lnurl: Option<LnUrl>,
     #[serde(skip_serializing_if = "Option::is_none")]
     image_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    primal_image_url: Option<String>,
     /// Epoch time in seconds when this tag was last used
     pub last_used_time: u64,
 }
@@ -754,6 +756,11 @@ impl TagItem {
     pub fn image_url(&self) -> Option<String> {
         self.image_url.clone()
     }
+
+    #[wasm_bindgen(getter)]
+    pub fn primal_image_url(&self) -> Option<String> {
+        self.primal_image_url.clone()
+    }
 }
 
 impl From<(String, MutinyContact)> for TagItem {
@@ -765,6 +772,12 @@ impl From<(String, MutinyContact)> for TagItem {
             npub: contact.npub.map(|n| n.to_bech32().expect("bech32")),
             ln_address: contact.ln_address,
             lnurl: contact.lnurl,
+            primal_image_url: contact.image_url.as_ref().map(|i| {
+                format!(
+                    "https://primal.b-cdn.net/media-cache?s=s&a=1&u={}",
+                    urlencoding::encode(i)
+                )
+            }),
             image_url: contact.image_url,
             last_used_time: contact.last_used,
         }
@@ -782,6 +795,7 @@ impl From<labels::TagItem> for TagItem {
                 ln_address: None,
                 lnurl: None,
                 image_url: None,
+                primal_image_url: None,
                 last_used_time: item.last_used_time,
             },
             labels::TagItem::Contact(contact) => contact.into(),
