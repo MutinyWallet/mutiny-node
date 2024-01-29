@@ -1,6 +1,7 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bip39::Mnemonic;
+use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error};
@@ -43,6 +44,7 @@ pub struct IndexedDbStorage {
     pub(crate) indexed_db: Arc<RwLock<RexieContainer>>,
     vss: Option<Arc<MutinyVssClient>>,
     logger: Arc<MutinyLogger>,
+    delayed_keys: Arc<Mutex<HashMap<String, DelayedKeyValueItem>>>,
 }
 
 impl IndexedDbStorage {
@@ -73,6 +75,7 @@ impl IndexedDbStorage {
             indexed_db,
             vss,
             logger,
+            delayed_keys: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -785,6 +788,10 @@ impl MutinyStorage for IndexedDbStorage {
                 Ok(Some(device_lock))
             }
         }
+    }
+
+    fn get_delayed_objects(&self) -> Arc<Mutex<HashMap<String, DelayedKeyValueItem>>> {
+        self.delayed_keys.clone()
     }
 }
 
