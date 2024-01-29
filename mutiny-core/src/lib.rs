@@ -95,6 +95,7 @@ use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::{lnurl::LnUrl, AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use nostr_sdk::{Client, RelayPoolNotification};
+use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -1638,6 +1639,42 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(())
     }
 
+    /// Uploads a profile pic to nostr.build and returns the uploaded file's URL
+    pub async fn upload_profile_pic(&self, image_bytes: Vec<u8>) -> Result<String, MutinyError> {
+        let client = reqwest::Client::new();
+
+        let form = Form::new().part("fileToUpload", Part::bytes(image_bytes));
+        let res: NostrBuildResult = client
+            .post("https://nostr.build/api/v2/upload/profile")
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|_| MutinyError::NostrError)?
+            .json()
+            .await
+            .map_err(|_| MutinyError::NostrError)?;
+
+        if res.status != "success" {
+            log_error!(
+                self.logger,
+                "Error uploading profile picture: {}",
+                res.message
+            );
+            return Err(MutinyError::NostrError);
+        }
+
+        // get url from response body
+        if let Some(value) = res.data.first() {
+            return value
+                .get("url")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .ok_or(MutinyError::NostrError);
+        }
+
+        Err(MutinyError::NostrError)
+    }
+
     /// Makes a request to the primal api
     async fn primal_request(
         client: &reqwest::Client,
@@ -2380,6 +2417,13 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         welcome_message,
         gateway_fees,
     })
+}
+
+#[derive(Deserialize)]
+struct NostrBuildResult {
+    status: String,
+    message: String,
+    data: Vec<Value>,
 }
 
 // max amount that can be spent through a gateway

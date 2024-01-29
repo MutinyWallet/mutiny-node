@@ -1717,6 +1717,12 @@ impl MutinyWallet {
         Ok(event_id.to_hex())
     }
 
+    /// Uploads a profile pic to nostr.build and returns the uploaded file's URL
+    pub async fn upload_profile_pic(&self, img_base64: String) -> Result<String, MutinyJsError> {
+        let bytes = base64::decode(&img_base64)?;
+        Ok(self.inner.upload_profile_pic(bytes).await?)
+    }
+
     /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.
     #[wasm_bindgen]
     pub async fn reset_router(&self) -> Result<(), MutinyJsError> {
