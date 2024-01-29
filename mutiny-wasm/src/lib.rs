@@ -1087,20 +1087,17 @@ impl MutinyWallet {
         let activity = self.inner.node_manager.get_label_activity(&label).await?;
         let mut activity: Vec<ActivityItem> = activity.into_iter().map(|a| a.into()).collect();
 
-        // add contact to the activity item if it is one
-        let Some(contact) = self.inner.node_manager.get_contact(&label)? else {
-            return Ok(JsValue::from_serde(&activity)?);
+        // add contact to the activity item it has one, otherwise return the activity list
+        let contact = match self.inner.node_manager.get_contact(&label)? {
+            Some(contact) => contact,
+            None => return Ok(JsValue::from_serde(&activity)?),
         };
 
+        // if we have a contact, add it to the activity item, remove it as a label
+        // This is the same as we do in get_activity
         for a in activity.iter_mut() {
-            // find labels that have a contact and add them to the item
-            for a_label in a.labels.iter() {
-                if label == *a_label {
-                    a.contacts
-                        .push(TagItem::from((a_label.clone(), contact.clone())));
-                }
-            }
-            // remove labels that have the contact to prevent duplicates
+            a.contacts
+                .push(TagItem::from((label.clone(), contact.clone())));
             a.labels.retain(|l| l != &label);
         }
 
