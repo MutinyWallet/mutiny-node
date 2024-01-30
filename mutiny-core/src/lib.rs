@@ -1699,6 +1699,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
             if federation_storage_guard.federations.contains_key(uuid) {
                 federation_storage_guard.federations.remove(uuid);
+                federation_storage_guard.version += 1;
                 self.storage
                     .insert_federations(federation_storage_guard.clone())
                     .await?;
@@ -2036,11 +2037,8 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     // be saved.
     let mut federation_mutex = federation_storage.write().await;
 
-    // Get the current federations so that we can check if the new federation already exists
-    let mut existing_federations = storage.get_federations()?;
-
     // Check if the federation already exists
-    if existing_federations
+    if federation_mutex
         .federations
         .values()
         .any(|federation| federation.federation_code == federation_code)
@@ -2054,15 +2052,11 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         federation_code: federation_code.clone(),
     };
 
-    existing_federations.version += 1;
-    existing_federations
+    federation_mutex
         .federations
         .insert(next_federation_uuid.clone(), next_federation.clone());
-
-    storage
-        .insert_federations(existing_federations.clone())
-        .await?;
-    federation_mutex.federations = existing_federations.federations.clone();
+    federation_mutex.version += 1;
+    storage.insert_federations(federation_mutex.clone()).await?;
 
     // now create the federation process and init it
     let new_federation = FederationClient::new(
