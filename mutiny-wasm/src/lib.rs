@@ -1222,7 +1222,7 @@ impl MutinyWallet {
             .set_invoice_labels(invoice, labels)?)
     }
 
-    pub fn get_contacts(&self) -> Result<JsValue /* Map<String, TagItem>*/, MutinyJsError> {
+    pub async fn get_contacts(&self) -> Result<JsValue /* Map<String, TagItem>*/, MutinyJsError> {
         Ok(JsValue::from_serde(
             &self
                 .inner
@@ -1234,7 +1234,7 @@ impl MutinyWallet {
         )?)
     }
 
-    pub fn get_contacts_sorted(&self) -> Result<JsValue /* Vec<TagItem>*/, MutinyJsError> {
+    pub async fn get_contacts_sorted(&self) -> Result<JsValue /* Vec<TagItem>*/, MutinyJsError> {
         let mut contacts: Vec<TagItem> = self
             .inner
             .node_manager
