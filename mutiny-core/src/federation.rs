@@ -159,6 +159,7 @@ pub(crate) struct FederationClient<S: MutinyStorage> {
     pub(crate) uuid: String,
     pub(crate) fedimint_client: ClientArc,
     storage: S,
+    #[allow(dead_code)]
     fedimint_storage: FedimintStorage<S>,
     pub(crate) logger: Arc<MutinyLogger>,
 }
@@ -570,6 +571,8 @@ impl<S: MutinyStorage> FederationClient<S> {
         }
     }
 
+    // delete_fedimint_storage is not suggested at the moment due to the lack of easy restores
+    #[allow(dead_code)]
     pub async fn delete_fedimint_storage(&self) -> Result<(), MutinyError> {
         self.fedimint_storage.delete_store().await
     }

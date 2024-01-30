@@ -1688,7 +1688,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(federation_identities)
     }
 
-    /// Removes a federation by setting its archived status to true, based on the FederationId.
+    /// Removes a federation by removing it from the user's federation list.
     pub async fn remove_federation(&self, federation_id: FederationId) -> Result<(), MutinyError> {
         let mut federations_guard = self.federations.write().await;
 
@@ -1702,7 +1702,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 self.storage
                     .insert_federations(federation_storage_guard.clone())
                     .await?;
-                fedimint_client.delete_fedimint_storage().await?;
+                // TODO in the future, delete user's fedimint storage too
+                // for now keep it in case they restore the federation again
+                // fedimint_client.delete_fedimint_storage().await?;
                 federations_guard.remove(&federation_id);
             } else {
                 return Err(MutinyError::NotFound);
