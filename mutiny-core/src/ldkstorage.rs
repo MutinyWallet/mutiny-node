@@ -6,7 +6,7 @@ use crate::logging::MutinyLogger;
 use crate::node::{default_user_config, ChainMonitor};
 use crate::node::{NetworkGraph, Router};
 use crate::nodemanager::ChannelClosure;
-use crate::storage::{MutinyStorage, VersionedValue};
+use crate::storage::{IndexItem, MutinyStorage, VersionedValue};
 use crate::utils;
 use crate::utils::{sleep, spawn};
 use crate::{chain::MutinyChain, scorer::HubPreferentialScorer};
@@ -40,7 +40,7 @@ use std::sync::Arc;
 pub const CHANNEL_MANAGER_KEY: &str = "manager";
 pub const MONITORS_PREFIX_KEY: &str = "monitors/";
 const CHANNEL_OPENING_PARAMS_PREFIX: &str = "chan_open_params/";
-const CHANNEL_CLOSURE_PREFIX: &str = "channel_closure/";
+pub const CHANNEL_CLOSURE_PREFIX: &str = "channel_closure/";
 const FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY: &str = "failed_spendable_outputs";
 
 pub(crate) type PhantomChannelManager<S: MutinyStorage> = LdkChannelManager<
@@ -367,7 +367,16 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             "{CHANNEL_CLOSURE_PREFIX}{}",
             user_channel_id.to_be_bytes().to_lower_hex_string()
         ));
-        self.storage.set_data(key, closure, None)?;
+        self.storage.set_data(key.clone(), &closure, None)?;
+
+        let index = self.storage.activity_index();
+        let mut index = index.try_write()?;
+        index.retain(|i| i.key != key); // remove old version
+        index.insert(IndexItem {
+            timestamp: Some(closure.timestamp),
+            key,
+        });
+
         Ok(())
     }
 

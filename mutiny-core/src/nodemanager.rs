@@ -948,30 +948,6 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(details_opt.map(|(d, _)| d))
     }
 
-    /// Returns all the on-chain and lightning activity from the wallet.
-    pub(crate) async fn get_activity(
-        &self,
-    ) -> Result<(Vec<ChannelClosure>, Vec<TransactionDetails>), MutinyError> {
-        // todo add contacts to the activity
-        let closures = self
-            .list_channel_closures()
-            .await
-            .map_err(|e| {
-                log_warn!(self.logger, "Failed to get channel closures: {e}");
-                e
-            })
-            .unwrap_or_default();
-        let onchain = self
-            .list_onchain()
-            .map_err(|e| {
-                log_warn!(self.logger, "Failed to get bdk history: {e}");
-                e
-            })
-            .unwrap_or_default();
-
-        Ok((closures, onchain))
-    }
-
     /// Returns all the on-chain and lightning activity for a given label
     pub async fn get_label_activity(
         &self,
