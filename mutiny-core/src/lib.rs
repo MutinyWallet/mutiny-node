@@ -43,14 +43,17 @@ mod test_utils;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
-use crate::storage::{
-    list_payment_info, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY,
-};
 use crate::{auth::MutinyAuthClient, logging::MutinyLogger};
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{
     event::{HTLCStatus, MillisatAmount, PaymentInfo},
     onchain::FULL_SYNC_STOP_GAP,
+};
+use crate::{
+    federation::GatewayFees,
+    storage::{
+        list_payment_info, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY,
+    },
 };
 use crate::{
     federation::{FederationClient, FederationIdentity, FederationIndex, FederationStorage},
@@ -104,6 +107,7 @@ use mockall::{automock, predicate::*};
 
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 const MAX_FEDERATION_INVOICE_AMT: u64 = 200_000;
+const SWAP_LABEL: &str = "SWAP";
 
 #[cfg_attr(test, automock)]
 pub trait InvoiceHandler {
@@ -1122,6 +1126,112 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         })
     }
 
+    pub async fn sweep_federation_balance(&self, amount: Option<u64>) -> Result<(), MutinyError> {
+        // Attempt to create federation invoice if available and below max amount
+        let federation_ids = self.list_federation_ids().await?;
+        if federation_ids.is_empty() {
+            return Err(MutinyError::BadAmountError);
+        }
+
+        // TODO support more than one federation
+        let federation_id = &federation_ids[0];
+        let federation_lock = self.federations.read().await;
+        let fedimint_client = federation_lock
+            .get(federation_id)
+            .ok_or(MutinyError::NotFound)?;
+
+        // if the user provided amount, this is easy
+        if let Some(amt) = amount {
+            let inv = self.node_manager.create_invoice(amt).await?;
+            self.storage.set_invoice_labels(
+                inv.bolt11.clone().expect("just created"),
+                vec![SWAP_LABEL.to_string()],
+            )?;
+            let _ = fedimint_client
+                .pay_invoice(
+                    inv.bolt11.expect("create inv had one job"),
+                    vec![SWAP_LABEL.to_string()],
+                )
+                .await?;
+            return Ok(());
+        }
+
+        // If no amount, figure out the amount to send over
+        let current_balance = fedimint_client.get_balance().await?;
+        log_info!(
+            self.logger,
+            "current fedimint client balance: {}",
+            current_balance
+        );
+
+        let fees = fedimint_client.gateway_fee().await?;
+        let amt = max_spendable_amount(current_balance, &fees)
+            .map_or(Err(MutinyError::InsufficientBalance), Ok)?;
+        log_info!(self.logger, "max spendable: {}", amt);
+
+        // try to get an invoice for this exact amount
+        let inv = self.node_manager.create_invoice(amt).await?;
+
+        let inv_amt = inv.amount_sats.ok_or(MutinyError::BadAmountError)?;
+        let inv_to_pay = if inv_amt > amt {
+            let new_amt = inv_amt - (inv_amt - amt);
+            log_info!(self.logger, "adjusting amount to swap to: {}", amt);
+            self.node_manager.create_invoice(new_amt).await?
+        } else {
+            inv.clone()
+        };
+        self.storage.set_invoice_labels(
+            inv_to_pay.bolt11.clone().expect("just created"),
+            vec![SWAP_LABEL.to_string()],
+        )?;
+
+        log_info!(self.logger, "attempting payment from fedimint client");
+        let _ = fedimint_client
+            .pay_invoice(
+                inv_to_pay.bolt11.expect("create inv had one job"),
+                vec![SWAP_LABEL.to_string()],
+            )
+            .await?;
+
+        // pay_invoice returns invoice if Succeeded or Err if something else
+        // it's safe to assume that it went through and we can check remaining balance
+        let remaining_balance = fedimint_client.get_balance().await?;
+        log_info!(
+            self.logger,
+            "remaining fedimint balance: {}",
+            remaining_balance
+        );
+        if remaining_balance > 1 {
+            // the fee for existing channel is voltage 1 sat + base fee + ppm
+            let remaining_balance_minus_fee = max_spendable_amount(remaining_balance - 1, &fees);
+            if remaining_balance_minus_fee.is_none() {
+                return Ok(());
+            }
+            let remaining_balance_minus_fee = remaining_balance_minus_fee.unwrap();
+
+            let inv = self
+                .node_manager
+                .create_invoice(remaining_balance_minus_fee)
+                .await?;
+
+            match fedimint_client
+                .pay_invoice(inv.bolt11.expect("create inv had one job"), vec![])
+                .await
+            {
+                Ok(_) => {
+                    log_info!(self.logger, "paid remaining balance")
+                }
+                Err(e) => {
+                    // Don't want to return this error since it's just "incomplete",
+                    // and just not the full amount.
+                    log_warn!(self.logger, "error paying remaining balance: {}", e)
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     async fn create_lightning_invoice(
         &self,
         amount: u64,
@@ -2089,11 +2199,174 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     })
 }
 
+// max amount that can be spent through a gateway
+fn max_spendable_amount(current_balance_sat: u64, routing_fees: &GatewayFees) -> Option<u64> {
+    let current_balance_msat = current_balance_sat as f64 * 1_000.0;
+
+    // proportional fee on the current balance
+    let prop_fee_msat =
+        (current_balance_msat * routing_fees.proportional_millionths as f64) / 1_000_000.0;
+
+    // The max balance considering the maximum possible proportional fee.
+    // This gives us a baseline to start checking the fees from. In the case that the fee is 1%
+    // The real maximum balance will be somewhere between our current balance and 99% of our
+    // balance.
+    let initial_max = current_balance_msat - (routing_fees.base_msat as f64 + prop_fee_msat);
+
+    // if the fee would make the amount go negative, then there is not a possible amount to spend
+    if initial_max <= 0.0 {
+        return None;
+    }
+
+    // if the initial balance and initial maximum is basically the same, then that's it
+    // this is basically only ever the case if there's not really any fee involved
+    if current_balance_msat - initial_max < 1.0 {
+        return Some((initial_max / 1_000.0).floor() as u64);
+    }
+
+    // keep trying until we hit our balance or find the max amount
+    let mut new_max = initial_max;
+    while new_max < current_balance_msat {
+        // we increment by one and check the fees for it
+        let new_check = new_max + 1.0;
+
+        // this is the new proportional fee to check with
+        let prop_fee_sat = (new_check * routing_fees.proportional_millionths as f64) / 1_000_000.0;
+
+        // check the new spendable balance amount plus base fees plus new proportional fee
+        let new_amt = new_check + routing_fees.base_msat as f64 + prop_fee_sat;
+        if current_balance_msat - new_amt <= 0.0 {
+            // since we are incrementing from a minimum spendable amount,
+            // if we overshot our total balance then the last max is the highest
+            return Some((new_max / 1_000.0).floor() as u64);
+        }
+
+        // this is the new spendable maximum
+        new_max += 1.0;
+    }
+
+    Some((new_max / 1_000.0).floor() as u64)
+}
+
 #[cfg(test)]
+fn max_routing_fee_amount() {
+    let initial_budget = 1;
+    let routing_fees = GatewayFees {
+        base_msat: 10_000,
+        proportional_millionths: 0,
+    };
+    assert_eq!(None, max_spendable_amount(initial_budget, &routing_fees));
+
+    // only a percentage fee
+    let initial_budget = 100;
+    let routing_fees = GatewayFees {
+        base_msat: 0,
+        proportional_millionths: 0,
+    };
+    assert_eq!(
+        Some(100),
+        max_spendable_amount(initial_budget, &routing_fees)
+    );
+
+    let initial_budget = 100;
+    let routing_fees = GatewayFees {
+        base_msat: 0,
+        proportional_millionths: 10_000,
+    };
+    assert_eq!(
+        Some(99),
+        max_spendable_amount(initial_budget, &routing_fees)
+    );
+
+    let initial_budget = 100;
+    let routing_fees = GatewayFees {
+        base_msat: 0,
+        proportional_millionths: 100_000,
+    };
+    assert_eq!(
+        Some(90),
+        max_spendable_amount(initial_budget, &routing_fees)
+    );
+
+    let initial_budget = 101_000;
+    let routing_fees = GatewayFees {
+        base_msat: 0,
+        proportional_millionths: 100_000,
+    };
+    assert_eq!(
+        Some(91_818),
+        max_spendable_amount(initial_budget, &routing_fees)
+    );
+
+    let initial_budget = 101;
+    let routing_fees = GatewayFees {
+        base_msat: 0,
+        proportional_millionths: 100_000,
+    };
+    assert_eq!(
+        Some(91),
+        max_spendable_amount(initial_budget, &routing_fees)
+    );
+
+    // same tests but with a base fee
+    let initial_budget = 100;
+    let routing_fees = GatewayFees {
+        base_msat: 1_000,
+        proportional_millionths: 0,
+    };
+    assert_eq!(
+        Some(99),
+        max_spendable_amount(initial_budget, &routing_fees)
+    );
+
+    let initial_budget = 100;
+    let routing_fees = GatewayFees {
+        base_msat: 1_000,
+        proportional_millionths: 10_000,
+    };
+    assert_eq!(
+        Some(98),
+        max_spendable_amount(initial_budget, &routing_fees)
+    );
+
+    let initial_budget = 100;
+    let routing_fees = GatewayFees {
+        base_msat: 1_000,
+        proportional_millionths: 100_000,
+    };
+    assert_eq!(
+        Some(89),
+        max_spendable_amount(initial_budget, &routing_fees)
+    );
+
+    let initial_budget = 101;
+    let routing_fees = GatewayFees {
+        base_msat: 1_000,
+        proportional_millionths: 100_000,
+    };
+    assert_eq!(
+        Some(90),
+        max_spendable_amount(initial_budget, &routing_fees)
+    );
+}
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_max_routing_fee_amount() {
+        max_routing_fee_amount();
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_arch = "wasm32")]
 mod tests {
     use crate::{
-        encrypt::encryption_key_from_pass, generate_seed, nodemanager::NodeManager, MutinyWallet,
-        MutinyWalletBuilder, MutinyWalletConfigBuilder,
+        encrypt::encryption_key_from_pass, generate_seed, max_routing_fee_amount,
+        nodemanager::NodeManager, MutinyWallet, MutinyWalletBuilder, MutinyWalletConfigBuilder,
     };
     use bitcoin::util::bip32::ExtendedPrivKey;
     use bitcoin::Network;
@@ -2400,5 +2673,10 @@ mod tests {
         // check that we got different messages
         assert_eq!(next.len(), 2);
         assert!(next.iter().all(|m| !messages.contains(m)))
+    }
+
+    #[test]
+    fn test_max_routing_fee_amount() {
+        max_routing_fee_amount();
     }
 }
