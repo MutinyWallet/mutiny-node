@@ -971,7 +971,7 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .sweep_all_to_channel(None, None, to_pubkey)
+            .sweep_all_to_channel(to_pubkey)
             .await?
             .into())
     }
