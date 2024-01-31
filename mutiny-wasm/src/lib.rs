@@ -608,6 +608,26 @@ impl MutinyWallet {
             .estimate_sweep_channel_open_fee(fee_rate)?)
     }
 
+    /// Estimates the lightning fee for a transaction. Amount is either from the invoice
+    /// if one is available or a passed in amount (priority). It will try to predict either
+    /// sending the payment through a federation or through lightning, depending on balances.
+    /// The amount and fee is in satoshis.
+    /// Returns None if it has no good way to calculate fee.
+    pub async fn estimate_ln_fee(
+        &self,
+        invoice_str: Option<String>,
+        amt_sats: Option<u64>,
+    ) -> Result<Option<u64>, MutinyJsError> {
+        let invoice = match invoice_str {
+            Some(i) => Some(Bolt11Invoice::from_str(&i)?),
+            None => None,
+        };
+        Ok(self
+            .inner
+            .estimate_ln_fee(invoice.as_ref(), amt_sats)
+            .await?)
+    }
+
     /// Bumps the given transaction by replacing the given tx with a transaction at
     /// the new given fee rate in sats/vbyte
     pub async fn bump_fee(&self, txid: String, fee_rate: f32) -> Result<String, MutinyJsError> {

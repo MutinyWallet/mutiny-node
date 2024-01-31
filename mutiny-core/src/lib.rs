@@ -1072,6 +1072,58 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
     }
 
+    /// Estimates the lightning fee for a transaction. Amount is either from the invoice
+    /// if one is available or a passed in amount (priority). It will try to predict either
+    /// sending the payment through a federation or through lightning, depending on balances.
+    /// The amount and fee is in satoshis.
+    /// Returns None if it has no good way to calculate fee.
+    pub async fn estimate_ln_fee(
+        &self,
+        inv: Option<&Bolt11Invoice>,
+        amt_sats: Option<u64>,
+    ) -> Result<Option<u64>, MutinyError> {
+        let amt = amt_sats
+            .or(inv.and_then(|i| i.amount_milli_satoshis()))
+            .ok_or(MutinyError::BadAmountError)?;
+
+        // check balances first
+        let total_balances = self.get_balance().await?;
+        if total_balances.federation > amt {
+            let federation_ids = self.list_federation_ids().await?;
+            for federation_id in federation_ids {
+                // Check if the federation has enough balance
+                if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
+                    let current_balance = fedimint_client.get_balance().await?;
+                    log_info!(
+                        self.logger,
+                        "current fedimint client balance: {}",
+                        current_balance
+                    );
+
+                    let fees = fedimint_client.gateway_fee().await?;
+                    let max_spendable = max_spendable_amount(current_balance, &fees)
+                        .map_or(Err(MutinyError::InsufficientBalance), Ok)?;
+
+                    if max_spendable >= amt {
+                        let prop_fee_msat =
+                            (amt as f64 * 1_000.0 * fees.proportional_millionths as f64)
+                                / 1_000_000.0;
+
+                        let total_fee = fees.base_msat as f64 + prop_fee_msat;
+                        return Ok(Some((total_fee / 1_000.0).floor() as u64));
+                    }
+                }
+            }
+        }
+
+        if total_balances.lightning > amt {
+            // TODO try something to try to get lightning fee
+            return Ok(None);
+        }
+
+        Err(MutinyError::InsufficientBalance)
+    }
+
     /// Creates a BIP 21 invoice. This creates a new address and a lightning invoice.
     /// The lightning invoice may return errors related to the LSP. Check the error and
     /// fallback to `get_new_address` and warn the user that Lightning is not available.
