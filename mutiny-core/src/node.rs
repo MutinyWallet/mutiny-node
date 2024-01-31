@@ -971,7 +971,7 @@ impl<S: MutinyStorage> Node<S> {
 
     pub async fn create_invoice(
         &self,
-        amount_sat: Option<u64>,
+        amount_sat: u64,
         route_hints: Option<Vec<PhantomRouteHints>>,
     ) -> Result<Bolt11Invoice, MutinyError> {
         match self.lsp_client.as_ref() {
@@ -981,9 +981,6 @@ impl<S: MutinyStorage> Node<S> {
                     None,
                 )
                 .await?;
-
-                // LSP requires an amount:
-                let amount_sat = amount_sat.ok_or(MutinyError::BadAmountError)?;
 
                 // Needs any amount over 0 if channel exists
                 // Needs amount over minimum if no channel
@@ -1112,7 +1109,7 @@ impl<S: MutinyStorage> Node<S> {
                 }
             }
             None => Ok(self
-                .create_internal_invoice(amount_sat, None, route_hints)
+                .create_internal_invoice(Some(amount_sat), None, route_hints)
                 .await?),
         }
     }
@@ -2420,7 +2417,7 @@ mod tests {
 
         let amount_sats = 1_000;
 
-        let invoice = node.create_invoice(Some(amount_sats), None).await.unwrap();
+        let invoice = node.create_invoice(amount_sats, None).await.unwrap();
 
         assert_eq!(invoice.amount_milli_satoshis(), Some(amount_sats * 1000));
         match invoice.description() {
@@ -2451,7 +2448,7 @@ mod tests {
         let storage = MemoryStorage::default();
         let node = create_node(storage).await;
 
-        let invoice = node.create_invoice(Some(10_000), None).await.unwrap();
+        let invoice = node.create_invoice(10_000, None).await.unwrap();
 
         let result = node
             .pay_invoice_with_timeout(&invoice, None, None, vec![])
@@ -2574,7 +2571,7 @@ mod wasm_test {
 
         let amount_sats = 1_000;
 
-        let invoice = node.create_invoice(Some(amount_sats), None).await.unwrap();
+        let invoice = node.create_invoice(amount_sats, None).await.unwrap();
 
         assert_eq!(invoice.amount_milli_satoshis(), Some(amount_sats * 1000));
         match invoice.description() {
@@ -2605,7 +2602,7 @@ mod wasm_test {
         let storage = MemoryStorage::default();
         let node = create_node(storage).await;
 
-        let invoice = node.create_invoice(Some(10_000), None).await.unwrap();
+        let invoice = node.create_invoice(10_000, None).await.unwrap();
 
         let result = node
             .pay_invoice_with_timeout(&invoice, None, None, vec![])

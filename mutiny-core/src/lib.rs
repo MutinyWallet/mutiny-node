@@ -118,7 +118,7 @@ pub trait InvoiceHandler {
     ) -> Result<MutinyInvoice, MutinyError>;
     async fn create_invoice(
         &self,
-        amount: Option<u64>,
+        amount: u64,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError>;
 }
@@ -1099,11 +1099,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         amount: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyBip21RawMaterials, MutinyError> {
-        let invoice = if self.safe_mode {
+        let invoice = if self.safe_mode || amount.is_none() {
             None
         } else {
             Some(
-                self.create_lightning_invoice(amount, labels.clone())
+                self.create_lightning_invoice(amount.expect("just checked"), labels.clone())
                     .await?
                     .bolt11
                     .ok_or(MutinyError::InvoiceCreationFailed)?,
@@ -1124,19 +1124,17 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     async fn create_lightning_invoice(
         &self,
-        amount: Option<u64>,
+        amount: u64,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
-        let amt = amount.map_or(Err(MutinyError::InvalidArgumentsError), Ok)?;
-
         // Attempt to create federation invoice if available and below max amount
         let federation_ids = self.list_federation_ids().await?;
-        if !federation_ids.is_empty() && amt <= MAX_FEDERATION_INVOICE_AMT {
+        if !federation_ids.is_empty() && amount <= MAX_FEDERATION_INVOICE_AMT {
             let federation_id = &federation_ids[0];
             let fedimint_client = self.federations.read().await.get(federation_id).cloned();
 
             if let Some(client) = fedimint_client {
-                if let Ok(inv) = client.get_invoice(amt, labels.clone()).await {
+                if let Ok(inv) = client.get_invoice(amount, labels.clone()).await {
                     self.storage
                         .set_invoice_labels(inv.bolt11.clone().expect("just created"), labels)?;
                     return Ok(inv);
@@ -1145,7 +1143,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         // Fallback to node_manager invoice creation if no federation invoice created
-        let inv = self.node_manager.create_invoice(Some(amt)).await?;
+        let inv = self.node_manager.create_invoice(amount).await?;
         self.storage
             .set_invoice_labels(inv.bolt11.clone().expect("just created"), labels)?;
         Ok(inv)
@@ -1927,7 +1925,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 // fixme: do we need to use this description?
                 let _description = withdraw.default_description.clone();
                 let mutiny_invoice = self
-                    .create_invoice(Some(amount_sats), vec!["LNURL Withdrawal".to_string()])
+                    .create_invoice(amount_sats, vec!["LNURL Withdrawal".to_string()])
                     .await?;
                 let invoice_str = mutiny_invoice.bolt11.expect("Invoice should have bolt11");
                 let res = self
@@ -1985,7 +1983,7 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
 
     async fn create_invoice(
         &self,
-        amount: Option<u64>,
+        amount: u64,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         self.create_lightning_invoice(amount, labels).await

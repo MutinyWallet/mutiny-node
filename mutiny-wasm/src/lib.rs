@@ -766,7 +766,7 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn create_invoice(
         &self,
-        amount: Option<u64>,
+        amount: u64,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
         Ok(self.inner.create_invoice(amount, labels).await?.into())

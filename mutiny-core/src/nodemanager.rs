@@ -1365,12 +1365,11 @@ impl<S: MutinyStorage> NodeManager<S> {
     // all values in sats
 
     /// Creates a lightning invoice. The amount should be in satoshis.
-    /// If no amount is provided, the invoice will be created with no amount.
     /// If no description is provided, the invoice will be created with no description.
     ///
     /// If the manager has more than one node it will create a phantom invoice.
     /// If there is only one node it will create an invoice just for that node.
-    pub async fn create_invoice(&self, amount: Option<u64>) -> Result<MutinyInvoice, MutinyError> {
+    pub async fn create_invoice(&self, amount: u64) -> Result<MutinyInvoice, MutinyError> {
         let nodes = self.nodes.lock().await;
         let use_phantom = nodes.len() > 1 && self.lsp_config.is_none();
         if nodes.len() == 0 {
