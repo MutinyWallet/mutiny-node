@@ -120,6 +120,7 @@ pub struct MutinyInvoice {
     payee_pubkey: Option<String>,
     pub amount_sats: Option<u64>,
     pub expire: u64,
+    pub expired: bool,
     status: String,
     pub fees_paid: Option<u64>,
     pub inbound: bool,
@@ -182,6 +183,7 @@ impl From<mutiny_core::MutinyInvoice> for MutinyInvoice {
             Some(ref b) => utils::is_hodl_invoice(b),
             None => false,
         };
+        let now = utils::now().as_secs();
         MutinyInvoice {
             bolt11: m.bolt11,
             description: m.description,
@@ -190,6 +192,7 @@ impl From<mutiny_core::MutinyInvoice> for MutinyInvoice {
             payee_pubkey: m.payee_pubkey.map(|p| p.serialize().to_lower_hex_string()),
             amount_sats: m.amount_sats,
             expire: m.expire,
+            expired: m.expire < now,
             status: m.status.to_string(),
             fees_paid: m.fees_paid,
             inbound: m.inbound,
