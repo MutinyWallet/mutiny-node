@@ -1193,13 +1193,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         &self,
         amount: Option<u64>,
     ) -> Result<FedimintSweepResult, MutinyError> {
-        // Attempt to create federation invoice if available and below max amount
+        // TODO support more than one federation
         let federation_ids = self.list_federation_ids().await?;
         if federation_ids.is_empty() {
-            return Err(MutinyError::BadAmountError);
+            return Err(MutinyError::NotFound);
         }
-
-        // TODO support more than one federation
         let federation_id = &federation_ids[0];
         let federation_lock = self.federations.read().await;
         let fedimint_client = federation_lock
@@ -1208,7 +1206,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         // if the user provided amount, this is easy
         if let Some(amt) = amount {
-            let inv = self.node_manager.create_invoice(amt).await?;
+            let (inv, fee) = self.node_manager.create_invoice(amt).await?;
             self.storage.set_invoice_labels(
                 inv.bolt11.clone().expect("just created"),
                 vec![SWAP_LABEL.to_string()],
@@ -1219,9 +1217,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     vec![SWAP_LABEL.to_string()],
                 )
                 .await?;
+            let total_fees_paid = pay_res.fees_paid.unwrap_or(0) + fee;
+
             return Ok(FedimintSweepResult {
                 amount: amt,
-                fees: pay_res.fees_paid,
+                fees: Some(total_fees_paid),
             });
         }
 
@@ -1239,7 +1239,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         log_debug!(self.logger, "max spendable: {}", amt);
 
         // try to get an invoice for this exact amount
-        let inv = self.node_manager.create_invoice(amt).await?;
+        let (inv, fee) = self.node_manager.create_invoice(amt).await?;
 
         // check if we can afford that invoice
         let inv_amt = inv.amount_sats.ok_or(MutinyError::BadAmountError)?;
@@ -1251,12 +1251,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         };
 
         // if invoice amount changed, create a new invoice
-        let inv_to_pay = if first_invoice_amount != inv_amt {
+        let (inv_to_pay, fee) = if first_invoice_amount != inv_amt {
             self.node_manager
                 .create_invoice(first_invoice_amount)
                 .await?
         } else {
-            inv.clone()
+            (inv.clone(), fee)
         };
         self.storage.set_invoice_labels(
             inv_to_pay.bolt11.clone().expect("just created"),
@@ -1264,17 +1264,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         )?;
 
         log_debug!(self.logger, "attempting payment from fedimint client");
-        let mut final_result = FedimintSweepResult {
-            amount: first_invoice_amount,
-            fees: None,
-        };
         let first_invoice_res = fedimint_client
             .pay_invoice(
                 inv_to_pay.bolt11.expect("create inv had one job"),
                 vec![SWAP_LABEL.to_string()],
             )
             .await?;
-        final_result.fees = first_invoice_res.fees_paid;
 
         let remaining_balance = fedimint_client.get_balance().await?;
         if remaining_balance > 0 {
@@ -1287,7 +1282,53 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             );
         }
 
-        Ok(final_result)
+        Ok(FedimintSweepResult {
+            amount: first_invoice_amount,
+            fees: Some(first_invoice_res.fees_paid.unwrap_or(0) + fee),
+        })
+    }
+
+    /// Estimate the fee before trying to sweep from federation
+    pub async fn estimate_sweep_federation_fee(
+        &self,
+        amount: Option<u64>,
+    ) -> Result<Option<u64>, MutinyError> {
+        if let Some(0) = amount {
+            return Ok(None);
+        }
+
+        // TODO support more than one federation
+        let federation_ids = self.list_federation_ids().await?;
+        if federation_ids.is_empty() {
+            return Err(MutinyError::NotFound);
+        }
+
+        let federation_id = &federation_ids[0];
+        let federation_lock = self.federations.read().await;
+        let fedimint_client = federation_lock
+            .get(federation_id)
+            .ok_or(MutinyError::NotFound)?;
+
+        // if the user provided amount, this is easy
+        if let Some(amt) = amount {
+            return Ok(Some(self.node_manager.get_lsp_fee(amt).await?));
+        }
+
+        // If no amount, figure out the amount to send over
+        let current_balance = fedimint_client.get_balance().await?;
+        log_debug!(
+            self.logger,
+            "current fedimint client balance: {}",
+            current_balance
+        );
+
+        let fees = fedimint_client.gateway_fee().await?;
+        let amt = max_spendable_amount(current_balance, &fees)
+            .map_or(Err(MutinyError::InsufficientBalance), Ok)?;
+        log_debug!(self.logger, "max spendable: {}", amt);
+
+        // try to get an invoice for this exact amount
+        Ok(Some(self.node_manager.get_lsp_fee(amt).await?))
     }
 
     async fn create_lightning_invoice(
@@ -1311,7 +1352,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         // Fallback to node_manager invoice creation if no federation invoice created
-        let inv = self.node_manager.create_invoice(amount).await?;
+        let (inv, _fee) = self.node_manager.create_invoice(amount).await?;
         self.storage
             .set_invoice_labels(inv.bolt11.clone().expect("just created"), labels)?;
         Ok(inv)

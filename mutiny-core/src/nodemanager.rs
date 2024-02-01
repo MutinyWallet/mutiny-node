@@ -1369,7 +1369,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     ///
     /// If the manager has more than one node it will create a phantom invoice.
     /// If there is only one node it will create an invoice just for that node.
-    pub async fn create_invoice(&self, amount: u64) -> Result<MutinyInvoice, MutinyError> {
+    pub async fn create_invoice(&self, amount: u64) -> Result<(MutinyInvoice, u64), MutinyError> {
         let nodes = self.nodes.lock().await;
         let use_phantom = nodes.len() > 1 && self.lsp_config.is_none();
         if nodes.len() == 0 {
@@ -1394,7 +1394,15 @@ impl<S: MutinyStorage> NodeManager<S> {
         };
         let invoice = first_node.create_invoice(amount, route_hints).await?;
 
-        Ok(invoice.into())
+        Ok((invoice.0.into(), invoice.1))
+    }
+
+    /// Gets the LSP fee for receiving an invoice down the first node that exists.
+    /// This could include the fee if a channel open is necessary. Otherwise the fee
+    /// will be low or non-existant.
+    pub async fn get_lsp_fee(&self, amount: u64) -> Result<u64, MutinyError> {
+        let node = self.get_node_by_key_or_first(None).await?;
+        node.get_lsp_fee(amount).await
     }
 
     /// Pays a lightning invoice from either a specified node or the first available node.

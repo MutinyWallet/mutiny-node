@@ -1004,6 +1004,14 @@ impl MutinyWallet {
         Ok(self.inner.sweep_federation_balance(amount).await?.into())
     }
 
+    /// Estimate the fee before trying to sweep from federation
+    pub async fn estimate_sweep_federation_fee(
+        &self,
+        amount: Option<u64>,
+    ) -> Result<Option<u64>, MutinyJsError> {
+        Ok(self.inner.estimate_sweep_federation_fee(amount).await?)
+    }
+
     /// Closes a channel with the given outpoint.
     ///
     /// If force is true, the channel will be force closed.
