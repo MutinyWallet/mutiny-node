@@ -2907,7 +2907,16 @@ mod tests {
 
         // check that we got different messages
         assert_eq!(next.len(), 2);
-        assert!(next.iter().all(|m| !messages.contains(m)))
+        assert!(next.iter().all(|m| !messages.contains(m)));
+
+        // test check for future messages, should be empty
+        let since = messages.iter().max_by_key(|m| m.date).unwrap().date + 1;
+        let future_msgs = mw
+            .get_dm_conversation(npub, limit, None, Some(since))
+            .await
+            .unwrap();
+
+        assert!(future_msgs.is_empty());
     }
 
     #[test]
