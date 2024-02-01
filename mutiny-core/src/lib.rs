@@ -412,6 +412,17 @@ impl MutinyInvoice {
     }
 }
 
+/// FedimintSweepResult is the result of how much was swept and the fees paid.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct FedimintSweepResult {
+    /// The final amount that was swept.
+    /// This should be the amount specified if it was not max.
+    pub amount: u64,
+
+    /// The total fees paid for the sweep.
+    pub fees: Option<u64>,
+}
+
 pub struct MutinyWalletConfigBuilder {
     xprivkey: ExtendedPrivKey,
     #[cfg(target_arch = "wasm32")]
@@ -1178,7 +1189,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         })
     }
 
-    pub async fn sweep_federation_balance(&self, amount: Option<u64>) -> Result<(), MutinyError> {
+    pub async fn sweep_federation_balance(
+        &self,
+        amount: Option<u64>,
+    ) -> Result<FedimintSweepResult, MutinyError> {
         // Attempt to create federation invoice if available and below max amount
         let federation_ids = self.list_federation_ids().await?;
         if federation_ids.is_empty() {
@@ -1199,13 +1213,16 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 inv.bolt11.clone().expect("just created"),
                 vec![SWAP_LABEL.to_string()],
             )?;
-            let _ = fedimint_client
+            let pay_res = fedimint_client
                 .pay_invoice(
                     inv.bolt11.expect("create inv had one job"),
                     vec![SWAP_LABEL.to_string()],
                 )
                 .await?;
-            return Ok(());
+            return Ok(FedimintSweepResult {
+                amount: amt,
+                fees: pay_res.fees_paid,
+            });
         }
 
         // If no amount, figure out the amount to send over
@@ -1219,16 +1236,25 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let fees = fedimint_client.gateway_fee().await?;
         let amt = max_spendable_amount(current_balance, &fees)
             .map_or(Err(MutinyError::InsufficientBalance), Ok)?;
-        log_info!(self.logger, "max spendable: {}", amt);
+        log_debug!(self.logger, "max spendable: {}", amt);
 
         // try to get an invoice for this exact amount
         let inv = self.node_manager.create_invoice(amt).await?;
 
+        // check if we can afford that invoice
         let inv_amt = inv.amount_sats.ok_or(MutinyError::BadAmountError)?;
-        let inv_to_pay = if inv_amt > amt {
-            let new_amt = inv_amt - (inv_amt - amt);
-            log_info!(self.logger, "adjusting amount to swap to: {}", amt);
-            self.node_manager.create_invoice(new_amt).await?
+        let first_invoice_amount = if inv_amt > amt {
+            log_debug!(self.logger, "adjusting amount to swap to: {}", amt);
+            inv_amt - (inv_amt - amt)
+        } else {
+            inv_amt
+        };
+
+        // if invoice amount changed, create a new invoice
+        let inv_to_pay = if first_invoice_amount != inv_amt {
+            self.node_manager
+                .create_invoice(first_invoice_amount)
+                .await?
         } else {
             inv.clone()
         };
@@ -1237,18 +1263,23 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             vec![SWAP_LABEL.to_string()],
         )?;
 
-        log_info!(self.logger, "attempting payment from fedimint client");
-        let _ = fedimint_client
+        log_debug!(self.logger, "attempting payment from fedimint client");
+        let mut final_result = FedimintSweepResult {
+            amount: first_invoice_amount,
+            fees: None,
+        };
+        let first_invoice_res = fedimint_client
             .pay_invoice(
                 inv_to_pay.bolt11.expect("create inv had one job"),
                 vec![SWAP_LABEL.to_string()],
             )
             .await?;
+        final_result.fees = first_invoice_res.fees_paid;
 
         // pay_invoice returns invoice if Succeeded or Err if something else
         // it's safe to assume that it went through and we can check remaining balance
         let remaining_balance = fedimint_client.get_balance().await?;
-        log_info!(
+        log_debug!(
             self.logger,
             "remaining fedimint balance: {}",
             remaining_balance
@@ -1257,7 +1288,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             // the fee for existing channel is voltage 1 sat + base fee + ppm
             let remaining_balance_minus_fee = max_spendable_amount(remaining_balance - 1, &fees);
             if remaining_balance_minus_fee.is_none() {
-                return Ok(());
+                return Ok(final_result);
             }
             let remaining_balance_minus_fee = remaining_balance_minus_fee.unwrap();
 
@@ -1270,8 +1301,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 .pay_invoice(inv.bolt11.expect("create inv had one job"), vec![])
                 .await
             {
-                Ok(_) => {
-                    log_info!(self.logger, "paid remaining balance")
+                Ok(r) => {
+                    log_debug!(self.logger, "paid remaining balance");
+                    final_result.amount += remaining_balance_minus_fee;
+                    final_result.fees = final_result.fees.map_or(r.fees_paid, |val| {
+                        r.fees_paid
+                            .map(|add_val| val + add_val)
+                            .map_or(Some(val), |_| None)
+                    });
                 }
                 Err(e) => {
                     // Don't want to return this error since it's just "incomplete",
@@ -1281,7 +1318,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             }
         }
 
-        Ok(())
+        Ok(final_result)
     }
 
     async fn create_lightning_invoice(

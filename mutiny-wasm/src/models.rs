@@ -1074,6 +1074,31 @@ impl From<mutiny_core::Plan> for Plan {
     }
 }
 
+/// FedimintSweepResult is the result of how much was swept and the fees paid.
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[wasm_bindgen]
+pub struct FedimintSweepResult {
+    pub amount: u64,
+    pub fees: Option<u64>,
+}
+
+#[wasm_bindgen]
+impl FedimintSweepResult {
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> JsValue {
+        JsValue::from_serde(&serde_json::to_value(self).unwrap()).unwrap()
+    }
+}
+
+impl From<mutiny_core::FedimintSweepResult> for FedimintSweepResult {
+    fn from(m: mutiny_core::FedimintSweepResult) -> Self {
+        FedimintSweepResult {
+            amount: m.amount,
+            fees: m.fees,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[wasm_bindgen]
 pub enum BudgetPeriod {

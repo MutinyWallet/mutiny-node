@@ -997,8 +997,11 @@ impl MutinyWallet {
     }
 
     /// Sweep the federation balance into a lightning channel
-    pub async fn sweep_federation_balance(&self, amount: Option<u64>) -> Result<(), MutinyJsError> {
-        Ok(self.inner.sweep_federation_balance(amount).await?)
+    pub async fn sweep_federation_balance(
+        &self,
+        amount: Option<u64>,
+    ) -> Result<FedimintSweepResult, MutinyJsError> {
+        Ok(self.inner.sweep_federation_balance(amount).await?.into())
     }
 
     /// Closes a channel with the given outpoint.
