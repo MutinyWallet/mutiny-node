@@ -608,6 +608,26 @@ impl MutinyWallet {
             .estimate_sweep_channel_open_fee(fee_rate)?)
     }
 
+    /// Estimates the lightning fee for a transaction. Amount is either from the invoice
+    /// if one is available or a passed in amount (priority). It will try to predict either
+    /// sending the payment through a federation or through lightning, depending on balances.
+    /// The amount and fee is in satoshis.
+    /// Returns None if it has no good way to calculate fee.
+    pub async fn estimate_ln_fee(
+        &self,
+        invoice_str: Option<String>,
+        amt_sats: Option<u64>,
+    ) -> Result<Option<u64>, MutinyJsError> {
+        let invoice = match invoice_str {
+            Some(i) => Some(Bolt11Invoice::from_str(&i)?),
+            None => None,
+        };
+        Ok(self
+            .inner
+            .estimate_ln_fee(invoice.as_ref(), amt_sats)
+            .await?)
+    }
+
     /// Bumps the given transaction by replacing the given tx with a transaction at
     /// the new given fee rate in sats/vbyte
     pub async fn bump_fee(&self, txid: String, fee_rate: f32) -> Result<String, MutinyJsError> {
@@ -766,7 +786,7 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn create_invoice(
         &self,
-        amount: Option<u64>,
+        amount: u64,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
         Ok(self.inner.create_invoice(amount, labels).await?.into())
@@ -971,9 +991,25 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .sweep_all_to_channel(None, None, to_pubkey)
+            .sweep_all_to_channel(to_pubkey)
             .await?
             .into())
+    }
+
+    /// Sweep the federation balance into a lightning channel
+    pub async fn sweep_federation_balance(
+        &self,
+        amount: Option<u64>,
+    ) -> Result<FedimintSweepResult, MutinyJsError> {
+        Ok(self.inner.sweep_federation_balance(amount).await?.into())
+    }
+
+    /// Estimate the fee before trying to sweep from federation
+    pub async fn estimate_sweep_federation_fee(
+        &self,
+        amount: Option<u64>,
+    ) -> Result<Option<u64>, MutinyJsError> {
+        Ok(self.inner.estimate_sweep_federation_fee(amount).await?)
     }
 
     /// Closes a channel with the given outpoint.
@@ -1114,6 +1150,14 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn get_federation_balances(&self) -> Result<FederationBalances, MutinyJsError> {
         Ok(self.inner.get_federation_balances().await?.into())
+    }
+
+    /// Scans all federations for user ecash.
+    ///
+    /// This can be useful if you think you have some federation funds missing.
+    #[wasm_bindgen]
+    pub async fn recover_federation_backups(&mut self) -> Result<(), MutinyJsError> {
+        Ok(self.inner.recover_federation_backups().await?)
     }
 
     pub fn get_address_labels(

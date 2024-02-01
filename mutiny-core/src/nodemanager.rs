@@ -1365,12 +1365,11 @@ impl<S: MutinyStorage> NodeManager<S> {
     // all values in sats
 
     /// Creates a lightning invoice. The amount should be in satoshis.
-    /// If no amount is provided, the invoice will be created with no amount.
     /// If no description is provided, the invoice will be created with no description.
     ///
     /// If the manager has more than one node it will create a phantom invoice.
     /// If there is only one node it will create an invoice just for that node.
-    pub async fn create_invoice(&self, amount: Option<u64>) -> Result<MutinyInvoice, MutinyError> {
+    pub async fn create_invoice(&self, amount: u64) -> Result<(MutinyInvoice, u64), MutinyError> {
         let nodes = self.nodes.lock().await;
         let use_phantom = nodes.len() > 1 && self.lsp_config.is_none();
         if nodes.len() == 0 {
@@ -1395,7 +1394,15 @@ impl<S: MutinyStorage> NodeManager<S> {
         };
         let invoice = first_node.create_invoice(amount, route_hints).await?;
 
-        Ok(invoice.into())
+        Ok((invoice.0.into(), invoice.1))
+    }
+
+    /// Gets the LSP fee for receiving an invoice down the first node that exists.
+    /// This could include the fee if a channel open is necessary. Otherwise the fee
+    /// will be low or non-existant.
+    pub async fn get_lsp_fee(&self, amount: u64) -> Result<u64, MutinyError> {
+        let node = self.get_node_by_key_or_first(None).await?;
+        node.get_lsp_fee(amount).await
     }
 
     /// Pays a lightning invoice from either a specified node or the first available node.
@@ -1515,12 +1522,10 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// The UTXOs must all exist in the wallet.
     pub async fn sweep_utxos_to_channel(
         &self,
-        user_chan_id: Option<u128>,
-        self_node_pubkey: Option<&PublicKey>,
         utxos: &[OutPoint],
         to_pubkey: Option<PublicKey>,
     ) -> Result<MutinyChannel, MutinyError> {
-        let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
+        let node = self.get_node_by_key_or_first(None).await?;
         let to_pubkey = match to_pubkey {
             Some(pubkey) => pubkey,
             None => node
@@ -1531,7 +1536,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         };
 
         let outpoint = node
-            .sweep_utxos_to_channel_with_timeout(user_chan_id, utxos, to_pubkey, 60)
+            .sweep_utxos_to_channel_with_timeout(None, utxos, to_pubkey, 60)
             .await?;
 
         let all_channels = node.channel_manager.list_channels();
@@ -1551,8 +1556,6 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// The node must be online and have a connection to the peer.
     pub async fn sweep_all_to_channel(
         &self,
-        user_chan_id: Option<u128>,
-        from_node: Option<&PublicKey>,
         to_pubkey: Option<PublicKey>,
     ) -> Result<MutinyChannel, MutinyError> {
         let utxos = self
@@ -1561,8 +1564,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             .map(|u| u.outpoint)
             .collect::<Vec<_>>();
 
-        self.sweep_utxos_to_channel(user_chan_id, from_node, &utxos, to_pubkey)
-            .await
+        self.sweep_utxos_to_channel(&utxos, to_pubkey).await
     }
 
     /// Closes a channel with the given outpoint.

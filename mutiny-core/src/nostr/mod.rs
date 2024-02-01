@@ -996,7 +996,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         client.connect().await;
 
         let invoice = invoice_handler
-            .create_invoice(Some(amount_sats), vec!["Gift".to_string()])
+            .create_invoice(amount_sats, vec!["Gift".to_string()])
             .await?;
         // unwrap is safe, we just created it
         let bolt11 = invoice.bolt11.unwrap();

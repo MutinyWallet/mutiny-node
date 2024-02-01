@@ -968,12 +968,7 @@ impl<S: MutinyStorage> Node<S> {
     pub fn get_phantom_route_hint(&self) -> PhantomRouteHints {
         self.channel_manager.get_phantom_route_hints()
     }
-
-    pub async fn create_invoice(
-        &self,
-        amount_sat: Option<u64>,
-        route_hints: Option<Vec<PhantomRouteHints>>,
-    ) -> Result<Bolt11Invoice, MutinyError> {
+    pub async fn get_lsp_fee(&self, amount_sat: u64) -> Result<u64, MutinyError> {
         match self.lsp_client.as_ref() {
             Some(lsp) => {
                 self.connect_peer(
@@ -982,8 +977,62 @@ impl<S: MutinyStorage> Node<S> {
                 )
                 .await?;
 
-                // LSP requires an amount:
-                let amount_sat = amount_sat.ok_or(MutinyError::BadAmountError)?;
+                // Needs any amount over 0 if channel exists
+                // Needs amount over minimum if no channel
+                let inbound_capacity_msat: u64 = self
+                    .channel_manager
+                    .list_channels_with_counterparty(&lsp.get_lsp_pubkey())
+                    .iter()
+                    .map(|c| c.inbound_capacity_msat)
+                    .sum();
+
+                log_debug!(self.logger, "Current inbound liquidity {inbound_capacity_msat}msats, creating invoice for {}msats", amount_sat * 1000);
+
+                let has_inbound_capacity = inbound_capacity_msat > amount_sat * 1_000;
+
+                let min_amount_sat = if has_inbound_capacity {
+                    1
+                } else {
+                    utils::min_lightning_amount(self.network)
+                };
+
+                if amount_sat < min_amount_sat {
+                    return Err(MutinyError::BadAmountError);
+                }
+
+                let user_channel_id = match lsp {
+                    AnyLsp::VoltageFlow(_) => None,
+                    AnyLsp::Lsps(_) => Some(utils::now().as_secs().into()),
+                };
+
+                // check the fee from the LSP
+                let lsp_fee = lsp
+                    .get_lsp_fee_msat(FeeRequest {
+                        pubkey: self.pubkey.to_hex(),
+                        amount_msat: amount_sat * 1000,
+                        user_channel_id,
+                    })
+                    .await?;
+
+                // Convert the fee from msat to sat for comparison and subtraction
+                Ok(lsp_fee.fee_amount_msat / 1000)
+            }
+            None => Ok(0),
+        }
+    }
+
+    pub async fn create_invoice(
+        &self,
+        amount_sat: u64,
+        route_hints: Option<Vec<PhantomRouteHints>>,
+    ) -> Result<(Bolt11Invoice, u64), MutinyError> {
+        match self.lsp_client.as_ref() {
+            Some(lsp) => {
+                self.connect_peer(
+                    PubkeyConnectionInfo::new(&lsp.get_lsp_connection_string())?,
+                    None,
+                )
+                .await?;
 
                 // Needs any amount over 0 if channel exists
                 // Needs amount over minimum if no channel
@@ -1075,13 +1124,15 @@ impl<S: MutinyStorage> Node<S> {
 
                         log_debug!(self.logger, "Got wrapped invoice from LSP: {lsp_invoice}");
 
-                        Ok(lsp_invoice)
+                        Ok((lsp_invoice, lsp_fee_sat))
                     }
                     AnyLsp::Lsps(client) => {
                         if has_inbound_capacity {
-                            Ok(self
-                                .create_internal_invoice(Some(amount_sat), None, route_hints)
-                                .await?)
+                            Ok((
+                                self.create_internal_invoice(Some(amount_sat), None, route_hints)
+                                    .await?,
+                                0,
+                            ))
                         } else {
                             let lsp_invoice = match client
                                 .get_lsp_invoice(InvoiceRequest {
@@ -1106,14 +1157,16 @@ impl<S: MutinyStorage> Node<S> {
                                     return Err(e);
                                 }
                             };
-                            Ok(lsp_invoice)
+                            Ok((lsp_invoice, 0))
                         }
                     }
                 }
             }
-            None => Ok(self
-                .create_internal_invoice(amount_sat, None, route_hints)
-                .await?),
+            None => Ok((
+                self.create_internal_invoice(Some(amount_sat), None, route_hints)
+                    .await?,
+                0,
+            )),
         }
     }
 
@@ -2420,7 +2473,7 @@ mod tests {
 
         let amount_sats = 1_000;
 
-        let invoice = node.create_invoice(Some(amount_sats), None).await.unwrap();
+        let invoice = node.create_invoice(amount_sats, None).await.unwrap().0;
 
         assert_eq!(invoice.amount_milli_satoshis(), Some(amount_sats * 1000));
         match invoice.description() {
@@ -2451,7 +2504,7 @@ mod tests {
         let storage = MemoryStorage::default();
         let node = create_node(storage).await;
 
-        let invoice = node.create_invoice(Some(10_000), None).await.unwrap();
+        let invoice = node.create_invoice(10_000, None).await.unwrap().0;
 
         let result = node
             .pay_invoice_with_timeout(&invoice, None, None, vec![])
@@ -2574,7 +2627,7 @@ mod wasm_test {
 
         let amount_sats = 1_000;
 
-        let invoice = node.create_invoice(Some(amount_sats), None).await.unwrap();
+        let invoice = node.create_invoice(amount_sats, None).await.unwrap().0;
 
         assert_eq!(invoice.amount_milli_satoshis(), Some(amount_sats * 1000));
         match invoice.description() {
@@ -2605,7 +2658,7 @@ mod wasm_test {
         let storage = MemoryStorage::default();
         let node = create_node(storage).await;
 
-        let invoice = node.create_invoice(Some(10_000), None).await.unwrap();
+        let invoice = node.create_invoice(10_000, None).await.unwrap().0;
 
         let result = node
             .pay_invoice_with_timeout(&invoice, None, None, vec![])
