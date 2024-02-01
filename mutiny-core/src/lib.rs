@@ -1227,7 +1227,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         // If no amount, figure out the amount to send over
         let current_balance = fedimint_client.get_balance().await?;
-        log_info!(
+        log_debug!(
             self.logger,
             "current fedimint client balance: {}",
             current_balance
@@ -1276,46 +1276,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .await?;
         final_result.fees = first_invoice_res.fees_paid;
 
-        // pay_invoice returns invoice if Succeeded or Err if something else
-        // it's safe to assume that it went through and we can check remaining balance
         let remaining_balance = fedimint_client.get_balance().await?;
-        log_debug!(
-            self.logger,
-            "remaining fedimint balance: {}",
-            remaining_balance
-        );
-        if remaining_balance > 1 {
-            // the fee for existing channel is voltage 1 sat + base fee + ppm
-            let remaining_balance_minus_fee = max_spendable_amount(remaining_balance - 1, &fees);
-            if remaining_balance_minus_fee.is_none() {
-                return Ok(final_result);
-            }
-            let remaining_balance_minus_fee = remaining_balance_minus_fee.unwrap();
-
-            let inv = self
-                .node_manager
-                .create_invoice(remaining_balance_minus_fee)
-                .await?;
-
-            match fedimint_client
-                .pay_invoice(inv.bolt11.expect("create inv had one job"), vec![])
-                .await
-            {
-                Ok(r) => {
-                    log_debug!(self.logger, "paid remaining balance");
-                    final_result.amount += remaining_balance_minus_fee;
-                    final_result.fees = final_result.fees.map_or(r.fees_paid, |val| {
-                        r.fees_paid
-                            .map(|add_val| val + add_val)
-                            .map_or(Some(val), |_| None)
-                    });
-                }
-                Err(e) => {
-                    // Don't want to return this error since it's just "incomplete",
-                    // and just not the full amount.
-                    log_warn!(self.logger, "error paying remaining balance: {}", e)
-                }
-            }
+        if remaining_balance > 0 {
+            // there was a remainder when there shouldn't have been
+            // for now just log this, it is probably just a millisat/1 sat difference
+            log_warn!(
+                self.logger,
+                "remaining fedimint balance: {}",
+                remaining_balance
+            );
         }
 
         Ok(final_result)
