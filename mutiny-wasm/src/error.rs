@@ -211,7 +211,12 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::SamePassword => MutinyJsError::SamePassword,
             MutinyError::Other(e) => {
                 error!("Got unhandled error: {e}");
-                MutinyJsError::UnknownError
+                // FIXME: For some unknown reason, InsufficientBalance is being returned as `Other`
+                if e.to_string().starts_with("Insufficient balance") {
+                    MutinyJsError::InsufficientBalance
+                } else {
+                    MutinyJsError::UnknownError
+                }
             }
             MutinyError::SubscriptionClientNotConfigured => {
                 MutinyJsError::SubscriptionClientNotConfigured
