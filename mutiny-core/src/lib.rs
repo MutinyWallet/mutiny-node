@@ -1308,27 +1308,37 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let fedimint_client = federation_lock
             .get(federation_id)
             .ok_or(MutinyError::NotFound)?;
-
-        // if the user provided amount, this is easy
-        if let Some(amt) = amount {
-            return Ok(Some(self.node_manager.get_lsp_fee(amt).await?));
-        }
-
-        // If no amount, figure out the amount to send over
-        let current_balance = fedimint_client.get_balance().await?;
-        log_debug!(
-            self.logger,
-            "current fedimint client balance: {}",
-            current_balance
-        );
-
         let fees = fedimint_client.gateway_fee().await?;
-        let amt = max_spendable_amount(current_balance, &fees)
-            .map_or(Err(MutinyError::InsufficientBalance), Ok)?;
-        log_debug!(self.logger, "max spendable: {}", amt);
 
-        // try to get an invoice for this exact amount
-        Ok(Some(self.node_manager.get_lsp_fee(amt).await?))
+        let (lsp_fee, federation_fee) = {
+            if let Some(amt) = amount {
+                // if the user provided amount, this is easy
+                (
+                    self.node_manager.get_lsp_fee(amt).await?,
+                    (calc_routing_fee_msat(amt as f64 * 1_000.0, &fees) / 1_000.0).floor() as u64,
+                )
+            } else {
+                // If no amount, figure out the amount to send over
+                let current_balance = fedimint_client.get_balance().await?;
+                log_debug!(
+                    self.logger,
+                    "current fedimint client balance: {}",
+                    current_balance
+                );
+
+                let amt = max_spendable_amount(current_balance, &fees)
+                    .map_or(Err(MutinyError::InsufficientBalance), Ok)?;
+                log_debug!(self.logger, "max spendable: {}", amt);
+
+                // try to get an invoice for this exact amount
+                (
+                    self.node_manager.get_lsp_fee(amt).await?,
+                    current_balance - amt,
+                )
+            }
+        };
+
+        Ok(Some(lsp_fee + federation_fee))
     }
 
     async fn create_lightning_invoice(
@@ -2303,14 +2313,13 @@ fn max_spendable_amount(current_balance_sat: u64, routing_fees: &GatewayFees) ->
     let current_balance_msat = current_balance_sat as f64 * 1_000.0;
 
     // proportional fee on the current balance
-    let prop_fee_msat =
-        (current_balance_msat * routing_fees.proportional_millionths as f64) / 1_000_000.0;
+    let base_and_prop_fee_msat = calc_routing_fee_msat(current_balance_msat, routing_fees);
 
     // The max balance considering the maximum possible proportional fee.
     // This gives us a baseline to start checking the fees from. In the case that the fee is 1%
     // The real maximum balance will be somewhere between our current balance and 99% of our
     // balance.
-    let initial_max = current_balance_msat - (routing_fees.base_msat as f64 + prop_fee_msat);
+    let initial_max = current_balance_msat - base_and_prop_fee_msat;
 
     // if the fee would make the amount go negative, then there is not a possible amount to spend
     if initial_max <= 0.0 {
@@ -2329,11 +2338,8 @@ fn max_spendable_amount(current_balance_sat: u64, routing_fees: &GatewayFees) ->
         // we increment by one and check the fees for it
         let new_check = new_max + 1.0;
 
-        // this is the new proportional fee to check with
-        let prop_fee_sat = (new_check * routing_fees.proportional_millionths as f64) / 1_000_000.0;
-
         // check the new spendable balance amount plus base fees plus new proportional fee
-        let new_amt = new_check + routing_fees.base_msat as f64 + prop_fee_sat;
+        let new_amt = new_check + calc_routing_fee_msat(new_check, routing_fees);
         if current_balance_msat - new_amt <= 0.0 {
             // since we are incrementing from a minimum spendable amount,
             // if we overshot our total balance then the last max is the highest
@@ -2345,6 +2351,11 @@ fn max_spendable_amount(current_balance_sat: u64, routing_fees: &GatewayFees) ->
     }
 
     Some((new_max / 1_000.0).floor() as u64)
+}
+
+fn calc_routing_fee_msat(amt_msat: f64, routing_fees: &GatewayFees) -> f64 {
+    let prop_fee_msat = (amt_msat * routing_fees.proportional_millionths as f64) / 1_000_000.0;
+    routing_fees.base_msat as f64 + prop_fee_msat
 }
 
 #[cfg(test)]
