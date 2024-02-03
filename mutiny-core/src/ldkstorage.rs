@@ -388,28 +388,17 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             "{CHANNEL_CLOSURE_PREFIX}{}",
             user_channel_id.to_be_bytes().to_lower_hex_string()
         ));
-        self.storage.get_data(key)
+        self.storage.get_channel_closure(&key)
     }
 
-    pub(crate) fn list_channel_closures(&self) -> Result<Vec<(u128, ChannelClosure)>, MutinyError> {
+    pub(crate) fn list_channel_closures(&self) -> Result<Vec<ChannelClosure>, MutinyError> {
         let suffix = format!("_{}", self.node_id);
         let map: HashMap<String, ChannelClosure> =
             self.storage.scan(CHANNEL_CLOSURE_PREFIX, Some(&suffix))?;
 
-        Ok(map
-            .into_iter()
-            .map(|(key, value)| {
-                // convert keys to u128
-                let user_channel_id_str = key
-                    .trim_start_matches(CHANNEL_CLOSURE_PREFIX)
-                    .trim_end_matches(&suffix);
-                let user_channel_id: [u8; 16] = FromHex::from_hex(user_channel_id_str)
-                    .unwrap_or_else(|_| panic!("key should be a u128 got {user_channel_id_str}"));
-
-                let user_channel_id = u128::from_be_bytes(user_channel_id);
-                (user_channel_id, value)
-            })
-            .collect())
+        map.into_iter()
+            .map(|(key, mut closure)| closure.set_user_channel_id_from_key(&key).map(|_| closure))
+            .collect::<Result<Vec<_>, _>>()
     }
 
     /// Persists the failed spendable outputs to storage.
@@ -830,7 +819,7 @@ mod test {
         assert!(result.is_ok());
 
         let result = persister.list_channel_closures().unwrap();
-        assert_eq!(result, vec![(user_channel_id, closure.clone())]);
+        assert_eq!(result, vec![closure.clone()]);
 
         let result = persister.get_channel_closure(user_channel_id).unwrap();
         assert_eq!(result, Some(closure));

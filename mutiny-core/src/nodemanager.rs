@@ -1,6 +1,7 @@
 use crate::auth::MutinyAuthClient;
 use crate::event::HTLCStatus;
 use crate::labels::LabelStorage;
+use crate::ldkstorage::CHANNEL_CLOSURE_PREFIX;
 use crate::logging::LOGGING_KEY;
 use crate::utils::{sleep, spawn};
 use crate::ActivityItem;
@@ -31,6 +32,7 @@ use bdk::{wallet::AddressIndex, FeeRate, LocalOutput};
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::bip32::ExtendedPrivKey;
 use bitcoin::blockdata::script;
+use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::sha256;
 use bitcoin::psbt::PartiallySignedTransaction;
 use bitcoin::secp256k1::PublicKey;
@@ -245,6 +247,22 @@ impl ChannelClosure {
             reason: reason.to_string(),
             timestamp: utils::now().as_secs(),
         }
+    }
+
+    pub(crate) fn set_user_channel_id_from_key(&mut self, key: &str) -> Result<(), MutinyError> {
+        if self.user_channel_id.is_some() {
+            return Ok(());
+        }
+
+        // convert keys to u128
+        let user_channel_id_str = key
+            .trim_start_matches(CHANNEL_CLOSURE_PREFIX)
+            .splitn(2, '_') // Channel closures have `_{node_id}` at the end
+            .collect::<Vec<&str>>()[0];
+        let user_channel_id: [u8; 16] = FromHex::from_hex(user_channel_id_str)?;
+        self.user_channel_id = Some(user_channel_id);
+
+        Ok(())
     }
 }
 

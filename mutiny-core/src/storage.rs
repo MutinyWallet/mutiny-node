@@ -1,6 +1,6 @@
 use crate::event::HTLCStatus;
 use crate::logging::MutinyLogger;
-use crate::nodemanager::{NodeStorage, DEVICE_LOCK_INTERVAL_SECS};
+use crate::nodemanager::{ChannelClosure, NodeStorage, DEVICE_LOCK_INTERVAL_SECS};
 use crate::utils::{now, spawn};
 use crate::vss::{MutinyVssClient, VssKeyValueItem};
 use crate::{
@@ -500,6 +500,16 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
     /// The key is block target, the value is the fee in satoshis per byte
     fn insert_fee_estimates(&self, fees: HashMap<String, f64>) -> Result<(), MutinyError> {
         self.set_data(FEE_ESTIMATES_KEY.to_string(), fees, None)
+    }
+
+    /// Gets a channel closure and handles setting the user_channel_id if needed
+    fn get_channel_closure(&self, key: &str) -> Result<Option<ChannelClosure>, MutinyError> {
+        if let Some(mut closure) = self.get_data::<ChannelClosure>(key)? {
+            closure.set_user_channel_id_from_key(key)?;
+            Ok(Some(closure))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Get the current bitcoin price cache from storage
