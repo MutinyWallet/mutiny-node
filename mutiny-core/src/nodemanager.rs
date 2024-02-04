@@ -148,13 +148,20 @@ pub struct MutinyChannel {
 
 impl From<&ChannelDetails> for MutinyChannel {
     fn from(c: &ChannelDetails) -> Self {
+        let size = c.channel_value_satoshis;
+        let balance = c.next_outbound_htlc_limit_msat / 1_000;
+        let inbound = c.inbound_capacity_msat / 1_000;
+
+        // Don't calculate reserve, just make it what we didn't
+        // account for in balance and inbound
+        let reserve = size - (balance + inbound);
+
         MutinyChannel {
             user_chan_id: c.user_channel_id.to_be_bytes().to_lower_hex_string(),
-            balance: c.next_outbound_htlc_limit_msat / 1_000,
-            size: c.channel_value_satoshis,
-            reserve: ((c.outbound_capacity_msat - c.next_outbound_htlc_limit_msat) / 1_000)
-                + c.unspendable_punishment_reserve.unwrap_or(0),
-            inbound: c.inbound_capacity_msat / 1_000,
+            balance,
+            size,
+            reserve,
+            inbound,
             outpoint: c.funding_txo.map(|f| f.into_bitcoin_outpoint()),
             peer: c.counterparty.node_id,
             confirmations_required: c.confirmations_required,
