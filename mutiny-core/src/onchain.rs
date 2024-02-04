@@ -492,8 +492,8 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         // does not look up
         fn input_pairs(
             psbt: &mut PartiallySignedTransaction,
-        ) -> Box<dyn Iterator<Item = (&bitcoin::TxIn, &mut Input)> + '_> {
-            Box::new(psbt.unsigned_tx.input.iter().zip(&mut psbt.inputs))
+        ) -> impl Iterator<Item = (&bitcoin::TxIn, &mut Input)> {
+            psbt.iter_funding_utxo().zip(&mut psbt.inputs)
         }
 
         let mut original_inputs = input_pairs(&mut original_psbt).peekable();
