@@ -1204,18 +1204,16 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .get(federation_id)
             .ok_or(MutinyError::NotFound)?;
 
+        let labels = vec![SWAP_LABEL.to_string()];
+
         // if the user provided amount, this is easy
         if let Some(amt) = amount {
-            let (inv, fee) = self.node_manager.create_invoice(amt).await?;
-            self.storage.set_invoice_labels(
-                inv.bolt11.clone().expect("just created"),
-                vec![SWAP_LABEL.to_string()],
-            )?;
+            let (inv, fee) = self
+                .node_manager
+                .create_invoice(amt, labels.clone())
+                .await?;
             let pay_res = fedimint_client
-                .pay_invoice(
-                    inv.bolt11.expect("create inv had one job"),
-                    vec![SWAP_LABEL.to_string()],
-                )
+                .pay_invoice(inv.bolt11.expect("create inv had one job"), labels.clone())
                 .await?;
             let total_fees_paid = pay_res.fees_paid.unwrap_or(0) + fee;
 
@@ -1239,7 +1237,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         log_debug!(self.logger, "max spendable: {}", amt);
 
         // try to get an invoice for this exact amount
-        let (inv, fee) = self.node_manager.create_invoice(amt).await?;
+        let (inv, fee) = self
+            .node_manager
+            .create_invoice(amt, labels.clone())
+            .await?;
 
         // check if we can afford that invoice
         let inv_amt = inv.amount_sats.ok_or(MutinyError::BadAmountError)?;
@@ -1253,22 +1254,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // if invoice amount changed, create a new invoice
         let (inv_to_pay, fee) = if first_invoice_amount != inv_amt {
             self.node_manager
-                .create_invoice(first_invoice_amount)
+                .create_invoice(first_invoice_amount, labels.clone())
                 .await?
         } else {
             (inv.clone(), fee)
         };
-        self.storage.set_invoice_labels(
-            inv_to_pay.bolt11.clone().expect("just created"),
-            vec![SWAP_LABEL.to_string()],
-        )?;
 
         log_debug!(self.logger, "attempting payment from fedimint client");
         let first_invoice_res = fedimint_client
-            .pay_invoice(
-                inv_to_pay.bolt11.expect("create inv had one job"),
-                vec![SWAP_LABEL.to_string()],
-            )
+            .pay_invoice(inv_to_pay.bolt11.expect("create inv had one job"), labels)
             .await?;
 
         let remaining_balance = fedimint_client.get_balance().await?;
@@ -1362,9 +1356,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         // Fallback to node_manager invoice creation if no federation invoice created
-        let (inv, _fee) = self.node_manager.create_invoice(amount).await?;
-        self.storage
-            .set_invoice_labels(inv.bolt11.clone().expect("just created"), labels)?;
+        let (inv, _fee) = self.node_manager.create_invoice(amount, labels).await?;
+
         Ok(inv)
     }
 

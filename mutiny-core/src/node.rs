@@ -1025,6 +1025,7 @@ impl<S: MutinyStorage> Node<S> {
         &self,
         amount_sat: u64,
         route_hints: Option<Vec<PhantomRouteHints>>,
+        labels: Vec<String>,
     ) -> Result<(Bolt11Invoice, u64), MutinyError> {
         match self.lsp_client.as_ref() {
             Some(lsp) => {
@@ -1093,6 +1094,7 @@ impl<S: MutinyStorage> Node<S> {
                                 Some(amount_minus_fee),
                                 Some(lsp_fee.fee_amount_msat),
                                 route_hints,
+                                labels,
                             )
                             .await?;
 
@@ -1129,8 +1131,13 @@ impl<S: MutinyStorage> Node<S> {
                     AnyLsp::Lsps(client) => {
                         if has_inbound_capacity {
                             Ok((
-                                self.create_internal_invoice(Some(amount_sat), None, route_hints)
-                                    .await?,
+                                self.create_internal_invoice(
+                                    Some(amount_sat),
+                                    None,
+                                    route_hints,
+                                    labels,
+                                )
+                                .await?,
                                 0,
                             ))
                         } else {
@@ -1147,6 +1154,7 @@ impl<S: MutinyStorage> Node<S> {
                                         invoice.clone(),
                                         Some(amount_sat * 1_000),
                                         Some(lsp_fee.fee_amount_msat),
+                                        labels,
                                     )
                                     .await?;
 
@@ -1163,7 +1171,7 @@ impl<S: MutinyStorage> Node<S> {
                 }
             }
             None => Ok((
-                self.create_internal_invoice(Some(amount_sat), None, route_hints)
+                self.create_internal_invoice(Some(amount_sat), None, route_hints, labels)
                     .await?,
                 0,
             )),
@@ -1175,6 +1183,7 @@ impl<S: MutinyStorage> Node<S> {
         amount_sat: Option<u64>,
         fee_amount_msat: Option<u64>,
         route_hints: Option<Vec<PhantomRouteHints>>,
+        labels: Vec<String>,
     ) -> Result<Bolt11Invoice, MutinyError> {
         let amount_msat = amount_sat.map(|s| s * 1_000);
         // Set description to empty string to make smallest possible invoice/QR code
@@ -1228,7 +1237,7 @@ impl<S: MutinyStorage> Node<S> {
             MutinyError::InvoiceCreationFailed
         })?;
 
-        self.save_invoice_payment_info(invoice.clone(), amount_msat, fee_amount_msat)
+        self.save_invoice_payment_info(invoice.clone(), amount_msat, fee_amount_msat, labels)
             .await?;
 
         log_info!(self.logger, "SUCCESS: generated invoice: {invoice}");
@@ -1241,6 +1250,7 @@ impl<S: MutinyStorage> Node<S> {
         invoice: Bolt11Invoice,
         amount_msat: Option<u64>,
         fee_amount_msat: Option<u64>,
+        labels: Vec<String>,
     ) -> Result<(), MutinyError> {
         let last_update = utils::now().as_secs();
         let payment_hash = PaymentHash(invoice.payment_hash().into_inner());
@@ -1264,6 +1274,8 @@ impl<S: MutinyStorage> Node<S> {
             log_error!(self.logger, "ERROR: could not persist payment info: {e}");
             MutinyError::InvoiceCreationFailed
         })?;
+
+        self.persister.storage.set_invoice_labels(invoice, labels)?;
 
         Ok(())
     }
@@ -2473,7 +2485,10 @@ mod tests {
 
         let amount_sats = 1_000;
 
-        let invoice = node.create_invoice(amount_sats, None).await.unwrap().0;
+        let (invoice, _) = node
+            .create_invoice(amount_sats, None, vec![])
+            .await
+            .unwrap();
 
         assert_eq!(invoice.amount_milli_satoshis(), Some(amount_sats * 1000));
         match invoice.description() {
@@ -2504,7 +2519,7 @@ mod tests {
         let storage = MemoryStorage::default();
         let node = create_node(storage).await;
 
-        let invoice = node.create_invoice(10_000, None).await.unwrap().0;
+        let invoice = node.create_invoice(10_000, None, vec![]).await.unwrap().0;
 
         let result = node
             .pay_invoice_with_timeout(&invoice, None, None, vec![])
@@ -2599,6 +2614,7 @@ mod tests {
 #[cfg(target_arch = "wasm32")]
 mod wasm_test {
     use crate::event::{MillisatAmount, PaymentInfo};
+    use crate::labels::LabelStorage;
     use crate::storage::MemoryStorage;
     use crate::test_utils::create_node;
     use crate::HTLCStatus;
@@ -2626,8 +2642,13 @@ mod wasm_test {
         let now = crate::utils::now().as_secs();
 
         let amount_sats = 1_000;
+        let label = "test".to_string();
+        let labels = vec![label.clone()];
 
-        let invoice = node.create_invoice(amount_sats, None).await.unwrap().0;
+        let (invoice, _) = node
+            .create_invoice(amount_sats, None, labels.clone())
+            .await
+            .unwrap();
 
         assert_eq!(invoice.amount_milli_satoshis(), Some(amount_sats * 1000));
         match invoice.description() {
@@ -2649,8 +2670,21 @@ mod wasm_test {
         assert_eq!(from_storage.amount_sats, Some(amount_sats));
         assert_eq!(from_storage.status, HTLCStatus::Pending);
         assert_eq!(from_storage.fees_paid, None);
+        assert_eq!(from_storage.labels, labels.clone());
         assert!(from_storage.inbound);
         assert!(from_storage.last_updated >= now);
+
+        // check labels
+
+        let invoice_labels = storage.get_invoice_labels().unwrap();
+        assert_eq!(invoice_labels.len(), 1);
+        assert_eq!(invoice_labels.get(&invoice).cloned(), Some(labels));
+
+        let label_item = storage.get_label("test").unwrap().unwrap();
+
+        assert!(label_item.last_used_time >= now);
+        assert!(label_item.addresses.is_empty());
+        assert_eq!(label_item.invoices, vec![invoice]);
     }
 
     #[test]
@@ -2658,7 +2692,7 @@ mod wasm_test {
         let storage = MemoryStorage::default();
         let node = create_node(storage).await;
 
-        let invoice = node.create_invoice(10_000, None).await.unwrap().0;
+        let invoice = node.create_invoice(10_000, None, vec![]).await.unwrap().0;
 
         let result = node
             .pay_invoice_with_timeout(&invoice, None, None, vec![])
