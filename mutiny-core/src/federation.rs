@@ -571,7 +571,7 @@ impl<S: MutinyStorage> FederationClient<S> {
                 }
             }
         };
-        inv.fees_paid = Some(outgoing_payment.fee.sats_round_down());
+        inv.fees_paid = Some(sats_round_up(&outgoing_payment.fee));
 
         self.maybe_update_after_checking_fedimint(inv.clone())
             .await?;
@@ -615,6 +615,10 @@ impl<S: MutinyStorage> FederationClient<S> {
             })?;
         Ok(())
     }
+}
+
+fn sats_round_up(amount: &Amount) -> u64 {
+    Amount::from_msats(amount.msats + 999).sats_round_down()
 }
 
 // Get a preferred gateway from a federation

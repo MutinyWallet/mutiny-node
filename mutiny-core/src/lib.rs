@@ -1232,6 +1232,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         );
 
         let fees = fedimint_client.gateway_fee().await?;
+        // FIXME: this is still producing off by one. check round down
         let amt = max_spendable_amount(current_balance, &fees)
             .map_or(Err(MutinyError::InsufficientBalance), Ok)?;
         log_debug!(self.logger, "max spendable: {}", amt);
@@ -1276,9 +1277,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             );
         }
 
+        let total_fees = first_invoice_res.fees_paid.unwrap_or(0) + fee;
         Ok(FedimintSweepResult {
-            amount: first_invoice_amount,
-            fees: Some(first_invoice_res.fees_paid.unwrap_or(0) + fee),
+            amount: current_balance - total_fees,
+            fees: Some(total_fees),
         })
     }
 
