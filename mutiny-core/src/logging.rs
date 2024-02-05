@@ -11,7 +11,7 @@ use hex_conservative::DisplayHex;
 use lightning::util::logger::{Level, Logger, Record};
 use log::*;
 
-pub(crate) const LOGGING_KEY: &str = "logs";
+pub const LOGGING_KEY: &str = "logs";
 
 const MAX_LOG_ITEMS: usize = 10_000;
 

@@ -47,12 +47,9 @@ use mutiny_core::{
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
 use nostr::key::{FromSkStr, Secp256k1, SecretKey};
 use nostr::{FromBech32, Keys, ToBech32};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::{
-    collections::HashMap,
-    sync::atomic::{AtomicBool, Ordering},
-};
 use wasm_bindgen::prelude::*;
 
 static INITIALIZED: once_cell::sync::Lazy<Mutex<bool>> =
@@ -1356,26 +1353,9 @@ impl MutinyWallet {
 
     /// Exports the current state of the node manager to a json object.
     #[wasm_bindgen]
-    pub async fn get_logs(
-        password: Option<String>,
-    ) -> Result<JsValue /* Option<Vec<String>> */, MutinyJsError> {
-        let logger = Arc::new(MutinyLogger::default());
-        // TODO Password should not be required for logs
-        let cipher = password
-            .as_ref()
-            .filter(|p| !p.is_empty())
-            .map(|p| encryption_key_from_pass(p))
-            .transpose()?;
-        let storage = IndexedDbStorage::new(password, cipher, None, logger.clone()).await?;
-        let stop = Arc::new(AtomicBool::new(false));
-        let logger = Arc::new(MutinyLogger::with_writer(
-            stop.clone(),
-            storage.clone(),
-            None,
-        ));
-        let res = JsValue::from_serde(&NodeManager::get_logs(storage, logger)?)?;
-        stop.swap(true, Ordering::Relaxed);
-        Ok(res)
+    pub async fn get_logs() -> Result<JsValue /* Option<Vec<String>> */, MutinyJsError> {
+        let logs = IndexedDbStorage::get_logs().await?;
+        Ok(JsValue::from_serde(&logs)?)
     }
 
     /// Get nostr wallet connect profiles
@@ -2269,7 +2249,7 @@ mod tests {
 
         // sleep to make sure logs save
         sleep(6_000).await;
-        let logs = MutinyWallet::get_logs(None).await.expect("should get logs");
+        let logs = MutinyWallet::get_logs().await.expect("should get logs");
         let parsed_logs = js_to_option_vec_string(logs).expect("should parse logs");
         assert!(parsed_logs.is_some());
         assert!(!parsed_logs.clone().unwrap().is_empty());
@@ -2326,9 +2306,7 @@ mod tests {
 
         // sleep to make sure logs save
         sleep(6_000).await;
-        let logs = MutinyWallet::get_logs(password)
-            .await
-            .expect("should get logs");
+        let logs = MutinyWallet::get_logs().await.expect("should get logs");
         let parsed_logs = js_to_option_vec_string(logs).expect("should parse logs");
         assert!(parsed_logs.is_some());
         assert!(!parsed_logs.clone().unwrap().is_empty());
