@@ -864,8 +864,8 @@ checksum = "25cbce373ec4653f1a01a31e8a5e5ec0c622dc27ff9c4e6606eefef5cbbed4a5"
 
 [[package]]
 name = "fedimint-aead"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "anyhow",
  "argon2",
@@ -876,8 +876,8 @@ dependencies = [
 
 [[package]]
 name = "fedimint-bip39"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "bip39",
  "fedimint-client",
@@ -887,8 +887,8 @@ dependencies = [
 
 [[package]]
 name = "fedimint-bitcoind"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -907,16 +907,16 @@ dependencies = [
 
 [[package]]
 name = "fedimint-build"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "fedimint-client"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "anyhow",
  "aquamarine",
@@ -945,8 +945,8 @@ dependencies = [
 
 [[package]]
 name = "fedimint-core"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "anyhow",
  "async-lock 2.8.0",
@@ -996,8 +996,8 @@ dependencies = [
 
 [[package]]
 name = "fedimint-derive"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "itertools 0.11.0",
  "proc-macro2",
@@ -1007,8 +1007,8 @@ dependencies = [
 
 [[package]]
 name = "fedimint-derive-secret"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "anyhow",
  "fedimint-core",
@@ -1020,16 +1020,16 @@ dependencies = [
 
 [[package]]
 name = "fedimint-hkdf"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "bitcoin_hashes 0.11.0",
 ]
 
 [[package]]
 name = "fedimint-ln-client"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "anyhow",
  "aquamarine",
@@ -1062,8 +1062,8 @@ dependencies = [
 
 [[package]]
 name = "fedimint-ln-common"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "anyhow",
  "aquamarine",
@@ -1092,8 +1092,8 @@ dependencies = [
 
 [[package]]
 name = "fedimint-logging"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "anyhow",
  "tracing-subscriber",
@@ -1101,8 +1101,8 @@ dependencies = [
 
 [[package]]
 name = "fedimint-mint-client"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "anyhow",
  "aquamarine",
@@ -1136,8 +1136,8 @@ dependencies = [
 
 [[package]]
 name = "fedimint-mint-common"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1160,8 +1160,8 @@ dependencies = [
 
 [[package]]
 name = "fedimint-tbs"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "bitcoin_hashes 0.11.0",
  "bls12_381",
@@ -1197,8 +1197,8 @@ dependencies = [
 
 [[package]]
 name = "fedimint-wallet-client"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "anyhow",
  "aquamarine",
@@ -1228,8 +1228,8 @@ dependencies = [
 
 [[package]]
 name = "fedimint-wallet-common"
-version = "0.2.2-rc7"
-source = "git+https://github.com/fedimint/fedimint?rev=989282cb118c25f6f6dce62d0727f61cfd6ec3d9#989282cb118c25f6f6dce62d0727f61cfd6ec3d9"
+version = "0.2.2-rc8"
+source = "git+https://github.com/fedimint/fedimint?rev=6a923ee10c3a578cd835044e3fdd94aa5123735a#6a923ee10c3a578cd835044e3fdd94aa5123735a"
 dependencies = [
  "anyhow",
  "async-trait",
