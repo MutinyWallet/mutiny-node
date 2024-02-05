@@ -1212,9 +1212,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 .node_manager
                 .create_invoice(amt, labels.clone())
                 .await?;
+
+            let bolt_11 = inv.bolt11.expect("create inv had one job");
             let pay_res = fedimint_client
-                .pay_invoice(inv.bolt11.expect("create inv had one job"), labels.clone())
+                .pay_invoice(bolt_11.clone(), labels.clone())
                 .await?;
+            self.storage.set_invoice_labels(bolt_11, labels)?;
             let total_fees_paid = pay_res.fees_paid.unwrap_or(0) + fee;
 
             return Ok(FedimintSweepResult {
@@ -1262,9 +1265,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         };
 
         log_debug!(self.logger, "attempting payment from fedimint client");
+        let bolt_11 = inv_to_pay.bolt11.expect("create inv had one job");
         let first_invoice_res = fedimint_client
-            .pay_invoice(inv_to_pay.bolt11.expect("create inv had one job"), labels)
+            .pay_invoice(bolt_11.clone(), labels.clone())
             .await?;
+        self.storage.set_invoice_labels(bolt_11, labels)?;
 
         let remaining_balance = fedimint_client.get_balance().await?;
         if remaining_balance > 0 {
