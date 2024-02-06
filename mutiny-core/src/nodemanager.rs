@@ -1,3 +1,4 @@
+use crate::auth::MutinyAuthClient;
 use crate::event::HTLCStatus;
 use crate::labels::LabelStorage;
 use crate::logging::LOGGING_KEY;
@@ -367,14 +368,8 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
 
         let chain = Arc::new(MutinyChain::new(tx_sync, wallet.clone(), logger.clone()));
 
-        let (gossip_sync, scorer) = get_gossip_sync(
-            &self.storage,
-            c.scorer_url,
-            c.auth_client.clone(),
-            c.network,
-            logger.clone(),
-        )
-        .await?;
+        let (gossip_sync, scorer) =
+            get_gossip_sync(&self.storage, c.network, logger.clone()).await?;
 
         let scorer = Arc::new(utils::Mutex::new(scorer));
 
@@ -479,6 +474,8 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
             user_rgs_url: c.user_rgs_url,
+            scorer_url: c.scorer_url,
+            auth_client: c.auth_client,
             esplora,
             lsp_config,
             logger,
@@ -505,6 +502,8 @@ pub struct NodeManager<S: MutinyStorage> {
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
     user_rgs_url: Option<String>,
+    scorer_url: Option<String>,
+    auth_client: Option<Arc<MutinyAuthClient>>,
     esplora: Arc<AsyncClient>,
     pub(crate) wallet: Arc<OnChainWallet<S>>,
     gossip_sync: Arc<RapidGossipSync>,
@@ -578,11 +577,6 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Creates a background process that will sync the wallet with the blockchain.
     /// This will also update the fee estimates every 10 minutes.
     pub fn start_sync(nm: Arc<NodeManager<S>>) {
-        // If we are stopped, don't sync
-        if nm.stop.load(Ordering::Relaxed) {
-            return;
-        }
-
         utils::spawn(async move {
             let mut synced = false;
             loop {
@@ -596,6 +590,12 @@ impl<S: MutinyStorage> NodeManager<S> {
                         log_error!(nm.logger, "Failed to sync RGS: {e}");
                     } else {
                         log_info!(nm.logger, "RGS Synced!");
+                    }
+
+                    if let Err(e) = nm.sync_scorer().await {
+                        log_error!(nm.logger, "Failed to sync scorer: {e}");
+                    } else {
+                        log_info!(nm.logger, "Scorer Synced!");
                     }
                 }
 
@@ -1160,6 +1160,39 @@ impl<S: MutinyStorage> NodeManager<S> {
                 )
                 .await?;
             }
+        }
+
+        Ok(())
+    }
+
+    /// Downloads the latest score data from the server and replaces the current scorer.
+    /// Will be skipped if in safe mode.
+    async fn sync_scorer(&self) -> Result<(), MutinyError> {
+        // Skip syncing scorer if we are in safe mode.
+        if self.safe_mode {
+            log_info!(self.logger, "Skipping scorer sync in safe mode");
+            return Ok(());
+        }
+
+        if let (Some(auth), Some(url)) = (self.auth_client.as_ref(), self.scorer_url.as_deref()) {
+            let scorer = get_remote_scorer(
+                auth,
+                url,
+                self.gossip_sync.network_graph().clone(),
+                self.logger.clone(),
+            )
+            .await
+            .map_err(|e| {
+                log_error!(self.logger, "Failed to sync scorer: {e}");
+                e
+            })?;
+
+            // Replace the current scorer with the new one
+            let mut lock = self
+                .scorer
+                .try_lock()
+                .map_err(|_| MutinyError::WalletSyncError)?;
+            *lock = scorer;
         }
 
         Ok(())
