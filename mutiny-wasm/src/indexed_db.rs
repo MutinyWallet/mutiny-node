@@ -4,7 +4,7 @@ use bip39::Mnemonic;
 use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
 use lightning::util::logger::Logger;
-use lightning::{log_debug, log_error};
+use lightning::{log_debug, log_error, log_trace};
 use log::error;
 use mutiny_core::storage::*;
 use mutiny_core::vss::*;
@@ -260,6 +260,7 @@ impl IndexedDbStorage {
             })?
         };
 
+        let start = instant::Instant::now();
         // use a memory storage to handle encryption and decryption
         let map = MemoryStorage::new(password, cipher, None);
 
@@ -283,6 +284,11 @@ impl IndexedDbStorage {
             let json: Value = value.into_serde()?;
             map.set(vec![(key, json)])?;
         }
+        log_trace!(
+            logger,
+            "Reading browser storage took {}ms",
+            start.elapsed().as_millis()
+        );
 
         match vss {
             None => {
@@ -290,26 +296,29 @@ impl IndexedDbStorage {
                 Ok(final_map.clone())
             }
             Some(vss) => {
-                log_debug!(logger, "Reading from vss");
+                log_trace!(logger, "Reading from vss");
+                let start = instant::Instant::now();
                 let keys = vss.list_key_versions(None).await?;
-                let mut futs = vec![];
+                let mut futs = Vec::with_capacity(keys.len());
                 for kv in keys {
                     futs.push(Self::handle_vss_key(kv, vss, &map, logger));
                 }
-                let results = futures::future::join_all(futs).await;
-                let mut items_vector = Vec::new();
-                for result in results {
-                    if let Some((key, value)) = result? {
-                        // save to memory and batch the write to local storage
-                        map.set_data(key.clone(), value.clone(), None)?;
-                        items_vector.push((key, value));
-                    }
+                let results = futures::future::try_join_all(futs).await?;
+
+                let mut items_vector = Vec::with_capacity(results.len());
+                for (key, value) in results.into_iter().flatten() {
+                    // save to memory and batch the write to local storage
+                    map.set_data(key.clone(), value.clone(), None)?;
+                    items_vector.push((key, value));
                 }
                 if !items_vector.is_empty() {
                     // write them so we don't have to pull them down again
                     Self::save_to_indexed_db(indexed_db, &items_vector).await?;
                 }
                 let final_map = map.memory.read().unwrap();
+
+                log_trace!(logger, "Reading VSS took {}ms", start.elapsed().as_millis());
+
                 Ok(final_map.clone())
             }
         }

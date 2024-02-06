@@ -23,7 +23,7 @@ pub async fn create_vss_client() -> MutinyVssClient {
 
     // Test authenticate method
     match auth_client.authenticate().await {
-        Ok(_) => assert!(auth_client.is_authenticated().is_some()),
+        Ok(_) => assert!(auth_client.is_authenticated().await.is_some()),
         Err(e) => panic!("Authentication failed with error: {:?}", e),
     };
 
