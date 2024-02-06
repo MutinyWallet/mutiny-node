@@ -35,7 +35,7 @@ use mutiny_core::nostr::nip49::NIP49URI;
 use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
 use mutiny_core::nostr::NostrKeySource;
 use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
-use mutiny_core::utils::{now, parse_npub, parse_npub_or_nip05, sleep};
+use mutiny_core::utils::{now, parse_npub, parse_npub_or_nip05, sleep, spawn};
 use mutiny_core::vss::MutinyVssClient;
 use mutiny_core::{encrypt::encryption_key_from_pass, InvoiceHandler, MutinyWalletConfigBuilder};
 use mutiny_core::{labels::Contact, MutinyWalletBuilder};
@@ -214,6 +214,13 @@ impl MutinyWallet {
                 logger.clone(),
                 auth_url,
             ));
+
+            // immediately start fetching JWT
+            let auth = auth_client.clone();
+            spawn(async move {
+                // if this errors, it's okay, we'll call it again when we fetch vss
+                let _ = auth.authenticate().await;
+            });
 
             let vss = storage_url.map(|url| {
                 Arc::new(MutinyVssClient::new_authenticated(
