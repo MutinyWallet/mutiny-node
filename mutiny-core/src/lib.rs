@@ -1067,7 +1067,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         if self
             .node_manager
             .nodes
-            .lock()
+            .read()
             .await
             .iter()
             .flat_map(|(_, n)| n.channel_manager.list_channels())
