@@ -6,16 +6,17 @@ use crate::{
     networking::websocket::{SimpleWebSocket, WebSocketImpl},
     utils,
 };
+use async_lock::RwLock;
 use jwt_compact::UntrustedToken;
 use lightning::util::logger::*;
-use lightning::{log_error, log_info};
+use lightning::{log_debug, log_error, log_info};
 use lnurl::{lnurl::LnUrl, AsyncClient as LnUrlClient};
 use reqwest::Client;
 use reqwest::{Method, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct CustomClaims {
@@ -54,8 +55,9 @@ impl MutinyAuthClient {
         Ok(())
     }
 
-    pub fn is_authenticated(&self) -> Option<String> {
-        if let Some(ref jwt) = *self.jwt.try_read().unwrap() {
+    pub async fn is_authenticated(&self) -> Option<String> {
+        let lock = self.jwt.read().await;
+        if let Some(jwt) = lock.as_ref() {
             return Some(jwt.to_string()); // TODO parse and make sure still valid
         }
         None
@@ -92,7 +94,7 @@ impl MutinyAuthClient {
     ) -> Result<reqwest::Response, MutinyError> {
         let mut request = self.http_client.request(method, url);
 
-        let mut jwt = self.is_authenticated();
+        let mut jwt = self.is_authenticated().await;
         if jwt.is_none() {
             jwt = Some(self.retrieve_new_jwt().await?);
         }
@@ -110,6 +112,10 @@ impl MutinyAuthClient {
     }
 
     async fn retrieve_new_jwt(&self) -> Result<String, MutinyError> {
+        // get lock so we don't make multiple requests for the same token
+        let mut lock = self.jwt.write().await;
+        log_debug!(self.logger, "Retrieving new JWT token");
+
         let mut url = Url::parse(&self.url).map_err(|_| MutinyError::LnUrlFailure)?;
         let ws_scheme = match url.scheme() {
             "http" => "ws",
@@ -165,7 +171,7 @@ impl MutinyAuthClient {
         };
 
         log_info!(self.logger, "Retrieved new JWT token");
-        *self.jwt.try_write()? = Some(jwt.clone());
+        *lock = Some(jwt.clone());
         Ok(jwt)
     }
 }
@@ -201,7 +207,7 @@ mod tests {
 
         // Test authenticate method
         match auth_client.authenticate().await {
-            Ok(_) => assert!(auth_client.is_authenticated().is_some()),
+            Ok(_) => assert!(auth_client.is_authenticated().await.is_some()),
             Err(e) => panic!("Authentication failed with error: {:?}", e),
         };
 
