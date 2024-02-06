@@ -1,3 +1,4 @@
+use crate::utils::spawn;
 use crate::{
     error::{MutinyError, MutinyStorageError},
     event::PaymentInfo,
@@ -55,11 +56,15 @@ use fedimint_wallet_client::{WalletClientInit, WalletClientModule};
 use futures::future::{self};
 use futures_util::{pin_mut, StreamExt};
 use hex::FromHex;
+#[cfg(target_arch = "wasm32")]
+use instant::Instant;
 use lightning::{
     ln::PaymentHash, log_debug, log_error, log_info, log_trace, log_warn, util::logger::Logger,
 };
 use lightning_invoice::{Bolt11Invoice, RoutingFees};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 use std::{
     str::FromStr,
@@ -192,18 +197,25 @@ impl<S: MutinyStorage> FederationClient<S> {
     ) -> Result<Self, MutinyError> {
         log_info!(logger, "initializing a new federation client: {uuid}");
 
-        let federation_info = FederationInfo::from_invite_code(federation_code.clone())
+        let download = Instant::now();
+        let federation_info = FederationInfo::from_invite_code(federation_code)
             .await
             .map_err(|e| {
                 log_error!(logger, "Could not parse invite code: {}", e);
                 e
             })?;
+        log_trace!(
+            logger,
+            "Downloaded federation info in: {}ms",
+            download.elapsed().as_millis()
+        );
 
         log_debug!(
             logger,
             "parsed federation invite code: {:?}",
             federation_info.invite_code()
         );
+        let federation_id = federation_info.federation_id();
 
         let mut client_builder = fedimint_client::Client::builder();
         client_builder.with_module(WalletClientInit(None));
@@ -211,12 +223,9 @@ impl<S: MutinyStorage> FederationClient<S> {
         client_builder.with_module(LightningClientInit);
 
         log_trace!(logger, "Building fedimint client db");
-        let fedimint_storage = FedimintStorage::new(
-            storage.clone(),
-            federation_info.federation_id().to_string(),
-            logger.clone(),
-        )
-        .await?;
+        let fedimint_storage =
+            FedimintStorage::new(storage.clone(), federation_id.to_string(), logger.clone())
+                .await?;
         let db = fedimint_storage.clone().into();
 
         if get_config_from_db(&db).await.is_none() {
@@ -230,10 +239,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         let secret = create_federation_secret(xprivkey, network)?;
 
         let fedimint_client = client_builder
-            .build(get_default_client_secret(
-                &secret,
-                &federation_info.federation_id(),
-            ))
+            .build(get_default_client_secret(&secret, &federation_id))
             .await?;
 
         log_trace!(logger, "Retrieving fedimint wallet client module");
@@ -249,36 +255,44 @@ impl<S: MutinyStorage> FederationClient<S> {
             return Err(MutinyError::NetworkMismatch);
         }
 
-        // Set active gateway preference
-        let lightning_module = fedimint_client.get_first_module::<LightningClientModule>();
-        let gateways = lightning_module
-            .fetch_registered_gateways()
-            .await
-            .map_err(|e| {
-                log_warn!(
-                    logger,
-                    "Could not fetch gateways from federation {}: {e}",
-                    federation_info.federation_id()
-                )
-            });
-
-        if let Ok(gateways) = gateways {
-            if let Some(a) = get_gateway_preference(gateways, fedimint_client.federation_id()) {
-                log_info!(
-                    logger,
-                    "Setting active gateway for federation {}: {:?}",
-                    federation_info.federation_id(),
-                    a
-                );
-                let _ = lightning_module.set_active_gateway(&a).await.map_err(|e| {
+        // Set active gateway preference in background
+        let client_clone = fedimint_client.clone();
+        let logger_clone = logger.clone();
+        spawn(async move {
+            let start = Instant::now();
+            let lightning_module = client_clone.get_first_module::<LightningClientModule>();
+            let gateways = lightning_module
+                .fetch_registered_gateways()
+                .await
+                .map_err(|e| {
                     log_warn!(
-                        logger,
-                        "Could not set gateway for federation {}: {e}",
-                        federation_info.federation_id()
+                        logger_clone,
+                        "Could not fetch gateways from federation {federation_id}: {e}",
                     )
                 });
+
+            if let Ok(gateways) = gateways {
+                if let Some(a) = get_gateway_preference(gateways, federation_id) {
+                    log_info!(
+                        logger_clone,
+                        "Setting active gateway for federation {federation_id}: {:?}",
+                        a
+                    );
+                    let _ = lightning_module.set_active_gateway(&a).await.map_err(|e| {
+                        log_warn!(
+                            logger_clone,
+                            "Could not set gateway for federation {federation_id}: {e}",
+                        )
+                    });
+                }
             }
-        }
+
+            log_trace!(
+                logger_clone,
+                "Setting active gateway took: {}ms",
+                start.elapsed().as_millis()
+            );
+        });
 
         log_debug!(logger, "Built fedimint client");
         Ok(FederationClient {

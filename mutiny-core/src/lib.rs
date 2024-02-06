@@ -2233,12 +2233,11 @@ async fn create_federations<S: MutinyStorage>(
     storage: &S,
     logger: &Arc<MutinyLogger>,
 ) -> Result<Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>, MutinyError> {
-    let federations = federation_storage.federations.into_iter();
-    let mut federation_map = HashMap::new();
-    for federation_item in federations {
+    let mut federation_map = HashMap::with_capacity(federation_storage.federations.len());
+    for (uuid, federation_index) in federation_storage.federations {
         let federation = FederationClient::new(
-            federation_item.0,
-            federation_item.1.federation_code.clone(),
+            uuid,
+            federation_index.federation_code,
             c.xprivkey,
             storage,
             c.network,
