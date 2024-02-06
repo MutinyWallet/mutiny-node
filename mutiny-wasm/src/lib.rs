@@ -1331,6 +1331,19 @@ impl MutinyWallet {
         Ok(self.inner.node_manager.edit_contact(id, contact)?)
     }
 
+    pub async fn get_contact_for_npub(
+        &self,
+        npub: String,
+    ) -> Result<Option<TagItem>, MutinyJsError> {
+        let npub = parse_npub(&npub)?;
+        let contact = self.inner.node_manager.get_contact_for_npub(npub)?;
+
+        match contact {
+            Some((id, c)) => Ok(Some((id, c).into())),
+            None => Ok(None),
+        }
+    }
+
     pub fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyJsError> {
         let mut tags: Vec<TagItem> = self
             .inner

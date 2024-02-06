@@ -155,6 +155,20 @@ pub trait LabelStorage {
         }
         Ok(None)
     }
+    /// Finds a contact that has the given npub
+    fn get_contact_for_npub(
+        &self,
+        npub: XOnlyPublicKey,
+    ) -> Result<Option<(String, Contact)>, MutinyError> {
+        // todo this is not efficient, we should have a map of npub to contact
+        let contacts = self.get_contacts()?;
+        for (id, contact) in contacts {
+            if contact.npub == Some(npub) {
+                return Ok(Some((id, contact)));
+            }
+        }
+        Ok(None)
+    }
 }
 
 impl<S: MutinyStorage> LabelStorage for S {
