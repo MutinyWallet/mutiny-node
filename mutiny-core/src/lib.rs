@@ -101,6 +101,7 @@ use uuid::Uuid;
 
 use crate::labels::LabelItem;
 use crate::nostr::NostrKeySource;
+use crate::storage::SUBSCRIPTION_TIMESTAMP;
 use crate::utils::parse_profile_metadata;
 #[cfg(test)]
 use mockall::{automock, predicate::*};
@@ -1483,8 +1484,24 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Returns Some(u64) for their unix expiration timestamp, which may be in the
     /// past or in the future, depending on whether or not it is currently active.
     pub async fn check_subscribed(&self) -> Result<Option<u64>, MutinyError> {
-        if let Some(subscription_client) = self.subscription_client.clone() {
-            Ok(subscription_client.check_subscribed().await?)
+        if let Some(ref subscription_client) = self.subscription_client {
+            let now = utils::now().as_secs();
+            match self.storage.get_data::<u64>(SUBSCRIPTION_TIMESTAMP) {
+                Ok(Some(timestamp)) if timestamp > now => {
+                    // if we have a timestamp and it is in the future, we are subscribed
+                    Ok(Some(timestamp))
+                }
+                _ => {
+                    // if we don't have a timestamp or it is in the past, check with the server
+                    let time = subscription_client.check_subscribed().await?;
+                    // if we are subscribed, save the timestamp
+                    if let Some(time) = time.filter(|t| *t > now) {
+                        self.storage
+                            .set_data(SUBSCRIPTION_TIMESTAMP.to_string(), time, None)?;
+                    }
+                    Ok(time)
+                }
+            }
         } else {
             Ok(None)
         }
