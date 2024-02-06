@@ -26,6 +26,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+pub const SUBSCRIPTION_TIMESTAMP: &str = "subscription_timestamp";
 pub const KEYCHAIN_STORE_KEY: &str = "bdk_keychain";
 pub const MNEMONIC_KEY: &str = "mnemonic";
 pub(crate) const NEED_FULL_SYNC_KEY: &str = "needs_full_sync";
