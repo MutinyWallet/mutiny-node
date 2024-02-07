@@ -35,6 +35,8 @@ use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint};
 use core::time::Duration;
 use esplora_client::AsyncClient;
 use futures_util::lock::Mutex;
+#[cfg(target_arch = "wasm32")]
+use instant::Instant;
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
 use lightning::ln::channelmanager::ChannelDetails;
 use lightning::ln::PaymentSecret;
@@ -78,6 +80,8 @@ use lightning_liquidity::{LiquidityClientConfig, LiquidityManager as LDKLSPLiqui
 #[cfg(test)]
 use mockall::predicate::*;
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 use std::{
     str::FromStr,
     sync::{
@@ -290,6 +294,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
     }
 
     pub async fn build(self) -> Result<Node<S>, MutinyError> {
+        let node_start = Instant::now();
         // check for all required parameters
         let uuid = self.uuid.as_ref().map_or_else(
             || Err(MutinyError::InvalidArgumentsError),
@@ -382,7 +387,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
         let router: Arc<Router> = Arc::new(DefaultRouter::new(
             network_graph,
             logger.clone(),
-            keys_manager.clone().get_secure_random_bytes(),
+            keys_manager.get_secure_random_bytes(),
             scorer.clone(),
             scoring_params(),
         ));
@@ -522,7 +527,9 @@ impl<S: MutinyStorage> NodeBuilder<S> {
 
         // sync to chain tip
         if read_channel_manager.is_restarting {
-            let mut chain_listener_channel_monitors = Vec::new();
+            let start = Instant::now();
+            let mut chain_listener_channel_monitors =
+                Vec::with_capacity(read_channel_manager.channel_monitors.len());
             for (blockhash, channel_monitor) in read_channel_manager.channel_monitors.drain(..) {
                 // Get channel monitor ready to sync
                 channel_monitor.load_outputs_to_watch(&chain);
@@ -549,6 +556,12 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                     .watch_channel(funding_outpoint, channel_monitor)
                     .map_err(|_| MutinyError::ChainAccessFailed)?;
             }
+
+            log_trace!(
+                logger,
+                "Syncing monitors to chain tip took {}ms",
+                start.elapsed().as_millis()
+            );
         }
 
         // Before we start the background processor, retry previously failed
@@ -819,6 +832,12 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                 sleep(3_000).await;
             }
         });
+
+        log_trace!(
+            logger,
+            "Node started, took {}ms",
+            node_start.elapsed().as_millis()
+        );
 
         Ok(Node {
             _uuid: uuid,

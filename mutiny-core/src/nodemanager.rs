@@ -37,6 +37,8 @@ use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use core::time::Duration;
 use esplora_client::{AsyncClient, Builder};
 use futures::{future::join_all, lock::Mutex};
+#[cfg(target_arch = "wasm32")]
+use instant::Instant;
 use lightning::chain::Confirm;
 use lightning::events::ClosureReason;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
@@ -45,7 +47,7 @@ use lightning::ln::ChannelId;
 use lightning::routing::gossip::NodeId;
 use lightning::sign::{NodeSigner, Recipient};
 use lightning::util::logger::*;
-use lightning::{log_debug, log_error, log_info, log_warn};
+use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use lightning_transaction_sync::EsploraSyncClient;
 use payjoin::Uri;
@@ -56,6 +58,8 @@ use std::cmp::max;
 use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 use uuid::Uuid;
 
@@ -319,10 +323,17 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
 
         // Need to prevent other devices from running at the same time
         if !c.skip_device_lock {
+            let start = Instant::now();
+            log_trace!(logger, "Checking device lock");
             if let Some(lock) = self.storage.get_device_lock()? {
                 log_info!(logger, "Current device lock: {lock:?}");
             }
             self.storage.set_device_lock().await?;
+            log_trace!(
+                logger,
+                "Device lock set: took {}ms",
+                start.elapsed().as_millis()
+            );
         }
 
         let storage_clone = self.storage.clone();
@@ -339,6 +350,9 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
                 }
             }
         });
+
+        let start = Instant::now();
+        log_info!(logger, "Building node manager components");
 
         let esplora_server_url = get_esplora_url(c.network, c.user_esplora_url);
         let esplora = Builder::new(&esplora_server_url).build_async()?;
@@ -388,6 +402,12 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
 
         let node_storage = self.storage.get_nodes()?;
 
+        log_trace!(
+            logger,
+            "Node manager Components built: took {}ms",
+            start.elapsed().as_millis()
+        );
+
         let nodes = if c.safe_mode {
             // If safe mode is enabled, we don't start any nodes
             log_warn!(logger, "Safe mode enabled, not starting any nodes");
@@ -399,6 +419,9 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
                 .nodes
                 .into_iter()
                 .filter(|(_, n)| !n.is_archived());
+
+            let start = Instant::now();
+            log_debug!(logger, "Building nodes");
 
             let mut nodes_map = HashMap::new();
 
@@ -434,6 +457,11 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
 
                 nodes_map.insert(id, Arc::new(node));
             }
+            log_trace!(
+                logger,
+                "Nodes built: took {}ms",
+                start.elapsed().as_millis()
+            );
 
             // when we create the nodes we set the LSP if one is missing
             // we need to save it to local storage after startup in case

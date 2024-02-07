@@ -25,7 +25,7 @@ use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
-use lightning::{log_error, routing::gossip::NodeId, util::logger::Logger};
+use lightning::{log_error, log_info, routing::gossip::NodeId, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
@@ -105,6 +105,7 @@ impl MutinyWallet {
         nip_07_key: Option<String>,
         primal_url: Option<String>,
     ) -> Result<MutinyWallet, MutinyJsError> {
+        let start = instant::Instant::now();
         // if both are set throw an error
         // todo default to nsec if both are for same key?
         if nsec_override.is_some() && nip_07_key.is_some() {
@@ -143,7 +144,14 @@ impl MutinyWallet {
         )
         .await
         {
-            Ok(m) => Ok(m),
+            Ok(m) => {
+                log_info!(
+                    m.inner.logger,
+                    "Wallet startup took {}ms",
+                    start.elapsed().as_millis()
+                );
+                Ok(m)
+            }
             Err(e) => {
                 // mark uninitialized because we failed to startup
                 *init = false;
