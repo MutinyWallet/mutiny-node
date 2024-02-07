@@ -2,6 +2,7 @@ use crate::error::MutinyError;
 use crate::keymanager::PhantomKeysManager;
 use crate::ldkstorage::PhantomChannelManager;
 use crate::logging::MutinyLogger;
+use crate::lsp::voltage::VoltageConfig;
 use crate::node::LiquidityManager;
 use crate::storage::MutinyStorage;
 use async_trait::async_trait;
@@ -20,13 +21,17 @@ pub mod voltage;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum LspConfig {
-    VoltageFlow(String),
+    VoltageFlow(VoltageConfig),
     Lsps(LspsConfig),
 }
 
 impl LspConfig {
     pub fn new_voltage_flow(url: String) -> Self {
-        Self::VoltageFlow(url)
+        Self::VoltageFlow(VoltageConfig {
+            url,
+            pubkey: None,
+            connection_string: None,
+        })
     }
 
     pub fn new_lsps(connection_string: String, token: Option<String>) -> Self {
@@ -42,6 +47,16 @@ impl LspConfig {
             LspConfig::Lsps(_) => true,
         }
     }
+
+    /// Checks if the two LSP configs are functionally equivalent, even if they do not
+    /// contain the same data.
+    pub fn matches(&self, other: &Self) -> bool {
+        match (self, other) {
+            (LspConfig::VoltageFlow(conf), LspConfig::VoltageFlow(other)) => conf.url == other.url,
+            (LspConfig::Lsps(conf), LspConfig::Lsps(other)) => conf == other,
+            _ => false,
+        }
+    }
 }
 
 pub fn deserialize_lsp_config<'de, D>(deserializer: D) -> Result<Option<LspConfig>, D::Error>
@@ -50,7 +65,11 @@ where
 {
     let v: Option<Value> = Option::deserialize(deserializer)?;
     match v {
-        Some(Value::String(s)) => Ok(Some(LspConfig::VoltageFlow(s))),
+        Some(Value::String(s)) => Ok(Some(LspConfig::VoltageFlow(VoltageConfig {
+            url: s,
+            pubkey: None,
+            connection_string: None,
+        }))),
         Some(Value::Object(_)) => LspConfig::deserialize(v.unwrap())
             .map(Some)
             .map_err(|e| serde::de::Error::custom(format!("invalid lsp config: {e}"))),
@@ -108,8 +127,8 @@ pub enum AnyLsp<S: MutinyStorage> {
 }
 
 impl<S: MutinyStorage> AnyLsp<S> {
-    pub async fn new_voltage_flow(url: &str) -> Result<Self, MutinyError> {
-        Ok(Self::VoltageFlow(LspClient::new(url).await?))
+    pub async fn new_voltage_flow(config: VoltageConfig) -> Result<Self, MutinyError> {
+        Ok(Self::VoltageFlow(LspClient::new(config).await?))
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -5,10 +5,60 @@ use bitcoin::secp256k1::PublicKey;
 use lightning::ln::PaymentHash;
 use lightning_invoice::Bolt11Invoice;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use std::str::FromStr;
 
 use super::FeeResponse;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct VoltageConfig {
+    pub url: String,
+    pub pubkey: Option<PublicKey>,
+    pub connection_string: Option<String>,
+}
+
+// Need custom Deserializer to handle old encoding
+impl<'de> Deserialize<'de> for VoltageConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value: Value = Value::deserialize(deserializer)?;
+        match value {
+            // old encoding was a string, parse as the url
+            Value::String(url) => Ok(VoltageConfig {
+                url,
+                pubkey: None,
+                connection_string: None,
+            }),
+            // new encoding is an object, parse as such
+            Value::Object(map) => {
+                let url = map
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| serde::de::Error::missing_field("url"))?
+                    .to_string();
+                let pubkey = map
+                    .get("pubkey")
+                    .and_then(Value::as_str)
+                    .map(PublicKey::from_str)
+                    .transpose()
+                    .map_err(|_| serde::de::Error::custom("invalid pubkey"))?;
+                let connection_string = map
+                    .get("connection_string")
+                    .and_then(Value::as_str)
+                    .map(String::from);
+                Ok(VoltageConfig {
+                    url,
+                    pubkey,
+                    connection_string,
+                })
+            }
+            _ => Err(serde::de::Error::custom("invalid value for VoltageConfig")),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct LspClient {
@@ -70,13 +120,33 @@ const PROPOSAL_PATH: &str = "/api/v1/proposal";
 const FEE_PATH: &str = "/api/v1/fee";
 
 impl LspClient {
-    pub async fn new(url: &str) -> Result<Self, MutinyError> {
+    pub async fn new(config: VoltageConfig) -> Result<Self, MutinyError> {
         let http_client = Client::new();
+
+        // if we have both pubkey and connection string, use them, otherwise request them from the LSP
+        let (pubkey, connection_string) = match (config.pubkey, config.connection_string) {
+            (Some(pk), Some(string)) => (pk, string),
+            _ => Self::fetch_connection_info(&http_client, &config.url).await?,
+        };
+
+        Ok(LspClient {
+            pubkey,
+            url: config.url,
+            connection_string,
+            http_client,
+        })
+    }
+
+    /// Get the pubkey and connection string from the LSP from the /info endpoint
+    async fn fetch_connection_info(
+        http_client: &Client,
+        url: &str,
+    ) -> Result<(PublicKey, String), MutinyError> {
         let request = http_client
             .get(format!("{}{}", url, GET_INFO_PATH))
             .build()
             .map_err(|_| MutinyError::LspGenericError)?;
-        let response: reqwest::Response = utils::fetch_with_timeout(&http_client, request).await?;
+        let response: reqwest::Response = utils::fetch_with_timeout(http_client, request).await?;
 
         let get_info_response: GetInfoResponse = response
             .json()
@@ -108,12 +178,7 @@ impl LspClient {
             })
             .ok_or_else(|| anyhow::anyhow!("No suitable connection method found"))?;
 
-        Ok(LspClient {
-            pubkey: get_info_response.pubkey,
-            url: String::from(url),
-            connection_string,
-            http_client,
-        })
+        Ok((get_info_response.pubkey, connection_string))
     }
 }
 
@@ -205,7 +270,11 @@ impl Lsp for LspClient {
     }
 
     fn get_config(&self) -> LspConfig {
-        LspConfig::VoltageFlow(self.url.clone())
+        LspConfig::VoltageFlow(VoltageConfig {
+            url: self.url.clone(),
+            pubkey: Some(self.pubkey),
+            connection_string: Some(self.connection_string.clone()),
+        })
     }
 
     fn get_expected_skimmed_fee_msat(&self, _payment_hash: PaymentHash, _payment_size: u64) -> u64 {
