@@ -30,9 +30,12 @@
 	  pkgs.clang
           pkgs.corepack_20
           pkgs.nodejs_20
+        ] ++ pkgs.lib.optionals (!pkgs.stdenv.isDarwin) [
+          # Add firefox deps only on non-darwin.
+          # darwin is listed in badPlatforms in pkgs.firefox's meta.
           pkgs.firefox
           pkgs.geckodriver
-	];
+        ];
       in
       {
         defaultPackage = pkgs.rustPlatform.buildRustPackage {
