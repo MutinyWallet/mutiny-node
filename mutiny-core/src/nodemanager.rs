@@ -2130,6 +2130,7 @@ mod tests {
     use crate::test_utils::*;
 
     use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
+    use crate::lsp::voltage::VoltageConfig;
     use crate::nodemanager::{LspConfig, NodeIndex, NodeStorage};
     use crate::storage::{MemoryStorage, MutinyStorage};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
@@ -2381,19 +2382,23 @@ mod tests {
 
     #[test]
     fn test_serialize_node_storage() {
-        let old: NodeStorage = serde_json::from_str("{\"nodes\":{\"93ca1ee3-d5f1-42ed-8bd9-042b298c70dc\":{\"archived\":false,\"child_index\":0,\"lsp\":\"https://signet-lsp.mutinywallet.com\"}},\"version\":11}").unwrap();
+        let old1: NodeStorage = serde_json::from_str("{\"nodes\":{\"93ca1ee3-d5f1-42ed-8bd9-042b298c70dc\":{\"archived\":false,\"child_index\":0,\"lsp\":\"https://signet-lsp.mutinywallet.com\"}},\"version\":11}").unwrap();
+        let old2: NodeStorage = serde_json::from_str("{\"nodes\":{\"93ca1ee3-d5f1-42ed-8bd9-042b298c70dc\":{\"archived\":false,\"child_index\":0,\"lsp\":{\"VoltageFlow\":\"https://signet-lsp.mutinywallet.com\"}}},\"version\":11}").unwrap();
         let node = NodeIndex {
             child_index: 0,
-            lsp: Some(LspConfig::VoltageFlow(
-                "https://signet-lsp.mutinywallet.com".to_string(),
-            )),
+            lsp: Some(LspConfig::VoltageFlow(VoltageConfig {
+                url: "https://signet-lsp.mutinywallet.com".to_string(),
+                pubkey: None,
+                connection_string: None,
+            })),
             archived: Some(false),
         };
         let mut nodes = HashMap::new();
         nodes.insert("93ca1ee3-d5f1-42ed-8bd9-042b298c70dc".to_string(), node);
         let expected = NodeStorage { nodes, version: 11 };
 
-        assert_eq!(old, expected);
+        assert_eq!(old1, expected);
+        assert_eq!(old2, expected);
 
         let serialized = serde_json::to_string(&expected).unwrap();
         let deserialized: NodeStorage = serde_json::from_str(&serialized).unwrap();

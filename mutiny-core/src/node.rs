@@ -396,7 +396,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                 self.lsp_config
             }
             Some(ref lsp) => {
-                if self.lsp_config.as_ref() == Some(lsp) {
+                if self.lsp_config.as_ref().is_some_and(|l| l.matches(lsp)) {
                     log_info!(logger, "lsp config matches saved lsp config");
                     self.lsp_config
                 } else {
@@ -431,8 +431,16 @@ impl<S: MutinyStorage> NodeBuilder<S> {
         let stop = Arc::new(AtomicBool::new(false));
 
         let (lsp_client, liquidity) = match lsp_config {
-            Some(LspConfig::VoltageFlow(url)) => {
-                (Some(AnyLsp::new_voltage_flow(&url).await?), None)
+            Some(LspConfig::VoltageFlow(config)) => {
+                let start = Instant::now();
+                log_trace!(logger, "Setting up Voltage LSP");
+                let lsp = AnyLsp::new_voltage_flow(config).await?;
+                log_debug!(
+                    logger,
+                    "Voltage LSP set up, took {}ms",
+                    start.elapsed().as_millis()
+                );
+                (Some(lsp), None)
             }
             Some(LspConfig::Lsps(lsps_config)) => {
                 let liquidity_manager = Arc::new(LiquidityManager::new(
