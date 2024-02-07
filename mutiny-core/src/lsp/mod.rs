@@ -5,6 +5,7 @@ use crate::logging::MutinyLogger;
 use crate::lsp::voltage::VoltageConfig;
 use crate::node::LiquidityManager;
 use crate::storage::MutinyStorage;
+use async_lock::RwLock;
 use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
@@ -122,13 +123,15 @@ pub(crate) trait Lsp {
 
 #[derive(Clone)]
 pub enum AnyLsp<S: MutinyStorage> {
-    VoltageFlow(LspClient),
+    VoltageFlow(Arc<RwLock<LspClient>>),
     Lsps(LspsClient<S>),
 }
 
 impl<S: MutinyStorage> AnyLsp<S> {
     pub async fn new_voltage_flow(config: VoltageConfig) -> Result<Self, MutinyError> {
-        Ok(Self::VoltageFlow(LspClient::new(config).await?))
+        Ok(Self::VoltageFlow(Arc::new(RwLock::new(
+            LspClient::new(config).await?,
+        ))))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -168,7 +171,10 @@ impl<S: MutinyStorage> AnyLsp<S> {
 impl<S: MutinyStorage> Lsp for AnyLsp<S> {
     async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> Result<FeeResponse, MutinyError> {
         match self {
-            AnyLsp::VoltageFlow(client) => client.get_lsp_fee_msat(fee_request).await,
+            AnyLsp::VoltageFlow(lock) => {
+                let client = lock.read().await;
+                client.get_lsp_fee_msat(fee_request).await
+            }
             AnyLsp::Lsps(client) => client.get_lsp_fee_msat(fee_request).await,
         }
     }
@@ -178,37 +184,47 @@ impl<S: MutinyStorage> Lsp for AnyLsp<S> {
         invoice_request: InvoiceRequest,
     ) -> Result<Bolt11Invoice, MutinyError> {
         match self {
-            AnyLsp::VoltageFlow(client) => client.get_lsp_invoice(invoice_request).await,
+            AnyLsp::VoltageFlow(lock) => {
+                let client = lock.read().await;
+                client.get_lsp_invoice(invoice_request).await
+            }
             AnyLsp::Lsps(client) => client.get_lsp_invoice(invoice_request).await,
         }
     }
 
     fn get_lsp_pubkey(&self) -> PublicKey {
         match self {
-            AnyLsp::VoltageFlow(client) => client.get_lsp_pubkey(),
+            AnyLsp::VoltageFlow(lock) => {
+                let client = lock.try_read().unwrap();
+                client.get_lsp_pubkey()
+            }
             AnyLsp::Lsps(client) => client.get_lsp_pubkey(),
         }
     }
 
     fn get_lsp_connection_string(&self) -> String {
         match self {
-            AnyLsp::VoltageFlow(client) => client.get_lsp_connection_string(),
+            AnyLsp::VoltageFlow(lock) => {
+                let client = lock.try_read().unwrap();
+                client.get_lsp_connection_string()
+            }
             AnyLsp::Lsps(client) => client.get_lsp_connection_string(),
         }
     }
 
     fn get_config(&self) -> LspConfig {
         match self {
-            AnyLsp::VoltageFlow(client) => client.get_config(),
+            AnyLsp::VoltageFlow(lock) => {
+                let client = lock.try_read().unwrap();
+                client.get_config()
+            }
             AnyLsp::Lsps(client) => client.get_config(),
         }
     }
 
     fn get_expected_skimmed_fee_msat(&self, payment_hash: PaymentHash, payment_size: u64) -> u64 {
         match self {
-            AnyLsp::VoltageFlow(client) => {
-                client.get_expected_skimmed_fee_msat(payment_hash, payment_size)
-            }
+            AnyLsp::VoltageFlow(_) => 0,
             AnyLsp::Lsps(client) => {
                 client.get_expected_skimmed_fee_msat(payment_hash, payment_size)
             }

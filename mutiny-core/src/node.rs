@@ -1088,7 +1088,8 @@ impl<S: MutinyStorage> Node<S> {
                 };
 
                 match lsp {
-                    AnyLsp::VoltageFlow(client) => {
+                    AnyLsp::VoltageFlow(lock) => {
+                        let client = lock.read().await;
                         let invoice = self
                             .create_internal_invoice(
                                 Some(amount_minus_fee),
@@ -2043,6 +2044,40 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                 }
                 Err(e) => {
                     log_trace!(proxy_logger, "could not connect to lsp {node_id}: {e}");
+                    match lsp {
+                        AnyLsp::VoltageFlow(lock) => {
+                            let mut client = lock.write().await;
+                            if let Err(e) = client.set_connection_info().await {
+                                log_error!(
+                                    proxy_logger,
+                                    "could not set connection info from voltage lsp: {e}"
+                                );
+                            } else {
+                                log_trace!(proxy_logger, "set connection info from voltage lsp");
+                                if let Err(e) = connect_peer_if_necessary(
+                                    #[cfg(target_arch = "wasm32")]
+                                    &websocket_proxy_addr_copy_proxy,
+                                    &PubkeyConnectionInfo::new(
+                                        lsp.get_lsp_connection_string().as_str(),
+                                    )
+                                    .unwrap(),
+                                    &storage_copy,
+                                    proxy_logger.clone(),
+                                    peer_man_proxy.clone(),
+                                    proxy_fee_estimator.clone(),
+                                    stop_copy.clone(),
+                                )
+                                .await
+                                {
+                                    log_error!(
+                                        proxy_logger,
+                                        "could not connect to lsp after setting connection info: {e}"
+                                    );
+                                }
+                            }
+                        }
+                        AnyLsp::Lsps(_) => {} // nothing to do here, just retry next loop
+                    }
                 }
             }
 

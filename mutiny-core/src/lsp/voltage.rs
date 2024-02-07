@@ -180,6 +180,16 @@ impl LspClient {
 
         Ok((get_info_response.pubkey, connection_string))
     }
+
+    /// Get the pubkey and connection string from the LSP from the /info endpoint
+    /// and set them on the LSP client
+    pub(crate) async fn set_connection_info(&mut self) -> Result<(), MutinyError> {
+        let (pubkey, connection_string) =
+            Self::fetch_connection_info(&self.http_client, &self.url).await?;
+        self.pubkey = pubkey;
+        self.connection_string = connection_string;
+        Ok(())
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
