@@ -438,10 +438,11 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             // when we create the nodes we set the LSP if one is missing
             // we need to save it to local storage after startup in case
             // a LSP was set.
-            let updated_nodes: HashMap<String, NodeIndex> = nodes_map
-                .values()
-                .map(|n| (n._uuid.clone(), n.node_index()))
-                .collect();
+            let mut updated_nodes: HashMap<String, NodeIndex> =
+                HashMap::with_capacity(nodes_map.len());
+            for n in nodes_map.values() {
+                updated_nodes.insert(n._uuid.clone(), n.node_index().await);
+            }
 
             log_info!(logger, "inserting updated nodes");
 
@@ -1285,16 +1286,16 @@ impl<S: MutinyStorage> NodeManager<S> {
         // check if any nodes have active channels with the current LSP
         // if they do, we can't change the LSP
         let nodes = self.nodes.read().await;
-        if nodes.iter().any(|(_, n)| {
-            if let Some(lsp_pk) = n.lsp_client.as_ref().map(|x| x.get_lsp_pubkey()) {
-                !n.channel_manager
-                    .list_channels_with_counterparty(&lsp_pk)
+        for node in nodes.values() {
+            if let Some(ref lsp) = node.lsp_client {
+                if !node
+                    .channel_manager
+                    .list_channels_with_counterparty(&lsp.get_lsp_pubkey().await)
                     .is_empty()
-            } else {
-                false
+                {
+                    return Err(MutinyError::LspGenericError);
+                }
             }
-        }) {
-            return Err(MutinyError::LspGenericError);
         }
         drop(nodes);
 
@@ -1504,11 +1505,13 @@ impl<S: MutinyStorage> NodeManager<S> {
         let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
         let to_pubkey = match to_pubkey {
             Some(pubkey) => pubkey,
-            None => node
-                .lsp_client
-                .as_ref()
-                .ok_or(MutinyError::PubkeyInvalid)?
-                .get_lsp_pubkey(),
+            None => {
+                node.lsp_client
+                    .as_ref()
+                    .ok_or(MutinyError::PubkeyInvalid)?
+                    .get_lsp_pubkey()
+                    .await
+            }
         };
 
         let outpoint = node
@@ -1539,11 +1542,13 @@ impl<S: MutinyStorage> NodeManager<S> {
         let node = self.get_node_by_key_or_first(None).await?;
         let to_pubkey = match to_pubkey {
             Some(pubkey) => pubkey,
-            None => node
-                .lsp_client
-                .as_ref()
-                .ok_or(MutinyError::PubkeyInvalid)?
-                .get_lsp_pubkey(),
+            None => {
+                node.lsp_client
+                    .as_ref()
+                    .ok_or(MutinyError::PubkeyInvalid)?
+                    .get_lsp_pubkey()
+                    .await
+            }
         };
 
         let outpoint = node

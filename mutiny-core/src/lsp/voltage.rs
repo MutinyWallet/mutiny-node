@@ -271,15 +271,15 @@ impl Lsp for LspClient {
         Ok(fee_response)
     }
 
-    fn get_lsp_pubkey(&self) -> PublicKey {
+    async fn get_lsp_pubkey(&self) -> PublicKey {
         self.pubkey
     }
 
-    fn get_lsp_connection_string(&self) -> String {
+    async fn get_lsp_connection_string(&self) -> String {
         self.connection_string.clone()
     }
 
-    fn get_config(&self) -> LspConfig {
+    async fn get_config(&self) -> LspConfig {
         LspConfig::VoltageFlow(VoltageConfig {
             url: self.url.clone(),
             pubkey: Some(self.pubkey),

@@ -115,10 +115,10 @@ pub(crate) trait Lsp {
         &self,
         invoice_request: InvoiceRequest,
     ) -> Result<Bolt11Invoice, MutinyError>;
-    fn get_lsp_pubkey(&self) -> PublicKey;
-    fn get_lsp_connection_string(&self) -> String;
+    async fn get_lsp_pubkey(&self) -> PublicKey;
+    async fn get_lsp_connection_string(&self) -> String;
     fn get_expected_skimmed_fee_msat(&self, payment_hash: PaymentHash, payment_size: u64) -> u64;
-    fn get_config(&self) -> LspConfig;
+    async fn get_config(&self) -> LspConfig;
 }
 
 #[derive(Clone)]
@@ -192,33 +192,33 @@ impl<S: MutinyStorage> Lsp for AnyLsp<S> {
         }
     }
 
-    fn get_lsp_pubkey(&self) -> PublicKey {
+    async fn get_lsp_pubkey(&self) -> PublicKey {
         match self {
             AnyLsp::VoltageFlow(lock) => {
-                let client = lock.try_read().unwrap();
-                client.get_lsp_pubkey()
+                let client = lock.read().await;
+                client.get_lsp_pubkey().await
             }
-            AnyLsp::Lsps(client) => client.get_lsp_pubkey(),
+            AnyLsp::Lsps(client) => client.get_lsp_pubkey().await,
         }
     }
 
-    fn get_lsp_connection_string(&self) -> String {
+    async fn get_lsp_connection_string(&self) -> String {
         match self {
             AnyLsp::VoltageFlow(lock) => {
-                let client = lock.try_read().unwrap();
-                client.get_lsp_connection_string()
+                let client = lock.read().await;
+                client.get_lsp_connection_string().await
             }
-            AnyLsp::Lsps(client) => client.get_lsp_connection_string(),
+            AnyLsp::Lsps(client) => client.get_lsp_connection_string().await,
         }
     }
 
-    fn get_config(&self) -> LspConfig {
+    async fn get_config(&self) -> LspConfig {
         match self {
             AnyLsp::VoltageFlow(lock) => {
-                let client = lock.try_read().unwrap();
-                client.get_config()
+                let client = lock.read().await;
+                client.get_config().await
             }
-            AnyLsp::Lsps(client) => client.get_config(),
+            AnyLsp::Lsps(client) => client.get_config().await,
         }
     }
 

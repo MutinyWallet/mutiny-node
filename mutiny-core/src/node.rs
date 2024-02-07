@@ -428,9 +428,11 @@ impl<S: MutinyStorage> NodeBuilder<S> {
 
         let stop = Arc::new(AtomicBool::new(false));
 
-        let (lsp_client, liquidity) = match lsp_config {
+        let (lsp_client, lsp_client_pubkey, liquidity) = match lsp_config {
             Some(LspConfig::VoltageFlow(config)) => {
-                (Some(AnyLsp::new_voltage_flow(config).await?), None)
+                let lsp = AnyLsp::new_voltage_flow(config).await?;
+                let pubkey = lsp.get_lsp_pubkey().await;
+                (Some(lsp), Some(pubkey), None)
             }
             Some(LspConfig::Lsps(lsps_config)) => {
                 let liquidity_manager = Arc::new(LiquidityManager::new(
@@ -443,25 +445,22 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                         lsps2_client_config: Some(LSPS2ClientConfig {}),
                     }),
                 ));
-
-                (
-                    Some(AnyLsp::new_lsps(
-                        lsps_config.connection_string.clone(),
-                        lsps_config.token.clone(),
-                        liquidity_manager.clone(),
-                        channel_manager.clone(),
-                        keys_manager.clone(),
-                        network,
-                        logger.clone(),
-                        stop.clone(),
-                    )?),
-                    Some(liquidity_manager),
-                )
+                let lsp = AnyLsp::new_lsps(
+                    lsps_config.connection_string.clone(),
+                    lsps_config.token.clone(),
+                    liquidity_manager.clone(),
+                    channel_manager.clone(),
+                    keys_manager.clone(),
+                    network,
+                    logger.clone(),
+                    stop.clone(),
+                )?;
+                let pubkey = lsp.get_lsp_pubkey().await;
+                (Some(lsp), Some(pubkey), Some(liquidity_manager))
             }
-            None => (None, None),
+            None => (None, None, None),
         };
 
-        let lsp_client_pubkey = lsp_client.clone().map(|lsp| lsp.get_lsp_pubkey());
         let message_router = Arc::new(LspMessageRouter::new(lsp_client_pubkey));
         let onion_message_handler = Arc::new(OnionMessenger::new(
             keys_manager.clone(),
@@ -891,10 +890,14 @@ impl<S: MutinyStorage> Node<S> {
         Ok(())
     }
 
-    pub fn node_index(&self) -> NodeIndex {
+    pub async fn node_index(&self) -> NodeIndex {
+        let lsp = match self.lsp_client.as_ref() {
+            Some(lsp) => Some(lsp.get_config().await),
+            None => None,
+        };
         NodeIndex {
             child_index: self.child_index,
-            lsp: self.lsp_client.as_ref().map(|l| l.get_config()),
+            lsp,
             archived: Some(false),
         }
     }
@@ -971,17 +974,15 @@ impl<S: MutinyStorage> Node<S> {
     pub async fn get_lsp_fee(&self, amount_sat: u64) -> Result<u64, MutinyError> {
         match self.lsp_client.as_ref() {
             Some(lsp) => {
-                self.connect_peer(
-                    PubkeyConnectionInfo::new(&lsp.get_lsp_connection_string())?,
-                    None,
-                )
-                .await?;
+                let connect = lsp.get_lsp_connection_string().await;
+                self.connect_peer(PubkeyConnectionInfo::new(&connect)?, None)
+                    .await?;
 
                 // Needs any amount over 0 if channel exists
                 // Needs amount over minimum if no channel
                 let inbound_capacity_msat: u64 = self
                     .channel_manager
-                    .list_channels_with_counterparty(&lsp.get_lsp_pubkey())
+                    .list_channels_with_counterparty(&lsp.get_lsp_pubkey().await)
                     .iter()
                     .map(|c| c.inbound_capacity_msat)
                     .sum();
@@ -1029,17 +1030,16 @@ impl<S: MutinyStorage> Node<S> {
     ) -> Result<(Bolt11Invoice, u64), MutinyError> {
         match self.lsp_client.as_ref() {
             Some(lsp) => {
-                self.connect_peer(
-                    PubkeyConnectionInfo::new(&lsp.get_lsp_connection_string())?,
-                    None,
-                )
-                .await?;
+                let connect = lsp.get_lsp_connection_string().await;
+                self.connect_peer(PubkeyConnectionInfo::new(&connect)?, None)
+                    .await?;
 
                 // Needs any amount over 0 if channel exists
                 // Needs amount over minimum if no channel
+                let lsp_pubkey = lsp.get_lsp_pubkey().await;
                 let inbound_capacity_msat: u64 = self
                     .channel_manager
-                    .list_channels_with_counterparty(&lsp.get_lsp_pubkey())
+                    .list_channels_with_counterparty(&lsp_pubkey)
                     .iter()
                     .map(|c| c.inbound_capacity_msat)
                     .sum();
@@ -1112,7 +1112,7 @@ impl<S: MutinyStorage> Node<S> {
                         }
 
                         if lsp_invoice.payment_hash() != invoice.payment_hash()
-                            || lsp_invoice.recover_payee_pub_key() != client.get_lsp_pubkey()
+                            || lsp_invoice.recover_payee_pub_key() != lsp_pubkey
                             || (lsp_invoice.amount_milli_satoshis() != Some(amount_sat * 1_000)
                                 && amount_sat != amount_minus_fee)
                         {
@@ -1748,7 +1748,7 @@ impl<S: MutinyStorage> Node<S> {
         // if we are opening channel to LSP, turn off SCID alias until CLN is updated
         // LSP protects all invoice information anyways, so no UTXO leakage
         if let Some(lsp) = self.lsp_client.clone() {
-            if pubkey == lsp.get_lsp_pubkey() {
+            if pubkey == lsp.get_lsp_pubkey().await {
                 config.channel_handshake_config.negotiate_scid_privacy = false;
             }
         }
@@ -1855,7 +1855,7 @@ impl<S: MutinyStorage> Node<S> {
         // if we are opening channel to LSP, turn off SCID alias until CLN is updated
         // LSP protects all invoice information anyways, so no UTXO leakage
         if let Some(lsp) = self.lsp_client.clone() {
-            if pubkey == lsp.get_lsp_pubkey() {
+            if pubkey == lsp.get_lsp_pubkey().await {
                 config.channel_handshake_config.negotiate_scid_privacy = false;
             }
         }
@@ -2024,13 +2024,16 @@ async fn start_reconnection_handling<S: MutinyStorage>(
     utils::spawn(async move {
         // Now try to connect to the client's LSP
         // This is here in case the LSP client node info has not saved to storage yet
+        let mut lsp_node_id = None;
         if let Some(lsp) = lsp_client_copy.as_ref() {
-            let node_id = NodeId::from_pubkey(&lsp.get_lsp_pubkey());
+            let pubkey = lsp.get_lsp_pubkey().await;
+            let connection_string = lsp.get_lsp_connection_string().await;
+            let mut node_id = NodeId::from_pubkey(&pubkey);
 
             let connect_res = connect_peer_if_necessary(
                 #[cfg(target_arch = "wasm32")]
                 &websocket_proxy_addr_copy_proxy,
-                &PubkeyConnectionInfo::new(lsp.get_lsp_connection_string().as_str()).unwrap(),
+                &PubkeyConnectionInfo::new(connection_string.as_str()).unwrap(),
                 &storage_copy,
                 proxy_logger.clone(),
                 peer_man_proxy.clone(),
@@ -2054,13 +2057,15 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                                 );
                             } else {
                                 log_trace!(proxy_logger, "set connection info from voltage lsp");
+                                // get new pubkey and connection string
+                                let pubkey = lsp.get_lsp_pubkey().await;
+                                node_id = NodeId::from_pubkey(&pubkey);
+                                let connection_string = lsp.get_lsp_connection_string().await;
+
                                 if let Err(e) = connect_peer_if_necessary(
                                     #[cfg(target_arch = "wasm32")]
                                     &websocket_proxy_addr_copy_proxy,
-                                    &PubkeyConnectionInfo::new(
-                                        lsp.get_lsp_connection_string().as_str(),
-                                    )
-                                    .unwrap(),
+                                    &PubkeyConnectionInfo::new(connection_string.as_str()).unwrap(),
                                     &storage_copy,
                                     proxy_logger.clone(),
                                     peer_man_proxy.clone(),
@@ -2081,11 +2086,13 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                 }
             }
 
+            lsp_node_id = Some(node_id);
+            let connection_string = lsp.get_lsp_connection_string().await;
             if let Err(e) = save_peer_connection_info(
                 &storage_copy,
                 &uuid_copy,
                 &node_id,
-                &lsp.get_lsp_connection_string(),
+                &connection_string,
                 None,
             ) {
                 log_error!(proxy_logger, "could not save connection to lsp: {e}");
@@ -2094,7 +2101,6 @@ async fn start_reconnection_handling<S: MutinyStorage>(
 
         // Now try to connect to other nodes the client might have, skipping the LSP if necessary
         let stored_peers = get_all_peers(&storage_copy).unwrap_or_default();
-        let lsp_node_id = lsp_client_copy.map(|lsp| NodeId::from_pubkey(&lsp.get_lsp_pubkey()));
         let initial_peers: Vec<(NodeId, String)> = stored_peers
             .into_iter()
             .filter(|(_, d)| {
