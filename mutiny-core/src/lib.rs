@@ -2542,7 +2542,7 @@ mod tests {
     use crate::labels::{Contact, LabelStorage};
     use crate::nostr::NostrKeySource;
     use crate::storage::{MemoryStorage, MutinyStorage};
-    use crate::utils::parse_npub;
+    use crate::utils::{parse_npub, sleep};
     use nostr::key::FromSkStr;
     use nostr::Keys;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
@@ -2623,8 +2623,15 @@ mod tests {
             .await
             .expect("mutiny wallet should initialize");
 
+        // let storage persist
+        sleep(1000).await;
+
         assert_eq!(mw.node_manager.list_nodes().await.unwrap().len(), 1);
+
         assert!(mw.node_manager.new_node().await.is_ok());
+        // let storage persist
+        sleep(1000).await;
+
         assert_eq!(mw.node_manager.list_nodes().await.unwrap().len(), 2);
 
         assert!(mw.stop().await.is_ok());

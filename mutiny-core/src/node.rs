@@ -582,38 +582,57 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             });
 
         if !retry_spendable_outputs.is_empty() {
-            log_info!(
-                logger,
-                "Retrying {} spendable outputs",
-                retry_spendable_outputs.len()
-            );
+            let event_handler = event_handler.clone();
+            let persister = persister.clone();
+            let logger = logger.clone();
 
-            match event_handler
-                .handle_spendable_outputs(&retry_spendable_outputs)
-                .await
-            {
-                Ok(_) => {
-                    log_info!(logger, "Successfully retried spendable outputs");
-                    persister.clear_failed_spendable_outputs()?;
-                }
-                Err(_) => {
-                    // retry them individually then only save failed ones
-                    // if there was only one we don't need to retry
-                    if retry_spendable_outputs.len() > 1 {
-                        let mut failed = vec![];
-                        for o in retry_spendable_outputs {
-                            if event_handler
-                                .handle_spendable_outputs(&[o.clone()])
-                                .await
-                                .is_err()
-                            {
-                                failed.push(o);
-                            }
+            // We need to process our unhandled spendable outputs
+            // can do this in the background, no need to block on it
+            utils::spawn(async move {
+                let start = Instant::now();
+                log_info!(
+                    logger,
+                    "Retrying {} spendable outputs",
+                    retry_spendable_outputs.len()
+                );
+
+                match event_handler
+                    .handle_spendable_outputs(&retry_spendable_outputs)
+                    .await
+                {
+                    Ok(_) => {
+                        log_info!(logger, "Successfully retried spendable outputs");
+                        if let Err(e) = persister.clear_failed_spendable_outputs() {
+                            log_warn!(logger, "Failed to clear failed spendable outputs: {e}");
                         }
-                        persister.set_failed_spendable_outputs(failed)?;
-                    };
+                    }
+                    Err(_) => {
+                        // retry them individually then only save failed ones
+                        // if there was only one we don't need to retry
+                        if retry_spendable_outputs.len() > 1 {
+                            let mut failed = vec![];
+                            for o in retry_spendable_outputs {
+                                if event_handler
+                                    .handle_spendable_outputs(&[o.clone()])
+                                    .await
+                                    .is_err()
+                                {
+                                    failed.push(o);
+                                }
+                            }
+                            if let Err(e) = persister.set_failed_spendable_outputs(failed) {
+                                log_warn!(logger, "Failed to set failed spendable outputs: {e}");
+                            }
+                        };
+                    }
                 }
-            }
+
+                log_info!(
+                    logger,
+                    "Retrying spendable outputs took {}ms",
+                    start.elapsed().as_millis()
+                );
+            });
         }
 
         // Check all existing channels against default configs.
