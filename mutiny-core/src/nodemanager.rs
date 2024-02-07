@@ -471,16 +471,30 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
                 .map(|n| (n._uuid.clone(), n.node_index()))
                 .collect();
 
+            // insert updated nodes in background, isn't a huge deal if this fails,
+            // it is only for updating the LSP config
             log_info!(logger, "inserting updated nodes");
-
-            self.storage
-                .insert_nodes(&NodeStorage {
-                    nodes: updated_nodes,
-                    version: node_storage.version + 1,
-                })
-                .await?;
-
-            log_info!(logger, "inserted updated nodes");
+            let version = node_storage.version + 1;
+            let storage = self.storage.clone();
+            let logger_clone = logger.clone();
+            spawn(async move {
+                let start = Instant::now();
+                if let Err(e) = storage
+                    .insert_nodes(&NodeStorage {
+                        nodes: updated_nodes,
+                        version,
+                    })
+                    .await
+                {
+                    log_error!(logger_clone, "Failed to insert updated nodes: {e}");
+                } else {
+                    log_info!(
+                        logger_clone,
+                        "inserted updated nodes, took {}ms",
+                        start.elapsed().as_millis()
+                    );
+                }
+            });
 
             Arc::new(RwLock::new(nodes_map))
         };
