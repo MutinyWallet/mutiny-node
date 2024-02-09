@@ -91,6 +91,7 @@ use lightning::{log_debug, util::logger::Logger};
 use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::{lnurl::LnUrl, AsyncClient as LnUrlClient, LnUrlResponse, Response};
+use moksha_core::model::{PostMeltResponse, TokenV3};
 use nostr_sdk::{Client, RelayPoolNotification};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -756,6 +757,9 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
                 .expect("failed to make lnurl client"),
         );
 
+        // TODO: (@leonardo) this looks weird, double-check on moksha, and some previous usage as well
+        let cashu_mint_client = Arc::new(moksha_wallet::client::Client);
+
         let (subscription_client, auth) = if let Some(auth_client) = self.auth_client.clone() {
             if let Some(subscription_url) = self.subscription_url {
                 let auth = auth_client.auth.clone();
@@ -789,6 +793,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             network,
             skip_hodl_invoices: self.skip_hodl_invoices,
             safe_mode: self.safe_mode,
+            cashu_mint_client,
         };
 
         #[cfg(not(test))]
@@ -840,6 +845,7 @@ pub struct MutinyWallet<S: MutinyStorage> {
     pub federation_storage: Arc<RwLock<FederationStorage>>,
     pub(crate) federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>,
     lnurl_client: Arc<LnUrlClient>,
+    cashu_mint_client: Arc<moksha_wallet::client::Client>,
     auth: AuthManager,
     subscription_client: Option<Arc<MutinySubscriptionClient>>,
     pub stop: Arc<AtomicBool>,
@@ -2193,11 +2199,40 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Calls upon a Cashu mint and withdrawls/redeem/melts the token from it.
-    pub async fn melt_cashu_token(
-        &self,
-        token: TokenV3,
-    ) -> Result<bool, MutinyError> {
-        todo!()
+    pub async fn melt_cashu_token(&self, token: TokenV3) -> Result<bool, MutinyError> {
+        // NOTE: for now it assumes that there is a single token being melted
+        let meltable_token = token.tokens.first();
+        let mint_url = meltable_token.map(|mt| mt.mint)?.unwrap(); // TODO: (@leonardo+elnosh) handle the unwrap() before moving to review + merging
+        let proofs = meltable_token.map(|mt| mt.proofs)?;
+
+        // TODO: (@leonardo+elnosh) We need a better strategy to get the optimal "meltable" amount.
+        let amount_sats = proofs.total_amount() * (1 - 1 / 100);
+        let mutiny_invoice = self
+            .create_invoice(amount_sats, vec!["Cashu Token Melt".to_string()])
+            .await?;
+        let mutiny_invoice_str = mutiny_invoice
+            .bolt11
+            .expect("The invoice should have BOLT11");
+
+        let response = self
+            .cashu_mint_client
+            .post_melt_tokens(&mint_url, proofs, mutiny_invoice_str, outputs)
+            .await;
+
+        match response {
+            Ok(PostMeltResponse {
+                paid,
+                preimage,
+                change,
+            }) => match paid {
+                true => Ok(true),
+                false => {
+                    OK(false)
+                    // TODO: (@leonardo) Should retry the melting process with a smaller amount ?
+                }
+            },
+            Err(_) => Ok(false),
+        }
     }
 }
 
