@@ -889,6 +889,13 @@ impl MutinyWallet {
         Ok(self.inner.lnurl_withdraw(&lnurl, amount_sats).await?)
     }
 
+    /// Calls upon a Cash mint and melts the token from it.
+    #[wasm_bindgen]
+    pub async fn melt_cashu_token(&self, maybe_token: String) -> Result<bool, MutinyJsError> {
+        let token = TokenV3::deserialize(maybe_token)?;
+        Ok(self.inner.melt_cashu_token(&token).await?)
+    }
+
     /// Authenticates with a LNURL-auth for the given profile.
     #[wasm_bindgen]
     pub async fn lnurl_auth(&self, lnurl: String) -> Result<(), MutinyJsError> {

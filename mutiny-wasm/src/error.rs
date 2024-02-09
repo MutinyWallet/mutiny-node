@@ -160,6 +160,9 @@ pub enum MutinyJsError {
     /// Payjoin configuration error
     #[error("Payjoin configuration failed.")]
     PayjoinConfigError,
+    /// Failed to call on the given Cashu mint URL
+    #[error("Failed to call on the given Cashu mint URL.")]
+    CashuMintUrlFailure,
     /// Unknown error.
     #[error("Unknown Error")]
     UnknownError,
@@ -209,6 +212,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::BitcoinPriceError => MutinyJsError::BitcoinPriceError,
             MutinyError::IncorrectPassword => MutinyJsError::IncorrectPassword,
             MutinyError::SamePassword => MutinyJsError::SamePassword,
+            MutinyError::CashuMintUrlFailure => MutinyJsError::CashuMintUrlFailure,
             MutinyError::Other(e) => {
                 error!("Got unhandled error: {e}");
                 // FIXME: For some unknown reason, InsufficientBalance is being returned as `Other`
@@ -288,6 +292,12 @@ impl From<bitcoin::secp256k1::Error> for MutinyJsError {
 impl From<serde_json::error::Error> for MutinyJsError {
     fn from(_e: serde_json::error::Error) -> Self {
         Self::WasmBindgenError
+    }
+}
+
+impl From<moksha_core::error::MokshaCoreError> for MutinyJsError {
+    fn from(_e: moksha_core::error::MokshaCoreError) -> Self {
+        MutinyError::from(e).into()
     }
 }
 
