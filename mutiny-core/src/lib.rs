@@ -2191,6 +2191,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     pub fn is_safe_mode(&self) -> bool {
         self.safe_mode
     }
+
+    /// Calls upon a Cashu mint and withdrawls/redeem/melts the token from it.
+    pub async fn melt_cashu_token(
+        &self,
+        token: TokenV3,
+    ) -> Result<bool, MutinyError> {
+        todo!()
+    }
 }
 
 impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {

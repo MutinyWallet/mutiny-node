@@ -48,6 +48,8 @@ payjoin = { version = "0.13.0", features = ["send", "base64"] }
 bincode = "1.3.3"
 hex = "0.4.3"
 async-lock = "3.2.0"
+moksha-core = { version = "0.1.2" }
+moksha-wallet = { version = "0.1.2" }
 
 fedimint-client = { git = "https://github.com/fedimint/fedimint", rev = "6a923ee10c3a578cd835044e3fdd94aa5123735a" }
 fedimint-core = { git = "https://github.com/fedimint/fedimint", rev = "6a923ee10c3a578cd835044e3fdd94aa5123735a" }
