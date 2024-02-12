@@ -342,7 +342,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
 
         let inbound_capacity_msat: u64 = self
             .channel_manager
-            .list_channels_with_counterparty(&self.get_lsp_pubkey())
+            .list_channels_with_counterparty(&self.pubkey)
             .iter()
             .map(|c| c.inbound_capacity_msat)
             .sum();
@@ -486,17 +486,17 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
         Ok(invoice)
     }
 
-    fn get_lsp_pubkey(&self) -> PublicKey {
+    async fn get_lsp_pubkey(&self) -> PublicKey {
         self.pubkey
     }
 
-    fn get_lsp_connection_string(&self) -> String {
+    async fn get_lsp_connection_string(&self) -> String {
         self.connection_string.clone()
     }
 
-    fn get_config(&self) -> LspConfig {
+    async fn get_config(&self) -> LspConfig {
         LspConfig::Lsps(LspsConfig {
-            connection_string: self.get_lsp_connection_string(),
+            connection_string: self.connection_string.clone(),
             token: self.token.clone(),
         })
     }

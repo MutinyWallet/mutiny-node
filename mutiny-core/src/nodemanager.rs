@@ -461,10 +461,11 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             // when we create the nodes we set the LSP if one is missing
             // we need to save it to local storage after startup in case
             // a LSP was set.
-            let updated_nodes: HashMap<String, NodeIndex> = nodes_map
-                .values()
-                .map(|n| (n._uuid.clone(), n.node_index()))
-                .collect();
+            let mut updated_nodes: HashMap<String, NodeIndex> =
+                HashMap::with_capacity(nodes_map.len());
+            for n in nodes_map.values() {
+                updated_nodes.insert(n._uuid.clone(), n.node_index().await);
+            }
 
             // insert updated nodes in background, isn't a huge deal if this fails,
             // it is only for updating the LSP config
@@ -1360,16 +1361,16 @@ impl<S: MutinyStorage> NodeManager<S> {
         // check if any nodes have active channels with the current LSP
         // if they do, we can't change the LSP
         let nodes = self.nodes.read().await;
-        if nodes.iter().any(|(_, n)| {
-            if let Some(lsp_pk) = n.lsp_client.as_ref().map(|x| x.get_lsp_pubkey()) {
-                !n.channel_manager
-                    .list_channels_with_counterparty(&lsp_pk)
+        for node in nodes.values() {
+            if let Some(ref lsp) = node.lsp_client {
+                if !node
+                    .channel_manager
+                    .list_channels_with_counterparty(&lsp.get_lsp_pubkey().await)
                     .is_empty()
-            } else {
-                false
+                {
+                    return Err(MutinyError::LspGenericError);
+                }
             }
-        }) {
-            return Err(MutinyError::LspGenericError);
         }
         drop(nodes);
 
@@ -1579,11 +1580,13 @@ impl<S: MutinyStorage> NodeManager<S> {
         let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
         let to_pubkey = match to_pubkey {
             Some(pubkey) => pubkey,
-            None => node
-                .lsp_client
-                .as_ref()
-                .ok_or(MutinyError::PubkeyInvalid)?
-                .get_lsp_pubkey(),
+            None => {
+                node.lsp_client
+                    .as_ref()
+                    .ok_or(MutinyError::PubkeyInvalid)?
+                    .get_lsp_pubkey()
+                    .await
+            }
         };
 
         let outpoint = node
@@ -1614,11 +1617,13 @@ impl<S: MutinyStorage> NodeManager<S> {
         let node = self.get_node_by_key_or_first(None).await?;
         let to_pubkey = match to_pubkey {
             Some(pubkey) => pubkey,
-            None => node
-                .lsp_client
-                .as_ref()
-                .ok_or(MutinyError::PubkeyInvalid)?
-                .get_lsp_pubkey(),
+            None => {
+                node.lsp_client
+                    .as_ref()
+                    .ok_or(MutinyError::PubkeyInvalid)?
+                    .get_lsp_pubkey()
+                    .await
+            }
         };
 
         let outpoint = node
@@ -2148,6 +2153,7 @@ mod tests {
     use crate::test_utils::*;
 
     use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
+    use crate::lsp::voltage::VoltageConfig;
     use crate::nodemanager::{LspConfig, NodeIndex, NodeStorage};
     use crate::storage::{MemoryStorage, MutinyStorage};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
@@ -2399,19 +2405,23 @@ mod tests {
 
     #[test]
     fn test_serialize_node_storage() {
-        let old: NodeStorage = serde_json::from_str("{\"nodes\":{\"93ca1ee3-d5f1-42ed-8bd9-042b298c70dc\":{\"archived\":false,\"child_index\":0,\"lsp\":\"https://signet-lsp.mutinywallet.com\"}},\"version\":11}").unwrap();
+        let old1: NodeStorage = serde_json::from_str("{\"nodes\":{\"93ca1ee3-d5f1-42ed-8bd9-042b298c70dc\":{\"archived\":false,\"child_index\":0,\"lsp\":\"https://signet-lsp.mutinywallet.com\"}},\"version\":11}").unwrap();
+        let old2: NodeStorage = serde_json::from_str("{\"nodes\":{\"93ca1ee3-d5f1-42ed-8bd9-042b298c70dc\":{\"archived\":false,\"child_index\":0,\"lsp\":{\"VoltageFlow\":\"https://signet-lsp.mutinywallet.com\"}}},\"version\":11}").unwrap();
         let node = NodeIndex {
             child_index: 0,
-            lsp: Some(LspConfig::VoltageFlow(
-                "https://signet-lsp.mutinywallet.com".to_string(),
-            )),
+            lsp: Some(LspConfig::VoltageFlow(VoltageConfig {
+                url: "https://signet-lsp.mutinywallet.com".to_string(),
+                pubkey: None,
+                connection_string: None,
+            })),
             archived: Some(false),
         };
         let mut nodes = HashMap::new();
         nodes.insert("93ca1ee3-d5f1-42ed-8bd9-042b298c70dc".to_string(), node);
         let expected = NodeStorage { nodes, version: 11 };
 
-        assert_eq!(old, expected);
+        assert_eq!(old1, expected);
+        assert_eq!(old2, expected);
 
         let serialized = serde_json::to_string(&expected).unwrap();
         let deserialized: NodeStorage = serde_json::from_str(&serialized).unwrap();

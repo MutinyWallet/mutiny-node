@@ -408,10 +408,10 @@ impl<S: MutinyStorage> EventHandler<S> {
                     Err(e) => log_debug!(self.logger, "EVENT: OpenChannelRequest error: {e:?}"),
                 };
 
-                let lsp_pubkey = self
-                    .lsp_client
-                    .as_ref()
-                    .map(|client| client.get_lsp_pubkey());
+                let lsp_pubkey = match self.lsp_client {
+                    Some(ref lsp) => Some(lsp.get_lsp_pubkey().await),
+                    None => None,
+                };
 
                 if lsp_pubkey.as_ref() != Some(&counterparty_node_id) {
                     // did not match the lsp pubkey, normal open
