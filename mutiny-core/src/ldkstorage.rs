@@ -682,6 +682,7 @@ mod test {
     use crate::{
         event::PaymentInfo,
         storage::{list_payment_info, MemoryStorage},
+        PrivacyLevel,
     };
     use crate::{
         event::{HTLCStatus, MillisatAmount},
@@ -757,6 +758,7 @@ mod test {
         let payment_info = PaymentInfo {
             preimage: Some(preimage),
             status: HTLCStatus::Succeeded,
+            privacy_level: PrivacyLevel::NotAvailable,
             amt_msat: MillisatAmount(Some(420)),
             fee_paid_msat: None,
             bolt11: None,
