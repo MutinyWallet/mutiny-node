@@ -1,3 +1,4 @@
+use crate::auth::MutinyAuthClient;
 use crate::event::HTLCStatus;
 use crate::labels::LabelStorage;
 use crate::logging::LOGGING_KEY;
@@ -37,6 +38,8 @@ use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use core::time::Duration;
 use esplora_client::{AsyncClient, Builder};
 use futures::{future::join_all, lock::Mutex};
+#[cfg(target_arch = "wasm32")]
+use instant::Instant;
 use lightning::chain::Confirm;
 use lightning::events::ClosureReason;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
@@ -45,7 +48,7 @@ use lightning::ln::ChannelId;
 use lightning::routing::gossip::NodeId;
 use lightning::sign::{NodeSigner, Recipient};
 use lightning::util::logger::*;
-use lightning::{log_debug, log_error, log_info, log_warn};
+use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use lightning_transaction_sync::EsploraSyncClient;
 use payjoin::Uri;
@@ -56,6 +59,8 @@ use std::cmp::max;
 use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 use uuid::Uuid;
 
@@ -319,10 +324,17 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
 
         // Need to prevent other devices from running at the same time
         if !c.skip_device_lock {
+            let start = Instant::now();
+            log_trace!(logger, "Checking device lock");
             if let Some(lock) = self.storage.get_device_lock()? {
                 log_info!(logger, "Current device lock: {lock:?}");
             }
             self.storage.set_device_lock().await?;
+            log_trace!(
+                logger,
+                "Device lock set: took {}ms",
+                start.elapsed().as_millis()
+            );
         }
 
         let storage_clone = self.storage.clone();
@@ -339,6 +351,9 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
                 }
             }
         });
+
+        let start = Instant::now();
+        log_info!(logger, "Building node manager components");
 
         let esplora_server_url = get_esplora_url(c.network, c.user_esplora_url);
         let esplora = Builder::new(&esplora_server_url).build_async()?;
@@ -367,14 +382,8 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
 
         let chain = Arc::new(MutinyChain::new(tx_sync, wallet.clone(), logger.clone()));
 
-        let (gossip_sync, scorer) = get_gossip_sync(
-            &self.storage,
-            c.scorer_url,
-            c.auth_client.clone(),
-            c.network,
-            logger.clone(),
-        )
-        .await?;
+        let (gossip_sync, scorer) =
+            get_gossip_sync(&self.storage, c.network, logger.clone()).await?;
 
         let scorer = Arc::new(utils::Mutex::new(scorer));
 
@@ -388,6 +397,12 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
 
         let node_storage = self.storage.get_nodes()?;
 
+        log_trace!(
+            logger,
+            "Node manager Components built: took {}ms",
+            start.elapsed().as_millis()
+        );
+
         let nodes = if c.safe_mode {
             // If safe mode is enabled, we don't start any nodes
             log_warn!(logger, "Safe mode enabled, not starting any nodes");
@@ -399,6 +414,9 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
                 .nodes
                 .into_iter()
                 .filter(|(_, n)| !n.is_archived());
+
+            let start = Instant::now();
+            log_debug!(logger, "Building nodes");
 
             let mut nodes_map = HashMap::new();
 
@@ -434,6 +452,11 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
 
                 nodes_map.insert(id, Arc::new(node));
             }
+            log_trace!(
+                logger,
+                "Nodes built: took {}ms",
+                start.elapsed().as_millis()
+            );
 
             // when we create the nodes we set the LSP if one is missing
             // we need to save it to local storage after startup in case
@@ -443,16 +466,30 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
                 .map(|n| (n._uuid.clone(), n.node_index()))
                 .collect();
 
+            // insert updated nodes in background, isn't a huge deal if this fails,
+            // it is only for updating the LSP config
             log_info!(logger, "inserting updated nodes");
-
-            self.storage
-                .insert_nodes(&NodeStorage {
-                    nodes: updated_nodes,
-                    version: node_storage.version + 1,
-                })
-                .await?;
-
-            log_info!(logger, "inserted updated nodes");
+            let version = node_storage.version + 1;
+            let storage = self.storage.clone();
+            let logger_clone = logger.clone();
+            spawn(async move {
+                let start = Instant::now();
+                if let Err(e) = storage
+                    .insert_nodes(&NodeStorage {
+                        nodes: updated_nodes,
+                        version,
+                    })
+                    .await
+                {
+                    log_error!(logger_clone, "Failed to insert updated nodes: {e}");
+                } else {
+                    log_info!(
+                        logger_clone,
+                        "inserted updated nodes, took {}ms",
+                        start.elapsed().as_millis()
+                    );
+                }
+            });
 
             Arc::new(RwLock::new(nodes_map))
         };
@@ -479,6 +516,8 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
             user_rgs_url: c.user_rgs_url,
+            scorer_url: c.scorer_url,
+            auth_client: c.auth_client,
             esplora,
             lsp_config,
             logger,
@@ -505,6 +544,8 @@ pub struct NodeManager<S: MutinyStorage> {
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
     user_rgs_url: Option<String>,
+    scorer_url: Option<String>,
+    auth_client: Option<Arc<MutinyAuthClient>>,
     esplora: Arc<AsyncClient>,
     pub(crate) wallet: Arc<OnChainWallet<S>>,
     gossip_sync: Arc<RapidGossipSync>,
@@ -578,11 +619,6 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Creates a background process that will sync the wallet with the blockchain.
     /// This will also update the fee estimates every 10 minutes.
     pub fn start_sync(nm: Arc<NodeManager<S>>) {
-        // If we are stopped, don't sync
-        if nm.stop.load(Ordering::Relaxed) {
-            return;
-        }
-
         utils::spawn(async move {
             let mut synced = false;
             loop {
@@ -596,6 +632,12 @@ impl<S: MutinyStorage> NodeManager<S> {
                         log_error!(nm.logger, "Failed to sync RGS: {e}");
                     } else {
                         log_info!(nm.logger, "RGS Synced!");
+                    }
+
+                    if let Err(e) = nm.sync_scorer().await {
+                        log_error!(nm.logger, "Failed to sync scorer: {e}");
+                    } else {
+                        log_info!(nm.logger, "Scorer Synced!");
                     }
                 }
 
@@ -1160,6 +1202,39 @@ impl<S: MutinyStorage> NodeManager<S> {
                 )
                 .await?;
             }
+        }
+
+        Ok(())
+    }
+
+    /// Downloads the latest score data from the server and replaces the current scorer.
+    /// Will be skipped if in safe mode.
+    async fn sync_scorer(&self) -> Result<(), MutinyError> {
+        // Skip syncing scorer if we are in safe mode.
+        if self.safe_mode {
+            log_info!(self.logger, "Skipping scorer sync in safe mode");
+            return Ok(());
+        }
+
+        if let (Some(auth), Some(url)) = (self.auth_client.as_ref(), self.scorer_url.as_deref()) {
+            let scorer = get_remote_scorer(
+                auth,
+                url,
+                self.gossip_sync.network_graph().clone(),
+                self.logger.clone(),
+            )
+            .await
+            .map_err(|e| {
+                log_error!(self.logger, "Failed to sync scorer: {e}");
+                e
+            })?;
+
+            // Replace the current scorer with the new one
+            let mut lock = self
+                .scorer
+                .try_lock()
+                .map_err(|_| MutinyError::WalletSyncError)?;
+            *lock = scorer;
         }
 
         Ok(())

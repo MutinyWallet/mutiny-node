@@ -25,7 +25,7 @@ use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
-use lightning::{log_error, routing::gossip::NodeId, util::logger::Logger};
+use lightning::{log_error, log_info, log_warn, routing::gossip::NodeId, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
@@ -35,7 +35,7 @@ use mutiny_core::nostr::nip49::NIP49URI;
 use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
 use mutiny_core::nostr::NostrKeySource;
 use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
-use mutiny_core::utils::{now, parse_npub, parse_npub_or_nip05, sleep};
+use mutiny_core::utils::{now, parse_npub, parse_npub_or_nip05, sleep, spawn};
 use mutiny_core::vss::MutinyVssClient;
 use mutiny_core::{encrypt::encryption_key_from_pass, InvoiceHandler, MutinyWalletConfigBuilder};
 use mutiny_core::{labels::Contact, MutinyWalletBuilder};
@@ -105,6 +105,7 @@ impl MutinyWallet {
         nip_07_key: Option<String>,
         primal_url: Option<String>,
     ) -> Result<MutinyWallet, MutinyJsError> {
+        let start = instant::Instant::now();
         // if both are set throw an error
         // todo default to nsec if both are for same key?
         if nsec_override.is_some() && nip_07_key.is_some() {
@@ -143,7 +144,14 @@ impl MutinyWallet {
         )
         .await
         {
-            Ok(m) => Ok(m),
+            Ok(m) => {
+                log_info!(
+                    m.inner.logger,
+                    "Wallet startup took {}ms",
+                    start.elapsed().as_millis()
+                );
+                Ok(m)
+            }
             Err(e) => {
                 // mark uninitialized because we failed to startup
                 *init = false;
@@ -214,6 +222,19 @@ impl MutinyWallet {
                 logger.clone(),
                 auth_url,
             ));
+
+            // immediately start fetching JWT
+            let auth = auth_client.clone();
+            let logger_clone = logger.clone();
+            spawn(async move {
+                // if this errors, it's okay, we'll call it again when we fetch vss
+                if let Err(e) = auth.authenticate().await {
+                    log_warn!(
+                        logger_clone,
+                        "Failed to authenticate on startup, will retry on next call: {e}"
+                    );
+                }
+            });
 
             let vss = storage_url.map(|url| {
                 Arc::new(MutinyVssClient::new_authenticated(

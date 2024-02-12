@@ -86,15 +86,19 @@ use bitcoin::util::bip32::ExtendedPrivKey;
 use bitcoin::Network;
 use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::{pin_mut, select, FutureExt};
+#[cfg(target_arch = "wasm32")]
+use instant::Instant;
 use lightning::ln::PaymentHash;
-use lightning::{log_debug, util::logger::Logger};
-use lightning::{log_error, log_info, log_warn};
+use lightning::util::logger::Logger;
+use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::{lnurl::LnUrl, AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use nostr_sdk::{Client, RelayPoolNotification};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 use std::{collections::HashMap, sync::atomic::AtomicBool};
 use std::{str::FromStr, sync::atomic::Ordering};
 use uuid::Uuid;
@@ -714,12 +718,21 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             self.session_id,
         ));
 
+        let start = Instant::now();
+
         let mut nm_builder = NodeManagerBuilder::new(self.xprivkey, self.storage.clone())
             .with_config(config.clone());
         nm_builder.with_stop(stop.clone());
         nm_builder.with_logger(logger.clone());
         let node_manager = Arc::new(nm_builder.build().await?);
 
+        log_trace!(
+            logger,
+            "NodeManager started, took: {}ms",
+            start.elapsed().as_millis()
+        );
+
+        // start syncing node manager
         NodeManager::start_sync(node_manager.clone());
 
         // create nostr manager
@@ -738,7 +751,17 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         // create federation module if any exist
         let federation_storage = self.storage.get_federations()?;
         let federations = if !federation_storage.federations.is_empty() {
-            create_federations(federation_storage.clone(), &config, &self.storage, &logger).await?
+            let start = Instant::now();
+            log_trace!(logger, "Building Federations");
+            let result =
+                create_federations(federation_storage.clone(), &config, &self.storage, &logger)
+                    .await?;
+            log_debug!(
+                logger,
+                "Federations started, took: {}ms",
+                start.elapsed().as_millis()
+            );
+            result
         } else {
             Arc::new(RwLock::new(HashMap::new()))
         };
@@ -749,6 +772,8 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
                 "Starting with HODL invoices enabled. This is not recommended!"
             );
         }
+
+        let start = Instant::now();
 
         let lnurl_client = Arc::new(
             lnurl::Builder::default()
@@ -795,11 +820,18 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         {
             // if we need a full sync from a restore
             if mw.storage.get(NEED_FULL_SYNC_KEY)?.unwrap_or_default() {
+                let start = Instant::now();
+                log_info!(mw.logger, "Full sync needed from restore");
                 mw.node_manager
                     .wallet
                     .full_sync(crate::onchain::RESTORE_SYNC_STOP_GAP)
                     .await?;
                 mw.storage.delete(&[NEED_FULL_SYNC_KEY])?;
+                log_info!(
+                    mw.logger,
+                    "Full sync complete, took: {}ms",
+                    start.elapsed().as_millis()
+                );
             }
         }
 
@@ -810,11 +842,14 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         }
 
         // if we don't have any nodes, create one
-        match mw.node_manager.list_nodes().await?.pop() {
-            Some(_) => (),
-            None => {
-                mw.node_manager.new_node().await?;
-            }
+        if mw.node_manager.list_nodes().await?.is_empty() {
+            let nm = mw.node_manager.clone();
+            // spawn in background, this can take a while and we don't want to block
+            utils::spawn(async move {
+                if let Err(e) = nm.new_node().await {
+                    log_error!(nm.logger, "Failed to create first node: {e}");
+                }
+            })
         };
 
         // start the nostr background process
@@ -822,6 +857,12 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
 
         // start the federation background processor
         mw.start_fedimint_background_checker().await;
+
+        log_info!(
+            mw.logger,
+            "Final setup took {}ms",
+            start.elapsed().as_millis()
+        );
 
         Ok(mw)
     }
@@ -2231,12 +2272,11 @@ async fn create_federations<S: MutinyStorage>(
     storage: &S,
     logger: &Arc<MutinyLogger>,
 ) -> Result<Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>, MutinyError> {
-    let federations = federation_storage.federations.into_iter();
-    let mut federation_map = HashMap::new();
-    for federation_item in federations {
+    let mut federation_map = HashMap::with_capacity(federation_storage.federations.len());
+    for (uuid, federation_index) in federation_storage.federations {
         let federation = FederationClient::new(
-            federation_item.0,
-            federation_item.1.federation_code.clone(),
+            uuid,
+            federation_index.federation_code,
             c.xprivkey,
             storage,
             c.network,
@@ -2501,7 +2541,7 @@ mod tests {
     use crate::labels::{Contact, LabelStorage};
     use crate::nostr::NostrKeySource;
     use crate::storage::{MemoryStorage, MutinyStorage};
-    use crate::utils::parse_npub;
+    use crate::utils::{parse_npub, sleep};
     use nostr::key::FromSkStr;
     use nostr::Keys;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
@@ -2582,8 +2622,15 @@ mod tests {
             .await
             .expect("mutiny wallet should initialize");
 
+        // let storage persist
+        sleep(1000).await;
+
         assert_eq!(mw.node_manager.list_nodes().await.unwrap().len(), 1);
+
         assert!(mw.node_manager.new_node().await.is_ok());
+        // let storage persist
+        sleep(1000).await;
+
         assert_eq!(mw.node_manager.list_nodes().await.unwrap().len(), 2);
 
         assert!(mw.stop().await.is_ok());

@@ -4,17 +4,21 @@ use crate::{
 };
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::Network;
+#[cfg(target_arch = "wasm32")]
+use instant::Instant;
 use lightning::ln::msgs::NodeAnnouncement;
 use lightning::routing::gossip::NodeId;
 use lightning::util::logger::Logger;
 use lightning::util::ser::ReadableArgs;
-use lightning::{log_debug, log_error, log_info, log_warn};
+use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 use reqwest::Client;
 use reqwest::{Method, Url};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 
 use crate::logging::MutinyLogger;
 use crate::node::{NetworkGraph, RapidGossipSync};
@@ -105,7 +109,7 @@ pub struct Scorer {
     pub value: String,
 }
 
-pub async fn get_remote_scorer_bytes(
+async fn get_remote_scorer_bytes(
     auth_client: &MutinyAuthClient,
     base_url: &str,
 ) -> Result<Vec<u8>, MutinyError> {
@@ -126,6 +130,29 @@ pub async fn get_remote_scorer_bytes(
     Ok(decoded)
 }
 
+/// Gets the remote scorer from the server, parses it and returns it as a [`HubPreferentialScorer`]
+pub async fn get_remote_scorer(
+    auth_client: &MutinyAuthClient,
+    base_url: &str,
+    network_graph: Arc<NetworkGraph>,
+    logger: Arc<MutinyLogger>,
+) -> Result<HubPreferentialScorer, MutinyError> {
+    let start = Instant::now();
+    let scorer_bytes = get_remote_scorer_bytes(auth_client, base_url).await?;
+    let mut readable_bytes = lightning::io::Cursor::new(scorer_bytes);
+    let params = decay_params();
+    let args = (params, network_graph, logger.clone());
+    let scorer = ProbScorer::read(&mut readable_bytes, args)?;
+
+    log_trace!(
+        logger,
+        "Retrieved remote scorer in {}ms",
+        start.elapsed().as_millis()
+    );
+
+    Ok(HubPreferentialScorer::new(scorer))
+}
+
 fn write_gossip_data(
     storage: &impl MutinyStorage,
     last_sync_timestamp: u32,
@@ -142,9 +169,7 @@ fn write_gossip_data(
 }
 
 pub async fn get_gossip_sync(
-    _storage: &impl MutinyStorage,
-    remote_scorer_url: Option<String>,
-    auth_client: Option<Arc<MutinyAuthClient>>,
+    storage: &impl MutinyStorage,
     network: Network,
     logger: Arc<MutinyLogger>,
 ) -> Result<(RapidGossipSync, HubPreferentialScorer), MutinyError> {
@@ -158,37 +183,28 @@ pub async fn get_gossip_sync(
         gossip_data.last_sync_timestamp
     );
 
+    let start = Instant::now();
+
     // get network graph
     let gossip_sync = RapidGossipSync::new(gossip_data.network_graph.clone(), logger.clone());
 
-    // Try to get remote scorer if remote_scorer_url and auth_client are available
-    if let (Some(url), Some(client)) = (remote_scorer_url, &auth_client) {
-        match get_remote_scorer_bytes(client, &url).await {
-            Ok(scorer_bytes) => {
-                let mut readable_bytes = lightning::io::Cursor::new(scorer_bytes);
-                let params = decay_params();
-                let args = (
-                    params,
-                    Arc::clone(&gossip_data.network_graph),
-                    Arc::clone(&logger),
-                );
-                if let Ok(remote_scorer) = ProbScorer::read(&mut readable_bytes, args) {
-                    log_debug!(logger, "retrieved remote scorer");
-                    let remote_scorer = HubPreferentialScorer::new(remote_scorer);
-                    gossip_data.scorer = Some(remote_scorer);
-                } else {
-                    log_error!(
-                        logger,
-                        "failed to parse remote scorer, keeping the local one"
-                    );
-                }
-            }
-            Err(_) => {
-                log_error!(
-                    logger,
-                    "failed to retrieve remote scorer, keeping the local one"
-                );
-            }
+    let scorer_hex: Option<String> = storage.get_data(PROB_SCORER_KEY)?;
+
+    if let Some(hex) = scorer_hex {
+        let scorer_bytes: Vec<u8> = Vec::from_hex(&hex)?;
+        let mut readable_bytes = lightning::io::Cursor::new(scorer_bytes);
+        let params = decay_params();
+        let args = (
+            params,
+            Arc::clone(&gossip_data.network_graph),
+            Arc::clone(&logger),
+        );
+        if let Ok(scorer) = ProbScorer::read(&mut readable_bytes, args) {
+            log_debug!(logger, "retrieved local scorer");
+            let scorer = HubPreferentialScorer::new(scorer);
+            gossip_data.scorer = Some(scorer);
+        } else {
+            log_error!(logger, "failed to parse local scorer");
         }
     }
 
@@ -201,6 +217,11 @@ pub async fn get_gossip_sync(
         }
     };
 
+    log_trace!(
+        &logger,
+        "Gossip sync/Scorer initialized in {}ms",
+        start.elapsed().as_millis()
+    );
     Ok((gossip_sync, prob_scorer))
 }
 
@@ -550,7 +571,7 @@ mod test {
         let storage = MemoryStorage::default();
 
         let logger = Arc::new(MutinyLogger::default());
-        let _gossip_sync = get_gossip_sync(&storage, None, None, Network::Regtest, logger.clone())
+        let _gossip_sync = get_gossip_sync(&storage, Network::Regtest, logger.clone())
             .await
             .unwrap();
 

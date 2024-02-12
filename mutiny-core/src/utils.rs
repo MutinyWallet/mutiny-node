@@ -135,6 +135,13 @@ impl<T> Mutex<T> {
             lock: self.inner.borrow_mut(),
         })
     }
+
+    #[allow(clippy::result_unit_err)]
+    pub fn try_lock(&self) -> LockResult<MutexGuard<'_, T>> {
+        Ok(MutexGuard {
+            lock: self.inner.try_borrow_mut().map_err(|_| ())?,
+        })
+    }
 }
 
 impl<'a, T: 'a + ScoreLookUp + ScoreUpdate> LockableScore<'a> for Mutex<T> {
