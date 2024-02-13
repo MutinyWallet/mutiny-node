@@ -6,6 +6,7 @@ use gloo_utils::format::JsValueSerdeExt;
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_trace};
 use log::error;
+use mutiny_core::logging::LOGGING_KEY;
 use mutiny_core::storage::*;
 use mutiny_core::vss::*;
 use mutiny_core::*;
@@ -138,6 +139,31 @@ impl IndexedDbStorage {
             .map_err(|_| MutinyError::write_err(MutinyStorageError::IndexedDBError))?;
 
         Ok(res)
+    }
+
+    pub(crate) async fn get_logs() -> Result<Option<Vec<String>>, MutinyError> {
+        let indexed_db = Self::build_indexed_db_database().await?;
+        let tx = indexed_db
+            .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadOnly)
+            .map_err(|e| {
+                MutinyError::read_err(
+                    anyhow!("Failed to create indexed db transaction: {e}").into(),
+                )
+            })?;
+
+        let store = tx.store(WALLET_OBJECT_STORE_NAME).map_err(|e| {
+            MutinyError::read_err(anyhow!("Failed to create indexed db store: {e}").into())
+        })?;
+
+        let key = JsValue::from(LOGGING_KEY);
+        let read = store
+            .get(&key)
+            .await
+            .map_err(|_| MutinyError::read_err(MutinyStorageError::IndexedDBError))?;
+
+        let result: Option<Vec<String>> = read.into_serde()?;
+
+        Ok(result)
     }
 
     async fn save_to_indexed_db(

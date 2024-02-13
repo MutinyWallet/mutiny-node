@@ -1,4 +1,3 @@
-use bitcoin::hashes::hex::ToHex;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -8,10 +7,11 @@ use crate::storage::MutinyStorage;
 use crate::utils::Mutex;
 use crate::{error::MutinyError, utils, utils::sleep};
 use chrono::Utc;
+use hex_conservative::DisplayHex;
 use lightning::util::logger::{Level, Logger, Record};
 use log::*;
 
-pub(crate) const LOGGING_KEY: &str = "logs";
+pub const LOGGING_KEY: &str = "logs";
 
 const MAX_LOG_ITEMS: usize = 10_000;
 
@@ -99,11 +99,11 @@ impl Default for MutinyLogger {
 fn gen_session_id() -> String {
     let mut entropy = vec![0u8; 2];
     getrandom::getrandom(&mut entropy).unwrap();
-    entropy.to_hex()
+    entropy.to_lower_hex_string()
 }
 
 impl Logger for MutinyLogger {
-    fn log(&self, record: &Record) {
+    fn log(&self, record: Record) {
         let raw_log = record.args.to_string();
         let log = format!(
             "{} {} {:<5} [{}:{}] {}\n",
@@ -172,7 +172,7 @@ pub struct TestLogger {}
 
 #[cfg(test)]
 impl Logger for TestLogger {
-    fn log(&self, record: &Record) {
+    fn log(&self, record: Record) {
         let raw_log = record.args.to_string();
         let log = format!(
             "{} {:<5} [{}:{}] {}\n",

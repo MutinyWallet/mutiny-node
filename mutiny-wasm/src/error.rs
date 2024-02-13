@@ -1,4 +1,3 @@
-use bitcoin::Network;
 use lightning_invoice::ParseOrSemanticError;
 use log::error;
 use mutiny_core::error::{MutinyError, MutinyStorageError};
@@ -28,7 +27,7 @@ pub enum MutinyJsError {
     ConnectionFailed,
     /// The invoice or address is on a different network
     #[error("The invoice or address is on a different network.")]
-    IncorrectNetwork(Network),
+    IncorrectNetwork,
     /// Payment of the given invoice has already been initiated.
     #[error("An invoice must not get payed twice.")]
     NonUniquePaymentHash,
@@ -173,7 +172,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::NotFound => MutinyJsError::NotFound,
             MutinyError::FundingTxCreationFailed => MutinyJsError::FundingTxCreationFailed,
             MutinyError::ConnectionFailed => MutinyJsError::ConnectionFailed,
-            MutinyError::IncorrectNetwork(net) => MutinyJsError::IncorrectNetwork(net),
+            MutinyError::IncorrectNetwork => MutinyJsError::IncorrectNetwork,
             MutinyError::NonUniquePaymentHash => MutinyJsError::NonUniquePaymentHash,
             MutinyError::PaymentTimeout => MutinyJsError::PaymentTimeout,
             MutinyError::InvoiceInvalid => MutinyJsError::InvoiceInvalid,
@@ -243,8 +242,8 @@ impl From<bip39::Error> for MutinyJsError {
     }
 }
 
-impl From<bitcoin::util::address::Error> for MutinyJsError {
-    fn from(_: bitcoin::util::address::Error) -> Self {
+impl From<bitcoin::address::Error> for MutinyJsError {
+    fn from(_: bitcoin::address::Error) -> Self {
         Self::JsonReadWriteError
     }
 }
@@ -252,12 +251,6 @@ impl From<bitcoin::util::address::Error> for MutinyJsError {
 impl From<lnurl::Error> for MutinyJsError {
     fn from(e: lnurl::Error) -> Self {
         MutinyError::from(e).into()
-    }
-}
-
-impl From<nostr::secp256k1::Error> for MutinyJsError {
-    fn from(_: nostr::secp256k1::Error) -> Self {
-        Self::InvalidArgumentsError
     }
 }
 

@@ -79,13 +79,13 @@ use ::nostr::{Event, EventId, JsonUtil, Kind};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
-use bitcoin::hashes::hex::ToHex;
-use bitcoin::hashes::{sha256, Hash};
+use bitcoin::bip32::ExtendedPrivKey;
+use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::util::bip32::ExtendedPrivKey;
-use bitcoin::Network;
+use bitcoin::{hashes::sha256, Network};
 use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::{pin_mut, select, FutureExt};
+use hex_conservative::{DisplayHex, FromHex};
 #[cfg(target_arch = "wasm32")]
 use instant::Instant;
 use lightning::ln::PaymentHash;
@@ -294,10 +294,11 @@ impl From<Bolt11Invoice> for MutinyInvoice {
     fn from(value: Bolt11Invoice) -> Self {
         let description = match value.description() {
             Bolt11InvoiceDescription::Direct(a) => {
-                if a.is_empty() {
+                let desc = a.clone().into_inner();
+                if desc.0.is_empty() {
                     None
                 } else {
-                    Some(a.to_string())
+                    Some(desc.0)
                 }
             }
             Bolt11InvoiceDescription::Hash(_) => None,
@@ -329,14 +330,9 @@ impl From<Bolt11Invoice> for MutinyInvoice {
 
 impl From<MutinyInvoice> for PaymentInfo {
     fn from(invoice: MutinyInvoice) -> Self {
-        let preimage = invoice
+        let preimage: Option<[u8; 32]> = invoice
             .preimage
-            .map(|s| hex::decode(s).expect("preimage should decode"))
-            .map(|v| {
-                let mut arr = [0; 32];
-                arr[..].copy_from_slice(&v);
-                arr
-            });
+            .map(|s| FromHex::from_hex(&s).expect("preimage should decode"));
         let secret = None;
         let status = invoice.status;
         let amt_msat = invoice
@@ -387,7 +383,7 @@ impl MutinyInvoice {
                     labels,
                     amount_sats,
                     payee_pubkey: i.payee_pubkey,
-                    preimage: i.preimage.map(|p| p.to_hex()),
+                    preimage: i.preimage.map(|p| p.to_lower_hex_string()),
                     fees_paid: i.fee_paid_msat.map(|f| f / 1_000),
                     ..invoice.into()
                 })
@@ -395,8 +391,8 @@ impl MutinyInvoice {
             None => {
                 let amount_sats: Option<u64> = i.amt_msat.0.map(|s| s / 1_000);
                 let fees_paid = i.fee_paid_msat.map(|f| f / 1_000);
-                let preimage = i.preimage.map(|p| p.to_hex());
-                let payment_hash = sha256::Hash::from_inner(payment_hash.0);
+                let preimage = i.preimage.map(|p| p.to_lower_hex_string());
+                let payment_hash = sha256::Hash::from_byte_array(payment_hash.0);
                 let invoice = MutinyInvoice {
                     bolt11: None,
                     description: None,
@@ -816,25 +812,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             safe_mode: self.safe_mode,
         };
 
-        #[cfg(not(test))]
-        {
-            // if we need a full sync from a restore
-            if mw.storage.get(NEED_FULL_SYNC_KEY)?.unwrap_or_default() {
-                let start = Instant::now();
-                log_info!(mw.logger, "Full sync needed from restore");
-                mw.node_manager
-                    .wallet
-                    .full_sync(crate::onchain::RESTORE_SYNC_STOP_GAP)
-                    .await?;
-                mw.storage.delete(&[NEED_FULL_SYNC_KEY])?;
-                log_info!(
-                    mw.logger,
-                    "Full sync complete, took: {}ms",
-                    start.elapsed().as_millis()
-                );
-            }
-        }
-
         // if we are in safe mode, don't create any nodes or
         // start any nostr services
         if self.safe_mode {
@@ -1048,7 +1025,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         if inv.network() != self.network {
-            return Err(MutinyError::IncorrectNetwork(inv.network()));
+            return Err(MutinyError::IncorrectNetwork);
         }
 
         // check invoice is expired
@@ -1698,7 +1675,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .iter()
             .filter_map(|(_, c)| {
                 if c.npub.is_some_and(|n| metadata.get(&n).is_none()) {
-                    c.npub.map(|n| n.to_hex())
+                    c.npub.map(|n| n.serialize().to_lower_hex_string())
                 } else {
                     None
                 }
@@ -1768,18 +1745,20 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let client = reqwest::Client::new();
 
         // api is a little weird, has sender and receiver but still gives full conversation
+        let sender = npub.serialize().to_lower_hex_string();
+        let receiver = self.nostr.public_key.serialize().to_lower_hex_string();
         let body = match (until, since) {
             (Some(until), Some(since)) => {
-                json!(["get_directmsgs", { "sender": npub.to_hex(), "receiver": self.nostr.public_key.to_hex(), "limit": limit, "until": until, "since": since }])
+                json!(["get_directmsgs", { "sender": sender, "receiver": receiver, "limit": limit, "until": until, "since": since }])
             }
             (None, Some(since)) => {
-                json!(["get_directmsgs", { "sender": npub.to_hex(), "receiver": self.nostr.public_key.to_hex(), "limit": limit, "since": since }])
+                json!(["get_directmsgs", { "sender": sender, "receiver": receiver, "limit": limit, "since": since }])
             }
             (Some(until), None) => {
-                json!(["get_directmsgs", { "sender": npub.to_hex(), "receiver": self.nostr.public_key.to_hex(), "limit": limit, "until": until }])
+                json!(["get_directmsgs", { "sender": sender, "receiver": receiver, "limit": limit, "until": until }])
             }
             (None, None) => {
-                json!(["get_directmsgs", { "sender": npub.to_hex(), "receiver": self.nostr.public_key.to_hex(), "limit": limit, "since": 0 }])
+                json!(["get_directmsgs", { "sender": sender, "receiver": receiver, "limit": limit, "since": 0 }])
             }
         };
         let data: Vec<Value> = Self::primal_request(&client, url, body).await?;
@@ -1916,7 +1895,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         network: Option<Network>,
     ) -> Result<MutinyInvoice, MutinyError> {
         if invoice.network() != network.unwrap_or(self.network) {
-            return Err(MutinyError::IncorrectNetwork(invoice.network()));
+            return Err(MutinyError::IncorrectNetwork);
         }
 
         Ok(invoice.into())
@@ -2242,7 +2221,7 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
     }
 
     async fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus> {
-        self.get_invoice_by_hash(&sha256::Hash::from_inner(*payment_hash))
+        self.get_invoice_by_hash(&sha256::Hash::from_byte_array(*payment_hash))
             .await
             .ok()
             .map(|p| p.status)
@@ -2533,7 +2512,7 @@ mod tests {
         encrypt::encryption_key_from_pass, generate_seed, max_routing_fee_amount,
         nodemanager::NodeManager, MutinyWallet, MutinyWalletBuilder, MutinyWalletConfigBuilder,
     };
-    use bitcoin::util::bip32::ExtendedPrivKey;
+    use bitcoin::bip32::ExtendedPrivKey;
     use bitcoin::Network;
 
     use crate::test_utils::*;
@@ -2659,7 +2638,7 @@ mod tests {
             .await
             .expect("mutiny wallet should initialize");
         let seed = mw.node_manager.xprivkey;
-        assert!(!seed.private_key.is_empty());
+        assert!(!seed.private_key.secret_bytes().is_empty());
 
         // create a second mw and make sure it has a different seed
         let pass = uuid::Uuid::new_v4().to_string();

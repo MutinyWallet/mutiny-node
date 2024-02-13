@@ -1,8 +1,8 @@
 use ::nostr::ToBech32;
-use bitcoin::hashes::hex::ToHex;
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
 use bitcoin::OutPoint;
 use gloo_utils::format::JsValueSerdeExt;
+use hex_conservative::DisplayHex;
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
@@ -74,11 +74,14 @@ impl From<mutiny_core::ActivityItem> for ActivityItem {
         };
 
         let id = match a {
-            mutiny_core::ActivityItem::OnChain(ref t) => t.txid.to_hex(),
-            mutiny_core::ActivityItem::Lightning(ref ln) => ln.payment_hash.to_hex(),
-            mutiny_core::ActivityItem::ChannelClosed(ref c) => {
-                c.user_channel_id.map(|c| c.to_hex()).unwrap_or_default()
+            mutiny_core::ActivityItem::OnChain(ref t) => t.txid.to_string(),
+            mutiny_core::ActivityItem::Lightning(ref ln) => {
+                ln.payment_hash.into_32().to_lower_hex_string()
             }
+            mutiny_core::ActivityItem::ChannelClosed(ref c) => c
+                .user_channel_id
+                .map(|c| c.to_lower_hex_string())
+                .unwrap_or_default(),
         };
 
         let (inbound, amount_sats) = match a {
@@ -176,17 +179,15 @@ impl MutinyInvoice {
 impl From<mutiny_core::MutinyInvoice> for MutinyInvoice {
     fn from(m: mutiny_core::MutinyInvoice) -> Self {
         let potential_hodl_invoice = match m.bolt11 {
-            Some(ref b) => {
-                utils::HODL_INVOICE_NODES.contains(&b.recover_payee_pub_key().to_hex().as_str())
-            }
+            Some(ref b) => utils::is_hodl_invoice(b),
             None => false,
         };
         MutinyInvoice {
             bolt11: m.bolt11,
             description: m.description,
-            payment_hash: m.payment_hash.to_hex(),
+            payment_hash: m.payment_hash.into_32().to_lower_hex_string(),
             preimage: m.preimage,
-            payee_pubkey: m.payee_pubkey.map(|p| p.to_hex()),
+            payee_pubkey: m.payee_pubkey.map(|p| p.serialize().to_lower_hex_string()),
             amount_sats: m.amount_sats,
             expire: m.expire,
             status: m.status.to_string(),
@@ -202,7 +203,7 @@ impl From<mutiny_core::MutinyInvoice> for MutinyInvoice {
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
 pub struct MutinyPeer {
-    pubkey: PublicKey,
+    pubkey: String,
     connection_string: Option<String>,
     alias: Option<String>,
     color: Option<String>,
@@ -219,7 +220,7 @@ impl MutinyPeer {
 
     #[wasm_bindgen(getter)]
     pub fn pubkey(&self) -> String {
-        self.pubkey.to_hex()
+        self.pubkey.clone()
     }
 
     #[wasm_bindgen(getter)]
@@ -246,7 +247,7 @@ impl MutinyPeer {
 impl From<nodemanager::MutinyPeer> for MutinyPeer {
     fn from(m: nodemanager::MutinyPeer) -> Self {
         MutinyPeer {
-            pubkey: m.pubkey,
+            pubkey: m.pubkey.serialize().to_lower_hex_string(),
             connection_string: m.connection_string,
             alias: m.alias,
             color: m.color,
@@ -312,7 +313,7 @@ impl From<nodemanager::MutinyChannel> for MutinyChannel {
             reserve: m.reserve,
             inbound: m.inbound,
             outpoint: m.outpoint.map(|o| o.to_string()),
-            peer: m.peer.to_hex(),
+            peer: m.peer.serialize().to_lower_hex_string(),
             confirmations_required: m.confirmations_required,
             confirmations: m.confirmations,
             is_outbound: m.is_outbound,
@@ -345,8 +346,8 @@ impl From<MutinyChannel> for nodemanager::MutinyChannel {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 #[wasm_bindgen]
 pub struct ChannelClosure {
-    channel_id: Option<[u8; 32]>,
-    node_id: Option<PublicKey>,
+    channel_id: Option<String>,
+    node_id: Option<String>,
     reason: String,
     pub timestamp: u64,
 }
@@ -360,12 +361,12 @@ impl ChannelClosure {
 
     #[wasm_bindgen(getter)]
     pub fn channel_id(&self) -> Option<String> {
-        self.channel_id.map(|c| c.to_hex())
+        self.channel_id.clone()
     }
 
     #[wasm_bindgen(getter)]
     pub fn node_id(&self) -> Option<String> {
-        self.node_id.map(|n| n.to_string())
+        self.node_id.clone()
     }
 
     #[wasm_bindgen(getter)]
@@ -389,8 +390,8 @@ impl Ord for ChannelClosure {
 impl From<nodemanager::ChannelClosure> for ChannelClosure {
     fn from(c: nodemanager::ChannelClosure) -> Self {
         ChannelClosure {
-            channel_id: c.channel_id,
-            node_id: c.node_id,
+            channel_id: c.channel_id.map(|c| c.to_lower_hex_string()),
+            node_id: c.node_id.map(|c| c.serialize().to_lower_hex_string()),
             reason: c.reason,
             timestamp: c.timestamp,
         }
@@ -1040,7 +1041,7 @@ impl From<(nostr::nwc::PendingNwcInvoice, Option<String>)> for PendingNwcInvoice
             index: value.index,
             npub,
             invoice: value.invoice.to_string(),
-            id: value.invoice.payment_hash().to_hex(),
+            id: value.invoice.payment_hash().into_32().to_lower_hex_string(),
             amount_sats: value.invoice.amount_milli_satoshis().unwrap_or_default() / 1_000,
             invoice_description,
             profile_name,

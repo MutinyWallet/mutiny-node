@@ -1,8 +1,9 @@
 use aes::cipher::block_padding::UnpadError;
-use bitcoin::Network;
+use bdk::signer::SignerError;
+use bdk::wallet::error::BuildFeeBumpError;
+use bdk::wallet::tx_builder::AddUtxoError;
 use lightning::ln::channelmanager::RetryableSendFailure;
 use lightning::ln::peer_handler::PeerHandleError;
-use lightning_invoice::payment::PaymentError;
 use lightning_invoice::ParseOrSemanticError;
 use lightning_rapid_gossip_sync::GraphSyncError;
 use lightning_transaction_sync::TxSyncError;
@@ -36,7 +37,7 @@ pub enum MutinyError {
     ConnectionFailed,
     /// The invoice or address is on a different network
     #[error("The invoice or address is on a different network.")]
-    IncorrectNetwork(Network),
+    IncorrectNetwork,
     /// Payment of the given invoice has already been initiated.
     #[error("An invoice must not get payed twice.")]
     NonUniquePaymentHash,
@@ -201,10 +202,11 @@ impl PartialEq for MutinyError {
             (Self::NotFound, Self::NotFound) => true,
             (Self::FundingTxCreationFailed, Self::FundingTxCreationFailed) => true,
             (Self::ConnectionFailed, Self::ConnectionFailed) => true,
-            (Self::IncorrectNetwork(net), Self::IncorrectNetwork(net2)) => net == net2,
+            (Self::IncorrectNetwork, Self::IncorrectNetwork) => true,
             (Self::NonUniquePaymentHash, Self::NonUniquePaymentHash) => true,
             (Self::PaymentTimeout, Self::PaymentTimeout) => true,
             (Self::InvoiceInvalid, Self::InvoiceInvalid) => true,
+            (Self::InvoiceExpired, Self::InvoiceExpired) => true,
             (Self::InvoiceCreationFailed, Self::InvoiceCreationFailed) => true,
             (Self::ReserveAmountError, Self::ReserveAmountError) => true,
             (Self::InsufficientBalance, Self::InsufficientBalance) => true,
@@ -285,14 +287,9 @@ impl From<aes_gcm::aes::cipher::InvalidLength> for MutinyError {
     }
 }
 
-impl From<bdk::Error> for MutinyError {
-    fn from(e: bdk::Error) -> Self {
-        match e {
-            bdk::Error::Signer(_) => Self::WalletSigningFailed,
-            bdk::Error::InsufficientFunds { .. } => Self::InsufficientBalance,
-            bdk::Error::TransactionNotFound => Self::NotFound,
-            _ => Self::WalletOperationFailed,
-        }
+impl From<bdk_chain::local_chain::AlterCheckPointError> for MutinyError {
+    fn from(_e: bdk_chain::local_chain::AlterCheckPointError) -> Self {
+        Self::WalletOperationFailed
     }
 }
 
@@ -305,9 +302,28 @@ impl From<bdk::descriptor::error::Error> for MutinyError {
 impl From<bdk::wallet::NewError<MutinyError>> for MutinyError {
     fn from(e: bdk::wallet::NewError<MutinyError>) -> Self {
         match e {
-            bdk::wallet::NewError::Persist(e) => e,
+            bdk::wallet::NewError::Write(e) => e,
             bdk::wallet::NewError::Descriptor(e) => e.into(),
+            bdk::wallet::NewError::NonEmptyDatabase => Self::WalletOperationFailed,
         }
+    }
+}
+
+impl From<bdk::wallet::LoadError<MutinyError>> for MutinyError {
+    fn from(e: bdk::wallet::LoadError<MutinyError>) -> Self {
+        match e {
+            bdk::wallet::LoadError::Descriptor(e) => e.into(),
+            bdk::wallet::LoadError::Load(e) => e,
+            bdk::wallet::LoadError::MissingGenesis => Self::WalletOperationFailed,
+            bdk::wallet::LoadError::MissingNetwork => Self::WalletOperationFailed,
+            bdk::wallet::LoadError::NotInitialized => Self::WalletOperationFailed,
+        }
+    }
+}
+
+impl From<AddUtxoError> for MutinyError {
+    fn from(_: AddUtxoError) -> Self {
+        Self::WalletOperationFailed
     }
 }
 
@@ -317,8 +333,8 @@ impl From<bip39::Error> for MutinyError {
     }
 }
 
-impl From<bitcoin::util::bip32::Error> for MutinyError {
-    fn from(_e: bitcoin::util::bip32::Error) -> Self {
+impl From<bitcoin::bip32::Error> for MutinyError {
+    fn from(_e: bitcoin::bip32::Error) -> Self {
         Self::InvalidMnemonic
     }
 }
@@ -366,15 +382,12 @@ impl From<PeerHandleError> for MutinyError {
     }
 }
 
-impl From<PaymentError> for MutinyError {
-    fn from(e: PaymentError) -> Self {
-        match e {
-            PaymentError::Invoice(_) => Self::InvoiceInvalid,
-            PaymentError::Sending(s) => match s {
-                RetryableSendFailure::PaymentExpired => Self::InvoiceExpired,
-                RetryableSendFailure::RouteNotFound => Self::RoutingFailed,
-                RetryableSendFailure::DuplicatePayment => Self::NonUniquePaymentHash,
-            },
+impl From<RetryableSendFailure> for MutinyError {
+    fn from(s: RetryableSendFailure) -> Self {
+        match s {
+            RetryableSendFailure::PaymentExpired => Self::InvoiceExpired,
+            RetryableSendFailure::RouteNotFound => Self::RoutingFailed,
+            RetryableSendFailure::DuplicatePayment => Self::NonUniquePaymentHash,
         }
     }
 }
@@ -427,10 +440,15 @@ impl From<bitcoin::hashes::hex::Error> for MutinyError {
     }
 }
 
-impl From<bitcoin::util::address::Error> for MutinyError {
-    fn from(_e: bitcoin::util::address::Error) -> Self {
-        MutinyError::ReadError {
-            source: MutinyStorageError::Other(anyhow::anyhow!("Failed to decode address")),
+impl From<bitcoin::address::Error> for MutinyError {
+    fn from(e: bitcoin::address::Error) -> Self {
+        match e {
+            bitcoin::address::Error::NetworkValidation { .. } => MutinyError::IncorrectNetwork,
+            bitcoin::address::Error::UnrecognizedScript => MutinyError::InvalidArgumentsError,
+            bitcoin::address::Error::UnknownAddressType(_) => MutinyError::InvalidArgumentsError,
+            _ => MutinyError::ReadError {
+                source: MutinyStorageError::Other(anyhow::anyhow!("Failed to decode address")),
+            },
         }
     }
 }
@@ -442,15 +460,33 @@ impl From<esplora_client::Error> for MutinyError {
     }
 }
 
-impl From<bdk_chain::local_chain::InsertBlockNotMatchingError> for MutinyError {
-    fn from(_e: bdk_chain::local_chain::InsertBlockNotMatchingError) -> Self {
+impl From<bdk::wallet::InsertTxError> for MutinyError {
+    fn from(_e: bdk::wallet::InsertTxError) -> Self {
         Self::WalletSyncError
     }
 }
 
-impl From<bdk::wallet::InsertTxError> for MutinyError {
-    fn from(_e: bdk::wallet::InsertTxError) -> Self {
-        Self::WalletSyncError
+impl<S> From<bdk::wallet::error::CreateTxError<S>> for MutinyError {
+    fn from(_e: bdk::wallet::error::CreateTxError<S>) -> Self {
+        Self::WalletOperationFailed
+    }
+}
+
+impl From<BuildFeeBumpError> for MutinyError {
+    fn from(e: BuildFeeBumpError) -> Self {
+        match e {
+            BuildFeeBumpError::UnknownUtxo(_) => Self::NotFound,
+            BuildFeeBumpError::TransactionNotFound(_) => Self::NotFound,
+            BuildFeeBumpError::TransactionConfirmed(_) => Self::NotFound,
+            BuildFeeBumpError::IrreplaceableTransaction(_) => Self::InvalidArgumentsError,
+            BuildFeeBumpError::FeeRateUnavailable => Self::WalletOperationFailed,
+        }
+    }
+}
+
+impl From<SignerError> for MutinyError {
+    fn from(_: SignerError) -> Self {
+        Self::WalletOperationFailed
     }
 }
 

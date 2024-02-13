@@ -14,10 +14,9 @@ use crate::{ldkstorage::CHANNEL_MANAGER_KEY, utils::sleep};
 use async_trait::async_trait;
 use bdk::chain::{Append, PersistBackend};
 use bip39::Mnemonic;
-use bitcoin::hashes::hex::ToHex;
-use bitcoin::hashes::Hash;
+use bitcoin::secp256k1::ThirtyTwoByteHash;
 use futures_util::lock::Mutex;
-use hex::FromHex;
+use hex_conservative::*;
 use lightning::{ln::PaymentHash, util::logger::Logger};
 use lightning::{log_error, log_trace};
 use serde::{Deserialize, Serialize};
@@ -785,17 +784,9 @@ impl MutinyStorage for () {
 
 fn payment_key(inbound: bool, payment_hash: &[u8; 32]) -> String {
     if inbound {
-        format!(
-            "{}{}",
-            PAYMENT_INBOUND_PREFIX_KEY,
-            payment_hash.to_hex().as_str()
-        )
+        format!("{}{}", PAYMENT_INBOUND_PREFIX_KEY, payment_hash.as_hex())
     } else {
-        format!(
-            "{}{}",
-            PAYMENT_OUTBOUND_PREFIX_KEY,
-            payment_hash.to_hex().as_str()
-        )
+        format!("{}{}", PAYMENT_OUTBOUND_PREFIX_KEY, payment_hash.as_hex())
     }
 }
 
@@ -817,12 +808,13 @@ pub(crate) fn get_payment_info<S: MutinyStorage>(
     logger: &MutinyLogger,
 ) -> Result<(PaymentInfo, bool), MutinyError> {
     // try inbound first
-    if let Some(payment_info) = read_payment_info(storage, payment_hash.as_inner(), true, logger) {
+    let payment_hash = payment_hash.into_32();
+    if let Some(payment_info) = read_payment_info(storage, &payment_hash, true, logger) {
         return Ok((payment_info, true));
     }
 
     // if no inbound check outbound
-    match read_payment_info(storage, payment_hash.as_inner(), false, logger) {
+    match read_payment_info(storage, &payment_hash, false, logger) {
         Some(payment_info) => Ok((payment_info, false)),
         None => Err(MutinyError::NotFound),
     }
@@ -901,13 +893,8 @@ where
         }
     }
 
-    fn load_from_persistence(&mut self) -> Result<K, Self::LoadError> {
-        if let Some(k) = self.0.get_data(KEYCHAIN_STORE_KEY)? {
-            Ok(k)
-        } else {
-            // If there is no keychain store, we return an empty one
-            Ok(K::default())
-        }
+    fn load_from_persistence(&mut self) -> Result<Option<K>, Self::LoadError> {
+        self.0.get_data(KEYCHAIN_STORE_KEY)
     }
 }
 

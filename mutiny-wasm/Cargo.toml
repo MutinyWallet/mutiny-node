@@ -24,12 +24,12 @@ wasm-bindgen = "0.2.88"
 wasm-bindgen-futures = "0.4.38"
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
-bitcoin = { version = "0.29.2", default-features = false, features = ["std", "serde", "secp-recovery", "rand"] }
-lightning = { version = "0.0.118", default-features = false, features = ["std"] }
-lightning-invoice = { version = "0.26.0" }
+bitcoin = { version = "0.30.2", default-features = false, features = ["std", "serde", "secp-recovery", "rand"] }
+lightning = { version = "0.0.121", default-features = false, features = ["std"] }
+lightning-invoice = { version = "0.29.0" }
 thiserror = "1.0"
 instant = { version = "0.1", features = ["wasm-bindgen"] }
-lnurl-rs = { version = "0.3.1", default-features = false }
+lnurl-rs = { version = "0.4.1", default-features = false }
 nostr = { version = "0.27.0", default-features = false, features = ["nip04", "nip05", "nip07", "nip47", "nip57"] }
 wasm-logger = "0.2.0"
 log = "0.4.17"
@@ -41,6 +41,7 @@ getrandom = { version = "0.2", features = ["js"] }
 futures = "0.3.25"
 urlencoding = "2.1.2"
 once_cell = "1.18.0"
+hex-conservative = "0.1.1"
 payjoin = { version = "0.13.0", features = ["send", "base64"] }
 fedimint-core = { git = "https://github.com/fedimint/fedimint", rev = "6a923ee10c3a578cd835044e3fdd94aa5123735a" }
 

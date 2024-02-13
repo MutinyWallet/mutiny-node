@@ -8,7 +8,7 @@ use lnurl::lnurl::LnUrl;
 use nostr::{key::XOnlyPublicKey, Metadata};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -17,10 +17,10 @@ const INVOICE_LABELS_MAP_KEY: &str = "invoice_labels";
 const LABEL_PREFIX: &str = "label/";
 const CONTACT_PREFIX: &str = "contact/";
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, Ord, PartialEq, PartialOrd, Hash, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Default)]
 pub struct LabelItem {
     /// List of addresses that have this label
-    pub addresses: Vec<Address>,
+    pub addresses: HashSet<String>,
     /// List of invoices that have this label
     pub invoices: Vec<Bolt11Invoice>,
     /// Epoch time in seconds when this label was last used
@@ -92,7 +92,7 @@ impl Contact {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, Ord, PartialEq, PartialOrd, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub enum TagItem {
     Label((String, LabelItem)),
     Contact((String, Contact)),
@@ -200,9 +200,7 @@ impl<S: MutinyStorage> LabelStorage for S {
                 Some(mut label_item) => {
                     // Add the address to the label item
                     // and sort so we can dedup the addresses
-                    label_item.addresses.push(address.clone());
-                    label_item.addresses.sort();
-                    label_item.addresses.dedup();
+                    label_item.addresses.insert(address.to_string());
 
                     // Update the last used timestamp
                     label_item.last_used_time = now;
@@ -217,9 +215,11 @@ impl<S: MutinyStorage> LabelStorage for S {
                     self.set_data(key, label_item, None)?;
                 }
                 None => {
+                    let mut addresses = HashSet::with_capacity(1);
+                    addresses.insert(address.to_string());
                     // Create a new label item
                     let label_item = LabelItem {
-                        addresses: vec![address.clone()],
+                        addresses,
                         invoices: vec![],
                         last_used_time: now,
                     };
@@ -268,7 +268,7 @@ impl<S: MutinyStorage> LabelStorage for S {
                 None => {
                     // Create a new label item
                     let label_item = LabelItem {
-                        addresses: vec![],
+                        addresses: HashSet::new(),
                         invoices: vec![invoice.clone()],
                         last_used_time: now,
                     };
@@ -499,6 +499,7 @@ mod tests {
     use super::*;
     use crate::test_utils::*;
     use bitcoin::Address;
+    use itertools::Itertools;
     use lightning_invoice::Bolt11Invoice;
     use std::collections::HashMap;
     use std::str::FromStr;
@@ -549,14 +550,16 @@ mod tests {
         labels.insert(
             "test1".to_string(),
             LabelItem {
-                addresses: vec![Address::from_str("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa").unwrap()],
+                addresses: HashSet::from_iter(vec![
+                    "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string()
+                ]),
                 ..Default::default()
             },
         );
         labels.insert(
             "test2".to_string(),
             LabelItem {
-                addresses: vec![Address::from_str("1BitcoinEaterAddressDontSendf59kuE").unwrap()],
+                addresses: HashSet::from_iter(vec!["1BitcoinEaterAddressDontSendf59kuE".to_string()]),
                 invoices: vec![Bolt11Invoice::from_str("lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm").unwrap()],
                 ..Default::default()
             },
@@ -564,7 +567,9 @@ mod tests {
         labels.insert(
             "test3".to_string(),
             LabelItem {
-                addresses: vec![Address::from_str("12cbQLTFMXRnSzktFkuoG3eHoMeFtpTu3S").unwrap()],
+                addresses: HashSet::from_iter(vec![
+                    "12cbQLTFMXRnSzktFkuoG3eHoMeFtpTu3S".to_string()
+                ]),
                 ..Default::default()
             },
         );
@@ -692,7 +697,7 @@ mod tests {
 
         let storage = MemoryStorage::default();
 
-        let address = Address::from_str(ADDRESS).unwrap();
+        let address = Address::from_str(ADDRESS).unwrap().assume_checked();
         let labels = vec!["label1".to_string(), "label2".to_string()];
 
         let result = storage.set_address_labels(address.clone(), labels.clone());
@@ -814,7 +819,7 @@ mod tests {
         storage
             .set_invoice_labels(invoice.clone(), vec![id.clone()])
             .unwrap();
-        let address = Address::from_str(ADDRESS).unwrap();
+        let address = Address::from_str(ADDRESS).unwrap().assume_checked();
         storage
             .set_address_labels(address, vec![id.clone()])
             .unwrap();
@@ -846,7 +851,7 @@ mod tests {
 
         let storage = MemoryStorage::default();
 
-        let address = Address::from_str(ADDRESS).unwrap();
+        let address = Address::from_str(ADDRESS).unwrap().assume_checked();
         let invoice = Bolt11Invoice::from_str(INVOICE).unwrap();
         let label = "test_label".to_string();
         let other_label = "other_label".to_string();
@@ -870,7 +875,10 @@ mod tests {
         let label_item = storage.get_label(&new_label).unwrap();
         assert!(label_item.is_some());
         assert_eq!(label_item.clone().unwrap().invoices, vec![invoice]);
-        assert_eq!(label_item.unwrap().addresses, vec![address]);
+        assert_eq!(
+            label_item.unwrap().addresses.into_iter().collect_vec(),
+            vec![address.to_string()]
+        );
 
         // check we properly converted the old label to a new label
         // check we also kept the other label
@@ -931,13 +939,18 @@ mod tests {
             expected_tag_items.push(TagItem::Label((label, label_item)));
         }
 
-        let mut result = storage.get_tag_items().unwrap();
+        let result = storage.get_tag_items().unwrap();
 
-        // Sort the resulting vectors to ensure proper comparison
-        result.sort();
-        expected_tag_items.sort();
+        // check they have same items
+        if result.len() != expected_tag_items.len() {
+            panic!("Incorrect tag items length")
+        }
 
-        assert_eq!(result, expected_tag_items);
+        for item in expected_tag_items {
+            if !result.contains(&item) {
+                panic!("Tag item missing! {item:?}")
+            }
+        }
     }
 
     #[test]
@@ -952,7 +965,7 @@ mod tests {
         assert_eq!(contact.last_used, 0);
         let id = storage.create_new_contact(contact.clone()).unwrap();
 
-        let address = Address::from_str(ADDRESS).unwrap();
+        let address = Address::from_str(ADDRESS).unwrap().assume_checked();
 
         storage
             .set_address_labels(address, vec![id.clone()])

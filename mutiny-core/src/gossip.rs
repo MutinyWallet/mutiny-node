@@ -2,8 +2,9 @@ use crate::{
     node::decay_params,
     scorer::{HubPreferentialScorer, ProbScorer},
 };
-use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::hashes::hex::FromHex;
 use bitcoin::Network;
+use hex_conservative::DisplayHex;
 #[cfg(target_arch = "wasm32")]
 use instant::Instant;
 use lightning::ln::msgs::NodeAnnouncement;
@@ -353,7 +354,7 @@ impl From<NodeAnnouncement> for LnPeerMetadata {
         Self {
             connection_string: None, // todo get from addresses
             alias: Some(value.contents.alias.to_string()),
-            color: Some(value.contents.rgb.to_hex()),
+            color: Some(value.contents.rgb.to_lower_hex_string()),
             label: None,
             timestamp: Some(value.contents.timestamp),
             nodes: vec![],
@@ -378,8 +379,9 @@ pub(crate) fn get_all_peers(
     for (key, value) in all {
         // remove the prefix from the key
         let key = key.replace(LN_PEER_METADATA_KEY_PREFIX, "");
-        let node_id = NodeId::from_str(&key)?;
-        peers.insert(node_id, value);
+        if let Ok(node_id) = NodeId::from_str(&key) {
+            peers.insert(node_id, value);
+        }
     }
     Ok(peers)
 }
@@ -501,6 +503,7 @@ pub(crate) fn get_rgs_url(
                 "https://rgs.mutinynet.com/snapshot/{last_sync_time}"
             )),
             Network::Regtest => None,
+            net => unreachable!("Unknown network {net}!"),
         }
     }
 }
