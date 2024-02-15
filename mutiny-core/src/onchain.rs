@@ -198,6 +198,13 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             }
         };
 
+        log_debug!(
+            self.logger,
+            "BDK Syncing {} addresses, {} txids",
+            spks.len(),
+            txids.len()
+        );
+
         let update_graph = self
             .blockchain
             .sync(spks, txids, core::iter::empty(), 5)
@@ -291,14 +298,14 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                     self.sync().await?
                 }
             }
-            ConfirmationTime::Unconfirmed { .. } => {
+            ConfirmationTime::Unconfirmed { last_seen } => {
                 // if the transaction is unconfirmed, we can just insert it
                 let mut wallet = self.wallet.try_write()?;
 
                 // if we already have the transaction, we don't need to insert it
                 if wallet.get_tx(tx.txid()).is_none() {
                     // insert tx and commit changes
-                    wallet.insert_tx(tx, position)?;
+                    wallet.apply_unconfirmed_txs([(&tx, last_seen)]);
                     wallet.commit()?;
                 } else {
                     log_debug!(
