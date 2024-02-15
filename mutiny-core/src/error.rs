@@ -460,6 +460,12 @@ impl From<esplora_client::Error> for MutinyError {
     }
 }
 
+impl From<Box<esplora_client::Error>> for MutinyError {
+    fn from(e: Box<esplora_client::Error>) -> Self {
+        e.into()
+    }
+}
+
 impl From<bdk::wallet::InsertTxError> for MutinyError {
     fn from(_e: bdk::wallet::InsertTxError) -> Self {
         Self::WalletSyncError

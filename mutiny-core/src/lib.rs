@@ -731,6 +731,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         );
 
         // start syncing node manager
+        #[cfg(not(test))]
         NodeManager::start_sync(node_manager.clone());
 
         // create nostr manager
