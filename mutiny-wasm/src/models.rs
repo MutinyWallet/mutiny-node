@@ -120,6 +120,7 @@ pub struct MutinyInvoice {
     payee_pubkey: Option<String>,
     pub amount_sats: Option<u64>,
     pub expire: u64,
+    pub expired: bool,
     status: String,
     pub fees_paid: Option<u64>,
     pub inbound: bool,
@@ -182,6 +183,7 @@ impl From<mutiny_core::MutinyInvoice> for MutinyInvoice {
             Some(ref b) => utils::is_hodl_invoice(b),
             None => false,
         };
+        let now = utils::now().as_secs();
         MutinyInvoice {
             bolt11: m.bolt11,
             description: m.description,
@@ -190,6 +192,7 @@ impl From<mutiny_core::MutinyInvoice> for MutinyInvoice {
             payee_pubkey: m.payee_pubkey.map(|p| p.serialize().to_lower_hex_string()),
             amount_sats: m.amount_sats,
             expire: m.expire,
+            expired: m.expire < now,
             status: m.status.to_string(),
             fees_paid: m.fees_paid,
             inbound: m.inbound,
@@ -696,6 +699,8 @@ pub struct TagItem {
     lnurl: Option<LnUrl>,
     #[serde(skip_serializing_if = "Option::is_none")]
     image_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    primal_image_url: Option<String>,
     /// Epoch time in seconds when this tag was last used
     pub last_used_time: u64,
 }
@@ -754,6 +759,11 @@ impl TagItem {
     pub fn image_url(&self) -> Option<String> {
         self.image_url.clone()
     }
+
+    #[wasm_bindgen(getter)]
+    pub fn primal_image_url(&self) -> Option<String> {
+        self.primal_image_url.clone()
+    }
 }
 
 impl From<(String, MutinyContact)> for TagItem {
@@ -765,6 +775,12 @@ impl From<(String, MutinyContact)> for TagItem {
             npub: contact.npub.map(|n| n.to_bech32().expect("bech32")),
             ln_address: contact.ln_address,
             lnurl: contact.lnurl,
+            primal_image_url: contact.image_url.as_ref().map(|i| {
+                format!(
+                    "https://primal.b-cdn.net/media-cache?s=s&a=1&u={}",
+                    urlencoding::encode(i)
+                )
+            }),
             image_url: contact.image_url,
             last_used_time: contact.last_used,
         }
@@ -782,6 +798,7 @@ impl From<labels::TagItem> for TagItem {
                 ln_address: None,
                 lnurl: None,
                 image_url: None,
+                primal_image_url: None,
                 last_used_time: item.last_used_time,
             },
             labels::TagItem::Contact(contact) => contact.into(),

@@ -19,6 +19,7 @@ use futures_util::lock::Mutex;
 use hex_conservative::*;
 use lightning::{ln::PaymentHash, util::logger::Logger};
 use lightning::{log_error, log_trace};
+use nostr::Metadata;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -41,6 +42,7 @@ pub(crate) const EXPECTED_NETWORK_KEY: &str = "network";
 const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
 const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
 pub const LAST_DM_SYNC_TIME_KEY: &str = "last_dm_sync_time";
+pub const NOSTR_PROFILE_METADATA: &str = "nostr_profile_metadata";
 const DELAYED_WRITE_MS: i32 = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -516,6 +518,14 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
         } else {
             Ok(())
         }
+    }
+
+    fn get_nostr_profile(&self) -> Result<Option<Metadata>, MutinyError> {
+        self.get_data(NOSTR_PROFILE_METADATA)
+    }
+
+    fn set_nostr_profile(&self, metadata: Metadata) -> Result<(), MutinyError> {
+        self.set_data(NOSTR_PROFILE_METADATA.to_string(), metadata, None)
     }
 
     fn get_device_id(&self) -> Result<String, MutinyError> {

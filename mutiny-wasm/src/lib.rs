@@ -438,7 +438,7 @@ impl MutinyWallet {
         self.mnemonic.to_string()
     }
 
-    /// Returns the npub for receiving dms
+    /// Returns the user's npub
     #[wasm_bindgen]
     pub fn get_npub(&self) -> String {
         self.inner.nostr.public_key.to_bech32().expect("bech32")
@@ -1222,7 +1222,7 @@ impl MutinyWallet {
             .set_invoice_labels(invoice, labels)?)
     }
 
-    pub fn get_contacts(&self) -> Result<JsValue /* Map<String, TagItem>*/, MutinyJsError> {
+    pub async fn get_contacts(&self) -> Result<JsValue /* Map<String, TagItem>*/, MutinyJsError> {
         Ok(JsValue::from_serde(
             &self
                 .inner
@@ -1234,7 +1234,7 @@ impl MutinyWallet {
         )?)
     }
 
-    pub fn get_contacts_sorted(&self) -> Result<JsValue /* Vec<TagItem>*/, MutinyJsError> {
+    pub async fn get_contacts_sorted(&self) -> Result<JsValue /* Vec<TagItem>*/, MutinyJsError> {
         let mut contacts: Vec<TagItem> = self
             .inner
             .node_manager
@@ -1329,6 +1329,19 @@ impl MutinyWallet {
         };
 
         Ok(self.inner.node_manager.edit_contact(id, contact)?)
+    }
+
+    pub async fn get_contact_for_npub(
+        &self,
+        npub: String,
+    ) -> Result<Option<TagItem>, MutinyJsError> {
+        let npub = parse_npub(&npub)?;
+        let contact = self.inner.node_manager.get_contact_for_npub(npub)?;
+
+        match contact {
+            Some((id, c)) => Ok(Some((id, c).into())),
+            None => Ok(None),
+        }
     }
 
     pub fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyJsError> {
@@ -1498,15 +1511,15 @@ impl MutinyWallet {
         &self,
         profile_index: u32,
     ) -> Result<models::NwcProfile, MutinyJsError> {
-        let mut profile = self.inner.nostr.get_profile(profile_index)?;
+        let mut profile = self.inner.nostr.get_nwc_profile(profile_index)?;
         profile.spending_conditions = SpendingConditions::RequireApproval;
-        Ok(self.inner.nostr.edit_profile(profile)?.into())
+        Ok(self.inner.nostr.edit_nwc_profile(profile)?.into())
     }
 
     /// Finds a nostr wallet connect profile by index
     #[wasm_bindgen]
     pub async fn get_nwc_profile(&self, index: u32) -> Result<models::NwcProfile, MutinyJsError> {
-        Ok(self.inner.nostr.get_profile(index)?.into())
+        Ok(self.inner.nostr.get_nwc_profile(index)?.into())
     }
 
     /// Create a single use nostr wallet connect profile
@@ -1640,6 +1653,50 @@ impl MutinyWallet {
         Ok(())
     }
 
+    /// Returns the user's nostr profile data
+    #[wasm_bindgen]
+    pub fn get_nostr_profile(&self) -> Result<JsValue, MutinyJsError> {
+        let profile = self.inner.nostr.get_profile()?;
+        Ok(JsValue::from_serde(&profile)?)
+    }
+
+    /// Sets the user's nostr profile data
+    #[wasm_bindgen]
+    pub async fn edit_nostr_profile(
+        &self,
+        name: Option<String>,
+        img_url: Option<String>,
+        lnurl: Option<String>,
+        nip05: Option<String>,
+    ) -> Result<JsValue, MutinyJsError> {
+        let img_url = img_url
+            .map(|i| nostr::url::Url::from_str(&i))
+            .transpose()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+
+        let lnurl = lnurl
+            .map(|l| {
+                LightningAddress::from_str(&l)
+                    .map(|a| a.lnurl())
+                    .or(LnUrl::from_str(&l))
+            })
+            .transpose()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+
+        let profile = self
+            .inner
+            .nostr
+            .edit_profile(name, img_url, lnurl, nip05)
+            .await?;
+        Ok(JsValue::from_serde(&profile)?)
+    }
+
+    /// Syncs all of our nostr data from the configured primal instance
+    pub async fn sync_nostr(&self) -> Result<(), MutinyJsError> {
+        self.inner.sync_nostr().await?;
+        Ok(())
+    }
+
     /// Get contacts from the given npub and sync them to the wallet
     pub async fn sync_nostr_contacts(&self, npub_str: String) -> Result<(), MutinyJsError> {
         let npub = parse_npub_or_nip05(&npub_str).await?;
@@ -1671,6 +1728,12 @@ impl MutinyWallet {
         let npub = parse_npub(&npub)?;
         let event_id = self.inner.nostr.send_dm(npub, message).await?;
         Ok(event_id.to_hex())
+    }
+
+    /// Uploads a profile pic to nostr.build and returns the uploaded file's URL
+    pub async fn upload_profile_pic(&self, img_base64: String) -> Result<String, MutinyJsError> {
+        let bytes = base64::decode(&img_base64)?;
+        Ok(self.inner.upload_profile_pic(bytes).await?)
     }
 
     /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.

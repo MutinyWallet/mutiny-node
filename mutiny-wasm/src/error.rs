@@ -236,6 +236,12 @@ impl From<MutinyStorageError> for MutinyJsError {
     }
 }
 
+impl From<base64::DecodeError> for MutinyJsError {
+    fn from(_e: base64::DecodeError) -> Self {
+        Self::InvalidArgumentsError
+    }
+}
+
 impl From<bip39::Error> for MutinyJsError {
     fn from(_e: bip39::Error) -> Self {
         Self::InvalidMnemonic

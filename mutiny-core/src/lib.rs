@@ -75,7 +75,7 @@ use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::key::XOnlyPublicKey;
 use ::nostr::nips::nip57;
 use ::nostr::prelude::ZapRequestData;
-use ::nostr::{Event, EventId, JsonUtil, Kind};
+use ::nostr::{Event, EventId, JsonUtil, Kind, Metadata};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
@@ -85,6 +85,7 @@ use bitcoin::secp256k1::PublicKey;
 use bitcoin::{hashes::sha256, Network};
 use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::{pin_mut, select, FutureExt};
+use futures_util::join;
 use hex_conservative::{DisplayHex, FromHex};
 #[cfg(target_arch = "wasm32")]
 use instant::Instant;
@@ -94,6 +95,7 @@ use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::{lnurl::LnUrl, AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use nostr_sdk::{Client, RelayPoolNotification};
+use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -1612,7 +1614,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 if profile.tag != NwcProfileTag::Subscription {
                     let mut nwc = profile.clone();
                     nwc.tag = NwcProfileTag::Subscription;
-                    self.nostr.edit_profile(nwc)?;
+                    self.nostr.edit_nwc_profile(nwc)?;
                 }
             }
         }
@@ -1637,6 +1639,42 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(())
     }
 
+    /// Uploads a profile pic to nostr.build and returns the uploaded file's URL
+    pub async fn upload_profile_pic(&self, image_bytes: Vec<u8>) -> Result<String, MutinyError> {
+        let client = reqwest::Client::new();
+
+        let form = Form::new().part("fileToUpload", Part::bytes(image_bytes));
+        let res: NostrBuildResult = client
+            .post("https://nostr.build/api/v2/upload/profile")
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|_| MutinyError::NostrError)?
+            .json()
+            .await
+            .map_err(|_| MutinyError::NostrError)?;
+
+        if res.status != "success" {
+            log_error!(
+                self.logger,
+                "Error uploading profile picture: {}",
+                res.message
+            );
+            return Err(MutinyError::NostrError);
+        }
+
+        // get url from response body
+        if let Some(value) = res.data.first() {
+            return value
+                .get("url")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .ok_or(MutinyError::NostrError);
+        }
+
+        Err(MutinyError::NostrError)
+    }
+
     /// Makes a request to the primal api
     async fn primal_request(
         client: &reqwest::Client,
@@ -1653,6 +1691,45 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .json()
             .await
             .map_err(|_| MutinyError::NostrError)
+    }
+
+    /// Syncs all of our nostr data from the configured primal instance
+    pub async fn sync_nostr(&self) -> Result<(), MutinyError> {
+        let contacts_fut = self.sync_nostr_contacts(self.nostr.public_key);
+        let profile_fut = self.sync_nostr_profile();
+
+        // join futures and handle result
+        let (contacts_res, profile_res) = join!(contacts_fut, profile_fut);
+        contacts_res?;
+        profile_res?;
+
+        Ok(())
+    }
+
+    /// Fetches our latest nostr profile from primal and saves to storage
+    async fn sync_nostr_profile(&self) -> Result<(), MutinyError> {
+        let url = self
+            .config
+            .primal_url
+            .as_deref()
+            .unwrap_or("https://primal-cache.mutinywallet.com/api");
+        let client = reqwest::Client::new();
+
+        let body = json!(["user_profile", { "pubkey": self.nostr.public_key } ]);
+        let data: Vec<Value> = Self::primal_request(&client, url, body).await?;
+
+        if let Some(json) = data.first().cloned() {
+            let event: Event = serde_json::from_value(json).map_err(|_| MutinyError::NostrError)?;
+            if event.kind != Kind::Metadata {
+                return Ok(());
+            }
+
+            let metadata: Metadata =
+                serde_json::from_str(&event.content).map_err(|_| MutinyError::NostrError)?;
+            self.storage.set_nostr_profile(metadata)?;
+        }
+
+        Ok(())
     }
 
     /// Get contacts from the given npub and sync them to the wallet
@@ -2342,6 +2419,13 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     })
 }
 
+#[derive(Deserialize)]
+struct NostrBuildResult {
+    status: String,
+    message: String,
+    data: Vec<Value>,
+}
+
 // max amount that can be spent through a gateway
 fn max_spendable_amount(current_balance_sat: u64, routing_fees: &GatewayFees) -> Option<u64> {
     let current_balance_msat = current_balance_sat as f64 * 1_000.0;
@@ -2823,7 +2907,16 @@ mod tests {
 
         // check that we got different messages
         assert_eq!(next.len(), 2);
-        assert!(next.iter().all(|m| !messages.contains(m)))
+        assert!(next.iter().all(|m| !messages.contains(m)));
+
+        // test check for future messages, should be empty
+        let since = messages.iter().max_by_key(|m| m.date).unwrap().date + 1;
+        let future_msgs = mw
+            .get_dm_conversation(npub, limit, None, Some(since))
+            .await
+            .unwrap();
+
+        assert!(future_msgs.is_empty());
     }
 
     #[test]

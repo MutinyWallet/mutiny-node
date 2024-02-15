@@ -2,7 +2,7 @@ cargo-features = ["per-package-target"]
 
 [package]
 name = "mutiny-core"
-version = "0.5.9"
+version = "0.6.0-rc1"
 edition = "2021"
 authors = ["Tony Giorgio <tony@mutinywallet.com>", "benthecarman <ben@mutinywallet.com>"]
 description = "The core SDK for the mutiny node"
@@ -35,7 +35,7 @@ lightning-transaction-sync = { version = "0.0.121", default-features = false, fe
 lightning-liquidity = { git = "https://github.com/lightningdevkit/lightning-liquidity.git", rev = "478ccf9324e2650d200ea289a0ba8905afe420b6" }
 chrono = "0.4.22"
 futures-util = { version = "0.3", default-features = false }
-reqwest = { version = "0.11", default-features = false, features = ["json"] }
+reqwest = { version = "0.11", default-features = false, features = ["multipart", "json"] }
 async-trait = "0.1.68"
 url = { version = "2.3.1", features = ["serde"] }
 nostr = { version = "0.27.0", default-features = false, features = ["nip04", "nip05", "nip47", "nip57"] }

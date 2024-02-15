@@ -16,12 +16,15 @@ use bitcoin::{hashes::hex::FromHex, secp256k1::ThirtyTwoByteHash};
 use futures::{pin_mut, select, FutureExt};
 use futures_util::lock::Mutex;
 use lightning::util::logger::Logger;
-use lightning::{log_debug, log_error, log_warn};
+use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
+use lnurl::lnurl::LnUrl;
 use nostr::key::{SecretKey, XOnlyPublicKey};
 use nostr::nips::nip47::*;
 use nostr::prelude::{decrypt, encrypt};
-use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Tag, Timestamp};
+use nostr::{
+    url::Url, Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Metadata, Tag, Timestamp,
+};
 use nostr_sdk::{Client, ClientSigner, RelayPoolNotification};
 use std::collections::HashSet;
 use std::sync::{atomic::Ordering, Arc, RwLock};
@@ -186,6 +189,52 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(nwc)
     }
 
+    /// Sets the user's nostr profile metadata
+    pub async fn edit_profile(
+        &self,
+        name: Option<String>,
+        img_url: Option<Url>,
+        lnurl: Option<LnUrl>,
+        nip05: Option<String>,
+    ) -> Result<Metadata, MutinyError> {
+        let current = self.get_profile()?;
+
+        let with_name = if let Some(name) = name {
+            current.name(name)
+        } else {
+            current
+        };
+        let with_img = if let Some(img_url) = img_url {
+            with_name.picture(img_url)
+        } else {
+            with_name
+        };
+        let with_lnurl = if let Some(lnurl) = lnurl {
+            if let Some(ln_addr) = lnurl.lightning_address() {
+                with_img.lud16(ln_addr.to_string())
+            } else {
+                with_img.lud06(lnurl.to_string())
+            }
+        } else {
+            with_img
+        };
+        let with_nip05 = if let Some(nip05) = nip05 {
+            with_lnurl.nip05(nip05)
+        } else {
+            with_lnurl
+        };
+
+        let event_id = self.client.set_metadata(&with_nip05).await?;
+        log_info!(self.logger, "New kind 0: {event_id}");
+        self.storage.set_nostr_profile(with_nip05.clone())?;
+
+        Ok(with_nip05)
+    }
+
+    pub fn get_profile(&self) -> Result<Metadata, MutinyError> {
+        Ok(self.storage.get_nostr_profile()?.unwrap_or_default())
+    }
+
     pub fn get_nwc_uri(&self, index: u32) -> Result<Option<NostrWalletConnectURI>, MutinyError> {
         let opt = self
             .nwc
@@ -294,7 +343,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(())
     }
 
-    pub fn edit_profile(&self, profile: NwcProfile) -> Result<NwcProfile, MutinyError> {
+    pub fn edit_nwc_profile(&self, profile: NwcProfile) -> Result<NwcProfile, MutinyError> {
         let mut profiles = self.nwc.write().unwrap();
         let index = profile.index;
 
@@ -363,7 +412,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(nwc_profile)
     }
 
-    pub fn get_profile(&self, index: u32) -> Result<NwcProfile, MutinyError> {
+    pub fn get_nwc_profile(&self, index: u32) -> Result<NwcProfile, MutinyError> {
         let profiles = self.nwc.read().unwrap();
 
         let nwc = profiles
@@ -456,7 +505,7 @@ impl<S: MutinyStorage> NostrManager<S> {
     }
 
     /// Creates a new NWC profile and saves to storage
-    pub(crate) fn create_new_profile(
+    pub(crate) fn create_new_nwc_profile_internal(
         &self,
         profile_type: ProfileType,
         spending_conditions: SpendingConditions,
@@ -504,7 +553,8 @@ impl<S: MutinyStorage> NostrManager<S> {
         spending_conditions: SpendingConditions,
         tag: NwcProfileTag,
     ) -> Result<NwcProfile, MutinyError> {
-        let profile = self.create_new_profile(profile_type, spending_conditions, tag)?;
+        let profile =
+            self.create_new_nwc_profile_internal(profile_type, spending_conditions, tag)?;
         // add relay if needed
         let needs_connect = self.client.add_relay(profile.relay.as_str()).await?;
         if needs_connect {
@@ -1409,7 +1459,7 @@ mod test {
         let name = "test".to_string();
 
         let profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Normal { name: name.clone() },
                 SpendingConditions::default(),
                 Default::default(),
@@ -1452,7 +1502,7 @@ mod test {
         let name = MUTINY_PLUS_SUBSCRIPTION_LABEL.to_string();
 
         let profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Reserved(ReservedProfile::MutinySubscription),
                 SpendingConditions::default(),
                 Default::default(),
@@ -1485,7 +1535,7 @@ mod test {
         let name = "test".to_string();
 
         let profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Normal { name: name.clone() },
                 SpendingConditions::default(),
                 Default::default(),
@@ -1617,7 +1667,7 @@ mod test {
         let name = "test".to_string();
 
         let mut profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Normal { name: name.clone() },
                 SpendingConditions::default(),
                 Default::default(),
@@ -1630,7 +1680,7 @@ mod test {
 
         profile.relay = "wss://relay.damus.io".to_string();
 
-        nostr_manager.edit_profile(profile).unwrap();
+        nostr_manager.edit_nwc_profile(profile).unwrap();
 
         let profiles = nostr_manager.profiles();
         assert_eq!(profiles.len(), 1);
@@ -1658,7 +1708,7 @@ mod test {
         let name = "test".to_string();
 
         let profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Normal { name: name.clone() },
                 SpendingConditions::default(),
                 Default::default(),
@@ -1690,7 +1740,7 @@ mod test {
         let name = "test".to_string();
 
         let profile = nostr_manager
-            .create_new_profile(
+            .create_new_nwc_profile_internal(
                 ProfileType::Normal { name },
                 SpendingConditions::default(),
                 Default::default(),
