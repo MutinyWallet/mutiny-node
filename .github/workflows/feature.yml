@@ -1,0 +1,52 @@
+name: Publish Feature-Tagged Package to npmjs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  mutiny-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-node@v3
+        with:
+          node-version: "16.x"
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly-2023-10-24
+          components: clippy
+          target: wasm32-unknown-unknown
+          override: true
+          profile: minimal
+
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-release-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-release-
+            cargo-${{ runner.os }}-
+
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: "v0.12.1"
+
+      - name: Build wasm
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2023-10-24
+        run: wasm-pack build ./mutiny-wasm --release --weak-refs --target web --scope mutinywallet
+
+      - name: Publish wasm
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/heads/}
+          echo "Tagging release with $TAG_NAME"
+          wasm-pack publish --tag $TAG_NAME --access public -t web
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2023-10-24
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
