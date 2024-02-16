@@ -1507,6 +1507,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             match self.storage.get_data::<u64>(SUBSCRIPTION_TIMESTAMP) {
                 Ok(Some(timestamp)) if timestamp > now => {
                     // if we have a timestamp and it is in the future, we are subscribed
+                    // make sure we have a NWC profile, this needs to be done in case
+                    // the subscription was created outside the app.
+                    self.ensure_mutiny_nwc_profile(subscription_client, true)
+                        .await?;
                     Ok(Some(timestamp))
                 }
                 _ => {
@@ -1551,7 +1555,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         inv: &Bolt11Invoice,
         autopay: bool,
     ) -> Result<(), MutinyError> {
-        if let Some(subscription_client) = self.subscription_client.clone() {
+        if let Some(subscription_client) = self.subscription_client.as_ref() {
             // TODO if this times out, we should make the next part happen in EventManager
             self.pay_invoice(inv, None, vec![MUTINY_PLUS_SUBSCRIPTION_LABEL.to_string()])
                 .await?;
@@ -1568,7 +1572,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     async fn ensure_mutiny_nwc_profile(
         &self,
-        subscription_client: Arc<subscription::MutinySubscriptionClient>,
+        subscription_client: &MutinySubscriptionClient,
         autopay: bool,
     ) -> Result<(), MutinyError> {
         let nwc_profiles = self.nostr.profiles();
