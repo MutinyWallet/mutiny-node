@@ -2,3 +2,10 @@
 target = "wasm32-unknown-unknown"
 # for fedimint to use tokio::task::Builder - https://github.com/fedimint/fedimint/issues/3951
 rustflags = ["--cfg", "tokio_unstable"]
+
+[target.wasm32-unknown-unknown]
+# Increase the stack size to 3MB, the default is 1MB
+# This is to prevent index out of bounds panics in the wasm code while running.
+rustflags = [
+    "-C", "link-args=-z stack-size=3000000",
+]
