@@ -2548,6 +2548,7 @@ dependencies = [
  "bitcoin-waila",
  "console_error_panic_hook",
  "fedimint-core",
+ "fedimint-mint-client",
  "futures",
  "getrandom",
  "gloo-utils",

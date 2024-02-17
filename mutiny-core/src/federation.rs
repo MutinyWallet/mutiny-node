@@ -9,7 +9,7 @@ use crate::{
         get_payment_info, list_payment_info, persist_payment_info, MutinyStorage, VersionedValue,
     },
     utils::sleep,
-    HTLCStatus, MutinyInvoice, DEFAULT_PAYMENT_TIMEOUT,
+    HTLCStatus, MutinyInvoice, DEFAULT_PAYMENT_TIMEOUT, DEFAULT_REISSUE_TIMEOUT,
 };
 use async_trait::async_trait;
 use bip39::Mnemonic;
@@ -52,7 +52,7 @@ use fedimint_ln_client::{
 };
 use fedimint_ln_common::lightning_invoice::RoutingFees;
 use fedimint_ln_common::LightningCommonInit;
-use fedimint_mint_client::MintClientInit;
+use fedimint_mint_client::{MintClientInit, MintClientModule, OOBNotes, ReissueExternalNotesState};
 use fedimint_wallet_client::{WalletClientInit, WalletClientModule};
 use futures::future::{self};
 use futures_util::{pin_mut, StreamExt};
@@ -609,6 +609,26 @@ impl<S: MutinyStorage> FederationClient<S> {
         }
     }
 
+    pub(crate) async fn reissue(&self, oob_notes: OOBNotes) -> Result<(), MutinyError> {
+        // Get the `MintClientModule`
+        let mint_module = self.fedimint_client.get_first_module::<MintClientModule>();
+
+        // Reissue `OOBNotes`
+        let operation_id = mint_module.reissue_external_notes(oob_notes, ()).await?;
+
+        // TODO: (@leonardo) re-think about the results and errors that we need/want
+        match process_reissue_outcome(&mint_module, operation_id, self.logger.clone()).await? {
+            ReissueExternalNotesState::Created | ReissueExternalNotesState::Failed(_) => {
+                log_trace!(self.logger, "re-issuance of OOBNotes failed!");
+                Err(MutinyError::FedimintReissueFailed)
+            }
+            _ => {
+                log_trace!(self.logger, "re-issuance of OOBNotes was successful!");
+                Ok(())
+            }
+        }
+    }
+
     pub async fn get_mutiny_federation_identity(&self) -> FederationIdentity {
         let gateway_fees = self.gateway_fee().await.ok();
 
@@ -864,6 +884,53 @@ where
     }
 
     invoice
+}
+
+async fn process_reissue_outcome(
+    mint_module: &MintClientModule,
+    operation_id: OperationId,
+    logger: Arc<MutinyLogger>,
+) -> Result<ReissueExternalNotesState, MutinyError> {
+    // Subscribe/Process the outcome based on `ReissueExternalNotesState`
+    let stream_or_outcome = mint_module
+        .subscribe_reissue_external_notes(operation_id)
+        .await
+        .map_err(MutinyError::Other)?;
+
+    match stream_or_outcome {
+        UpdateStreamOrOutcome::Outcome(outcome) => {
+            log_trace!(logger, "outcome received {:?}", outcome);
+            Ok(outcome)
+        }
+        UpdateStreamOrOutcome::UpdateStream(mut stream) => {
+            let timeout = DEFAULT_REISSUE_TIMEOUT;
+            let timeout_fut = sleep(timeout as i32);
+            pin_mut!(timeout_fut);
+
+            log_trace!(logger, "started timeout future {:?}", timeout);
+
+            while let future::Either::Left((outcome_opt, _)) =
+                future::select(stream.next(), &mut timeout_fut).await
+            {
+                if let Some(outcome) = outcome_opt {
+                    log_trace!(logger, "streamed outcome received {:?}", outcome);
+
+                    match outcome {
+                        ReissueExternalNotesState::Failed(_) | ReissueExternalNotesState::Done => {
+                            log_trace!(
+                                logger,
+                                "streamed outcome received is final {:?}, returning",
+                                outcome
+                            );
+                            return Ok(outcome);
+                        }
+                        _ => { /* ignore and continue */ }
+                    }
+                };
+            }
+            Err(MutinyError::FedimintReissueFailed)
+        }
+    }
 }
 
 #[derive(Clone)]
