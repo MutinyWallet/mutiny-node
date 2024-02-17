@@ -40,7 +40,11 @@ pub async fn create_vss_client() -> MutinyVssClient {
 pub fn create_nwc_request(nwc: &NostrWalletConnectURI, invoice: String) -> Event {
     let req = Request {
         method: Method::PayInvoice,
-        params: RequestParams::PayInvoice(PayInvoiceRequestParams { invoice }),
+        params: RequestParams::PayInvoice(PayInvoiceRequestParams {
+            id: None,
+            invoice,
+            amount: None,
+        }),
     };
 
     let encrypted = encrypt(&nwc.secret, &nwc.public_key, req.as_json()).unwrap();
@@ -52,7 +56,7 @@ pub fn create_nwc_request(nwc: &NostrWalletConnectURI, invoice: String) -> Event
     };
 
     EventBuilder::new(Kind::WalletConnectRequest, encrypted, [p_tag])
-        .to_event(&Keys::new(nwc.secret))
+        .to_event(&Keys::new(nwc.secret.clone()))
         .unwrap()
 }
 
@@ -192,8 +196,9 @@ use lightning_invoice::{Bolt11Invoice, InvoiceBuilder};
 use lightning_transaction_sync::EsploraSyncClient;
 #[allow(unused_imports)]
 pub(crate) use log;
+use nostr::nips::nip04::encrypt;
 use nostr::nips::nip47::*;
-use nostr::prelude::{encrypt, NostrWalletConnectURI};
+use nostr::prelude::NostrWalletConnectURI;
 use nostr::{Event, EventBuilder, JsonUtil, Keys, Kind, Tag};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;

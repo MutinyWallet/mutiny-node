@@ -45,8 +45,7 @@ use mutiny_core::{
     nodemanager::{create_lsp_config, NodeManager},
 };
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
-use nostr::key::{FromSkStr, Secp256k1, SecretKey};
-use nostr::{FromBech32, Keys, ToBech32};
+use nostr::{Keys, ToBech32};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -306,8 +305,7 @@ impl MutinyWallet {
         let mut mw_builder = MutinyWalletBuilder::new(xprivkey, storage).with_config(config);
         mw_builder.with_session_id(logger.session_id.clone());
         if let Some(nsec) = nsec_override {
-            let keys =
-                Keys::from_sk_str(&nsec).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+            let keys = Keys::parse(nsec).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
             mw_builder.with_nostr_key_source(NostrKeySource::Imported(keys));
         }
         if let Some(key) = nip_07_key {
@@ -1670,7 +1668,7 @@ impl MutinyWallet {
         nip05: Option<String>,
     ) -> Result<JsValue, MutinyJsError> {
         let img_url = img_url
-            .map(|i| nostr::url::Url::from_str(&i))
+            .map(|i| nostr::Url::from_str(&i))
             .transpose()
             .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
 
@@ -1849,13 +1847,8 @@ impl MutinyWallet {
     /// Convert an npub string to a hex string
     #[wasm_bindgen]
     pub async fn nsec_to_npub(nsec: String) -> Result<String, MutinyJsError> {
-        let nsec =
-            SecretKey::from_bech32(nsec).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        Ok(nsec
-            .x_only_public_key(&Secp256k1::new())
-            .0
-            .to_bech32()
-            .expect("bech32"))
+        let nsec = Keys::parse(nsec).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        Ok(nsec.public_key().to_bech32().expect("bech32"))
     }
 
     /// Convert an npub string to a hex string
