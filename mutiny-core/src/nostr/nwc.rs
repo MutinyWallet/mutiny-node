@@ -15,9 +15,8 @@ use hex_conservative::DisplayHex;
 use lightning::util::logger::Logger;
 use lightning::{log_error, log_warn};
 use lightning_invoice::Bolt11Invoice;
-use nostr::key::XOnlyPublicKey;
+use nostr::nips::nip04::{decrypt, encrypt};
 use nostr::nips::nip47::*;
-use nostr::prelude::{decrypt, encrypt};
 use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Tag, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -168,7 +167,7 @@ pub(crate) struct Profile {
     pub name: String,
     pub index: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_key: Option<XOnlyPublicKey>,
+    pub client_key: Option<nostr::PublicKey>,
     pub relay: String,
     pub enabled: Option<bool>,
     /// Archived profiles will not be displayed
@@ -242,28 +241,22 @@ impl NostrWalletConnect {
     }
 
     pub fn get_nwc_uri(&self) -> anyhow::Result<Option<NostrWalletConnectURI>> {
-        let uri = self
-            .client_key
-            .secret_key()
-            .ok()
-            .map(|sk| {
-                NostrWalletConnectURI::new(
-                    self.server_key.public_key(),
-                    self.profile.relay.parse()?,
-                    sk,
-                    None,
-                )
-            })
-            .transpose()?;
-
-        Ok(uri)
+        match self.client_key.secret_key().ok() {
+            Some(sk) => Ok(Some(NostrWalletConnectURI::new(
+                self.server_key.public_key(),
+                self.profile.relay.parse()?,
+                sk.clone(),
+                None,
+            ))),
+            None => Ok(None),
+        }
     }
 
-    pub fn client_pubkey(&self) -> XOnlyPublicKey {
+    pub fn client_pubkey(&self) -> nostr::PublicKey {
         self.client_key.public_key()
     }
 
-    pub fn server_pubkey(&self) -> XOnlyPublicKey {
+    pub fn server_pubkey(&self) -> nostr::PublicKey {
         self.server_key.public_key()
     }
 
@@ -299,11 +292,11 @@ impl NostrWalletConnect {
             relay: Some(self.profile.relay.clone()),
         };
         let content = encrypt(
-            &self.server_key.secret_key()?,
+            self.server_key.secret_key()?,
             &self.client_pubkey(),
             serde_json::to_string(&json)?,
         )?;
-        let d_tag = Tag::Identifier(self.client_pubkey().serialize().to_lower_hex_string());
+        let d_tag = Tag::Identifier(self.client_pubkey().to_hex());
         let event = EventBuilder::new(Kind::ParameterizedReplaceable(33194), content, [d_tag])
             .to_event(&self.server_key)?;
         Ok(Some(event))
@@ -342,7 +335,7 @@ impl NostrWalletConnect {
         &self,
         nostr_manager: &NostrManager<S>,
         event_id: EventId,
-        event_pk: XOnlyPublicKey,
+        event_pk: nostr::PublicKey,
         invoice: Bolt11Invoice,
     ) -> anyhow::Result<()> {
         nostr_manager
@@ -367,7 +360,7 @@ impl NostrWalletConnect {
             result: None,
         };
 
-        let encrypted = encrypt(&server_key, &client_pubkey, content.as_json())?;
+        let encrypted = encrypt(server_key, &client_pubkey, content.as_json())?;
 
         let p_tag = Tag::PublicKey {
             public_key: event.pubkey,
@@ -404,7 +397,7 @@ impl NostrWalletConnect {
         {
             let server_key = self.server_key.secret_key()?;
 
-            let decrypted = decrypt(&server_key, &client_pubkey, &event.content)?;
+            let decrypted = decrypt(server_key, &client_pubkey, &event.content)?;
             let req: Request = match Request::from_json(decrypted) {
                 Ok(req) => req,
                 Err(e) => {
@@ -444,7 +437,7 @@ impl NostrWalletConnect {
                 Err(err_string) => {
                     return self
                         .get_skipped_error_event(&event, ErrorCode::Other, err_string)
-                        .map(Some)
+                        .map(Some);
                 }
             };
 
@@ -560,7 +553,7 @@ impl NostrWalletConnect {
                         }
                     };
 
-                    let encrypted = encrypt(&server_key, &client_pubkey, content.as_json())?;
+                    let encrypted = encrypt(server_key, &client_pubkey, content.as_json())?;
 
                     let p_tag = Tag::PublicKey {
                         public_key: event.pubkey,
@@ -730,7 +723,7 @@ impl NostrWalletConnect {
                         }
                     };
 
-                    let encrypted = encrypt(&server_key, &client_pubkey, content.as_json())?;
+                    let encrypted = encrypt(server_key, &client_pubkey, content.as_json())?;
 
                     let p_tag = Tag::PublicKey {
                         public_key: event.pubkey,
@@ -789,7 +782,7 @@ pub struct NwcProfile {
     /// Public Key given in a Nostr Wallet Auth URI.
     /// This will only be defined for profiles created through Nostr Wallet Auth.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_key: Option<XOnlyPublicKey>,
+    pub client_key: Option<nostr::PublicKey>,
     pub relay: String,
     pub enabled: Option<bool>,
     pub archived: Option<bool>,
@@ -835,7 +828,7 @@ pub struct PendingNwcInvoice {
     pub event_id: EventId,
     /// The nostr pubkey of the request
     /// If this is a DM, this is who sent us the request
-    pub pubkey: XOnlyPublicKey,
+    pub pubkey: nostr::PublicKey,
 }
 
 impl PartialOrd for PendingNwcInvoice {
@@ -1253,7 +1246,7 @@ mod wasm_test {
         let one =
             SecretKey::from_str("0000000000000000000000000000000000000000000000000000000000000001")
                 .unwrap(); // one key
-        let invoice = create_dummy_invoice(Some(10_000), Network::Regtest, Some(one))
+        let invoice = create_dummy_invoice(Some(10_000), Network::Regtest, Some(*one))
             .0
             .to_string();
         let event = create_nwc_request(&uri, invoice.clone());
@@ -1309,7 +1302,7 @@ mod wasm_test {
         // test wrong kind
         let event = {
             EventBuilder::new(Kind::TextNote, "", [])
-                .to_event(&Keys::new(uri.secret))
+                .to_event(&Keys::new(uri.secret.clone()))
                 .unwrap()
         };
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
@@ -1328,7 +1321,7 @@ mod wasm_test {
                 uppercase: false,
             };
             EventBuilder::new(Kind::WalletConnectRequest, encrypted, [p_tag])
-                .to_event(&Keys::new(uri.secret))
+                .to_event(&Keys::new(uri.secret.clone()))
                 .unwrap()
         };
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
@@ -1357,7 +1350,7 @@ mod wasm_test {
                 uppercase: false,
             };
             EventBuilder::new(Kind::WalletConnectRequest, encrypted, [p_tag])
-                .to_event(&Keys::new(uri.secret))
+                .to_event(&Keys::new(uri.secret.clone()))
                 .unwrap()
         };
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
@@ -1416,7 +1409,7 @@ mod wasm_test {
         let one =
             SecretKey::from_str("0000000000000000000000000000000000000000000000000000000000000001")
                 .unwrap(); // one key
-        let invoice = create_dummy_invoice(Some(10_000), Network::Regtest, Some(one))
+        let invoice = create_dummy_invoice(Some(10_000), Network::Regtest, Some(*one))
             .0
             .to_string();
         let event = create_nwc_request(&uri, invoice);

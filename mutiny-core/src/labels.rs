@@ -5,7 +5,7 @@ use bitcoin::Address;
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
-use nostr::{key::XOnlyPublicKey, Metadata};
+use nostr::Metadata;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -31,7 +31,7 @@ pub struct LabelItem {
 pub struct Contact {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub npub: Option<XOnlyPublicKey>,
+    pub npub: Option<nostr::PublicKey>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ln_address: Option<LightningAddress>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -68,7 +68,7 @@ impl Contact {
         self
     }
 
-    pub fn create_from_metadata(npub: XOnlyPublicKey, metadata: Metadata) -> Self {
+    pub fn create_from_metadata(npub: nostr::PublicKey, metadata: Metadata) -> Self {
         let init = Self {
             npub: Some(npub),
             ..Default::default()
@@ -158,7 +158,7 @@ pub trait LabelStorage {
     /// Finds a contact that has the given npub
     fn get_contact_for_npub(
         &self,
-        npub: XOnlyPublicKey,
+        npub: nostr::PublicKey,
     ) -> Result<Option<(String, Contact)>, MutinyError> {
         // todo this is not efficient, we should have a map of npub to contact
         let contacts = self.get_contacts()?;

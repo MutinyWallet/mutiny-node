@@ -72,7 +72,6 @@ use crate::{
     subscription::MutinySubscriptionClient,
 };
 use crate::{nostr::NostrManager, utils::sleep};
-use ::nostr::key::XOnlyPublicKey;
 use ::nostr::nips::nip57;
 use ::nostr::prelude::ZapRequestData;
 use ::nostr::{Event, EventId, JsonUtil, Kind, Metadata};
@@ -448,8 +447,8 @@ pub struct MutinyWalletConfigBuilder {
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DirectMessage {
-    pub from: XOnlyPublicKey,
-    pub to: XOnlyPublicKey,
+    pub from: ::nostr::PublicKey,
+    pub to: ::nostr::PublicKey,
     pub message: String,
     pub date: u64,
     pub event_id: EventId,
@@ -1737,7 +1736,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Get contacts from the given npub and sync them to the wallet
-    pub async fn sync_nostr_contacts(&self, npub: XOnlyPublicKey) -> Result<(), MutinyError> {
+    pub async fn sync_nostr_contacts(&self, npub: ::nostr::PublicKey) -> Result<(), MutinyError> {
         let url = self
             .config
             .primal_url
@@ -1756,7 +1755,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .iter()
             .filter_map(|(_, c)| {
                 if c.npub.is_some_and(|n| metadata.get(&n).is_none()) {
-                    c.npub.map(|n| n.serialize().to_lower_hex_string())
+                    c.npub.map(|n| n.to_hex())
                 } else {
                     None
                 }
@@ -1813,7 +1812,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Returns a vector of messages sorted by newest first
     pub async fn get_dm_conversation(
         &self,
-        npub: XOnlyPublicKey,
+        npub: ::nostr::PublicKey,
         limit: u64,
         until: Option<u64>,
         since: Option<u64>,
@@ -1826,8 +1825,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let client = reqwest::Client::new();
 
         // api is a little weird, has sender and receiver but still gives full conversation
-        let sender = npub.serialize().to_lower_hex_string();
-        let receiver = self.nostr.public_key.serialize().to_lower_hex_string();
+        let sender = npub.to_hex();
+        let receiver = self.nostr.public_key.to_hex();
         let body = match (until, since) {
             (Some(until), Some(since)) => {
                 json!(["get_directmsgs", { "sender": sender, "receiver": receiver, "limit": limit, "until": until, "since": since }])
@@ -2184,7 +2183,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         &self,
         lnurl: &LnUrl,
         amount_sats: u64,
-        zap_npub: Option<XOnlyPublicKey>,
+        zap_npub: Option<::nostr::PublicKey>,
         mut labels: Vec<String>,
         comment: Option<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
@@ -2609,7 +2608,6 @@ mod tests {
     use crate::nostr::NostrKeySource;
     use crate::storage::{MemoryStorage, MutinyStorage};
     use crate::utils::{parse_npub, sleep};
-    use nostr::key::FromSkStr;
     use nostr::Keys;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
@@ -2867,8 +2865,7 @@ mod tests {
     async fn get_dm_conversation_test() {
         // test nsec I made and sent dms to
         let nsec =
-            Keys::from_sk_str("nsec1w2cy7vmq8urw9ae6wjaujrmztndad7e65hja52zk0c9x4yxgk0xsfuqk6s")
-                .unwrap();
+            Keys::parse("nsec1w2cy7vmq8urw9ae6wjaujrmztndad7e65hja52zk0c9x4yxgk0xsfuqk6s").unwrap();
         let npub =
             parse_npub("npub18s7md9ytv8r240jmag5j037huupk5jnsk94adykeaxtvc6lyftesuw5ydl").unwrap();
 

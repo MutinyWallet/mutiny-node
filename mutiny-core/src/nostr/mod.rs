@@ -19,17 +19,16 @@ use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lnurl::LnUrl;
-use nostr::key::{SecretKey, XOnlyPublicKey};
+use nostr::key::SecretKey;
+use nostr::nips::nip04::{decrypt, encrypt};
 use nostr::nips::nip47::*;
-use nostr::prelude::{decrypt, encrypt};
-use nostr::{
-    url::Url, Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Metadata, Tag, Timestamp,
-};
-use nostr_sdk::{Client, ClientSigner, RelayPoolNotification};
+use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Metadata, Tag, Timestamp};
+use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
 use std::collections::HashSet;
 use std::sync::{atomic::Ordering, Arc, RwLock};
 use std::time::Duration;
 use std::{str::FromStr, sync::atomic::AtomicBool};
+use url::Url;
 
 pub mod nip49;
 pub mod nwc;
@@ -74,7 +73,7 @@ pub enum NostrKeySource {
     Imported(Keys),
     /// Get keys from NIP-07 extension
     #[cfg(target_arch = "wasm32")]
-    Extension(XOnlyPublicKey),
+    Extension(nostr::PublicKey),
 }
 
 /// Manages Nostr keys and has different utilities for nostr specific things
@@ -83,9 +82,9 @@ pub struct NostrManager<S: MutinyStorage> {
     /// Extended private key that is the root seed of the wallet
     xprivkey: ExtendedPrivKey,
     /// Primary key used for nostr, this will be used for signing events
-    pub(crate) primary_key: ClientSigner,
+    pub(crate) primary_key: NostrSigner,
     /// Primary key's public key
-    pub public_key: XOnlyPublicKey,
+    pub public_key: nostr::PublicKey,
     /// Separate profiles for each nostr wallet connect string
     pub(crate) nwc: Arc<RwLock<Vec<NostrWalletConnect>>>,
     pub storage: S,
@@ -160,7 +159,8 @@ impl<S: MutinyStorage> NostrManager<S> {
     fn get_dm_filter(&self) -> Result<Filter, MutinyError> {
         let contacts = self.storage.get_contacts()?;
         let last_sync_time = self.storage.get_dm_sync_time()?;
-        let npubs: HashSet<XOnlyPublicKey> = contacts.into_values().flat_map(|c| c.npub).collect();
+        let npubs: HashSet<nostr::PublicKey> =
+            contacts.into_values().flat_map(|c| c.npub).collect();
 
         // if we haven't synced before, use now and save to storage
         let time_stamp = match last_sync_time {
@@ -571,7 +571,7 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         if let Some(info_event) = info_event {
             self.client
-                .send_event_to(profile.relay.as_str(), info_event)
+                .send_event_to([profile.relay.as_str()], info_event)
                 .await
                 .map_err(|e| {
                     MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}"))
@@ -697,30 +697,21 @@ impl<S: MutinyStorage> NostrManager<S> {
         inv: PendingNwcInvoice,
     ) -> Result<EventId, MutinyError> {
         let encrypted = encrypt(
-            &nwc.server_key.secret_key().unwrap(),
+            nwc.server_key.secret_key().unwrap(),
             &nwc.client_pubkey(),
             resp.as_json(),
         )
         .unwrap();
 
-        let p_tag = Tag::PublicKey {
-            public_key: inv.pubkey,
-            relay_url: None,
-            alias: None,
-            uppercase: false,
-        };
-        let e_tag = Tag::Event {
-            event_id: inv.event_id,
-            relay_url: None,
-            marker: None,
-        };
+        let p_tag = Tag::public_key(inv.pubkey);
+        let e_tag = Tag::event(inv.event_id);
         let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
             .to_event(&nwc.server_key)
             .map_err(|e| MutinyError::Other(anyhow::anyhow!("Failed to create event: {e:?}")))?;
 
         let event_id = self
             .client
-            .send_event_to(nwc.profile.relay.as_str(), response)
+            .send_event_to([nwc.profile.relay.as_str()], response)
             .await
             .map_err(|e| MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}")))?;
 
@@ -843,23 +834,14 @@ impl<S: MutinyStorage> NostrManager<S> {
 
                 if let Some(nwc) = nwc {
                     let encrypted = encrypt(
-                        &nwc.server_key.secret_key().unwrap(),
+                        nwc.server_key.secret_key().unwrap(),
                         &nwc.client_pubkey(),
                         resp.as_json(),
                     )
                     .unwrap();
 
-                    let p_tag = Tag::PublicKey {
-                        public_key: inv.pubkey,
-                        relay_url: None,
-                        alias: None,
-                        uppercase: false,
-                    };
-                    let e_tag = Tag::Event {
-                        event_id: inv.event_id,
-                        relay_url: None,
-                        marker: None,
-                    };
+                    let p_tag = Tag::public_key(inv.pubkey);
+                    let e_tag = Tag::event(inv.event_id);
                     let response =
                         EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
                             .to_event(&nwc.server_key)
@@ -943,7 +925,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         &self,
         profile_index: Option<u32>,
         event_id: EventId,
-        event_pk: XOnlyPublicKey,
+        event_pk: nostr::PublicKey,
         invoice: Bolt11Invoice,
     ) -> anyhow::Result<()> {
         let pending = PendingNwcInvoice {
@@ -1032,7 +1014,7 @@ impl<S: MutinyStorage> NostrManager<S> {
     ) -> Result<Option<NIP47Error>, MutinyError> {
         let nwc = NostrWalletConnectURI::from_str(nwc_uri)
             .map_err(|_| MutinyError::InvalidArgumentsError)?;
-        let secret = Keys::new(nwc.secret);
+        let secret = Keys::new(nwc.secret.clone());
         let client = Client::new(&secret);
 
         client
@@ -1050,16 +1032,13 @@ impl<S: MutinyStorage> NostrManager<S> {
         let req = Request {
             method: Method::PayInvoice,
             params: RequestParams::PayInvoice(PayInvoiceRequestParams {
+                id: None,
                 invoice: bolt11.to_string(),
+                amount: None,
             }),
         };
         let encrypted = encrypt(&nwc.secret, &nwc.public_key, req.as_json())?;
-        let p_tag = Tag::PublicKey {
-            public_key: nwc.public_key,
-            relay_url: None,
-            alias: None,
-            uppercase: false,
-        };
+        let p_tag = Tag::public_key(nwc.public_key);
         let request_event =
             EventBuilder::new(Kind::WalletConnectRequest, encrypted, [p_tag]).to_event(&secret)?;
 
@@ -1162,18 +1141,18 @@ impl<S: MutinyStorage> NostrManager<S> {
     /// Decrypts a DM using the primary key
     pub async fn decrypt_dm(
         &self,
-        pubkey: XOnlyPublicKey,
+        pubkey: nostr::PublicKey,
         message: &str,
     ) -> Result<String, MutinyError> {
         // todo we should handle NIP-44 as well
         match &self.primary_key {
-            ClientSigner::Keys(key) => {
+            NostrSigner::Keys(key) => {
                 let secret = key.secret_key().expect("must have");
-                let decrypted = decrypt(&secret, &pubkey, message)?;
+                let decrypted = decrypt(secret, &pubkey, message)?;
                 Ok(decrypted)
             }
             #[cfg(target_arch = "wasm32")]
-            ClientSigner::NIP07(nip07) => {
+            NostrSigner::NIP07(nip07) => {
                 let decrypted = nip07.nip04_decrypt(pubkey, message).await?;
                 Ok(decrypted)
             }
@@ -1182,7 +1161,7 @@ impl<S: MutinyStorage> NostrManager<S> {
 
     pub async fn send_dm(
         &self,
-        pubkey: XOnlyPublicKey,
+        pubkey: nostr::PublicKey,
         message: String,
     ) -> Result<EventId, MutinyError> {
         let event_id = self.client.send_direct_msg(pubkey, message, None).await?;
@@ -1255,18 +1234,18 @@ impl<S: MutinyStorage> NostrManager<S> {
                 let keys =
                     Self::derive_nostr_key(&context, xprivkey, PROFILE_ACCOUNT_INDEX, None, None)?;
                 let public_key = keys.public_key();
-                let signer = ClientSigner::Keys(keys);
+                let signer = NostrSigner::Keys(keys);
                 (signer, public_key)
             }
             NostrKeySource::Imported(keys) => {
                 let public_key = keys.public_key();
-                let signer = ClientSigner::Keys(keys);
+                let signer = NostrSigner::Keys(keys);
                 (signer, public_key)
             }
             #[cfg(target_arch = "wasm32")]
             NostrKeySource::Extension(public_key) => {
                 let nip07 = nostr::prelude::Nip07Signer::new()?;
-                let signer = ClientSigner::NIP07(nip07);
+                let signer = NostrSigner::NIP07(nip07);
                 (signer, public_key)
             }
         };
@@ -1337,7 +1316,6 @@ mod test {
     use lightning::ln::PaymentSecret;
     use lightning_invoice::{Bolt11Invoice, Currency, InvoiceBuilder};
     use mockall::predicate::eq;
-    use nostr::key::XOnlyPublicKey;
     use std::str::FromStr;
 
     const EXPIRED_INVOICE: &str = "lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm";
@@ -1369,7 +1347,7 @@ mod test {
         inv_handler.expect_skip_hodl_invoices().return_const(true);
 
         #[allow(irrefutable_let_patterns)] // need this because enum with single variant
-        let nostr_keys = if let ClientSigner::Keys(ref keys) = nostr_manager.primary_key {
+        let nostr_keys = if let NostrSigner::Keys(ref keys) = nostr_manager.primary_key {
             keys.clone()
         } else {
             panic!("unexpected keys")
@@ -1751,7 +1729,7 @@ mod test {
             index: Some(profile.index),
             invoice: Bolt11Invoice::from_str("lnbc923720n1pj9nrefpp5pczykgk37af5388n8dzynljpkzs7sje4melqgazlwv9y3apay8jqhp5rd8saxz3juve3eejq7z5fjttxmpaq88d7l92xv34n4h3mq6kwq2qcqzzsxqzfvsp5z0jwpehkuz9f2kv96h62p8x30nku76aj8yddpcust7g8ad0tr52q9qyyssqfy622q25helv8cj8hyxqltws4rdwz0xx2hw0uh575mn7a76cp3q4jcptmtjkjs4a34dqqxn8uy70d0qlxqleezv4zp84uk30pp5q3nqq4c9gkz").unwrap(),
             event_id: EventId::from_slice(&[0; 32]).unwrap(),
-            pubkey: XOnlyPublicKey::from_str("552a9d06810f306bfc085cb1e1c26102554138a51fa3a7fdf98f5b03a945143a").unwrap(),
+            pubkey: nostr::PublicKey::from_str("552a9d06810f306bfc085cb1e1c26102554138a51fa3a7fdf98f5b03a945143a").unwrap(),
         };
 
         // add dummy to storage

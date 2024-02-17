@@ -1,4 +1,5 @@
 use crate::error::MutinyError;
+use bitcoin::key::XOnlyPublicKey;
 use bitcoin::Network;
 use core::cell::{RefCell, RefMut};
 use core::ops::{Deref, DerefMut};
@@ -12,7 +13,6 @@ use lightning::routing::scoring::{LockableScore, ScoreLookUp, ScoreUpdate};
 use lightning::util::ser::Writeable;
 use lightning::util::ser::Writer;
 use lightning_invoice::Bolt11Invoice;
-use nostr::key::XOnlyPublicKey;
 use nostr::nips::nip05;
 use nostr::{Event, Filter, FromBech32, JsonUtil, Kind, Metadata};
 use reqwest::Client;
@@ -193,7 +193,7 @@ where
     tokio::spawn(future);
 }
 
-pub(crate) fn parse_profile_metadata(data: Vec<Value>) -> HashMap<XOnlyPublicKey, Metadata> {
+pub(crate) fn parse_profile_metadata(data: Vec<Value>) -> HashMap<nostr::PublicKey, Metadata> {
     data.into_iter()
         .filter_map(|v| {
             Event::from_value(v)
@@ -203,17 +203,17 @@ pub(crate) fn parse_profile_metadata(data: Vec<Value>) -> HashMap<XOnlyPublicKey
         .collect()
 }
 
-pub fn parse_npub(str: &str) -> Result<XOnlyPublicKey, MutinyError> {
+pub fn parse_npub(str: &str) -> Result<nostr::PublicKey, MutinyError> {
     match XOnlyPublicKey::from_str(str) {
-        Ok(x) => Ok(x),
-        Err(_) => Ok(XOnlyPublicKey::from_bech32(str)?),
+        Ok(x) => Ok(x.into()),
+        Err(_) => Ok(nostr::PublicKey::from_bech32(str)?),
     }
 }
 
-pub async fn parse_npub_or_nip05(str: &str) -> Result<XOnlyPublicKey, MutinyError> {
+pub async fn parse_npub_or_nip05(str: &str) -> Result<nostr::PublicKey, MutinyError> {
     match XOnlyPublicKey::from_str(str) {
-        Ok(x) => Ok(x),
-        Err(_) => match XOnlyPublicKey::from_bech32(str) {
+        Ok(x) => Ok(x.into()),
+        Err(_) => match nostr::PublicKey::from_bech32(str) {
             Ok(x) => Ok(x),
             Err(_) => {
                 let profile = nip05::get_profile(str, None).await?;
@@ -239,8 +239,10 @@ pub fn compare_filters_vec(a: &[Filter], b: &[Filter]) -> bool {
     }
 
     // compare same authors
-    let agg_authors_a: HashSet<XOnlyPublicKey> = a.iter().flat_map(|i| i.authors.clone()).collect();
-    let agg_authors_b: HashSet<XOnlyPublicKey> = b.iter().flat_map(|i| i.authors.clone()).collect();
+    let agg_authors_a: HashSet<nostr::PublicKey> =
+        a.iter().flat_map(|i| i.authors.clone()).collect();
+    let agg_authors_b: HashSet<nostr::PublicKey> =
+        b.iter().flat_map(|i| i.authors.clone()).collect();
 
     if agg_authors_a != agg_authors_b {
         return false;

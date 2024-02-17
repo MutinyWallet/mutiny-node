@@ -522,7 +522,7 @@ impl From<nip05::Error> for MutinyError {
             nip05::Error::ImpossibleToVerify => Self::NostrError,
             nip05::Error::Reqwest(_) => Self::NostrError,
             nip05::Error::Json(_) => Self::NostrError,
-            nip05::Error::Secp256k1(_) => Self::NostrError,
+            nip05::Error::Keys(_) => Self::NostrError,
         }
     }
 }
