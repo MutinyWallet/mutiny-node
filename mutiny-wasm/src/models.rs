@@ -122,6 +122,7 @@ pub struct MutinyInvoice {
     pub expire: u64,
     pub expired: bool,
     status: String,
+    privacy_level: String,
     pub fees_paid: Option<u64>,
     pub inbound: bool,
     pub last_updated: u64,
@@ -167,6 +168,11 @@ impl MutinyInvoice {
     }
 
     #[wasm_bindgen(getter)]
+    pub fn privacy_level(&self) -> String {
+        self.privacy_level.clone()
+    }
+
+    #[wasm_bindgen(getter)]
     pub fn paid(&self) -> bool {
         self.status == HTLCStatus::Succeeded.to_string()
     }
@@ -194,6 +200,7 @@ impl From<mutiny_core::MutinyInvoice> for MutinyInvoice {
             expire: m.expire,
             expired: m.expire < now,
             status: m.status.to_string(),
+            privacy_level: m.privacy_level.to_string(),
             fees_paid: m.fees_paid,
             inbound: m.inbound,
             last_updated: m.last_updated,

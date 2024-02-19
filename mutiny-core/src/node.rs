@@ -17,7 +17,7 @@ use crate::{
     onchain::OnChainWallet,
     peermanager::{GossipMessageHandler, PeerManagerImpl},
     utils::{self, sleep},
-    MutinyInvoice,
+    MutinyInvoice, PrivacyLevel,
 };
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
@@ -831,20 +831,20 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                         .await;
 
                         match res {
-                            Ok(_) => {
-                                for id in update_ids {
-                                    if let Err(e) = retry_chain_monitor
-                                        .channel_monitor_updated(funding_txo, id)
-                                    {
-                                        log_error!(retry_logger, "Error notifying chain monitor of channel monitor update: {e:?}");
-                                    }
-                                }
-                            }
-                            Err(e) => log_error!(
+							Ok(_) => {
+								for id in update_ids {
+									if let Err(e) = retry_chain_monitor
+										.channel_monitor_updated(funding_txo, id)
+									{
+										log_error!(retry_logger, "Error notifying chain monitor of channel monitor update: {e:?}");
+									}
+								}
+							}
+							Err(e) => log_error!(
                                     retry_logger,
                                     "Failed to persist monitor for outpoint: {funding_txo:?}, error: {e:?}",
                                 ),
-                        }
+						}
                     }
                 }
 
@@ -1303,6 +1303,7 @@ impl<S: MutinyStorage> Node<S> {
             fee_paid_msat: fee_amount_msat,
             bolt11: Some(invoice.clone()),
             payee_pubkey: None,
+            privacy_level: PrivacyLevel::NotAvailable,
             last_update,
         };
         persist_payment_info(
@@ -1476,6 +1477,7 @@ impl<S: MutinyStorage> Node<S> {
             fee_paid_msat: None,
             bolt11: Some(invoice.clone()),
             payee_pubkey: None,
+            privacy_level: PrivacyLevel::NotAvailable,
             last_update,
         };
 
@@ -1654,6 +1656,7 @@ impl<S: MutinyStorage> Node<S> {
             fee_paid_msat: None,
             bolt11: None,
             payee_pubkey: Some(to_node),
+            privacy_level: PrivacyLevel::NotAvailable,
             last_update,
         };
 
@@ -2484,7 +2487,7 @@ mod tests {
             map_sending_failure(
                 RetryableSendFailure::RouteNotFound,
                 amt_msat,
-                &[channel_details.clone()]
+                &[channel_details.clone()],
             ),
             MutinyError::InsufficientBalance
         );
@@ -2493,7 +2496,7 @@ mod tests {
             map_sending_failure(
                 RetryableSendFailure::RouteNotFound,
                 amt_msat,
-                &[channel_details.clone()]
+                &[channel_details.clone()],
             ),
             MutinyError::InsufficientBalance
         );
@@ -2505,7 +2508,7 @@ mod tests {
             map_sending_failure(
                 RetryableSendFailure::RouteNotFound,
                 amt_msat,
-                &[channel_details.clone()]
+                &[channel_details.clone()],
             ),
             MutinyError::ReserveAmountError
         );
@@ -2516,7 +2519,7 @@ mod tests {
             map_sending_failure(
                 RetryableSendFailure::RouteNotFound,
                 amt_msat,
-                &[channel_details.clone()]
+                &[channel_details.clone()],
             ),
             MutinyError::ReserveAmountError
         );
@@ -2527,7 +2530,7 @@ mod tests {
             map_sending_failure(
                 RetryableSendFailure::RouteNotFound,
                 amt_msat,
-                &[channel_details.clone()]
+                &[channel_details.clone()],
             ),
             MutinyError::RoutingFailed
         );
@@ -2615,6 +2618,7 @@ mod tests {
             preimage: None,
             secret: Some([0; 32]),
             status: HTLCStatus::InFlight,
+            privacy_level: PrivacyLevel::NotAvailable,
             amt_msat: MillisatAmount(Some(1000)),
             fee_paid_msat: None,
             bolt11: None,
@@ -2681,8 +2685,8 @@ mod wasm_test {
     use crate::labels::LabelStorage;
     use crate::storage::MemoryStorage;
     use crate::test_utils::create_node;
-    use crate::HTLCStatus;
     use crate::{error::MutinyError, storage::persist_payment_info};
+    use crate::{HTLCStatus, PrivacyLevel};
     use lightning::ln::channelmanager::PaymentId;
     use lightning::ln::PaymentHash;
     use lightning_invoice::Bolt11InvoiceDescription;
@@ -2787,6 +2791,7 @@ mod wasm_test {
             preimage: None,
             secret: Some([0; 32]),
             status: HTLCStatus::InFlight,
+            privacy_level: PrivacyLevel::NotAvailable,
             amt_msat: MillisatAmount(Some(1000)),
             fee_paid_msat: None,
             bolt11: None,

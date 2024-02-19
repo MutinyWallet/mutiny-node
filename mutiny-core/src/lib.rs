@@ -80,7 +80,7 @@ use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
 use bitcoin::bip32::ExtendedPrivKey;
 use bitcoin::hashes::Hash;
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
 use bitcoin::{hashes::sha256, Network};
 use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::{pin_mut, select, FutureExt};
@@ -106,7 +106,7 @@ use uuid::Uuid;
 
 use crate::labels::LabelItem;
 use crate::nostr::NostrKeySource;
-use crate::storage::SUBSCRIPTION_TIMESTAMP;
+use crate::storage::{persist_payment_info, SUBSCRIPTION_TIMESTAMP};
 use crate::utils::parse_profile_metadata;
 #[cfg(test)]
 use mockall::{automock, predicate::*};
@@ -269,6 +269,45 @@ impl Ord for ActivityItem {
     }
 }
 
+/// Privacy Level for a payment
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Default, Hash)]
+pub enum PrivacyLevel {
+    /// A public payment that is visible to everyone.
+    Public,
+    /// A private payment that is only visible to the sender and receiver.
+    Private,
+    /// A payment where the receiver does not know the sender.
+    Anonymous,
+    /// No information is shared about the payment.
+    #[default]
+    NotAvailable,
+}
+
+impl core::fmt::Display for PrivacyLevel {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            PrivacyLevel::Public => write!(f, "Public"),
+            PrivacyLevel::Private => write!(f, "Private"),
+            PrivacyLevel::Anonymous => write!(f, "Anonymous"),
+            PrivacyLevel::NotAvailable => write!(f, "Not Available"),
+        }
+    }
+}
+
+impl FromStr for PrivacyLevel {
+    type Err = MutinyError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Public" => Ok(PrivacyLevel::Public),
+            "Private" => Ok(PrivacyLevel::Private),
+            "Anonymous" => Ok(PrivacyLevel::Anonymous),
+            "Not Available" => Ok(PrivacyLevel::NotAvailable),
+            _ => Err(MutinyError::InvalidArgumentsError),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct MutinyInvoice {
     pub bolt11: Option<Bolt11Invoice>,
@@ -279,6 +318,8 @@ pub struct MutinyInvoice {
     pub amount_sats: Option<u64>,
     pub expire: u64,
     pub status: HTLCStatus,
+    #[serde(default)]
+    pub privacy_level: PrivacyLevel,
     pub fees_paid: Option<u64>,
     pub inbound: bool,
     pub labels: Vec<String>,
@@ -321,6 +362,7 @@ impl From<Bolt11Invoice> for MutinyInvoice {
             amount_sats,
             expire: expiry,
             status: HTLCStatus::Pending,
+            privacy_level: PrivacyLevel::NotAvailable,
             fees_paid: None,
             inbound: true,
             labels: vec![],
@@ -353,6 +395,7 @@ impl From<MutinyInvoice> for PaymentInfo {
             fee_paid_msat,
             bolt11,
             payee_pubkey,
+            privacy_level: invoice.privacy_level,
             last_update,
         }
     }
@@ -386,6 +429,7 @@ impl MutinyInvoice {
                     payee_pubkey: i.payee_pubkey,
                     preimage: i.preimage.map(|p| p.to_lower_hex_string()),
                     fees_paid: i.fee_paid_msat.map(|f| f / 1_000),
+                    privacy_level: i.privacy_level,
                     ..invoice.into()
                 })
             }
@@ -403,6 +447,7 @@ impl MutinyInvoice {
                     amount_sats,
                     expire: i.last_update,
                     status: i.status,
+                    privacy_level: i.privacy_level,
                     fees_paid,
                     inbound,
                     labels,
@@ -2194,7 +2239,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 let msats = amount_sats * 1000;
 
                 // if user's npub is given, do an anon zap
-                let (zap_request, comment) = match zap_npub {
+                let (zap_request, comment, privacy_level) = match zap_npub {
                     Some(zap_npub) => {
                         let data = ZapRequestData {
                             public_key: zap_npub,
@@ -2210,9 +2255,13 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         };
                         let event = nip57::anonymous_zap_request(data)?;
 
-                        (Some(event.as_json()), None)
+                        (Some(event.as_json()), None, PrivacyLevel::Anonymous)
                     }
-                    None => (None, comment.filter(|c| !c.is_empty())),
+                    None => (
+                        None,
+                        comment.filter(|c| !c.is_empty()),
+                        PrivacyLevel::NotAvailable,
+                    ),
                 };
 
                 let invoice = self
@@ -2233,7 +2282,17 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         }
                     }
 
-                    self.pay_invoice(&invoice, None, labels).await
+                    let mut inv = self.pay_invoice(&invoice, None, labels).await?;
+                    // save privacy level to storage
+                    inv.privacy_level = privacy_level;
+                    persist_payment_info(
+                        &self.storage,
+                        &inv.payment_hash.into_32(),
+                        &inv.clone().into(),
+                        false,
+                    )?;
+
+                    Ok(inv)
                 } else {
                     log_error!(self.logger, "LNURL return invoice with incorrect amount");
                     Err(MutinyError::LnUrlFailure)

@@ -6,7 +6,7 @@ use crate::nodemanager::ChannelClosure;
 use crate::onchain::OnChainWallet;
 use crate::storage::MutinyStorage;
 use crate::utils::sleep;
-use crate::{fees::MutinyFeeEstimator, storage::read_payment_info};
+use crate::{fees::MutinyFeeEstimator, storage::read_payment_info, PrivacyLevel};
 use crate::{keymanager::PhantomKeysManager, storage::persist_payment_info};
 use anyhow::anyhow;
 use bitcoin::absolute::LockTime;
@@ -38,6 +38,8 @@ pub(crate) struct PaymentInfo {
     pub bolt11: Option<Bolt11Invoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payee_pubkey: Option<PublicKey>,
+    #[serde(default)]
+    pub privacy_level: PrivacyLevel,
     pub last_update: u64,
 }
 
@@ -322,6 +324,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                             payee_pubkey: receiver_node_id,
                             bolt11: None,
                             last_update,
+                            privacy_level: PrivacyLevel::NotAvailable,
                         };
                         match persist_payment_info(
                             &self.persister.storage,
@@ -665,7 +668,7 @@ impl<S: MutinyStorage> EventHandler<S> {
 #[cfg(test)]
 mod test {
     use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
-    use crate::utils;
+    use crate::{utils, PrivacyLevel};
     use bitcoin::secp256k1::PublicKey;
     use std::str::FromStr;
 
@@ -683,6 +686,7 @@ mod test {
         let payment_info = PaymentInfo {
             preimage: Some(preimage),
             status: HTLCStatus::Succeeded,
+            privacy_level: PrivacyLevel::Anonymous,
             amt_msat: MillisatAmount(Some(420)),
             fee_paid_msat: None,
             bolt11: None,
