@@ -40,7 +40,9 @@ use mutiny_core::nostr::NostrKeySource;
 use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
 use mutiny_core::utils::{now, parse_npub, parse_npub_or_nip05, sleep, spawn};
 use mutiny_core::vss::MutinyVssClient;
-use mutiny_core::{encrypt::encryption_key_from_pass, InvoiceHandler, MutinyWalletConfigBuilder};
+use mutiny_core::{
+    encrypt::encryption_key_from_pass, InvoiceHandler, MutinyWalletConfigBuilder, PrivacyLevel,
+};
 use mutiny_core::{labels::Contact, MutinyWalletBuilder};
 use mutiny_core::{
     labels::LabelStorage,
@@ -868,6 +870,7 @@ impl MutinyWallet {
         zap_npub: Option<String>,
         labels: Vec<String>,
         comment: Option<String>,
+        privacy_level: Option<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let lnurl = LnUrl::from_str(&lnurl)?;
 
@@ -876,9 +879,22 @@ impl MutinyWallet {
             None => None,
         };
 
+        let privacy_level = privacy_level
+            .as_deref()
+            .map(PrivacyLevel::from_str)
+            .transpose()?
+            .unwrap_or_default(); // default to NotAvailable
+
         Ok(self
             .inner
-            .lnurl_pay(&lnurl, amount_sats, zap_npub, labels, comment)
+            .lnurl_pay(
+                &lnurl,
+                amount_sats,
+                zap_npub,
+                labels,
+                comment,
+                privacy_level,
+            )
             .await?
             .into())
     }

@@ -551,6 +551,12 @@ impl From<nostr::event::builder::Error> for MutinyError {
     }
 }
 
+impl From<nostr_sdk::signer::Error> for MutinyError {
+    fn from(_e: nostr_sdk::signer::Error) -> Self {
+        Self::NostrError
+    }
+}
+
 impl From<payjoin::send::CreateRequestError> for MutinyError {
     fn from(_e: payjoin::send::CreateRequestError) -> Self {
         Self::PayjoinCreateRequest
