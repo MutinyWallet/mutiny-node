@@ -9,7 +9,9 @@ use crate::{
     event::{EventHandler, HTLCStatus, MillisatAmount, PaymentInfo},
     fees::MutinyFeeEstimator,
     gossip::{get_all_peers, read_peer_info, save_peer_connection_info},
-    keymanager::{create_keys_manager, pubkey_from_keys_manager},
+    keymanager::{
+        create_keys_manager, deterministic_uuid_from_keys_manager, pubkey_from_keys_manager,
+    },
     ldkstorage::{MutinyNodePersister, PhantomChannelManager},
     logging::MutinyLogger,
     lsp::{AnyLsp, FeeRequest, Lsp},
@@ -297,10 +299,6 @@ impl<S: MutinyStorage> NodeBuilder<S> {
     pub async fn build(self) -> Result<Node<S>, MutinyError> {
         let node_start = Instant::now();
         // check for all required parameters
-        let uuid = self.uuid.as_ref().map_or_else(
-            || Err(MutinyError::InvalidArgumentsError),
-            |v| Ok(v.clone()),
-        )?;
         let node_index = self.node_index.as_ref().map_or_else(
             || Err(MutinyError::InvalidArgumentsError),
             |v| Ok(v.clone()),
@@ -340,7 +338,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
 
         let logger = self.logger.unwrap_or(Arc::new(MutinyLogger::default()));
 
-        log_info!(logger, "initializing a new node: {uuid}");
+        log_info!(logger, "initializing a new node: {:?}", self.uuid);
 
         // a list of components that need to be stopped and whether or not they are stopped
         let stopped_components = Arc::new(RwLock::new(vec![]));
@@ -352,6 +350,13 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             logger.clone(),
         )?);
         let pubkey = pubkey_from_keys_manager(&keys_manager);
+
+        // if no UUID was given then this is new node, we deterministically generate
+        // it from our key manager.
+        let uuid = match self.uuid {
+            Some(uuid) => uuid,
+            None => deterministic_uuid_from_keys_manager(&keys_manager).to_string(),
+        };
 
         // init the persister
         let persister = Arc::new(MutinyNodePersister::new(
@@ -860,7 +865,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
         );
 
         Ok(Node {
-            _uuid: uuid,
+            uuid,
             stopped_components,
             child_index: node_index.child_index,
             pubkey,
@@ -883,7 +888,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
 }
 
 pub(crate) struct Node<S: MutinyStorage> {
-    pub _uuid: String,
+    pub uuid: String,
     pub child_index: u32,
     stopped_components: Arc<RwLock<Vec<bool>>>,
     pub pubkey: PublicKey,
@@ -971,7 +976,7 @@ impl<S: MutinyStorage> Node<S> {
                     if saved != peer_connection_info.original_connection_string {
                         match save_peer_connection_info(
                             &self.persister.storage,
-                            &self._uuid,
+                            &self.uuid,
                             &node_id,
                             &peer_connection_info.original_connection_string,
                             label,
@@ -986,7 +991,7 @@ impl<S: MutinyStorage> Node<S> {
                     // store this so we can reconnect later
                     if let Err(e) = save_peer_connection_info(
                         &self.persister.storage,
-                        &self._uuid,
+                        &self.uuid,
                         &node_id,
                         &peer_connection_info.original_connection_string,
                         label,

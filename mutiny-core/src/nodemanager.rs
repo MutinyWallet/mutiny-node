@@ -63,7 +63,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 use std::{collections::HashMap, ops::Deref, sync::Arc};
-use uuid::Uuid;
 
 const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 pub const DEVICE_LOCK_INTERVAL_SECS: u64 = 30;
@@ -450,7 +449,7 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             let mut updated_nodes: HashMap<String, NodeIndex> =
                 HashMap::with_capacity(nodes_map.len());
             for n in nodes_map.values() {
-                updated_nodes.insert(n._uuid.clone(), n.node_index().await);
+                updated_nodes.insert(n.uuid.clone(), n.node_index().await);
             }
 
             // insert updated nodes in background, isn't a huge deal if this fails,
@@ -1286,7 +1285,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             if node.channel_manager.list_channels().is_empty()
                 && node.chain_monitor.get_claimable_balances(&[]).is_empty()
             {
-                self.archive_node_by_uuid(node._uuid.clone()).await
+                self.archive_node_by_uuid(node.uuid.clone()).await
             } else {
                 Err(anyhow!("Node has active channels, cannot archive").into())
             }
@@ -1408,7 +1407,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         peer: &NodeId,
     ) -> Result<(), MutinyError> {
         let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
-        gossip::delete_peer_info(&self.storage, &node._uuid, peer)?;
+        gossip::delete_peer_info(&self.storage, &node.uuid, peer)?;
         Ok(())
     }
 
@@ -2026,9 +2025,6 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         Some((_, v)) => v.child_index + 1,
     };
 
-    // Create and save a new node using the next child index
-    let next_node_uuid = Uuid::new_v4().to_string();
-
     let lsp = node_manager.lsp_config.clone();
 
     let next_node = NodeIndex {
@@ -2037,17 +2033,8 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         archived: Some(false),
     };
 
-    existing_nodes.version += 1;
-    existing_nodes
-        .nodes
-        .insert(next_node_uuid.clone(), next_node.clone());
-
-    node_manager.storage.insert_nodes(&existing_nodes).await?;
-    node_mutex.nodes = existing_nodes.nodes.clone();
-
     let mut node_builder = NodeBuilder::new(node_manager.xprivkey, node_manager.storage.clone())
-        .with_uuid(next_node_uuid.clone())
-        .with_node_index(next_node)
+        .with_node_index(next_node.clone())
         .with_gossip_sync(node_manager.gossip_sync.clone())
         .with_scorer(node_manager.scorer.clone())
         .with_chain(node_manager.chain.clone())
@@ -2069,6 +2056,15 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
 
     let new_node = node_builder.build().await?;
     let node_pubkey = new_node.pubkey;
+    let next_node_uuid = new_node.uuid.clone();
+
+    existing_nodes.version += 1;
+    existing_nodes
+        .nodes
+        .insert(next_node_uuid.clone(), next_node);
+    node_manager.storage.insert_nodes(&existing_nodes).await?;
+    node_mutex.nodes = existing_nodes.nodes.clone();
+
     let mut nodes = node_manager.nodes.write().await;
     nodes.insert(node_pubkey, Arc::new(new_node));
 

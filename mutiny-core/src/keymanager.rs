@@ -8,6 +8,7 @@ use bip39::Mnemonic;
 use bitcoin::absolute::LockTime;
 use bitcoin::bech32::u5;
 use bitcoin::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
+use bitcoin::hashes::{sha256, Hash, HashEngine, Hmac, HmacEngine};
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::RecoverableSignature;
 use bitcoin::secp256k1::ecdsa::Signature;
@@ -25,6 +26,7 @@ use lightning::sign::{
 };
 use lightning::util::logger::Logger;
 use std::sync::Arc;
+use uuid::Uuid;
 
 pub struct PhantomKeysManager<S: MutinyStorage> {
     inner: LdkPhantomKeysManager,
@@ -258,6 +260,26 @@ pub(crate) fn pubkey_from_keys_manager<S: MutinyStorage>(
         .expect("cannot parse node id")
 }
 
+pub(crate) fn deterministic_uuid_from_keys_manager<S: MutinyStorage>(
+    keys_manager: &PhantomKeysManager<S>,
+) -> Uuid {
+    let secret_bytes = keys_manager.get_node_secret_key().secret_bytes();
+    // hash secret bytes just in case
+    let hashed_secret_bytes = sha256::Hash::hash(&secret_bytes);
+    let node_id = pubkey_from_keys_manager(keys_manager);
+
+    // create a Hmac that commits to a secret plus their node id and a salt,
+    // this way it can't be calculated off of only public info.
+    let mut engine = HmacEngine::new(&hashed_secret_bytes.to_byte_array());
+    engine.input(&node_id.serialize());
+    engine.input(b"Mutiny Node UUID");
+    let hmac = Hmac::<sha256::Hash>::from_engine(engine);
+
+    // take first 16 bytes to create the UUID
+    let bytes = hmac.as_byte_array();
+    Uuid::from_slice(&bytes[..16]).expect("exactly 16 bytes")
+}
+
 #[cfg(test)]
 mod tests {
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
@@ -268,7 +290,7 @@ mod tests {
         encrypt::encryption_key_from_pass, keymanager::pubkey_from_keys_manager, test_utils::*,
     };
 
-    use super::create_keys_manager;
+    use super::{create_keys_manager, deterministic_uuid_from_keys_manager};
     use crate::fees::MutinyFeeEstimator;
     use crate::logging::MutinyLogger;
     use crate::onchain::OnChainWallet;
@@ -327,5 +349,50 @@ mod tests {
         let second_pubkey_again = pubkey_from_keys_manager(&km);
 
         assert_eq!(second_pubkey, second_pubkey_again);
+    }
+
+    #[test]
+    async fn derive_uuid_from_key_manager() {
+        let test_name = "derive_uuid_from_key_manager";
+        log!("{}", test_name);
+
+        let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
+        let esplora = Arc::new(
+            Builder::new("https://blockstream.info/testnet/api/")
+                .build_async()
+                .unwrap(),
+        );
+        let network = Network::Testnet;
+        let pass = uuid::Uuid::new_v4().to_string();
+        let cipher = encryption_key_from_pass(&pass).unwrap();
+        let db = MemoryStorage::new(Some(pass), Some(cipher), None);
+        let logger = Arc::new(MutinyLogger::default());
+        let fees = Arc::new(MutinyFeeEstimator::new(
+            db.clone(),
+            esplora.clone(),
+            logger.clone(),
+        ));
+        let stop = Arc::new(AtomicBool::new(false));
+        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
+
+        let wallet = Arc::new(
+            OnChainWallet::new(xpriv, db, network, esplora, fees, stop, logger.clone()).unwrap(),
+        );
+
+        let km = create_keys_manager(wallet.clone(), xpriv, 1, logger.clone()).unwrap();
+        let uuid = deterministic_uuid_from_keys_manager(&km);
+        assert_eq!("1f586dda-909b-e737-e49b-f1dfbcfd21c0", uuid.to_string());
+
+        let km = create_keys_manager(wallet.clone(), xpriv, 2, logger.clone()).unwrap();
+        let second_uuid = deterministic_uuid_from_keys_manager(&km);
+        assert_eq!(
+            "acb9c94d-780a-5ef5-f576-069a7bb4c5ae",
+            second_uuid.to_string()
+        );
+
+        let km = create_keys_manager(wallet, xpriv, 2, logger).unwrap();
+        let second_uuid_again = deterministic_uuid_from_keys_manager(&km);
+
+        assert_eq!(second_uuid, second_uuid_again);
     }
 }
