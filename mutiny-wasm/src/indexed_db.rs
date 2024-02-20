@@ -80,6 +80,31 @@ impl IndexedDbStorage {
         })
     }
 
+    pub(crate) async fn has_mnemonic() -> Result<bool, MutinyError> {
+        let indexed_db = Self::build_indexed_db_database().await?;
+        let tx = indexed_db
+            .transaction(&[WALLET_OBJECT_STORE_NAME], TransactionMode::ReadOnly)
+            .map_err(|e| {
+                MutinyError::read_err(
+                    anyhow!("Failed to create read only indexed db transaction: {e}").into(),
+                )
+            })?;
+
+        let store = tx.store(WALLET_OBJECT_STORE_NAME).map_err(|e| {
+            MutinyError::read_err(
+                anyhow!("Failed to create read only indexed db store: {e}").into(),
+            )
+        })?;
+
+        let key = JsValue::from(MNEMONIC_KEY);
+        let read = store
+            .get(&key)
+            .await
+            .map_err(|_| MutinyError::read_err(MutinyStorageError::IndexedDBError))?;
+
+        Ok(!read.is_null() && !read.is_undefined())
+    }
+
     /// Read the mnemonic from indexed db, if one does not exist,
     /// then generate a new one and save it to indexed db.
     pub(crate) async fn get_mnemonic(
