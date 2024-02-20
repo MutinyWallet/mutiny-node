@@ -4,7 +4,10 @@ cargo-features = ["per-package-target"]
 name = "mutiny-wasm"
 version = "0.6.0-rc1"
 edition = "2021"
-authors = ["Tony Giorgio <tony@mutinywallet.com>", "benthecarman <ben@mutinywallet.com>"]
+authors = [
+    "Tony Giorgio <tony@mutinywallet.com>",
+    "benthecarman <ben@mutinywallet.com>",
+]
 forced-target = "wasm32-unknown-unknown"
 description = "A wasm-bindgen wrapper around mutiny-core"
 license = "MIT"
@@ -25,13 +28,26 @@ wasm-bindgen-futures = "0.4.38"
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
 base64 = "0.13.1"
-bitcoin = { version = "0.30.2", default-features = false, features = ["std", "serde", "secp-recovery", "rand"] }
-lightning = { version = "0.0.121", default-features = false, features = ["std"] }
+bitcoin = { version = "0.30.2", default-features = false, features = [
+    "std",
+    "serde",
+    "secp-recovery",
+    "rand",
+] }
+lightning = { version = "0.0.121", default-features = false, features = [
+    "std",
+] }
 lightning-invoice = { version = "0.29.0" }
 thiserror = "1.0"
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 lnurl-rs = { version = "0.4.1", default-features = false }
-nostr = { version = "0.28.0", default-features = false, features = ["nip04", "nip05", "nip07", "nip47", "nip57"] }
+nostr = { version = "0.28.0", default-features = false, features = [
+    "nip04",
+    "nip05",
+    "nip07",
+    "nip47",
+    "nip57",
+] }
 wasm-logger = "0.2.0"
 log = "0.4.17"
 rexie = "0.5.0"

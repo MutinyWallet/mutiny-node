@@ -4,7 +4,10 @@ cargo-features = ["per-package-target"]
 name = "mutiny-core"
 version = "0.6.0-rc1"
 edition = "2021"
-authors = ["Tony Giorgio <tony@mutinywallet.com>", "benthecarman <ben@mutinywallet.com>"]
+authors = [
+    "Tony Giorgio <tony@mutinywallet.com>",
+    "benthecarman <ben@mutinywallet.com>",
+]
 description = "The core SDK for the mutiny node"
 license = "MIT"
 documentation = "https://docs.rs/mutiny-core"
@@ -12,13 +15,24 @@ homepage = "https://mutinywallet.com"
 repository = "https://github.com/mutinywallet/mutiny-node"
 
 [dependencies]
-lnurl-rs = { version = "0.4.0", default-features = false, features = ["async", "async-https"] }
+lnurl-rs = { version = "0.4.0", default-features = false, features = [
+    "async",
+    "async-https",
+] }
 
 cfg-if = "1.0.0"
 bip39 = { version = "2.0.0" }
-bitcoin = { version = "0.30.2", default-features = false, features = ["std", "serde", "secp-recovery", "rand"] }
+bitcoin = { version = "0.30.2", default-features = false, features = [
+    "std",
+    "serde",
+    "secp-recovery",
+    "rand",
+] }
 bdk = { version = "1.0.0-alpha.5" }
-bdk_esplora = { version = "0.7.0", default-features = false, features = ["std", "async-https"] }
+bdk_esplora = { version = "0.7.0", default-features = false, features = [
+    "std",
+    "async-https",
+] }
 bdk_chain = { version = "0.9.0", features = ["std"] }
 bdk-macros = "0.6.0"
 getrandom = { version = "0.2" }
@@ -27,19 +41,38 @@ serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
 uuid = { version = "1.1.2", features = ["v4"] }
 esplora-client = { version = "0.6", default-features = false }
-lightning = { version = "0.0.121", default-features = false, features = ["max_level_trace", "grind_signatures", "std"] }
+lightning = { version = "0.0.121", default-features = false, features = [
+    "max_level_trace",
+    "grind_signatures",
+    "std",
+] }
 lightning-invoice = { version = "0.29.0", features = ["serde"] }
 lightning-rapid-gossip-sync = { version = "0.0.121" }
 lightning-background-processor = { version = "0.0.121", features = ["futures"] }
-lightning-transaction-sync = { version = "0.0.121", default-features = false, features = ["esplora-async-https"] }
+lightning-transaction-sync = { version = "0.0.121", default-features = false, features = [
+    "esplora-async-https",
+] }
 lightning-liquidity = { git = "https://github.com/lightningdevkit/lightning-liquidity.git", rev = "478ccf9324e2650d200ea289a0ba8905afe420b6" }
 chrono = "0.4.22"
 futures-util = { version = "0.3", default-features = false }
-reqwest = { version = "0.11", default-features = false, features = ["multipart", "json"] }
+reqwest = { version = "0.11", default-features = false, features = [
+    "multipart",
+    "json",
+] }
 async-trait = "0.1.68"
 url = { version = "2.3.1", features = ["serde"] }
-nostr = { version = "0.28.0", default-features = false, features = ["nip04", "nip05", "nip47", "nip57"] }
-nostr-sdk = { version = "0.28.0", default-features = false, features = ["nip04", "nip05", "nip47", "nip57"] }
+nostr = { version = "0.28.0", default-features = false, features = [
+    "nip04",
+    "nip05",
+    "nip47",
+    "nip57",
+] }
+nostr-sdk = { version = "0.28.0", default-features = false, features = [
+    "nip04",
+    "nip05",
+    "nip47",
+    "nip57",
+] }
 cbc = { version = "0.1", features = ["alloc"] }
 aes = { version = "0.8" }
 jwt-compact = { version = "0.8.0-beta.1", features = ["es256k"] }
@@ -83,8 +116,20 @@ gloo-net = { version = "0.4.0" }
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 getrandom = { version = "0.2", features = ["js"] }
 # add nip07 feature for wasm32
-nostr = { version = "0.28.0", default-features = false, features = ["nip04", "nip05", "nip07", "nip47", "nip57"] }
-nostr-sdk = { version = "0.28.0", default-features = false, features = ["nip04", "nip05", "nip07", "nip47", "nip57"] }
+nostr = { version = "0.28.0", default-features = false, features = [
+    "nip04",
+    "nip05",
+    "nip07",
+    "nip47",
+    "nip57",
+] }
+nostr-sdk = { version = "0.28.0", default-features = false, features = [
+    "nip04",
+    "nip05",
+    "nip07",
+    "nip47",
+    "nip57",
+] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["rt"] }
