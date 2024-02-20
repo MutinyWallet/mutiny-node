@@ -1900,21 +1900,22 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     continue;
                 }
 
-                let message = self.nostr.decrypt_dm(npub, &event.content).await?;
-
-                let to = if event.pubkey == npub {
-                    self.nostr.public_key
-                } else {
-                    npub
-                };
-                let dm = DirectMessage {
-                    from: event.pubkey,
-                    to,
-                    message,
-                    date: event.created_at.as_u64(),
-                    event_id: event.id,
-                };
-                messages.push(dm);
+                // if decryption fails, skip this message, just a bad dm
+                if let Ok(message) = self.nostr.decrypt_dm(npub, &event.content).await {
+                    let to = if event.pubkey == npub {
+                        self.nostr.public_key
+                    } else {
+                        npub
+                    };
+                    let dm = DirectMessage {
+                        from: event.pubkey,
+                        to,
+                        message,
+                        date: event.created_at.as_u64(),
+                        event_id: event.id,
+                    };
+                    messages.push(dm);
+                }
             }
         }
 
