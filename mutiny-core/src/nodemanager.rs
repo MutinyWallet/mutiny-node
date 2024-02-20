@@ -973,13 +973,14 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let mut activity = vec![];
         for inv in label_item.invoices.iter() {
-            let ln = self.get_invoice_by_hash(inv.payment_hash()).await?;
-            // Only show paid and in-flight invoices
-            match ln.status {
-                HTLCStatus::Succeeded | HTLCStatus::InFlight => {
-                    activity.push(ActivityItem::Lightning(Box::new(ln)));
+            if let Ok(ln) = self.get_invoice_by_hash(inv.payment_hash()).await {
+                // Only show paid and in-flight invoices
+                match ln.status {
+                    HTLCStatus::Succeeded | HTLCStatus::InFlight => {
+                        activity.push(ActivityItem::Lightning(Box::new(ln)));
+                    }
+                    HTLCStatus::Pending | HTLCStatus::Failed => {}
                 }
-                HTLCStatus::Pending | HTLCStatus::Failed => {}
             }
         }
         let onchain = self
