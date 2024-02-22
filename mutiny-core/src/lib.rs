@@ -2302,12 +2302,6 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         federation_code: federation_code.clone(),
     };
 
-    federation_mutex
-        .federations
-        .insert(next_federation_uuid.clone(), next_federation.clone());
-    federation_mutex.version += 1;
-    storage.insert_federations(federation_mutex.clone()).await?;
-
     // now create the federation process and init it
     let new_federation = FederationClient::new(
         next_federation_uuid.clone(),
@@ -2318,6 +2312,12 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         logger.clone(),
     )
     .await?;
+
+    federation_mutex
+        .federations
+        .insert(next_federation_uuid.clone(), next_federation.clone());
+    federation_mutex.version += 1;
+    storage.insert_federations(federation_mutex.clone()).await?;
 
     let federation_id = new_federation.fedimint_client.federation_id();
     let federation_name = new_federation.fedimint_client.get_meta("federation_name");

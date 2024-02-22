@@ -254,6 +254,12 @@ impl<S: MutinyStorage> FederationClient<S> {
                 "Fedimint on different network {}, expected: {network}",
                 wallet_client.get_network()
             );
+
+            // try to delete the storage for this federation
+            if let Err(e) = fedimint_storage.delete_store().await {
+                log_error!(logger, "Could not delete fedimint storage: {e}");
+            }
+
             return Err(MutinyError::NetworkMismatch);
         }
 
