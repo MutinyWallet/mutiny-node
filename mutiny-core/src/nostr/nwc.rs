@@ -9,6 +9,7 @@ use anyhow::anyhow;
 use bitcoin::bip32::ExtendedPrivKey;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::secp256k1::{Secp256k1, Signing, ThirtyTwoByteHash};
+use bitcoin::Network;
 use chrono::{DateTime, Datelike, Duration, NaiveDateTime, Utc};
 use core::fmt;
 use hex_conservative::DisplayHex;
@@ -459,6 +460,7 @@ impl NostrWalletConnect {
                     .await?
                 }
                 RequestParams::GetBalance => self.handle_get_balance_request(event).await?,
+                RequestParams::GetInfo => self.handle_get_info_request(event, node).await?,
                 _ => return Err(anyhow!("Invalid request params for {}", req.method)),
             };
         }
@@ -470,6 +472,56 @@ impl NostrWalletConnect {
         }
 
         Ok(result)
+    }
+
+    async fn handle_get_info_request(
+        &self,
+        event: Event,
+        node: &impl InvoiceHandler,
+    ) -> anyhow::Result<Option<Event>> {
+        let network = match node.get_network() {
+            Network::Bitcoin => "mainnet",
+            Network::Testnet => "testnet",
+            Network::Signet => "signet",
+            Network::Regtest => "regtest",
+            net => unreachable!("Unknown network: {net}"),
+        };
+
+        let block = node.get_best_block().await?;
+
+        let content = Response {
+            result_type: Method::GetInfo,
+            error: None,
+            result: Some(ResponseResult::GetInfo(GetInfoResponseResult {
+                alias: "Mutiny".to_string(),
+                color: "000000".to_string(),
+                // give an arbitrary pubkey, no need to leak ours
+                pubkey: "02cae09cf2c8842ace44068a5bf3117a494ebbf69a99e79712483c36f97cdb7b54"
+                    .to_string(),
+                network: network.to_string(),
+                block_height: block.height(),
+                block_hash: block.block_hash().to_string(),
+                methods: self
+                    .profile
+                    .available_commands()
+                    .iter()
+                    .map(|c| c.to_string())
+                    .collect(),
+            })),
+        };
+
+        let encrypted = encrypt(
+            self.server_key.secret_key()?,
+            &self.client_key.public_key(),
+            content.as_json(),
+        )?;
+
+        let p_tag = Tag::public_key(event.pubkey);
+        let e_tag = Tag::event(event.id);
+        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
+            .to_event(&self.server_key)?;
+
+        Ok(Some(response))
     }
 
     async fn handle_get_balance_request(&self, event: Event) -> anyhow::Result<Option<Event>> {
@@ -1279,7 +1331,8 @@ mod wasm_test {
     };
     use crate::MockInvoiceHandler;
     use crate::MutinyInvoice;
-    use bitcoin::Network;
+    use bitcoin::{BlockHash, Network};
+    use lightning::chain::BestBlock;
     use mockall::predicate::eq;
     use nostr::key::SecretKey;
     use serde_json::json;
@@ -1928,5 +1981,68 @@ mod wasm_test {
         let response: Response = Response::from_json(content).unwrap();
         let balance = response.to_get_balance().unwrap();
         assert_eq!(balance.balance, budget * 1_000); // convert to msats
+    }
+
+    #[test]
+    async fn test_get_info() {
+        let storage = MemoryStorage::default();
+
+        let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let nostr_manager = NostrManager::from_mnemonic(
+            xprivkey,
+            NostrKeySource::Derived,
+            storage.clone(),
+            None,
+            Arc::new(MutinyLogger::default()),
+            stop,
+        )
+        .unwrap();
+
+        let best_block = BestBlock::new(
+            BlockHash::from_str("000000000000000000017dfbca2b8c975abcf0f86a6b19f38b3e4cafeabf56b0")
+                .unwrap(),
+            6969,
+        );
+
+        let mut node = MockInvoiceHandler::new();
+        node.expect_logger().return_const(MutinyLogger::default());
+        node.expect_get_network().return_const(Network::Regtest);
+        node.expect_get_best_block()
+            .returning(move || Ok(best_block));
+
+        let profile = nostr_manager
+            .create_new_nwc_profile_internal(
+                ProfileType::Normal {
+                    name: "test".to_string(),
+                },
+                SpendingConditions::RequireApproval,
+                NwcProfileTag::General,
+                vec![Method::GetInfo],
+            )
+            .unwrap();
+
+        let secp = Secp256k1::new();
+        let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
+        let uri = nwc.get_nwc_uri().unwrap().unwrap();
+
+        // test get_info
+
+        let event = sign_nwc_request(&uri, Request::get_info());
+        let result = nwc
+            .handle_nwc_request(event.clone(), &node, &nostr_manager)
+            .await;
+        let event = result.unwrap().unwrap();
+        let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
+        let response: Response = Response::from_json(content).unwrap();
+        let info = response.to_get_info().unwrap();
+
+        assert_eq!(info.network, "regtest");
+        assert_eq!(
+            info.block_hash,
+            "000000000000000000017dfbca2b8c975abcf0f86a6b19f38b3e4cafeabf56b0"
+        );
+        assert_eq!(info.block_height, best_block.height());
+        assert_eq!(info.methods, vec!["get_info"]);
     }
 }

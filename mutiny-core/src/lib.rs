@@ -95,6 +95,7 @@ use futures_util::join;
 use hex_conservative::{DisplayHex, FromHex};
 #[cfg(target_arch = "wasm32")]
 use instant::Instant;
+use lightning::chain::BestBlock;
 use lightning::ln::PaymentHash;
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
@@ -131,6 +132,8 @@ const MELT_CASHU_TOKEN: &str = "Cashu Token Melt";
 pub trait InvoiceHandler {
     fn logger(&self) -> &MutinyLogger;
     fn skip_hodl_invoices(&self) -> bool;
+    fn get_network(&self) -> Network;
+    async fn get_best_block(&self) -> Result<BestBlock, MutinyError>;
     async fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus>;
     async fn pay_invoice(
         &self,
@@ -2450,6 +2453,15 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
 
     fn skip_hodl_invoices(&self) -> bool {
         self.skip_hodl_invoices
+    }
+
+    fn get_network(&self) -> Network {
+        self.network
+    }
+
+    async fn get_best_block(&self) -> Result<BestBlock, MutinyError> {
+        let node = self.node_manager.get_node_by_key_or_first(None).await?;
+        Ok(node.channel_manager.current_best_block())
     }
 
     async fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus> {
