@@ -10,6 +10,7 @@
 extern crate core;
 
 pub mod auth;
+mod cashu;
 mod chain;
 pub mod encrypt;
 pub mod error;
@@ -40,6 +41,7 @@ pub mod vss;
 #[cfg(test)]
 mod test_utils;
 
+use crate::cashu::CashuHttpClient;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
@@ -93,6 +95,11 @@ use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::{lnurl::LnUrl, AsyncClient as LnUrlClient, LnUrlResponse, Response};
+use moksha_core::primitives::{
+    CurrencyUnit, PostMeltBolt11Request, PostMeltBolt11Response, PostMeltQuoteBolt11Request,
+    PostMeltQuoteBolt11Response,
+};
+use moksha_core::token::TokenV3;
 use nostr_sdk::{Client, RelayPoolNotification};
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
@@ -114,6 +121,7 @@ use mockall::{automock, predicate::*};
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 const MAX_FEDERATION_INVOICE_AMT: u64 = 200_000;
 const SWAP_LABEL: &str = "SWAP";
+const MELT_CASHU_TOKEN: &str = "Cashu Token Melt";
 
 #[cfg_attr(test, automock)]
 pub trait InvoiceHandler {
@@ -856,6 +864,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             network,
             skip_hodl_invoices: self.skip_hodl_invoices,
             safe_mode: self.safe_mode,
+            cashu_client: CashuHttpClient::new(),
         };
 
         // if we are in safe mode, don't create any nodes or
@@ -911,6 +920,7 @@ pub struct MutinyWallet<S: MutinyStorage> {
     network: Network,
     skip_hodl_invoices: bool,
     safe_mode: bool,
+    cashu_client: CashuHttpClient,
 }
 
 impl<S: MutinyStorage> MutinyWallet<S> {
@@ -2348,6 +2358,75 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     pub fn is_safe_mode(&self) -> bool {
         self.safe_mode
+    }
+
+    /// Calls upon a Cashu mint and redeems/melts the token.
+    pub async fn melt_cashu_token(
+        &self,
+        token_v3: TokenV3,
+    ) -> Result<Vec<MutinyInvoice>, MutinyError> {
+        let mut invoices: Vec<MutinyInvoice> = Vec::with_capacity(token_v3.tokens.len());
+
+        for token in token_v3.tokens {
+            let mint_url = match token.mint {
+                Some(url) => url,
+                None => return Err(MutinyError::EmptyMintURLError),
+            };
+
+            let total_proofs_amount = token.proofs.total_amount();
+            let mut invoice_pct = 0.99;
+            // create invoice for 1% less than proofs amount
+            let mut invoice_amount = total_proofs_amount as f64 * invoice_pct;
+            let mut mutiny_invoice: MutinyInvoice;
+            let mut mutiny_invoice_str: Bolt11Invoice;
+            let mut melt_quote_res: PostMeltQuoteBolt11Response;
+
+            loop {
+                mutiny_invoice = self
+                    .create_invoice(invoice_amount as u64, vec![MELT_CASHU_TOKEN.to_string()])
+                    .await?;
+
+                mutiny_invoice_str = mutiny_invoice
+                    .bolt11
+                    .clone()
+                    .expect("The invoice should have BOLT11");
+
+                let quote_request = PostMeltQuoteBolt11Request {
+                    request: mutiny_invoice_str.to_string(),
+                    unit: CurrencyUnit::Sat,
+                };
+
+                melt_quote_res = self
+                    .cashu_client
+                    .post_melt_quote_bolt11(&mint_url, quote_request)
+                    .await?;
+
+                if melt_quote_res.amount + melt_quote_res.fee_reserve > total_proofs_amount {
+                    // if invoice created was too big, lower amount
+                    invoice_pct -= 0.01;
+                    invoice_amount *= invoice_pct;
+                } else {
+                    break;
+                }
+            }
+
+            let melt_request = PostMeltBolt11Request {
+                quote: melt_quote_res.quote,
+                inputs: token.proofs,
+                outputs: vec![],
+            };
+
+            let post_melt_bolt11_response: PostMeltBolt11Response = self
+                .cashu_client
+                .post_melt_bolt11(&mint_url, melt_request)
+                .await?;
+
+            if post_melt_bolt11_response.paid {
+                mutiny_invoice = self.get_invoice(&mutiny_invoice_str).await?;
+                invoices.push(mutiny_invoice);
+            }
+        }
+        Ok(invoices)
     }
 }
 

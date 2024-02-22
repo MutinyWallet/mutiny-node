@@ -162,6 +162,15 @@ pub enum MutinyError {
     /// Payjoin configuration error
     #[error("Payjoin configuration failed.")]
     PayjoinConfigError,
+    /// Error calling Cashu Mint
+    #[error("Error calling Cashu Mint.")]
+    CashuMintError,
+    /// Mint URL in token was empty
+    #[error("Mint URL in token is empty.")]
+    EmptyMintURLError,
+    /// Token already spent.
+    #[error("Token has been already spent.")]
+    TokenAlreadySpent,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -241,6 +250,9 @@ impl PartialEq for MutinyError {
             (Self::NostrError, Self::NostrError) => true,
             (Self::IncorrectPassword, Self::IncorrectPassword) => true,
             (Self::SamePassword, Self::SamePassword) => true,
+            (Self::CashuMintError, Self::CashuMintError) => true,
+            (Self::EmptyMintURLError, Self::EmptyMintURLError) => true,
+            (Self::TokenAlreadySpent, Self::TokenAlreadySpent) => true,
             (Self::Other(e), Self::Other(e2)) => e.to_string() == e2.to_string(),
             _ => false,
         }
