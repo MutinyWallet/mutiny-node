@@ -459,6 +459,10 @@ impl NostrWalletConnect {
                     )
                     .await?
                 }
+                RequestParams::MakeInvoice(params) => {
+                    self.handle_make_invoice_request(event, node, params)
+                        .await?
+                }
                 RequestParams::GetBalance => self.handle_get_balance_request(event).await?,
                 RequestParams::GetInfo => self.handle_get_info_request(event, node).await?,
                 _ => return Err(anyhow!("Invalid request params for {}", req.method)),
@@ -543,6 +547,46 @@ impl NostrWalletConnect {
             error: None,
             result: Some(ResponseResult::GetBalance(GetBalanceResponseResult {
                 balance: balance_sats * 1_000, // return in msats
+            })),
+        };
+
+        let encrypted = encrypt(
+            self.server_key.secret_key()?,
+            &self.client_key.public_key(),
+            content.as_json(),
+        )?;
+
+        let p_tag = Tag::public_key(event.pubkey);
+        let e_tag = Tag::event(event.id);
+        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
+            .to_event(&self.server_key)?;
+
+        Ok(Some(response))
+    }
+
+    async fn handle_make_invoice_request(
+        &mut self,
+        event: Event,
+        node: &impl InvoiceHandler,
+        params: MakeInvoiceRequestParams,
+    ) -> anyhow::Result<Option<Event>> {
+        // FIXME currently we are ignoring the description and expiry params
+        let amount_sats = params.amount / 1_000;
+
+        let label = self
+            .profile
+            .label
+            .clone()
+            .unwrap_or(self.profile.name.clone());
+        let invoice = node.create_invoice(amount_sats, vec![label]).await?;
+        let bolt11 = invoice.bolt11.expect("just made");
+
+        let content = Response {
+            result_type: Method::MakeInvoice,
+            error: None,
+            result: Some(ResponseResult::MakeInvoice(MakeInvoiceResponseResult {
+                invoice: bolt11.to_string(),
+                payment_hash: bolt11.payment_hash().to_string(),
             })),
         };
 
@@ -2044,5 +2088,70 @@ mod wasm_test {
         );
         assert_eq!(info.block_height, best_block.height());
         assert_eq!(info.methods, vec!["get_info"]);
+    }
+
+    #[test]
+    async fn test_make_invoice() {
+        let storage = MemoryStorage::default();
+
+        let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let nostr_manager = NostrManager::from_mnemonic(
+            xprivkey,
+            NostrKeySource::Derived,
+            storage.clone(),
+            None,
+            Arc::new(MutinyLogger::default()),
+            stop,
+        )
+        .unwrap();
+
+        let amount = 69696969;
+        let invoice = create_dummy_invoice(Some(amount), Network::Regtest, None).0;
+
+        let mut node = MockInvoiceHandler::new();
+        let mutiny_inv: MutinyInvoice = invoice.clone().into();
+        node.expect_create_invoice()
+            .return_once(|_, _| Ok(mutiny_inv));
+
+        let profile = nostr_manager
+            .create_new_nwc_profile_internal(
+                ProfileType::Normal {
+                    name: "test".to_string(),
+                },
+                SpendingConditions::RequireApproval,
+                NwcProfileTag::General,
+                vec![Method::MakeInvoice],
+            )
+            .unwrap();
+
+        let secp = Secp256k1::new();
+        let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
+        let uri = nwc.get_nwc_uri().unwrap().unwrap();
+
+        // test make_invoice
+
+        let event = sign_nwc_request(
+            &uri,
+            Request::make_invoice(MakeInvoiceRequestParams {
+                amount,
+                description: None,
+                description_hash: None,
+                expiry: None,
+            }),
+        );
+        let result = nwc
+            .handle_nwc_request(event.clone(), &node, &nostr_manager)
+            .await;
+        let event = result.unwrap().unwrap();
+        let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
+        let response: Response = Response::from_json(content).unwrap();
+        let result = response.to_make_invoice().unwrap();
+
+        assert_eq!(result.invoice, invoice.to_string());
+        assert_eq!(
+            result.payment_hash,
+            invoice.payment_hash().into_32().to_lower_hex_string()
+        );
     }
 }
