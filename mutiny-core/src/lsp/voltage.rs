@@ -190,6 +190,61 @@ impl LspClient {
         self.connection_string = connection_string;
         Ok(())
     }
+
+    /// Verify that the invoice has all the parameters we expect
+    /// Returns an Option with an error message if the invoice is invalid
+    pub(crate) fn verify_invoice(
+        &self,
+        our_invoice: &Bolt11Invoice,
+        lsp_invoice: &Bolt11Invoice,
+        lsp_fee_msats: u64,
+    ) -> Option<String> {
+        if lsp_invoice.network() != our_invoice.network() {
+            return Some(format!(
+                "Received invoice on wrong network: {} != {}",
+                lsp_invoice.network(),
+                our_invoice.network()
+            ));
+        }
+
+        if lsp_invoice.payment_hash() != our_invoice.payment_hash() {
+            return Some(format!(
+                "Received invoice with wrong payment hash: {} != {}",
+                lsp_invoice.payment_hash(),
+                our_invoice.payment_hash()
+            ));
+        }
+
+        let invoice_pubkey = lsp_invoice.recover_payee_pub_key();
+        if invoice_pubkey != self.pubkey {
+            return Some(format!(
+                "Received invoice from wrong node: {invoice_pubkey} != {}",
+                self.pubkey
+            ));
+        }
+
+        if lsp_invoice.amount_milli_satoshis().is_none() {
+            return Some("Invoice amount is missing".to_string());
+        }
+
+        if our_invoice.amount_milli_satoshis().is_none() {
+            return Some("Invoice amount is missing".to_string());
+        }
+
+        let lsp_invoice_amt = lsp_invoice.amount_milli_satoshis().expect("just checked");
+        let our_invoice_amt = our_invoice.amount_milli_satoshis().expect("just checked");
+
+        let expected_lsp_invoice_amt = our_invoice_amt + lsp_fee_msats;
+
+        // verify invoice within 10 sats of our target
+        if lsp_invoice_amt.abs_diff(expected_lsp_invoice_amt) > 10_000 {
+            return Some(format!(
+                "Received invoice with wrong amount: {lsp_invoice_amt} when amount was {expected_lsp_invoice_amt}",
+            ));
+        }
+
+        None
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
@@ -289,5 +344,187 @@ impl Lsp for LspClient {
 
     fn get_expected_skimmed_fee_msat(&self, _payment_hash: PaymentHash, _payment_size: u64) -> u64 {
         0
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::lsp::voltage::{LspClient, VoltageConfig};
+    use crate::test_utils::{create_dummy_invoice, create_dummy_invoice_with_payment_hash};
+    use bitcoin::hashes::{sha256, Hash};
+    use bitcoin::secp256k1::{Secp256k1, SecretKey};
+    use bitcoin::Network;
+    use futures::executor::block_on;
+
+    #[test]
+    fn test_verify_invoice() {
+        let secret = SecretKey::from_slice(&[0x42; 32]).unwrap();
+        let pk = secret.public_key(&Secp256k1::new());
+        let client = block_on(LspClient::new(VoltageConfig {
+            url: "http://localhost:8080".to_string(),
+            pubkey: Some(pk),
+            connection_string: Some(format!("{pk}@localhost:9735")),
+        }))
+        .unwrap();
+
+        let invoice_amount_msats = 100_000_000; // 100k sats
+        let lsp_fee_msat = 1_000; // 1 sat fee
+        let amount_minus_fee = invoice_amount_msats - lsp_fee_msat;
+
+        // we create our invoices with `amount_minus_fee` so we pay the fee, not the sender
+        let (our_invoice, preimage) =
+            create_dummy_invoice(Some(amount_minus_fee), Network::Regtest, None);
+        let payment_hash = sha256::Hash::hash(&preimage);
+
+        // check good invoice
+        let lsp_invoice = create_dummy_invoice_with_payment_hash(
+            Some(invoice_amount_msats),
+            Network::Regtest,
+            Some(secret),
+            payment_hash,
+        );
+        assert!(client
+            .verify_invoice(&our_invoice, &lsp_invoice, lsp_fee_msat)
+            .is_none());
+
+        // check invoice wrong network
+        let lsp_invoice = create_dummy_invoice_with_payment_hash(
+            Some(invoice_amount_msats),
+            Network::Bitcoin,
+            Some(secret),
+            payment_hash,
+        );
+        let err = client
+            .verify_invoice(&our_invoice, &lsp_invoice, lsp_fee_msat)
+            .unwrap();
+        assert!(err.contains("Received invoice on wrong network"));
+
+        // check invoice wrong payment_hash
+        let lsp_invoice = create_dummy_invoice_with_payment_hash(
+            Some(invoice_amount_msats),
+            Network::Regtest,
+            Some(secret),
+            sha256::Hash::all_zeros(),
+        );
+        let err = client
+            .verify_invoice(&our_invoice, &lsp_invoice, lsp_fee_msat)
+            .unwrap();
+        assert!(err.contains("Received invoice with wrong payment hash"));
+
+        // check invoice wrong key
+        let lsp_invoice = create_dummy_invoice_with_payment_hash(
+            Some(invoice_amount_msats),
+            Network::Regtest,
+            None,
+            payment_hash,
+        );
+        let err = client
+            .verify_invoice(&our_invoice, &lsp_invoice, lsp_fee_msat)
+            .unwrap();
+        assert!(err.contains("Received invoice from wrong node"));
+
+        // check invoice no amount
+        let lsp_invoice = create_dummy_invoice_with_payment_hash(
+            None,
+            Network::Regtest,
+            Some(secret),
+            payment_hash,
+        );
+        let err = client
+            .verify_invoice(&our_invoice, &lsp_invoice, lsp_fee_msat)
+            .unwrap();
+        assert!(err.contains("Invoice amount is missing"));
+
+        // check invoice amount way too low
+        let lsp_invoice = create_dummy_invoice_with_payment_hash(
+            Some(1),
+            Network::Regtest,
+            Some(secret),
+            payment_hash,
+        );
+        let err = client
+            .verify_invoice(&our_invoice, &lsp_invoice, lsp_fee_msat)
+            .unwrap();
+        assert!(err.contains("Received invoice with wrong amount"));
+
+        // check invoice amount way too high
+        let lsp_invoice = create_dummy_invoice_with_payment_hash(
+            Some(invoice_amount_msats * 10),
+            Network::Regtest,
+            Some(secret),
+            payment_hash,
+        );
+        let err = client
+            .verify_invoice(&our_invoice, &lsp_invoice, lsp_fee_msat)
+            .unwrap();
+        assert!(err.contains("Received invoice with wrong amount"));
+
+        // check invoice amount small difference
+        let lsp_invoice = create_dummy_invoice_with_payment_hash(
+            Some(invoice_amount_msats + 10_001),
+            Network::Regtest,
+            Some(secret),
+            payment_hash,
+        );
+        let err = client
+            .verify_invoice(&our_invoice, &lsp_invoice, lsp_fee_msat)
+            .unwrap();
+        assert!(err.contains("Received invoice with wrong amount"));
+
+        // check invoice amount small difference
+        let lsp_invoice = create_dummy_invoice_with_payment_hash(
+            Some(invoice_amount_msats - 10_001),
+            Network::Regtest,
+            Some(secret),
+            payment_hash,
+        );
+        let err = client
+            .verify_invoice(&our_invoice, &lsp_invoice, lsp_fee_msat)
+            .unwrap();
+        assert!(err.contains("Received invoice with wrong amount"));
+
+        // change fee to 10k sats
+        let lsp_fee_msat = 10_000_000; // 10k sats fee
+        let amount_minus_fee = invoice_amount_msats - lsp_fee_msat;
+
+        // we create our invoices with `amount_minus_fee` so we pay the fee, not the sender
+        let (our_invoice, preimage) =
+            create_dummy_invoice(Some(amount_minus_fee), Network::Regtest, None);
+        let payment_hash = sha256::Hash::hash(&preimage);
+
+        // check good invoice
+        let lsp_invoice = create_dummy_invoice_with_payment_hash(
+            Some(invoice_amount_msats),
+            Network::Regtest,
+            Some(secret),
+            payment_hash,
+        );
+        assert!(client
+            .verify_invoice(&our_invoice, &lsp_invoice, lsp_fee_msat)
+            .is_none());
+
+        // check invoice amount small difference
+        let lsp_invoice = create_dummy_invoice_with_payment_hash(
+            Some(amount_minus_fee + 10_001),
+            Network::Regtest,
+            Some(secret),
+            payment_hash,
+        );
+        let err = client
+            .verify_invoice(&our_invoice, &lsp_invoice, lsp_fee_msat)
+            .unwrap();
+        assert!(err.contains("Received invoice with wrong amount"));
+
+        // check invoice amount small difference
+        let lsp_invoice = create_dummy_invoice_with_payment_hash(
+            Some(amount_minus_fee - 10_001),
+            Network::Regtest,
+            Some(secret),
+            payment_hash,
+        );
+        let err = client
+            .verify_invoice(&our_invoice, &lsp_invoice, lsp_fee_msat)
+            .unwrap();
+        assert!(err.contains("Received invoice with wrong amount"));
     }
 }

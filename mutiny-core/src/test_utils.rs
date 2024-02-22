@@ -144,10 +144,21 @@ pub fn create_dummy_invoice(
     network: Network,
     sk: Option<SecretKey>,
 ) -> (Bolt11Invoice, [u8; 32]) {
-    let preimage = &mut [0u8; 32];
-    getrandom::getrandom(preimage).unwrap();
-    let invoice_hash = sha256::Hash::hash(preimage);
+    let mut preimage = [0u8; 32];
+    getrandom::getrandom(&mut preimage).unwrap();
+    let invoice_hash = sha256::Hash::hash(&preimage);
 
+    let invoice = create_dummy_invoice_with_payment_hash(msats, network, sk, invoice_hash);
+
+    (invoice, preimage)
+}
+
+pub fn create_dummy_invoice_with_payment_hash(
+    msats: Option<u64>,
+    network: Network,
+    sk: Option<SecretKey>,
+    invoice_hash: sha256::Hash,
+) -> Bolt11Invoice {
     let payment_secret = &mut [0u8; 32];
     getrandom::getrandom(payment_secret).unwrap();
 
@@ -171,11 +182,9 @@ pub fn create_dummy_invoice(
         builder
     };
 
-    let invoice = builder
+    builder
         .build_signed(|hash| secp.sign_ecdsa_recoverable(hash, &sk))
-        .unwrap();
-
-    (invoice, *preimage)
+        .unwrap()
 }
 
 #[allow(unused_macros)]
