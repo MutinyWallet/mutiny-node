@@ -333,22 +333,6 @@ pub fn compute_opening_fee(
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl<S: MutinyStorage> Lsp for LspsClient<S> {
     async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> Result<FeeResponse, MutinyError> {
-        let inbound_capacity_msat: u64 = self
-            .channel_manager
-            .list_channels_with_counterparty(&self.pubkey)
-            .iter()
-            .map(|c| c.inbound_capacity_msat)
-            .sum();
-
-        // if there's enough capacity then the LSP won't charge an opening fee to route a normal payment
-        // this is only here to keep both voltage + lsps logic symmetric
-        if inbound_capacity_msat >= fee_request.amount_msat {
-            return Ok(FeeResponse {
-                id: String::from("deadbeef"),
-                fee_amount_msat: 0,
-            });
-        }
-
         let (pending_fee_request_sender, pending_fee_request_receiver) =
             oneshot::channel::<Result<GetInfoResponse, MutinyError>>();
 
