@@ -516,6 +516,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         profile_type: ProfileType,
         spending_conditions: SpendingConditions,
         tag: NwcProfileTag,
+        commands: Vec<Method>,
     ) -> Result<NwcProfile, MutinyError> {
         let mut profiles = self.nwc.try_write()?;
 
@@ -532,7 +533,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             tag,
             client_key: None,
             label: None,
-            commands: Some(vec![Method::PayInvoice]),
+            commands: Some(commands),
         };
         let nwc = NostrWalletConnect::new(&Secp256k1::new(), self.xprivkey, profile)?;
 
@@ -559,9 +560,10 @@ impl<S: MutinyStorage> NostrManager<S> {
         profile_type: ProfileType,
         spending_conditions: SpendingConditions,
         tag: NwcProfileTag,
+        commands: Vec<Method>,
     ) -> Result<NwcProfile, MutinyError> {
         let profile =
-            self.create_new_nwc_profile_internal(profile_type, spending_conditions, tag)?;
+            self.create_new_nwc_profile_internal(profile_type, spending_conditions, tag, commands)?;
         // add relay if needed
         let needs_connect = self.client.add_relay(profile.relay.as_str()).await?;
         if needs_connect {
@@ -599,8 +601,13 @@ impl<S: MutinyStorage> NostrManager<S> {
             amount_sats,
             payment_hash: None,
         });
-        self.create_new_nwc_profile(profile, spending_conditions, NwcProfileTag::Gift)
-            .await
+        self.create_new_nwc_profile(
+            profile,
+            spending_conditions,
+            NwcProfileTag::Gift,
+            vec![Method::PayInvoice], // gifting only needs pay invoice
+        )
+        .await
     }
 
     /// Approves a nostr wallet auth request.
@@ -1473,6 +1480,7 @@ mod test {
                 ProfileType::Normal { name: name.clone() },
                 SpendingConditions::default(),
                 Default::default(),
+                vec![Method::PayInvoice],
             )
             .unwrap();
 
@@ -1516,6 +1524,7 @@ mod test {
                 ProfileType::Reserved(ReservedProfile::MutinySubscription),
                 SpendingConditions::default(),
                 Default::default(),
+                vec![Method::PayInvoice],
             )
             .unwrap();
 
@@ -1549,6 +1558,7 @@ mod test {
                 ProfileType::Normal { name: name.clone() },
                 SpendingConditions::default(),
                 Default::default(),
+                vec![Method::PayInvoice],
             )
             .unwrap();
 
@@ -1566,6 +1576,7 @@ mod test {
             archived: None,
             child_key_index: None,
             spending_conditions: Default::default(),
+            commands: None,
             tag: Default::default(),
             label: None,
         };
@@ -1632,6 +1643,7 @@ mod test {
                 uri.clone(),
                 None,
                 Default::default(),
+                vec![Method::PayInvoice],
             )
             .unwrap();
 
@@ -1681,6 +1693,7 @@ mod test {
                 ProfileType::Normal { name: name.clone() },
                 SpendingConditions::default(),
                 Default::default(),
+                vec![Method::PayInvoice],
             )
             .unwrap();
 
@@ -1722,6 +1735,7 @@ mod test {
                 ProfileType::Normal { name: name.clone() },
                 SpendingConditions::default(),
                 Default::default(),
+                vec![Method::PayInvoice],
             )
             .unwrap();
 
@@ -1754,6 +1768,7 @@ mod test {
                 ProfileType::Normal { name },
                 SpendingConditions::default(),
                 Default::default(),
+                vec![Method::PayInvoice],
             )
             .unwrap();
 

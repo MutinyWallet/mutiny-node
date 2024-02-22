@@ -78,6 +78,7 @@ use ::nostr::nips::nip57;
 #[cfg(target_arch = "wasm32")]
 use ::nostr::prelude::rand::rngs::OsRng;
 use ::nostr::prelude::ZapRequestData;
+use ::nostr::nips::nip47::Method;
 use ::nostr::{EventBuilder, EventId, JsonUtil, Kind};
 #[cfg(target_arch = "wasm32")]
 use ::nostr::{Keys, Tag};
@@ -1653,6 +1654,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                 period: BudgetPeriod::Month,
                             }),
                             NwcProfileTag::Subscription,
+                            vec![Method::PayInvoice], // subscription only needs pay invoice
                         )
                         .await?
                         .nwc_uri
@@ -1662,6 +1664,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                             ProfileType::Reserved(ReservedProfile::MutinySubscription),
                             SpendingConditions::RequireApproval,
                             NwcProfileTag::Subscription,
+                            vec![Method::PayInvoice], // subscription only needs pay invoice
                         )
                         .await?
                         .nwc_uri

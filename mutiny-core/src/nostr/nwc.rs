@@ -12,6 +12,7 @@ use bitcoin::secp256k1::{Secp256k1, Signing, ThirtyTwoByteHash};
 use chrono::{DateTime, Datelike, Duration, NaiveDateTime, Utc};
 use core::fmt;
 use hex_conservative::DisplayHex;
+use itertools::Itertools;
 use lightning::util::logger::Logger;
 use lightning::{log_error, log_warn};
 use lightning_invoice::Bolt11Invoice;
@@ -281,8 +282,14 @@ impl NostrWalletConnect {
 
     /// Create Nostr Wallet Connect Info event
     pub fn create_nwc_info_event(&self) -> anyhow::Result<Event> {
-        let info = EventBuilder::new(Kind::WalletConnectInfo, "pay_invoice".to_string(), [])
-            .to_event(&self.server_key)?;
+        let commands = self
+            .profile
+            .available_commands()
+            .iter()
+            .map(|c| c.to_string())
+            .join(" ");
+        let info =
+            EventBuilder::new(Kind::WalletConnectInfo, commands, []).to_event(&self.server_key)?;
         Ok(info)
     }
 
@@ -1290,6 +1297,7 @@ mod wasm_test {
                 },
                 SpendingConditions::RequireApproval,
                 NwcProfileTag::General,
+                vec![Method::PayInvoice],
             )
             .unwrap();
 
@@ -1348,6 +1356,7 @@ mod wasm_test {
                 },
                 SpendingConditions::RequireApproval,
                 NwcProfileTag::General,
+                vec![Method::PayInvoice],
             )
             .unwrap();
 
@@ -1605,6 +1614,7 @@ mod wasm_test {
                     period: BudgetPeriod::Seconds(10),
                 }),
                 NwcProfileTag::General,
+                vec![Method::PayInvoice],
             )
             .unwrap();
 
@@ -1693,6 +1703,7 @@ mod wasm_test {
                     period: BudgetPeriod::Seconds(10),
                 }),
                 NwcProfileTag::General,
+                vec![Method::PayInvoice],
             )
             .unwrap();
 
