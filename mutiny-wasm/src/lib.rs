@@ -11,6 +11,7 @@ pub mod error;
 mod indexed_db;
 mod models;
 mod utils;
+pub mod waila;
 
 use crate::error::MutinyJsError;
 use crate::indexed_db::IndexedDbStorage;
