@@ -433,6 +433,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         uri: NIP49URI,
         budget: Option<BudgetedSpendingConditions>,
         tag: NwcProfileTag,
+        commands: Vec<Method>,
     ) -> Result<NwcProfile, MutinyError> {
         let spending_conditions = match uri.budget {
             None => match budget {
@@ -486,6 +487,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             enabled: None,
             archived: None,
             spending_conditions,
+            commands: Some(commands),
             tag,
             label,
         };
@@ -530,6 +532,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             tag,
             client_key: None,
             label: None,
+            commands: Some(vec![Method::PayInvoice]),
         };
         let nwc = NostrWalletConnect::new(&Secp256k1::new(), self.xprivkey, profile)?;
 
@@ -616,7 +619,7 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let secret = uri.secret.clone();
         let relay = uri.relay_url.to_string();
-        let profile = self.nostr_wallet_auth(profile_type, uri, budget, tag)?;
+        let profile = self.nostr_wallet_auth(profile_type, uri, budget, tag, commands.clone())?;
 
         let nwc = self.nwc.try_read()?.iter().find_map(|nwc| {
             if nwc.profile.index == profile.index {
@@ -709,7 +712,12 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let p_tag = Tag::public_key(inv.pubkey);
         let e_tag = Tag::event(inv.event_id);
-        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
+        let tags = match inv.identifier {
+            Some(id) => vec![p_tag, e_tag, Tag::Identifier(id)],
+            None => vec![p_tag, e_tag],
+        };
+
+        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, tags)
             .to_event(&nwc.server_key)
             .map_err(|e| MutinyError::Other(anyhow::anyhow!("Failed to create event: {e:?}")))?;
 
@@ -909,17 +917,22 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let decrypted = self.decrypt_dm(event.pubkey, &event.content).await?;
 
-        let invoice: Bolt11Invoice =
-            match check_valid_nwc_invoice(&decrypted, invoice_handler).await {
-                Ok(Some(invoice)) => invoice,
-                Ok(None) => return Ok(()),
-                Err(msg) => {
-                    log_debug!(self.logger, "Not adding DM'd invoice: {msg}");
-                    return Ok(());
-                }
-            };
+        // handle it like a pay invoice NWC request, to see if it is valid
+        let params = PayInvoiceRequestParams {
+            id: None,
+            invoice: decrypted,
+            amount: None,
+        };
+        let invoice: Bolt11Invoice = match check_valid_nwc_invoice(&params, invoice_handler).await {
+            Ok(Some(invoice)) => invoice,
+            Ok(None) => return Ok(()),
+            Err(msg) => {
+                log_debug!(self.logger, "Not adding DM'd invoice: {msg}");
+                return Ok(());
+            }
+        };
 
-        self.save_pending_nwc_invoice(None, event.id, event.pubkey, invoice)
+        self.save_pending_nwc_invoice(None, event.id, event.pubkey, invoice, None)
             .await?;
 
         Ok(())
@@ -931,12 +944,14 @@ impl<S: MutinyStorage> NostrManager<S> {
         event_id: EventId,
         event_pk: nostr::PublicKey,
         invoice: Bolt11Invoice,
+        identifier: Option<String>,
     ) -> anyhow::Result<()> {
         let pending = PendingNwcInvoice {
             index: profile_index,
             invoice,
             event_id,
             pubkey: event_pk,
+            identifier,
         };
         self.pending_nwc_lock.lock().await;
 
@@ -1743,11 +1758,12 @@ mod test {
             .unwrap();
 
         let inv = PendingNwcInvoice {
-            index: Some(profile.index),
-            invoice: Bolt11Invoice::from_str("lnbc923720n1pj9nrefpp5pczykgk37af5388n8dzynljpkzs7sje4melqgazlwv9y3apay8jqhp5rd8saxz3juve3eejq7z5fjttxmpaq88d7l92xv34n4h3mq6kwq2qcqzzsxqzfvsp5z0jwpehkuz9f2kv96h62p8x30nku76aj8yddpcust7g8ad0tr52q9qyyssqfy622q25helv8cj8hyxqltws4rdwz0xx2hw0uh575mn7a76cp3q4jcptmtjkjs4a34dqqxn8uy70d0qlxqleezv4zp84uk30pp5q3nqq4c9gkz").unwrap(),
-            event_id: EventId::from_slice(&[0; 32]).unwrap(),
-            pubkey: nostr::PublicKey::from_str("552a9d06810f306bfc085cb1e1c26102554138a51fa3a7fdf98f5b03a945143a").unwrap(),
-        };
+			index: Some(profile.index),
+			invoice: Bolt11Invoice::from_str("lnbc923720n1pj9nrefpp5pczykgk37af5388n8dzynljpkzs7sje4melqgazlwv9y3apay8jqhp5rd8saxz3juve3eejq7z5fjttxmpaq88d7l92xv34n4h3mq6kwq2qcqzzsxqzfvsp5z0jwpehkuz9f2kv96h62p8x30nku76aj8yddpcust7g8ad0tr52q9qyyssqfy622q25helv8cj8hyxqltws4rdwz0xx2hw0uh575mn7a76cp3q4jcptmtjkjs4a34dqqxn8uy70d0qlxqleezv4zp84uk30pp5q3nqq4c9gkz").unwrap(),
+			event_id: EventId::from_slice(&[0; 32]).unwrap(),
+			pubkey: nostr::PublicKey::from_str("552a9d06810f306bfc085cb1e1c26102554138a51fa3a7fdf98f5b03a945143a").unwrap(),
+			identifier: None,
+		};
 
         // add dummy to storage
         nostr_manager

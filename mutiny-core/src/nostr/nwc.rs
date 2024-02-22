@@ -175,6 +175,8 @@ pub(crate) struct Profile {
     /// Require approval before sending a payment
     #[serde(default)]
     pub spending_conditions: SpendingConditions,
+    /// Allowed commands for this profile
+    pub(crate) commands: Option<Vec<Method>>,
     /// index to use to derive nostr keys for child index
     /// set to Option so that we keep using `index` for reserved + existing
     #[serde(default)]
@@ -192,6 +194,15 @@ impl Profile {
             (Some(enabled), None) => enabled,
             (None, Some(archived)) => !archived,
             (None, None) => true,
+        }
+    }
+
+    /// Returns the available commands for this profile
+    pub fn available_commands(&self) -> &[Method] {
+        // if None this is an old profile and we should only allow pay invoice
+        match self.commands.as_ref() {
+            None => &[Method::PayInvoice],
+            Some(cmds) => cmds,
         }
     }
 }
@@ -337,22 +348,30 @@ impl NostrWalletConnect {
         event_id: EventId,
         event_pk: nostr::PublicKey,
         invoice: Bolt11Invoice,
+        identifier: Option<String>,
     ) -> anyhow::Result<()> {
         nostr_manager
-            .save_pending_nwc_invoice(Some(self.profile.index), event_id, event_pk, invoice)
+            .save_pending_nwc_invoice(
+                Some(self.profile.index),
+                event_id,
+                event_pk,
+                invoice,
+                identifier,
+            )
             .await
     }
 
     fn get_skipped_error_event(
         &self,
         event: &Event,
+        result_type: Method,
         error_code: ErrorCode,
         message: String,
     ) -> anyhow::Result<Event> {
         let server_key = self.server_key.secret_key()?;
         let client_pubkey = self.client_key.public_key();
         let content = Response {
-            result_type: Method::PayInvoice,
+            result_type,
             error: Some(NIP47Error {
                 code: error_code,
                 message,
@@ -362,17 +381,8 @@ impl NostrWalletConnect {
 
         let encrypted = encrypt(server_key, &client_pubkey, content.as_json())?;
 
-        let p_tag = Tag::PublicKey {
-            public_key: event.pubkey,
-            relay_url: None,
-            alias: None,
-            uppercase: false,
-        };
-        let e_tag = Tag::Event {
-            event_id: event.id,
-            relay_url: None,
-            marker: None,
-        };
+        let p_tag = Tag::public_key(event.pubkey);
+        let e_tag = Tag::event(event.id);
         let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
             .to_event(&self.server_key)?;
 
@@ -391,6 +401,7 @@ impl NostrWalletConnect {
         let client_pubkey = self.client_key.public_key();
         let mut needs_save = false;
         let mut needs_delete = false;
+        let mut result = None;
         if self.profile.active()
             && event.kind == Kind::WalletConnectRequest
             && event.pubkey == client_pubkey
@@ -408,6 +419,7 @@ impl NostrWalletConnect {
                     return self
                         .get_skipped_error_event(
                             &event,
+                            Method::PayInvoice, // most likely it's a pay invoice request
                             ErrorCode::NotImplemented,
                             "Failed to parse request.".to_string(),
                         )
@@ -415,334 +427,32 @@ impl NostrWalletConnect {
                 }
             };
 
-            // only respond to pay invoice requests
-            if req.method != Method::PayInvoice {
+            // only respond to commands that are allowed by the profile
+            if !self.profile.available_commands().contains(&req.method) {
                 return self
                     .get_skipped_error_event(
                         &event,
+                        req.method,
                         ErrorCode::NotImplemented,
                         "Command is not supported.".to_string(),
                     )
                     .map(Some);
             }
 
-            let invoice_str = match req.params {
-                RequestParams::PayInvoice(params) => params.invoice,
-                _ => return Err(anyhow!("Invalid request params for pay invoice")),
+            result = match req.params {
+                RequestParams::PayInvoice(params) => {
+                    self.handle_pay_invoice_request(
+                        event,
+                        node,
+                        nostr_manager,
+                        params,
+                        &mut needs_delete,
+                        &mut needs_save,
+                    )
+                    .await?
+                }
+                _ => return Err(anyhow!("Invalid request params for {}", req.method)),
             };
-
-            let invoice: Bolt11Invoice = match check_valid_nwc_invoice(&invoice_str, node).await {
-                Ok(Some(invoice)) => invoice,
-                Ok(None) => return Ok(None),
-                Err(err_string) => {
-                    return self
-                        .get_skipped_error_event(&event, ErrorCode::Other, err_string)
-                        .map(Some);
-                }
-            };
-
-            // if we need approval, just save in the db for later
-            match self.profile.spending_conditions.clone() {
-                SpendingConditions::SingleUse(mut single_use) => {
-                    let msats = invoice.amount_milli_satoshis().unwrap();
-
-                    // get the status of the previous payment attempt, if one exists
-                    let prev_status: Option<HTLCStatus> = match single_use.payment_hash {
-                        Some(payment_hash) => {
-                            let hash: [u8; 32] =
-                                FromHex::from_hex(&payment_hash).expect("invalid hash");
-                            node.get_outbound_payment_status(&hash).await
-                        }
-                        None => None,
-                    };
-
-                    // check if we have already spent
-                    let content = match prev_status {
-                        Some(HTLCStatus::Succeeded) => {
-                            needs_delete = true;
-                            Response {
-                                result_type: Method::PayInvoice,
-                                error: Some(NIP47Error {
-                                    code: ErrorCode::QuotaExceeded,
-                                    message: "Already Claimed".to_string(),
-                                }),
-                                result: None,
-                            }
-                        }
-                        None | Some(HTLCStatus::Failed) => {
-                            if msats <= single_use.amount_sats * 1_000 {
-                                match self.pay_nwc_invoice(node, &invoice).await {
-                                    Ok(resp) => {
-                                        // after it is spent, delete the profile
-                                        // so that it cannot be used again
-                                        needs_delete = true;
-                                        resp
-                                    }
-                                    Err(e) => {
-                                        let mut code = ErrorCode::InsufficientBalance;
-                                        if let MutinyError::PaymentTimeout = e {
-                                            // if a payment times out, we should save the payment_hash
-                                            // and track if the payment settles or not. If it does not
-                                            // we can try again later.
-                                            single_use.payment_hash = Some(
-                                                invoice
-                                                    .payment_hash()
-                                                    .into_32()
-                                                    .to_lower_hex_string(),
-                                            );
-                                            self.profile.spending_conditions =
-                                                SpendingConditions::SingleUse(single_use);
-                                            needs_save = true;
-
-                                            log_error!(
-                                                nostr_manager.logger,
-                                                "Payment timeout, saving profile for later"
-                                            );
-                                            code = ErrorCode::Internal;
-                                        } else {
-                                            // for non-timeout errors, add to manual approval list
-                                            self.save_pending_nwc_invoice(
-                                                nostr_manager,
-                                                event.id,
-                                                event.pubkey,
-                                                invoice,
-                                            )
-                                            .await?
-                                        }
-                                        Response {
-                                            result_type: Method::PayInvoice,
-                                            error: Some(NIP47Error {
-                                                code,
-                                                message: format!("Failed to pay invoice: {e}"),
-                                            }),
-                                            result: None,
-                                        }
-                                    }
-                                }
-                            } else {
-                                log_warn!(
-                                    nostr_manager.logger,
-                                    "Invoice amount too high: {msats} msats"
-                                );
-
-                                Response {
-                                    result_type: Method::PayInvoice,
-                                    error: Some(NIP47Error {
-                                        code: ErrorCode::QuotaExceeded,
-                                        message: format!("Invoice amount too high: {msats} msats"),
-                                    }),
-                                    result: None,
-                                }
-                            }
-                        }
-                        Some(HTLCStatus::Pending) | Some(HTLCStatus::InFlight) => {
-                            log_warn!(
-                                nostr_manager.logger,
-                                "Previous NWC payment still in flight, cannot pay: {invoice}"
-                            );
-
-                            Response {
-                                result_type: Method::PayInvoice,
-                                error: Some(NIP47Error {
-                                    code: ErrorCode::RateLimited,
-                                    message: "Previous payment still in flight, cannot pay"
-                                        .to_string(),
-                                }),
-                                result: None,
-                            }
-                        }
-                    };
-
-                    let encrypted = encrypt(server_key, &client_pubkey, content.as_json())?;
-
-                    let p_tag = Tag::PublicKey {
-                        public_key: event.pubkey,
-                        relay_url: None,
-                        alias: None,
-                        uppercase: false,
-                    };
-                    let e_tag = Tag::Event {
-                        event_id: event.id,
-                        relay_url: None,
-                        marker: None,
-                    };
-                    let response =
-                        EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
-                            .to_event(&self.server_key)?;
-
-                    if needs_delete {
-                        nostr_manager.delete_nwc_profile(self.profile.index)?;
-                    } else if needs_save {
-                        nostr_manager.save_nwc_profile(self.clone())?;
-                    }
-
-                    return Ok(Some(response));
-                }
-                SpendingConditions::RequireApproval => {
-                    self.save_pending_nwc_invoice(nostr_manager, event.id, event.pubkey, invoice)
-                        .await?;
-
-                    if needs_save {
-                        nostr_manager.save_nwc_profile(self.clone())?;
-                    }
-
-                    return Ok(None);
-                }
-                SpendingConditions::Budget(mut budget) => {
-                    let sats = invoice.amount_milli_satoshis().unwrap() / 1_000;
-
-                    let budget_err = if budget.single_max.is_some_and(|max| sats > max) {
-                        Some("Invoice amount too high.")
-                    } else if budget.sum_payments() + sats > budget.budget {
-                        // budget might not actually be exceeded, we should verify that the payments
-                        // all went through, and if not, remove them from the budget
-                        let mut indices_to_remove = Vec::new();
-                        for (index, p) in budget.payments.iter().enumerate() {
-                            let hash: [u8; 32] = FromHex::from_hex(&p.hash)?;
-                            indices_to_remove.push((index, hash));
-                        }
-
-                        let futures: Vec<_> = indices_to_remove
-                            .iter()
-                            .map(|(index, hash)| async move {
-                                match node.get_outbound_payment_status(hash).await {
-                                    Some(HTLCStatus::Failed) => Some(*index),
-                                    _ => None,
-                                }
-                            })
-                            .collect();
-
-                        let results = futures::future::join_all(futures).await;
-
-                        // Remove failed payments
-                        for index in results.into_iter().flatten().rev() {
-                            budget.payments.remove(index);
-                        }
-
-                        // update budget with removed payments
-                        self.profile.spending_conditions =
-                            SpendingConditions::Budget(budget.clone());
-
-                        // try again with cleaned budget
-                        if budget.sum_payments() + sats > budget.budget {
-                            Some("Budget exceeded.")
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-
-                    let content = match budget_err {
-                        Some(err) => {
-                            log_warn!(nostr_manager.logger, "Attempted to exceed budget: {err}");
-                            // add to manual approval list
-                            self.save_pending_nwc_invoice(
-                                nostr_manager,
-                                event.id,
-                                event.pubkey,
-                                invoice,
-                            )
-                            .await?;
-                            Response {
-                                result_type: Method::PayInvoice,
-                                error: Some(NIP47Error {
-                                    code: ErrorCode::QuotaExceeded,
-                                    message: err.to_string(),
-                                }),
-                                result: None,
-                            }
-                        }
-                        None => {
-                            // add payment to budget
-                            budget.add_payment(&invoice);
-                            self.profile.spending_conditions =
-                                SpendingConditions::Budget(budget.clone());
-                            // persist budget before payment to protect against it not saving after
-                            nostr_manager.save_nwc_profile(self.clone())?;
-
-                            // attempt to pay invoice
-                            match self.pay_nwc_invoice(node, &invoice).await {
-                                Ok(resp) => resp,
-                                Err(e) => {
-                                    // remove payment if it failed
-                                    match e {
-                                        MutinyError::PaymentTimeout => {
-                                            log_warn!(
-                                                nostr_manager.logger,
-                                                "Payment timeout, not removing payment from budget"
-                                            );
-                                        }
-                                        MutinyError::NonUniquePaymentHash => {
-                                            log_warn!(
-                                                nostr_manager.logger,
-                                                "Already paid invoice, removing payment from budget"
-                                            );
-                                            budget.remove_payment(&invoice);
-                                            self.profile.spending_conditions =
-                                                SpendingConditions::Budget(budget);
-
-                                            nostr_manager.save_nwc_profile(self.clone())?;
-
-                                            // don't save to pending list, we already paid it
-                                            return Ok(None);
-                                        }
-                                        _ => {
-                                            log_warn!(
-                                                nostr_manager.logger,
-                                                "Failed to pay invoice: {e}, removing payment from budget, adding to manual approval list"
-                                            );
-
-                                            budget.remove_payment(&invoice);
-                                            self.profile.spending_conditions =
-                                                SpendingConditions::Budget(budget.clone());
-
-                                            nostr_manager.save_nwc_profile(self.clone())?;
-
-                                            // for non-timeout errors, add to manual approval list
-                                            self.save_pending_nwc_invoice(
-                                                nostr_manager,
-                                                event.id,
-                                                event.pubkey,
-                                                invoice,
-                                            )
-                                            .await?
-                                        }
-                                    }
-
-                                    Response {
-                                        result_type: Method::PayInvoice,
-                                        error: Some(NIP47Error {
-                                            code: ErrorCode::InsufficientBalance,
-                                            message: format!("Failed to pay invoice: {e}"),
-                                        }),
-                                        result: None,
-                                    }
-                                }
-                            }
-                        }
-                    };
-
-                    let encrypted = encrypt(server_key, &client_pubkey, content.as_json())?;
-
-                    let p_tag = Tag::PublicKey {
-                        public_key: event.pubkey,
-                        relay_url: None,
-                        alias: None,
-                        uppercase: false,
-                    };
-                    let e_tag = Tag::Event {
-                        event_id: event.id,
-                        relay_url: None,
-                        marker: None,
-                    };
-                    let response =
-                        EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
-                            .to_event(&self.server_key)?;
-
-                    return Ok(Some(response));
-                }
-            }
         }
 
         if needs_delete {
@@ -751,7 +461,338 @@ impl NostrWalletConnect {
             nostr_manager.save_nwc_profile(self.clone())?;
         }
 
-        Ok(None)
+        Ok(result)
+    }
+
+    async fn handle_pay_invoice_request<S: MutinyStorage>(
+        &mut self,
+        event: Event,
+        node: &impl InvoiceHandler,
+        nostr_manager: &NostrManager<S>,
+        params: PayInvoiceRequestParams,
+        needs_delete: &mut bool,
+        needs_save: &mut bool,
+    ) -> anyhow::Result<Option<Event>> {
+        let invoice: Bolt11Invoice = match check_valid_nwc_invoice(&params, node).await {
+            Ok(Some(invoice)) => invoice,
+            Ok(None) => return Ok(None),
+            Err(err_string) => {
+                return self
+                    .get_skipped_error_event(
+                        &event,
+                        Method::PayInvoice,
+                        ErrorCode::Other,
+                        err_string,
+                    )
+                    .map(Some);
+            }
+        };
+
+        // if we need approval, just save in the db for later
+        match self.profile.spending_conditions.clone() {
+            SpendingConditions::SingleUse(mut single_use) => {
+                let msats = invoice.amount_milli_satoshis().unwrap();
+
+                // get the status of the previous payment attempt, if one exists
+                let prev_status: Option<HTLCStatus> = match single_use.payment_hash {
+                    Some(payment_hash) => {
+                        let hash: [u8; 32] =
+                            FromHex::from_hex(&payment_hash).expect("invalid hash");
+                        node.get_outbound_payment_status(&hash).await
+                    }
+                    None => None,
+                };
+
+                // check if we have already spent
+                let content = match prev_status {
+                    Some(HTLCStatus::Succeeded) => {
+                        *needs_delete = true;
+                        Response {
+                            result_type: Method::PayInvoice,
+                            error: Some(NIP47Error {
+                                code: ErrorCode::QuotaExceeded,
+                                message: "Already Claimed".to_string(),
+                            }),
+                            result: None,
+                        }
+                    }
+                    None | Some(HTLCStatus::Failed) => {
+                        if msats <= single_use.amount_sats * 1_000 {
+                            match self.pay_nwc_invoice(node, &invoice).await {
+                                Ok(resp) => {
+                                    // after it is spent, delete the profile
+                                    // so that it cannot be used again
+                                    *needs_delete = true;
+                                    resp
+                                }
+                                Err(e) => {
+                                    let mut code = ErrorCode::InsufficientBalance;
+                                    if let MutinyError::PaymentTimeout = e {
+                                        // if a payment times out, we should save the payment_hash
+                                        // and track if the payment settles or not. If it does not
+                                        // we can try again later.
+                                        single_use.payment_hash = Some(
+                                            invoice.payment_hash().into_32().to_lower_hex_string(),
+                                        );
+                                        self.profile.spending_conditions =
+                                            SpendingConditions::SingleUse(single_use);
+                                        *needs_save = true;
+
+                                        log_error!(
+                                            nostr_manager.logger,
+                                            "Payment timeout, saving profile for later"
+                                        );
+                                        code = ErrorCode::Internal;
+                                    } else {
+                                        // for non-timeout errors, add to manual approval list
+                                        self.save_pending_nwc_invoice(
+                                            nostr_manager,
+                                            event.id,
+                                            event.pubkey,
+                                            invoice,
+                                            params.id.clone(),
+                                        )
+                                        .await?
+                                    }
+                                    Response {
+                                        result_type: Method::PayInvoice,
+                                        error: Some(NIP47Error {
+                                            code,
+                                            message: format!("Failed to pay invoice: {e}"),
+                                        }),
+                                        result: None,
+                                    }
+                                }
+                            }
+                        } else {
+                            log_warn!(
+                                nostr_manager.logger,
+                                "Invoice amount too high: {msats} msats"
+                            );
+
+                            Response {
+                                result_type: Method::PayInvoice,
+                                error: Some(NIP47Error {
+                                    code: ErrorCode::QuotaExceeded,
+                                    message: format!("Invoice amount too high: {msats} msats"),
+                                }),
+                                result: None,
+                            }
+                        }
+                    }
+                    Some(HTLCStatus::Pending) | Some(HTLCStatus::InFlight) => {
+                        log_warn!(
+                            nostr_manager.logger,
+                            "Previous NWC payment still in flight, cannot pay: {invoice}"
+                        );
+
+                        Response {
+                            result_type: Method::PayInvoice,
+                            error: Some(NIP47Error {
+                                code: ErrorCode::RateLimited,
+                                message: "Previous payment still in flight, cannot pay".to_string(),
+                            }),
+                            result: None,
+                        }
+                    }
+                };
+
+                let encrypted = encrypt(
+                    self.server_key.secret_key()?,
+                    &self.client_key.public_key(),
+                    content.as_json(),
+                )?;
+
+                let p_tag = Tag::public_key(event.pubkey);
+                let e_tag = Tag::event(event.id);
+                let tags = match params.id {
+                    Some(id) => vec![p_tag, e_tag, Tag::Identifier(id)],
+                    None => vec![p_tag, e_tag],
+                };
+
+                let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, tags)
+                    .to_event(&self.server_key)?;
+
+                if *needs_delete {
+                    nostr_manager.delete_nwc_profile(self.profile.index)?;
+                } else if *needs_save {
+                    nostr_manager.save_nwc_profile(self.clone())?;
+                }
+
+                Ok(Some(response))
+            }
+            SpendingConditions::RequireApproval => {
+                self.save_pending_nwc_invoice(
+                    nostr_manager,
+                    event.id,
+                    event.pubkey,
+                    invoice,
+                    params.id,
+                )
+                .await?;
+
+                if *needs_save {
+                    nostr_manager.save_nwc_profile(self.clone())?;
+                }
+
+                Ok(None)
+            }
+            SpendingConditions::Budget(mut budget) => {
+                let sats = invoice.amount_milli_satoshis().unwrap() / 1_000;
+
+                let budget_err = if budget.single_max.is_some_and(|max| sats > max) {
+                    Some("Invoice amount too high.")
+                } else if budget.sum_payments() + sats > budget.budget {
+                    // budget might not actually be exceeded, we should verify that the payments
+                    // all went through, and if not, remove them from the budget
+                    let mut indices_to_remove = Vec::new();
+                    for (index, p) in budget.payments.iter().enumerate() {
+                        let hash: [u8; 32] = FromHex::from_hex(&p.hash)?;
+                        indices_to_remove.push((index, hash));
+                    }
+
+                    let futures: Vec<_> = indices_to_remove
+                        .iter()
+                        .map(|(index, hash)| async move {
+                            match node.get_outbound_payment_status(hash).await {
+                                Some(HTLCStatus::Failed) => Some(*index),
+                                _ => None,
+                            }
+                        })
+                        .collect();
+
+                    let results = futures::future::join_all(futures).await;
+
+                    // Remove failed payments
+                    for index in results.into_iter().flatten().rev() {
+                        budget.payments.remove(index);
+                    }
+
+                    // update budget with removed payments
+                    self.profile.spending_conditions = SpendingConditions::Budget(budget.clone());
+
+                    // try again with cleaned budget
+                    if budget.sum_payments() + sats > budget.budget {
+                        Some("Budget exceeded.")
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let content = match budget_err {
+                    Some(err) => {
+                        log_warn!(nostr_manager.logger, "Attempted to exceed budget: {err}");
+                        // add to manual approval list
+                        self.save_pending_nwc_invoice(
+                            nostr_manager,
+                            event.id,
+                            event.pubkey,
+                            invoice,
+                            params.id.clone(),
+                        )
+                        .await?;
+                        Response {
+                            result_type: Method::PayInvoice,
+                            error: Some(NIP47Error {
+                                code: ErrorCode::QuotaExceeded,
+                                message: err.to_string(),
+                            }),
+                            result: None,
+                        }
+                    }
+                    None => {
+                        // add payment to budget
+                        budget.add_payment(&invoice);
+                        self.profile.spending_conditions =
+                            SpendingConditions::Budget(budget.clone());
+                        // persist budget before payment to protect against it not saving after
+                        nostr_manager.save_nwc_profile(self.clone())?;
+
+                        // attempt to pay invoice
+                        match self.pay_nwc_invoice(node, &invoice).await {
+                            Ok(resp) => resp,
+                            Err(e) => {
+                                // remove payment if it failed
+                                match e {
+                                    MutinyError::PaymentTimeout => {
+                                        log_warn!(
+                                            nostr_manager.logger,
+                                            "Payment timeout, not removing payment from budget"
+                                        );
+                                    }
+                                    MutinyError::NonUniquePaymentHash => {
+                                        log_warn!(
+                                            nostr_manager.logger,
+                                            "Already paid invoice, removing payment from budget"
+                                        );
+                                        budget.remove_payment(&invoice);
+                                        self.profile.spending_conditions =
+                                            SpendingConditions::Budget(budget);
+
+                                        nostr_manager.save_nwc_profile(self.clone())?;
+
+                                        // don't save to pending list, we already paid it
+                                        return Ok(None);
+                                    }
+                                    _ => {
+                                        log_warn!(
+                                                nostr_manager.logger,
+                                                "Failed to pay invoice: {e}, removing payment from budget, adding to manual approval list"
+                                            );
+
+                                        budget.remove_payment(&invoice);
+                                        self.profile.spending_conditions =
+                                            SpendingConditions::Budget(budget.clone());
+
+                                        nostr_manager.save_nwc_profile(self.clone())?;
+
+                                        // for non-timeout errors, add to manual approval list
+                                        self.save_pending_nwc_invoice(
+                                            nostr_manager,
+                                            event.id,
+                                            event.pubkey,
+                                            invoice,
+                                            params.id.clone(),
+                                        )
+                                        .await?
+                                    }
+                                }
+
+                                Response {
+                                    result_type: Method::PayInvoice,
+                                    error: Some(NIP47Error {
+                                        code: ErrorCode::InsufficientBalance,
+                                        message: format!("Failed to pay invoice: {e}"),
+                                    }),
+                                    result: None,
+                                }
+                            }
+                        }
+                    }
+                };
+
+                let encrypted = encrypt(
+                    self.server_key.secret_key()?,
+                    &self.client_key.public_key(),
+                    content.as_json(),
+                )?;
+
+                let p_tag = Tag::public_key(event.pubkey);
+                let e_tag = Tag::event(event.id);
+
+                let tags = match params.id {
+                    Some(id) => vec![p_tag, e_tag, Tag::Identifier(id)],
+                    None => vec![p_tag, e_tag],
+                };
+
+                let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, tags)
+                    .to_event(&self.server_key)?;
+
+                Ok(Some(response))
+            }
+        }
     }
 
     pub fn nwc_profile(&self) -> NwcProfile {
@@ -767,6 +808,7 @@ impl NostrWalletConnect {
                 .expect("failed to get nwc uri")
                 .map(|uri| uri.to_string()),
             spending_conditions: self.profile.spending_conditions.clone(),
+            commands: self.profile.commands.clone(),
             child_key_index: self.profile.child_key_index,
             tag: self.profile.tag,
             label: self.profile.label.clone(),
@@ -791,6 +833,8 @@ pub struct NwcProfile {
     pub nwc_uri: Option<String>,
     #[serde(default)]
     pub spending_conditions: SpendingConditions,
+    /// Allowed commands for this profile
+    pub commands: Option<Vec<Method>>,
     #[serde(default)]
     pub child_key_index: Option<u32>,
     #[serde(default)]
@@ -809,6 +853,7 @@ impl NwcProfile {
             archived: self.archived,
             enabled: self.enabled,
             spending_conditions: self.spending_conditions.clone(),
+            commands: self.commands.clone(),
             child_key_index: self.child_key_index,
             tag: self.tag,
             label: self.label.clone(),
@@ -829,6 +874,9 @@ pub struct PendingNwcInvoice {
     /// The nostr pubkey of the request
     /// If this is a DM, this is who sent us the request
     pub pubkey: nostr::PublicKey,
+    /// `id` parameter given in the original request
+    /// This is normally only given for MultiPayInvoice requests
+    pub identifier: Option<String>,
 }
 
 impl PartialOrd for PendingNwcInvoice {
@@ -853,10 +901,10 @@ impl PendingNwcInvoice {
 /// Return an error string if invalid
 /// Otherwise returns an optional invoice that should be processed
 pub(crate) async fn check_valid_nwc_invoice(
-    invoice: &str,
+    params: &PayInvoiceRequestParams,
     invoice_handler: &impl InvoiceHandler,
 ) -> Result<Option<Bolt11Invoice>, String> {
-    let invoice = match Bolt11Invoice::from_str(invoice) {
+    let invoice = match Bolt11Invoice::from_str(&params.invoice) {
         Ok(invoice) => invoice,
         Err(_) => return Err("Invalid invoice".to_string()),
     };
@@ -872,7 +920,13 @@ pub(crate) async fn check_valid_nwc_invoice(
             invoice_handler.logger(),
             "NWC Invoice amount not set, cannot pay: {invoice}"
         );
-        return Err("Invoice amount not set".to_string());
+
+        if params.amount.is_none() {
+            return Err("Invoice amount not set".to_string());
+        }
+
+        // TODO we cannot pay invoices with msat values so for now return an error
+        return Err("Paying 0 amount invoices is not supported yet".to_string());
     }
 
     if invoice_handler.skip_hodl_invoices() {
@@ -1493,6 +1547,7 @@ mod wasm_test {
             invoice: Bolt11Invoice::from_str(INVOICE).unwrap(),
             event_id: EventId::all_zeros(),
             pubkey: nostr_manager.public_key,
+            identifier: None,
         };
         // add an unexpired invoice
         let unexpired = PendingNwcInvoice {
@@ -1500,6 +1555,7 @@ mod wasm_test {
             invoice: create_dummy_invoice(Some(1_000), Network::Regtest, None).0,
             event_id: EventId::all_zeros(),
             pubkey: nostr_manager.public_key,
+            identifier: None,
         };
         storage
             .set_data(
