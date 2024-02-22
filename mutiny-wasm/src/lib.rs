@@ -325,21 +325,8 @@ impl MutinyWallet {
     /// Returns if there is a saved wallet in storage.
     /// This is checked by seeing if a mnemonic seed exists in storage.
     #[wasm_bindgen]
-    pub async fn has_node_manager(password: Option<String>) -> bool {
-        let logger = Arc::new(MutinyLogger::default());
-        let cipher = match password
-            .as_ref()
-            .filter(|p| !p.is_empty())
-            .map(|p| encryption_key_from_pass(p))
-            .transpose()
-        {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
-        let storage = IndexedDbStorage::new(password, cipher, None, logger)
-            .await
-            .expect("Failed to init");
-        NodeManager::has_node_manager(storage)
+    pub async fn has_node_manager() -> Result<bool, MutinyJsError> {
+        Ok(IndexedDbStorage::has_mnemonic().await?)
     }
 
     /// Returns the number of remaining seconds until the device lock expires.
@@ -1895,7 +1882,7 @@ mod tests {
         log!("creating mutiny wallet!");
         let password = Some("password".to_string());
 
-        assert!(!MutinyWallet::has_node_manager(password.clone()).await);
+        assert!(!MutinyWallet::has_node_manager().await.unwrap());
         MutinyWallet::new(
             password.clone(),
             None,
@@ -1921,7 +1908,7 @@ mod tests {
         .await
         .expect("mutiny wallet should initialize");
         sleep(1_000).await;
-        assert!(MutinyWallet::has_node_manager(password).await);
+        assert!(MutinyWallet::has_node_manager().await.unwrap());
 
         IndexedDbStorage::clear()
             .await
@@ -1956,7 +1943,7 @@ mod tests {
         .await
         .expect("mutiny wallet should initialize");
         sleep(1_000).await;
-        assert!(MutinyWallet::has_node_manager(None).await);
+        assert!(MutinyWallet::has_node_manager().await.unwrap());
         uninit().await;
 
         let seed = mutiny_core::generate_seed(12).unwrap();
@@ -2001,7 +1988,7 @@ mod tests {
         log!("trying to create 2 mutiny wallets!");
         let password = Some("password".to_string());
 
-        assert!(!MutinyWallet::has_node_manager(password.clone()).await);
+        assert!(!MutinyWallet::has_node_manager().await.unwrap());
         MutinyWallet::new(
             password.clone(),
             None,
@@ -2027,7 +2014,7 @@ mod tests {
         .await
         .expect("mutiny wallet should initialize");
         sleep(1_000).await;
-        assert!(MutinyWallet::has_node_manager(password.clone()).await);
+        assert!(MutinyWallet::has_node_manager().await.unwrap());
 
         // try to create a second
         let result = MutinyWallet::new(
@@ -2105,7 +2092,7 @@ mod tests {
         .unwrap();
 
         log!("checking nm");
-        assert!(MutinyWallet::has_node_manager(password).await);
+        assert!(MutinyWallet::has_node_manager().await.unwrap());
         log!("checking seed");
         assert_eq!(seed.to_string(), nm.show_seed());
 
@@ -2152,7 +2139,7 @@ mod tests {
         .unwrap();
 
         log!("checking nm");
-        assert!(MutinyWallet::has_node_manager(password).await);
+        assert!(MutinyWallet::has_node_manager().await.unwrap());
         log!("checking seed");
         assert_eq!(seed.to_string(), nm.show_seed());
         nm.stop().await.unwrap();
