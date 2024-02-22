@@ -134,7 +134,7 @@ pub trait InvoiceHandler {
     fn skip_hodl_invoices(&self) -> bool;
     fn get_network(&self) -> Network;
     async fn get_best_block(&self) -> Result<BestBlock, MutinyError>;
-    async fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus>;
+    async fn lookup_payment(&self, payment_hash: &[u8; 32]) -> Option<MutinyInvoice>;
     async fn pay_invoice(
         &self,
         invoice: &Bolt11Invoice,
@@ -339,6 +339,27 @@ pub struct MutinyInvoice {
     pub inbound: bool,
     pub labels: Vec<String>,
     pub last_updated: u64,
+}
+
+#[cfg(test)]
+impl Default for MutinyInvoice {
+    fn default() -> Self {
+        MutinyInvoice {
+            bolt11: None,
+            description: None,
+            payment_hash: sha256::Hash::all_zeros(),
+            preimage: None,
+            payee_pubkey: None,
+            amount_sats: None,
+            expire: 0,
+            status: HTLCStatus::Pending,
+            privacy_level: PrivacyLevel::NotAvailable,
+            fees_paid: None,
+            inbound: false,
+            labels: vec![],
+            last_updated: 0,
+        }
+    }
 }
 
 impl MutinyInvoice {
@@ -2464,11 +2485,10 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
         Ok(node.channel_manager.current_best_block())
     }
 
-    async fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus> {
+    async fn lookup_payment(&self, payment_hash: &[u8; 32]) -> Option<MutinyInvoice> {
         self.get_invoice_by_hash(&sha256::Hash::from_byte_array(*payment_hash))
             .await
             .ok()
-            .map(|p| p.status)
     }
 
     async fn pay_invoice(

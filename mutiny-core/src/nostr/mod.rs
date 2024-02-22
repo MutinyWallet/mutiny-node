@@ -320,7 +320,11 @@ impl<S: MutinyStorage> NostrManager<S> {
         let futures: Vec<_> = indices_to_remove
             .into_iter()
             .map(|(index, hash)| async move {
-                match invoice_handler.get_outbound_payment_status(&hash).await {
+                match invoice_handler
+                    .lookup_payment(&hash)
+                    .await
+                    .map(|x| x.status)
+                {
                     Some(HTLCStatus::Succeeded) => Some(index),
                     _ => None,
                 }
@@ -1097,11 +1101,11 @@ impl<S: MutinyStorage> NostrManager<S> {
 
             // check if the invoice has been paid, if so, return, otherwise continue
             // checking for response event
-            if let Some(status) = invoice_handler
-                .get_outbound_payment_status(&bolt11.payment_hash().into_32())
+            if let Some(inv) = invoice_handler
+                .lookup_payment(&bolt11.payment_hash().into_32())
                 .await
             {
-                if status == HTLCStatus::Succeeded {
+                if inv.status == HTLCStatus::Succeeded {
                     break;
                 }
             }
@@ -1436,7 +1440,7 @@ mod test {
 
         // add handling for mock
         inv_handler
-            .expect_get_outbound_payment_status()
+            .expect_lookup_payment()
             .with(eq(invoice.payment_hash().into_32()))
             .returning(move |_| None);
 

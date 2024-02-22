@@ -638,7 +638,7 @@ impl NostrWalletConnect {
                     Some(payment_hash) => {
                         let hash: [u8; 32] =
                             FromHex::from_hex(&payment_hash).expect("invalid hash");
-                        node.get_outbound_payment_status(&hash).await
+                        node.lookup_payment(&hash).await.map(|i| i.status)
                     }
                     None => None,
                 };
@@ -794,7 +794,7 @@ impl NostrWalletConnect {
                     let futures: Vec<_> = indices_to_remove
                         .iter()
                         .map(|(index, hash)| async move {
-                            match node.get_outbound_payment_status(hash).await {
+                            match node.lookup_payment(hash).await.map(|i| i.status) {
                                 Some(HTLCStatus::Failed) => Some(*index),
                                 _ => None,
                             }
@@ -1082,8 +1082,9 @@ pub(crate) async fn check_valid_nwc_invoice(
 
     // if we have already paid or are attempting to pay this invoice, skip it
     if invoice_handler
-        .get_outbound_payment_status(&invoice.payment_hash().into_32())
+        .lookup_payment(&invoice.payment_hash().into_32())
         .await
+        .map(|i| i.status)
         .is_some_and(|status| matches!(status, HTLCStatus::Succeeded | HTLCStatus::InFlight))
     {
         return Ok(None);
@@ -1627,9 +1628,14 @@ mod wasm_test {
 
         // test in-flight payment
         let (invoice, _) = create_dummy_invoice(Some(1_000), Network::Regtest, None);
-        node.expect_get_outbound_payment_status()
+        node.expect_lookup_payment()
             .with(eq(invoice.payment_hash().into_32()))
-            .returning(move |_| Some(HTLCStatus::InFlight));
+            .returning(move |_| {
+                Some(MutinyInvoice {
+                    status: HTLCStatus::InFlight,
+                    ..Default::default()
+                })
+            });
         let event = create_nwc_request(&uri, invoice.to_string());
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
         assert_eq!(result.unwrap(), None);
@@ -1637,9 +1643,14 @@ mod wasm_test {
 
         // test completed payment
         let (invoice, _) = create_dummy_invoice(Some(1_000), Network::Regtest, None);
-        node.expect_get_outbound_payment_status()
+        node.expect_lookup_payment()
             .with(eq(invoice.payment_hash().into_32()))
-            .returning(move |_| Some(HTLCStatus::Succeeded));
+            .returning(move |_| {
+                Some(MutinyInvoice {
+                    status: HTLCStatus::Succeeded,
+                    ..Default::default()
+                })
+            });
         let event = create_nwc_request(&uri, invoice.to_string());
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
         assert_eq!(result.unwrap(), None);
@@ -1647,7 +1658,7 @@ mod wasm_test {
 
         // test it goes to pending
         let (invoice, _) = create_dummy_invoice(Some(1_000), Network::Regtest, None);
-        node.expect_get_outbound_payment_status()
+        node.expect_lookup_payment()
             .with(eq(invoice.payment_hash().into_32()))
             .returning(move |_| None);
         let event = create_nwc_request(&uri, invoice.to_string());
@@ -1802,7 +1813,7 @@ mod wasm_test {
 
         node.expect_skip_hodl_invoices().once().returning(|| true);
         node.expect_logger().return_const(MutinyLogger::default());
-        node.expect_get_outbound_payment_status().return_const(None);
+        node.expect_lookup_payment().return_const(None);
         node.expect_pay_invoice()
             .once()
             .returning(move |inv, _, _| {
