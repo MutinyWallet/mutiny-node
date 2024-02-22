@@ -41,6 +41,7 @@ pub struct LspsConfig {
 pub(crate) struct JitChannelInfo {
     pub channel_id: u128,
     pub fee_params: OpeningFeeParams,
+    pub payment_size_msat: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -408,6 +409,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
                 JitChannelInfo {
                     channel_id: user_channel_id,
                     fee_params,
+                    payment_size_msat: fee_request.amount_msat,
                 },
             );
         }
@@ -441,13 +443,17 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             pending_buy_requests.insert(user_channel_id, pending_buy_request_sender);
         }
 
-        let (channel_id, fee_params) = {
+        let (channel_id, fee_params, payment_size_msat) = {
             let channel_info = self.pending_channel_info.lock().unwrap();
             let channel_info = channel_info
                 .get(&user_channel_id)
                 .ok_or(MutinyError::LspGenericError)?;
 
-            (channel_info.channel_id, channel_info.fee_params.clone())
+            (
+                channel_info.channel_id,
+                channel_info.fee_params.clone(),
+                channel_info.payment_size_msat,
+            )
         };
 
         let lsps2_client_handler = self
@@ -456,7 +462,12 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             .expect("to be configured with lsps2 client config");
 
         lsps2_client_handler
-            .select_opening_params(self.pubkey, channel_id, None, fee_params.clone())
+            .select_opening_params(
+                self.pubkey,
+                channel_id,
+                Some(payment_size_msat),
+                fee_params.clone(),
+            )
             .map_err(|_| MutinyError::LspGenericError)?;
 
         let invoice = pending_buy_request_receiver
