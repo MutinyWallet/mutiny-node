@@ -47,6 +47,10 @@ pub fn create_nwc_request(nwc: &NostrWalletConnectURI, invoice: String) -> Event
         }),
     };
 
+    sign_nwc_request(nwc, req)
+}
+
+pub fn sign_nwc_request(nwc: &NostrWalletConnectURI, req: Request) -> Event {
     let encrypted = encrypt(&nwc.secret, &nwc.public_key, req.as_json()).unwrap();
     let p_tag = Tag::PublicKey {
         public_key: nwc.public_key,

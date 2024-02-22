@@ -458,6 +458,7 @@ impl NostrWalletConnect {
                     )
                     .await?
                 }
+                RequestParams::GetBalance => self.handle_get_balance_request(event).await?,
                 _ => return Err(anyhow!("Invalid request params for {}", req.method)),
             };
         }
@@ -469,6 +470,42 @@ impl NostrWalletConnect {
         }
 
         Ok(result)
+    }
+
+    async fn handle_get_balance_request(&self, event: Event) -> anyhow::Result<Option<Event>> {
+        // Just return our current budget amount, don't leak our actual wallet balance
+        let balance_sats = match &self.profile.spending_conditions {
+            SpendingConditions::SingleUse(single_use) => {
+                // if this nwc is used, we have no balance remaining
+                match single_use.payment_hash {
+                    Some(_) => 0,
+                    None => single_use.amount_sats,
+                }
+            }
+            SpendingConditions::Budget(budget) => budget.budget_remaining(),
+            SpendingConditions::RequireApproval => 0,
+        };
+
+        let content = Response {
+            result_type: Method::GetBalance,
+            error: None,
+            result: Some(ResponseResult::GetBalance(GetBalanceResponseResult {
+                balance: balance_sats * 1_000, // return in msats
+            })),
+        };
+
+        let encrypted = encrypt(
+            self.server_key.secret_key()?,
+            &self.client_key.public_key(),
+            content.as_json(),
+        )?;
+
+        let p_tag = Tag::public_key(event.pubkey);
+        let e_tag = Tag::event(event.id);
+        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
+            .to_event(&self.server_key)?;
+
+        Ok(Some(response))
     }
 
     async fn handle_pay_invoice_request<S: MutinyStorage>(
@@ -1237,7 +1274,9 @@ mod wasm_test {
     use crate::logging::MutinyLogger;
     use crate::nostr::{NostrKeySource, ProfileType};
     use crate::storage::MemoryStorage;
-    use crate::test_utils::{create_dummy_invoice, create_mutiny_wallet, create_nwc_request};
+    use crate::test_utils::{
+        create_dummy_invoice, create_mutiny_wallet, create_nwc_request, sign_nwc_request,
+    };
     use crate::MockInvoiceHandler;
     use crate::MutinyInvoice;
     use bitcoin::Network;
@@ -1742,5 +1781,152 @@ mod wasm_test {
             }
             _ => panic!("wrong spending conditions"),
         }
+    }
+
+    #[test]
+    async fn test_get_balance_require_approval() {
+        let storage = MemoryStorage::default();
+        let mw = create_mutiny_wallet(storage.clone()).await;
+
+        let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let nostr_manager = NostrManager::from_mnemonic(
+            xprivkey,
+            NostrKeySource::Derived,
+            storage.clone(),
+            None,
+            mw.logger.clone(),
+            stop,
+        )
+        .unwrap();
+
+        let profile = nostr_manager
+            .create_new_nwc_profile_internal(
+                ProfileType::Normal {
+                    name: "test".to_string(),
+                },
+                SpendingConditions::RequireApproval,
+                NwcProfileTag::General,
+                vec![Method::GetBalance],
+            )
+            .unwrap();
+
+        let secp = Secp256k1::new();
+        let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
+        let uri = nwc.get_nwc_uri().unwrap().unwrap();
+
+        // test get_balance
+
+        let event = sign_nwc_request(&uri, Request::get_balance());
+        let result = nwc
+            .handle_nwc_request(event.clone(), &mw, &nostr_manager)
+            .await;
+        let event = result.unwrap().unwrap();
+        let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
+        let response: Response = Response::from_json(content).unwrap();
+        let balance = response.to_get_balance().unwrap();
+        assert_eq!(balance.balance, 0);
+    }
+
+    #[test]
+    async fn test_get_balance_budget() {
+        let storage = MemoryStorage::default();
+        let mw = create_mutiny_wallet(storage.clone()).await;
+
+        let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let nostr_manager = NostrManager::from_mnemonic(
+            xprivkey,
+            NostrKeySource::Derived,
+            storage.clone(),
+            None,
+            mw.logger.clone(),
+            stop,
+        )
+        .unwrap();
+
+        let budget = 10_000;
+
+        let profile = nostr_manager
+            .create_new_nwc_profile_internal(
+                ProfileType::Normal {
+                    name: "test".to_string(),
+                },
+                SpendingConditions::Budget(BudgetedSpendingConditions {
+                    budget,
+                    single_max: None,
+                    payments: vec![],
+                    period: BudgetPeriod::Day,
+                }),
+                NwcProfileTag::General,
+                vec![Method::GetBalance],
+            )
+            .unwrap();
+
+        let secp = Secp256k1::new();
+        let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
+        let uri = nwc.get_nwc_uri().unwrap().unwrap();
+
+        // test get_balance
+
+        let event = sign_nwc_request(&uri, Request::get_balance());
+        let result = nwc
+            .handle_nwc_request(event.clone(), &mw, &nostr_manager)
+            .await;
+        let event = result.unwrap().unwrap();
+        let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
+        let response: Response = Response::from_json(content).unwrap();
+        let balance = response.to_get_balance().unwrap();
+        assert_eq!(balance.balance, budget * 1_000); // convert to msats
+    }
+
+    #[test]
+    async fn test_get_balance_single_use() {
+        let storage = MemoryStorage::default();
+        let mw = create_mutiny_wallet(storage.clone()).await;
+
+        let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let nostr_manager = NostrManager::from_mnemonic(
+            xprivkey,
+            NostrKeySource::Derived,
+            storage.clone(),
+            None,
+            mw.logger.clone(),
+            stop,
+        )
+        .unwrap();
+
+        let budget = 10_000;
+
+        let profile = nostr_manager
+            .create_new_nwc_profile_internal(
+                ProfileType::Normal {
+                    name: "test".to_string(),
+                },
+                SpendingConditions::SingleUse(SingleUseSpendingConditions {
+                    payment_hash: None,
+                    amount_sats: budget,
+                }),
+                NwcProfileTag::General,
+                vec![Method::GetBalance],
+            )
+            .unwrap();
+
+        let secp = Secp256k1::new();
+        let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
+        let uri = nwc.get_nwc_uri().unwrap().unwrap();
+
+        // test get_balance
+
+        let event = sign_nwc_request(&uri, Request::get_balance());
+        let result = nwc
+            .handle_nwc_request(event.clone(), &mw, &nostr_manager)
+            .await;
+        let event = result.unwrap().unwrap();
+        let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
+        let response: Response = Response::from_json(content).unwrap();
+        let balance = response.to_get_balance().unwrap();
+        assert_eq!(balance.balance, budget * 1_000); // convert to msats
     }
 }
