@@ -1046,17 +1046,11 @@ impl<S: MutinyStorage> Node<S> {
                     return Err(MutinyError::BadAmountError);
                 }
 
-                let user_channel_id = match lsp {
-                    AnyLsp::VoltageFlow(_) => None,
-                    AnyLsp::Lsps(_) => Some(utils::now().as_secs().into()),
-                };
-
                 // check the fee from the LSP
                 let lsp_fee = lsp
                     .get_lsp_fee_msat(FeeRequest {
                         pubkey: self.pubkey.encode().to_lower_hex_string(),
                         amount_msat: amount_sat * 1000,
-                        user_channel_id,
                     })
                     .await?;
 
@@ -1103,17 +1097,11 @@ impl<S: MutinyStorage> Node<S> {
                     return Err(MutinyError::BadAmountError);
                 }
 
-                let user_channel_id = match lsp {
-                    AnyLsp::VoltageFlow(_) => None,
-                    AnyLsp::Lsps(_) => Some(utils::now().as_secs().into()),
-                };
-
                 // check the fee from the LSP
                 let lsp_fee = lsp
                     .get_lsp_fee_msat(FeeRequest {
                         pubkey: self.pubkey.encode().to_lower_hex_string(),
                         amount_msat: amount_sat * 1000,
-                        user_channel_id,
                     })
                     .await?;
 
@@ -1147,7 +1135,6 @@ impl<S: MutinyStorage> Node<S> {
                         let lsp_invoice = client
                             .get_lsp_invoice(InvoiceRequest {
                                 bolt11: Some(invoice.to_string()),
-                                user_channel_id,
                                 fee_id: lsp_fee.id,
                             })
                             .await?;
@@ -1179,7 +1166,6 @@ impl<S: MutinyStorage> Node<S> {
                             let lsp_invoice = match client
                                 .get_lsp_invoice(InvoiceRequest {
                                     bolt11: None,
-                                    user_channel_id,
                                     fee_id: lsp_fee.id,
                                 })
                                 .await

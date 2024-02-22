@@ -11,6 +11,7 @@ use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info};
 use lightning_invoice::{Bolt11Invoice, InvoiceBuilder};
 use lightning_liquidity::events::Event;
+use lightning_liquidity::lsps0::msgs::RequestId;
 use lightning_liquidity::lsps2::event::LSPS2ClientEvent;
 use lightning_liquidity::lsps2::msgs::OpeningFeeParams;
 use serde::{Deserialize, Serialize};
@@ -39,7 +40,6 @@ pub struct LspsConfig {
 
 #[derive(Clone, Debug)]
 pub(crate) struct JitChannelInfo {
-    pub channel_id: u128,
     pub fee_params: OpeningFeeParams,
     pub payment_size_msat: u64,
 }
@@ -47,10 +47,6 @@ pub(crate) struct JitChannelInfo {
 #[derive(Clone, Debug)]
 pub(crate) struct GetInfoResponse {
     pub opening_fee_params_menu: Vec<OpeningFeeParams>,
-    /// The min payment size allowed when opening the channel.
-    pub min_payment_size_msat: u64,
-    /// The max payment size allowed when opening the channel.
-    pub max_payment_size_msat: u64,
 }
 
 pub(crate) struct PendingPaymentInfo {
@@ -72,8 +68,8 @@ pub struct LspsClient<S: MutinyStorage> {
     network: Network,
     logger: Arc<MutinyLogger>,
     pending_fee_requests: Arc<Mutex<HashMap<PublicKey, PendingFeeRequestSender>>>,
-    pending_buy_requests: Arc<Mutex<HashMap<u128, PendingBuyRequestSender>>>,
-    pending_channel_info: Arc<Mutex<HashMap<u128, JitChannelInfo>>>,
+    pending_buy_requests: Arc<Mutex<HashMap<RequestId, PendingBuyRequestSender>>>,
+    pending_channel_info: Arc<Mutex<HashMap<RequestId, JitChannelInfo>>>,
     pending_payments: Arc<Mutex<HashMap<PaymentHash, PendingPaymentInfo>>>,
     stop: Arc<AtomicBool>,
 }
@@ -121,8 +117,7 @@ impl<S: MutinyStorage> LspsClient<S> {
             Event::LSPS2Client(LSPS2ClientEvent::OpeningParametersReady {
                 counterparty_node_id,
                 opening_fee_params_menu,
-                min_payment_size_msat,
-                max_payment_size_msat,
+                request_id: _,
             }) => {
                 log_debug!(
                     self.logger,
@@ -137,8 +132,6 @@ impl<S: MutinyStorage> LspsClient<S> {
                     if fee_response_sender
                         .send(Ok(GetInfoResponse {
                             opening_fee_params_menu,
-                            min_payment_size_msat,
-                            max_payment_size_msat,
                         }))
                         .is_err()
                     {
@@ -149,16 +142,15 @@ impl<S: MutinyStorage> LspsClient<S> {
             Event::LSPS2Client(LSPS2ClientEvent::InvoiceParametersReady {
                 intercept_scid,
                 cltv_expiry_delta,
-                user_channel_id,
                 counterparty_node_id,
                 payment_size_msat,
-                ..
+                request_id,
             }) => {
-                log_debug!(self.logger, "received InvoiceGenerationReady with intercept_scid {}, cltv_expiry_delta {}, user_channel_id {}, counterparty_node_id {}, payment_size_msat {:?}", intercept_scid, cltv_expiry_delta, user_channel_id, counterparty_node_id, payment_size_msat);
+                log_debug!(self.logger, "received InvoiceGenerationReady with intercept_scid {}, cltv_expiry_delta {}, request_id {:?}, counterparty_node_id {}, payment_size_msat {:?}", intercept_scid, cltv_expiry_delta, request_id, counterparty_node_id, payment_size_msat);
 
                 let mut pending_buy_requests = self.pending_buy_requests.lock().unwrap();
 
-                if let Some(buy_response_sender) = pending_buy_requests.remove(&user_channel_id) {
+                if let Some(buy_response_sender) = pending_buy_requests.remove(&request_id) {
                     let invoice_expiry_delta_secs = 3600;
                     let (payment_hash, payment_secret) = match self
                         .channel_manager
@@ -341,10 +333,6 @@ pub fn compute_opening_fee(
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl<S: MutinyStorage> Lsp for LspsClient<S> {
     async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> Result<FeeResponse, MutinyError> {
-        let user_channel_id = fee_request
-            .user_channel_id
-            .ok_or(MutinyError::LspGenericError)?;
-
         let inbound_capacity_msat: u64 = self
             .channel_manager
             .list_channels_with_counterparty(&self.pubkey)
@@ -356,7 +344,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
         // this is only here to keep both voltage + lsps logic symmetric
         if inbound_capacity_msat >= fee_request.amount_msat {
             return Ok(FeeResponse {
-                id: None,
+                id: String::from("deadbeef"),
                 fee_amount_msat: 0,
             });
         }
@@ -381,7 +369,8 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             .lsps2_client_handler()
             .expect("to be configured with lsps2 client config");
 
-        lsps2_client_handler.request_opening_params(self.pubkey, self.token.clone());
+        let request_id =
+            lsps2_client_handler.request_opening_params(self.pubkey, self.token.clone());
 
         let get_info_response = pending_fee_request_receiver.await.map_err(|e| {
             log_debug!(self.logger, "error receiving get info response: {:?}", e);
@@ -398,16 +387,15 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             "received fee information. min_fee_msat {}, proportional fee {}, min payment {}msats, max payment {}msats",
             min_fee_msat,
             proportional_fee,
-            get_info_response.min_payment_size_msat,
-            get_info_response.max_payment_size_msat,
+            fee_params.min_payment_size_msat,
+            fee_params.max_payment_size_msat,
         );
 
         {
             let mut pending_channel_info = self.pending_channel_info.lock().unwrap();
             pending_channel_info.insert(
-                user_channel_id,
+                request_id.clone(),
                 JitChannelInfo {
-                    channel_id: user_channel_id,
                     fee_params,
                     payment_size_msat: fee_request.amount_msat,
                 },
@@ -422,7 +410,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
         .ok_or(MutinyError::LspGenericError)?;
 
         Ok(FeeResponse {
-            id: None,
+            id: request_id.0,
             fee_amount_msat,
         })
     }
@@ -431,26 +419,26 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
         &self,
         invoice_request: InvoiceRequest,
     ) -> Result<Bolt11Invoice, MutinyError> {
-        let user_channel_id = invoice_request
-            .user_channel_id
-            .ok_or(MutinyError::LspGenericError)?;
+        let request_id = RequestId(invoice_request.fee_id);
 
         let (pending_buy_request_sender, pending_buy_request_receiver) =
             oneshot::channel::<Result<Bolt11Invoice, MutinyError>>();
 
         {
-            let mut pending_buy_requests = self.pending_buy_requests.lock().unwrap();
-            pending_buy_requests.insert(user_channel_id, pending_buy_request_sender);
+            let mut pending_buy_requests: std::sync::MutexGuard<
+                '_,
+                HashMap<RequestId, oneshot::Sender<Result<Bolt11Invoice, MutinyError>>>,
+            > = self.pending_buy_requests.lock().unwrap();
+            pending_buy_requests.insert(request_id.clone(), pending_buy_request_sender);
         }
 
-        let (channel_id, fee_params, payment_size_msat) = {
+        let (fee_params, payment_size_msat) = {
             let channel_info = self.pending_channel_info.lock().unwrap();
             let channel_info = channel_info
-                .get(&user_channel_id)
+                .get(&request_id)
                 .ok_or(MutinyError::LspGenericError)?;
 
             (
-                channel_info.channel_id,
                 channel_info.fee_params.clone(),
                 channel_info.payment_size_msat,
             )
@@ -462,12 +450,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             .expect("to be configured with lsps2 client config");
 
         lsps2_client_handler
-            .select_opening_params(
-                self.pubkey,
-                channel_id,
-                Some(payment_size_msat),
-                fee_params.clone(),
-            )
+            .select_opening_params(self.pubkey, Some(payment_size_msat), fee_params.clone())
             .map_err(|_| MutinyError::LspGenericError)?;
 
         let invoice = pending_buy_request_receiver
