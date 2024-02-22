@@ -16,7 +16,7 @@ use hex_conservative::DisplayHex;
 use itertools::Itertools;
 use lightning::util::logger::Logger;
 use lightning::{log_error, log_warn};
-use lightning_invoice::Bolt11Invoice;
+use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use nostr::nips::nip04::{decrypt, encrypt};
 use nostr::nips::nip47::*;
 use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Tag, Timestamp};
@@ -463,6 +463,10 @@ impl NostrWalletConnect {
                     self.handle_make_invoice_request(event, node, params)
                         .await?
                 }
+                RequestParams::LookupInvoice(params) => {
+                    self.handle_lookup_invoice_request(event, node, params)
+                        .await?
+                }
                 RequestParams::GetBalance => self.handle_get_balance_request(event).await?,
                 RequestParams::GetInfo => self.handle_get_info_request(event, node).await?,
                 _ => return Err(anyhow!("Invalid request params for {}", req.method)),
@@ -588,6 +592,109 @@ impl NostrWalletConnect {
                 invoice: bolt11.to_string(),
                 payment_hash: bolt11.payment_hash().to_string(),
             })),
+        };
+
+        let encrypted = encrypt(
+            self.server_key.secret_key()?,
+            &self.client_key.public_key(),
+            content.as_json(),
+        )?;
+
+        let p_tag = Tag::public_key(event.pubkey);
+        let e_tag = Tag::event(event.id);
+        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
+            .to_event(&self.server_key)?;
+
+        Ok(Some(response))
+    }
+
+    async fn handle_lookup_invoice_request(
+        &mut self,
+        event: Event,
+        node: &impl InvoiceHandler,
+        params: LookupInvoiceRequestParams,
+    ) -> anyhow::Result<Option<Event>> {
+        let invoice = match params.payment_hash {
+            Some(payment_hash) => {
+                let hash: [u8; 32] = FromHex::from_hex(&payment_hash).expect("invalid hash");
+                node.lookup_payment(&hash).await
+            }
+            None => match params.bolt11 {
+                Some(bolt11) => {
+                    let invoice = Bolt11Invoice::from_str(&bolt11)?;
+                    let hash = invoice.payment_hash().into_32();
+                    node.lookup_payment(&hash).await
+                }
+                None => return Err(anyhow!("No payment_hash or bolt11 provided")),
+            },
+        };
+
+        let content = match invoice {
+            None => Response {
+                result_type: Method::LookupInvoice,
+                error: Some(NIP47Error {
+                    code: ErrorCode::NotFound,
+                    message: "Invoice not found".to_string(),
+                }),
+                result: None,
+            },
+            Some(invoice) => {
+                let transaction_type = if invoice.inbound {
+                    Some(TransactionType::Incoming)
+                } else {
+                    Some(TransactionType::Outgoing)
+                };
+
+                let (description, description_hash) = match invoice.bolt11.as_ref() {
+                    None => (None, None),
+                    Some(invoice) => match invoice.description() {
+                        Bolt11InvoiceDescription::Direct(desc) => (Some(desc.to_string()), None),
+                        Bolt11InvoiceDescription::Hash(hash) => (None, Some(hash.0.to_string())),
+                    },
+                };
+
+                // try to get created_at from invoice,
+                // if it is not set, use last_updated as that's our closest approximation
+                let created_at = invoice
+                    .bolt11
+                    .as_ref()
+                    .map(|b| b.duration_since_epoch().as_secs())
+                    .unwrap_or(invoice.last_updated);
+
+                let settled_at = if invoice.status == HTLCStatus::Succeeded {
+                    Some(invoice.last_updated)
+                } else {
+                    None
+                };
+
+                // only reveal preimage if it is settled
+                let preimage = if invoice.status == HTLCStatus::Succeeded {
+                    invoice.preimage
+                } else {
+                    None
+                };
+
+                let result = LookupInvoiceResponseResult {
+                    transaction_type,
+                    invoice: invoice.bolt11.map(|i| i.to_string()),
+                    description,
+                    description_hash,
+                    preimage,
+                    payment_hash: invoice.payment_hash.into_32().to_lower_hex_string(),
+                    amount: invoice.amount_sats.map(|a| a * 1_000).unwrap_or(0),
+                    fees_paid: invoice.fees_paid.map(|a| a * 1_000).unwrap_or(0),
+                    created_at,
+                    expires_at: invoice.expire,
+                    settled_at,
+                    metadata: Default::default(),
+                };
+
+                Response {
+                    result_type: Method::LookupInvoice,
+                    error: None,
+                    result: Some(ResponseResult::LookupInvoice(result)),
+                }
+            }
         };
 
         let encrypted = encrypt(
@@ -2164,5 +2271,88 @@ mod wasm_test {
             result.payment_hash,
             invoice.payment_hash().into_32().to_lower_hex_string()
         );
+    }
+
+    #[test]
+    async fn test_lookup_invoice() {
+        let storage = MemoryStorage::default();
+
+        let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let nostr_manager = NostrManager::from_mnemonic(
+            xprivkey,
+            NostrKeySource::Derived,
+            storage.clone(),
+            None,
+            Arc::new(MutinyLogger::default()),
+            stop,
+        )
+        .unwrap();
+
+        let mut node = MockInvoiceHandler::new();
+        node.expect_lookup_payment().once().returning(|_| None);
+
+        let profile = nostr_manager
+            .create_new_nwc_profile_internal(
+                ProfileType::Normal {
+                    name: "test".to_string(),
+                },
+                SpendingConditions::RequireApproval,
+                NwcProfileTag::General,
+                vec![Method::LookupInvoice],
+            )
+            .unwrap();
+
+        let secp = Secp256k1::new();
+        let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
+        let uri = nwc.get_nwc_uri().unwrap().unwrap();
+
+        // test lookup_invoice
+
+        // test missing invoice
+        let event = sign_nwc_request(
+			&uri,
+			Request::lookup_invoice(LookupInvoiceRequestParams {
+				payment_hash: None,
+				bolt11: Some("lntbs1m1pjrmuu3pp52hk0j956d7s8azaps87amadshnrcvqtkvk06y2nue2w69g6e5vasdqqcqzpgxqyz5vqsp5wu3py6257pa3yzarw0et2200c08r5fu6k3u94yfwmlnc8skdkc9s9qyyssqc783940p82c64qq9pu3xczt4tdxzex9wpjn54486y866aayft2cxxusl9eags4cs3kcmuqdrvhvs0gudpj5r2a6awu4wcq29crpesjcqhdju55".to_string()),
+			}),
+		);
+        let result = nwc
+            .handle_nwc_request(event.clone(), &node, &nostr_manager)
+            .await;
+        let event = result.unwrap().unwrap();
+        let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
+        let response: Response = Response::from_json(content).unwrap();
+        let error = response.error.unwrap();
+        assert_eq!(error.message, "Invoice not found");
+        assert!(matches!(error.code, ErrorCode::NotFound));
+        assert_eq!(response.result_type, Method::LookupInvoice);
+
+        // test found invoice
+        let invoice = create_dummy_invoice(Some(69696969), Network::Regtest, None).0;
+        let mutiny_inv: MutinyInvoice = invoice.clone().into();
+        node.expect_lookup_payment()
+            .once()
+            .returning(move |_| Some(mutiny_inv.clone()));
+
+        let event = sign_nwc_request(
+            &uri,
+            Request::lookup_invoice(LookupInvoiceRequestParams {
+                payment_hash: None,
+                bolt11: Some(invoice.to_string()),
+            }),
+        );
+        let result = nwc
+            .handle_nwc_request(event.clone(), &node, &nostr_manager)
+            .await;
+        let event = result.unwrap().unwrap();
+        let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
+        let response: Response = Response::from_json(content).unwrap();
+        let result = response.to_lookup_invoice().unwrap();
+
+        assert_eq!(result.invoice, Some(invoice.to_string()));
+        assert_eq!(result.transaction_type, Some(TransactionType::Incoming));
+        assert_eq!(result.preimage, None);
+        assert_ne!(result.created_at, 0); // make sure we properly set this
     }
 }
