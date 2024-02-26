@@ -67,7 +67,7 @@ pub struct LspsClient<S: MutinyStorage> {
     keys_manager: Arc<PhantomKeysManager<S>>,
     network: Network,
     logger: Arc<MutinyLogger>,
-    pending_fee_requests: Arc<Mutex<HashMap<PublicKey, PendingFeeRequestSender>>>,
+    pending_fee_requests: Arc<Mutex<HashMap<RequestId, PendingFeeRequestSender>>>,
     pending_buy_requests: Arc<Mutex<HashMap<RequestId, PendingBuyRequestSender>>>,
     pending_channel_info: Arc<Mutex<HashMap<RequestId, JitChannelInfo>>>,
     pending_payments: Arc<Mutex<HashMap<PaymentHash, PendingPaymentInfo>>>,
@@ -117,7 +117,7 @@ impl<S: MutinyStorage> LspsClient<S> {
             Event::LSPS2Client(LSPS2ClientEvent::OpeningParametersReady {
                 counterparty_node_id,
                 opening_fee_params_menu,
-                request_id: _,
+                request_id,
             }) => {
                 log_debug!(
                     self.logger,
@@ -126,9 +126,7 @@ impl<S: MutinyStorage> LspsClient<S> {
 
                 let mut pending_fee_requests = self.pending_fee_requests.lock().unwrap();
 
-                if let Some(fee_response_sender) =
-                    pending_fee_requests.remove(&counterparty_node_id)
-                {
+                if let Some(fee_response_sender) = pending_fee_requests.remove(&request_id) {
                     if fee_response_sender
                         .send(Ok(GetInfoResponse {
                             opening_fee_params_menu,
@@ -336,11 +334,6 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
         let (pending_fee_request_sender, pending_fee_request_receiver) =
             oneshot::channel::<Result<GetInfoResponse, MutinyError>>();
 
-        {
-            let mut pending_fee_requests = self.pending_fee_requests.lock().unwrap();
-            pending_fee_requests.insert(self.pubkey, pending_fee_request_sender);
-        }
-
         log_debug!(
             self.logger,
             "initiating inbound flow for {}msats with token {:?}",
@@ -353,8 +346,18 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             .lsps2_client_handler()
             .expect("to be configured with lsps2 client config");
 
-        let request_id =
-            lsps2_client_handler.request_opening_params(self.pubkey, self.token.clone());
+        let request_id = {
+            let mut pending_fee_requests = self.pending_fee_requests.lock().unwrap();
+            let request_id =
+                lsps2_client_handler.request_opening_params(self.pubkey, self.token.clone());
+            log_debug!(
+                self.logger,
+                "requested opening params from lsp with request_id {:?}",
+                request_id
+            );
+            pending_fee_requests.insert(request_id.clone(), pending_fee_request_sender);
+            request_id
+        };
 
         let get_info_response = pending_fee_request_receiver.await.map_err(|e| {
             log_debug!(self.logger, "error receiving get info response: {:?}", e);
@@ -403,23 +406,11 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
         &self,
         invoice_request: InvoiceRequest,
     ) -> Result<Bolt11Invoice, MutinyError> {
-        let request_id = RequestId(invoice_request.fee_id);
-
-        let (pending_buy_request_sender, pending_buy_request_receiver) =
-            oneshot::channel::<Result<Bolt11Invoice, MutinyError>>();
-
-        {
-            let mut pending_buy_requests: std::sync::MutexGuard<
-                '_,
-                HashMap<RequestId, oneshot::Sender<Result<Bolt11Invoice, MutinyError>>>,
-            > = self.pending_buy_requests.lock().unwrap();
-            pending_buy_requests.insert(request_id.clone(), pending_buy_request_sender);
-        }
-
+        let fee_request_id = RequestId(invoice_request.fee_id);
         let (fee_params, payment_size_msat) = {
             let channel_info = self.pending_channel_info.lock().unwrap();
             let channel_info = channel_info
-                .get(&request_id)
+                .get(&fee_request_id)
                 .ok_or(MutinyError::LspGenericError)?;
 
             (
@@ -433,9 +424,21 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             .lsps2_client_handler()
             .expect("to be configured with lsps2 client config");
 
-        lsps2_client_handler
-            .select_opening_params(self.pubkey, Some(payment_size_msat), fee_params.clone())
-            .map_err(|_| MutinyError::LspGenericError)?;
+        let (pending_buy_request_sender, pending_buy_request_receiver) =
+            oneshot::channel::<Result<Bolt11Invoice, MutinyError>>();
+
+        {
+            let mut pending_buy_requests: std::sync::MutexGuard<
+                '_,
+                HashMap<RequestId, oneshot::Sender<Result<Bolt11Invoice, MutinyError>>>,
+            > = self.pending_buy_requests.lock().unwrap();
+
+            let request_id = lsps2_client_handler
+                .select_opening_params(self.pubkey, Some(payment_size_msat), fee_params.clone())
+                .map_err(|_| MutinyError::LspGenericError)?;
+
+            pending_buy_requests.insert(request_id.clone(), pending_buy_request_sender);
+        }
 
         let invoice = pending_buy_request_receiver
             .await
