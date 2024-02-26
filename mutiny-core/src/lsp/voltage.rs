@@ -254,8 +254,6 @@ impl Lsp for LspClient {
         &self,
         invoice_request: InvoiceRequest,
     ) -> Result<Bolt11Invoice, MutinyError> {
-        let fee_id = invoice_request.fee_id.ok_or(MutinyError::LspGenericError)?;
-
         let bolt11 = invoice_request
             .bolt11
             .ok_or(MutinyError::LspInvoiceRequired)?;
@@ -264,7 +262,7 @@ impl Lsp for LspClient {
             bolt11,
             host: None,
             port: None,
-            fee_id,
+            fee_id: invoice_request.fee_id,
         };
 
         let request = self

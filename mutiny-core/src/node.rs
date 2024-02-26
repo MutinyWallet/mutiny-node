@@ -1046,17 +1046,11 @@ impl<S: MutinyStorage> Node<S> {
                     return Err(MutinyError::BadAmountError);
                 }
 
-                let user_channel_id = match lsp {
-                    AnyLsp::VoltageFlow(_) => None,
-                    AnyLsp::Lsps(_) => Some(utils::now().as_secs().into()),
-                };
-
                 // check the fee from the LSP
                 let lsp_fee = lsp
                     .get_lsp_fee_msat(FeeRequest {
                         pubkey: self.pubkey.encode().to_lower_hex_string(),
                         amount_msat: amount_sat * 1000,
-                        user_channel_id,
                     })
                     .await?;
 
@@ -1103,37 +1097,30 @@ impl<S: MutinyStorage> Node<S> {
                     return Err(MutinyError::BadAmountError);
                 }
 
-                let user_channel_id = match lsp {
-                    AnyLsp::VoltageFlow(_) => None,
-                    AnyLsp::Lsps(_) => Some(utils::now().as_secs().into()),
-                };
-
-                // check the fee from the LSP
-                let lsp_fee = lsp
-                    .get_lsp_fee_msat(FeeRequest {
-                        pubkey: self.pubkey.encode().to_lower_hex_string(),
-                        amount_msat: amount_sat * 1000,
-                        user_channel_id,
-                    })
-                    .await?;
-
-                // Convert the fee from msat to sat for comparison and subtraction
-                let lsp_fee_sat = lsp_fee.fee_amount_msat / 1000;
-
-                // Ensure that the fee is less than the amount being requested.
-                // If it isn't, we don't subtract it.
-                // This prevents amount from being subtracted down to 0.
-                // This will mean that the LSP fee will be paid by the payer instead.
-                let amount_minus_fee = if lsp_fee_sat < amount_sat {
-                    amount_sat
-                        .checked_sub(lsp_fee_sat)
-                        .ok_or(MutinyError::BadAmountError)?
-                } else {
-                    amount_sat
-                };
-
                 match lsp {
                     AnyLsp::VoltageFlow(lock) => {
+                        // check the fee from the LSP
+                        let lsp_fee = lsp
+                            .get_lsp_fee_msat(FeeRequest {
+                                pubkey: self.pubkey.encode().to_lower_hex_string(),
+                                amount_msat: amount_sat * 1000,
+                            })
+                            .await?;
+
+                        // Convert the fee from msat to sat for comparison and subtraction
+                        let lsp_fee_sat = lsp_fee.fee_amount_msat / 1000;
+
+                        // Ensure that the fee is less than the amount being requested.
+                        // If it isn't, we don't subtract it.
+                        // This prevents amount from being subtracted down to 0.
+                        // This will mean that the LSP fee will be paid by the payer instead.
+                        let amount_minus_fee = if lsp_fee_sat < amount_sat {
+                            amount_sat
+                                .checked_sub(lsp_fee_sat)
+                                .ok_or(MutinyError::BadAmountError)?
+                        } else {
+                            amount_sat
+                        };
                         let client = lock.read().await;
                         let invoice = self
                             .create_internal_invoice(
@@ -1147,7 +1134,6 @@ impl<S: MutinyStorage> Node<S> {
                         let lsp_invoice = client
                             .get_lsp_invoice(InvoiceRequest {
                                 bolt11: Some(invoice.to_string()),
-                                user_channel_id,
                                 fee_id: lsp_fee.id,
                             })
                             .await?;
@@ -1176,10 +1162,17 @@ impl<S: MutinyStorage> Node<S> {
                                 0,
                             ))
                         } else {
+                            // check the fee from the LSP
+                            let lsp_fee = lsp
+                                .get_lsp_fee_msat(FeeRequest {
+                                    pubkey: self.pubkey.encode().to_lower_hex_string(),
+                                    amount_msat: amount_sat * 1000,
+                                })
+                                .await?;
+
                             let lsp_invoice = match client
                                 .get_lsp_invoice(InvoiceRequest {
                                     bolt11: None,
-                                    user_channel_id,
                                     fee_id: lsp_fee.id,
                                 })
                                 .await
