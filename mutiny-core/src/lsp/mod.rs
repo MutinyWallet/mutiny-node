@@ -86,24 +86,20 @@ where
 pub struct InvoiceRequest {
     // Used only for VoltageFlow
     pub bolt11: Option<String>,
-    // Used only for VoltageFlow to map to previously fetched fee
-    pub fee_id: Option<String>,
-    // Used only for LSPS to track channel creation
-    pub user_channel_id: Option<u128>,
+    // Map to previously fetched fee
+    pub fee_id: String,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct FeeRequest {
     pub pubkey: String,
     pub amount_msat: u64,
-    // Used only for LSPS to track channel creation
-    pub user_channel_id: Option<u128>,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct FeeResponse {
-    // Used only for VoltageFlow to be used in subsequent InvoiceRequest
-    pub id: Option<String>,
+    // To be used in subsequent InvoiceRequest
+    pub id: String,
     pub fee_amount_msat: u64,
 }
 
