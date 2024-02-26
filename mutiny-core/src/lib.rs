@@ -2305,7 +2305,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     // now create the federation process and init it
     let new_federation = FederationClient::new(
         next_federation_uuid.clone(),
-        federation_code,
+        federation_code.clone(),
         xprivkey,
         &storage,
         network,
@@ -2335,6 +2335,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     Ok(FederationIdentity {
         uuid: next_federation_uuid.clone(),
         federation_id,
+        invite_code: federation_code,
         federation_name,
         federation_expiry_timestamp,
         welcome_message,

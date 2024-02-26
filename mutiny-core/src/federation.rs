@@ -145,6 +145,7 @@ pub struct FederationStorage {
 pub struct FederationIdentity {
     pub uuid: String,
     pub federation_id: FederationId,
+    pub invite_code: InviteCode,
     // https://github.com/fedimint/fedimint/tree/master/docs/meta_fields
     pub federation_name: Option<String>,
     pub federation_expiry_timestamp: Option<String>,
@@ -180,6 +181,7 @@ pub struct FedimintBalance {
 pub(crate) struct FederationClient<S: MutinyStorage> {
     pub(crate) uuid: String,
     pub(crate) fedimint_client: ClientArc,
+    invite_code: InviteCode,
     storage: S,
     #[allow(dead_code)]
     fedimint_storage: FedimintStorage<S>,
@@ -213,7 +215,7 @@ impl<S: MutinyStorage> FederationClient<S> {
 
         if get_config_from_db(&db).await.is_none() {
             let download = Instant::now();
-            let federation_info = FederationInfo::from_invite_code(federation_code)
+            let federation_info = FederationInfo::from_invite_code(federation_code.clone())
                 .await
                 .map_err(|e| {
                     log_error!(logger, "Could not parse invite code: {}", e);
@@ -308,6 +310,7 @@ impl<S: MutinyStorage> FederationClient<S> {
             fedimint_storage,
             storage: storage.clone(),
             logger,
+            invite_code: federation_code,
         })
     }
 
@@ -615,6 +618,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         FederationIdentity {
             uuid: self.uuid.clone(),
             federation_id: self.fedimint_client.federation_id(),
+            invite_code: self.invite_code.clone(),
             federation_name: self.fedimint_client.get_meta("federation_name"),
             federation_expiry_timestamp: self
                 .fedimint_client
