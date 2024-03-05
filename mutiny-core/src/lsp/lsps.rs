@@ -11,7 +11,7 @@ use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info};
 use lightning_invoice::{Bolt11Invoice, InvoiceBuilder};
 use lightning_liquidity::events::Event;
-use lightning_liquidity::lsps0::msgs::RequestId;
+use lightning_liquidity::lsps0::ser::RequestId;
 use lightning_liquidity::lsps2::event::LSPS2ClientEvent;
 use lightning_liquidity::lsps2::msgs::OpeningFeeParams;
 use serde::{Deserialize, Serialize};
