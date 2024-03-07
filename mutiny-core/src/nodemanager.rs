@@ -510,6 +510,7 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             bitcoin_price_cache: Arc::new(Mutex::new(price_cache)),
             do_not_connect_peers: c.do_not_connect_peers,
             safe_mode: c.safe_mode,
+            has_done_initial_ldk_sync: Arc::new(AtomicBool::new(false)),
         };
 
         Ok(nm)
@@ -546,6 +547,8 @@ pub struct NodeManager<S: MutinyStorage> {
     bitcoin_price_cache: Arc<Mutex<HashMap<String, (f32, Duration)>>>,
     do_not_connect_peers: bool,
     pub safe_mode: bool,
+    /// If we've completed an initial sync this instance
+    pub(crate) has_done_initial_ldk_sync: Arc<AtomicBool>,
 }
 
 impl<S: MutinyStorage> NodeManager<S> {
@@ -1237,6 +1240,9 @@ impl<S: MutinyStorage> NodeManager<S> {
             log_error!(self.logger, "Failed to sync ldk: {e}");
             return Err(e);
         }
+
+        // set has synced to true
+        self.has_done_initial_ldk_sync.swap(true, Ordering::SeqCst);
 
         // sync bdk wallet
         match self.wallet.sync().await {
@@ -2042,7 +2048,8 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
         .with_fee_estimator(node_manager.fee_estimator.clone())
         .with_wallet(node_manager.wallet.clone())
         .with_esplora(node_manager.esplora.clone())
-        .with_network(node_manager.network);
+        .with_network(node_manager.network)
+        .with_initial_sync(node_manager.has_done_initial_ldk_sync.clone());
     node_builder.with_logger(node_manager.logger.clone());
 
     #[cfg(target_arch = "wasm32")]

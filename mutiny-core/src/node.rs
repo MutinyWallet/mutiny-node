@@ -190,6 +190,7 @@ pub struct NodeBuilder<S: MutinyStorage> {
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: Option<String>,
     network: Option<Network>,
+    has_done_initial_sync: Option<Arc<AtomicBool>>,
 
     // optional
     lsp_config: Option<LspConfig>,
@@ -210,6 +211,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             fee_estimator: None,
             wallet: None,
             esplora: None,
+            has_done_initial_sync: None,
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr: None,
             lsp_config: None,
@@ -275,6 +277,11 @@ impl<S: MutinyStorage> NodeBuilder<S> {
 
     pub fn with_network(mut self, network: Network) -> NodeBuilder<S> {
         self.network = Some(network);
+        self
+    }
+
+    pub fn with_initial_sync(mut self, has_done_initial_sync: Arc<AtomicBool>) -> NodeBuilder<S> {
+        self.has_done_initial_sync = Some(has_done_initial_sync);
         self
     }
 
@@ -864,6 +871,10 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             node_start.elapsed().as_millis()
         );
 
+        let has_done_initial_sync = self
+            .has_done_initial_sync
+            .unwrap_or(Arc::new(AtomicBool::new(false)));
+
         Ok(Node {
             uuid,
             stopped_components,
@@ -881,6 +892,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             lsp_client,
             sync_lock,
             stop,
+            has_done_initial_sync,
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
         })
@@ -904,6 +916,7 @@ pub(crate) struct Node<S: MutinyStorage> {
     pub(crate) lsp_client: Option<AnyLsp<S>>,
     pub(crate) sync_lock: Arc<Mutex<()>>,
     stop: Arc<AtomicBool>,
+    has_done_initial_sync: Arc<AtomicBool>,
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
 }
@@ -1424,12 +1437,16 @@ impl<S: MutinyStorage> Node<S> {
 
         // make sure node at least has one connection before attempting payment
         // wait for connection before paying, or otherwise instant fail anyways
+        // also check we've completed initial sync this run, otherwise we might create
+        // htlcs that can cause a channel to be closed
         for _ in 0..DEFAULT_PAYMENT_TIMEOUT {
             // check if we've been stopped
             if self.stop.load(Ordering::Relaxed) {
                 return Err(MutinyError::NotRunning);
             }
-            if !self.channel_manager.list_usable_channels().is_empty() {
+            if !self.channel_manager.list_usable_channels().is_empty()
+                && self.has_done_initial_sync.load(Ordering::SeqCst)
+            {
                 break;
             }
             sleep(1_000).await;
@@ -1587,7 +1604,7 @@ impl<S: MutinyStorage> Node<S> {
 
     /// init_keysend_payment sends off the payment but does not wait for results
     /// use keysend_with_timeout to wait for results
-    pub fn init_keysend_payment(
+    pub async fn init_keysend_payment(
         &self,
         to_node: PublicKey,
         amt_sats: u64,
@@ -1595,6 +1612,39 @@ impl<S: MutinyStorage> Node<S> {
         labels: Vec<String>,
         payment_id: PaymentId,
     ) -> Result<MutinyInvoice, MutinyError> {
+        let amt_msats = amt_sats * 1_000;
+
+        // check if we have enough balance to send
+        let channels = self.channel_manager.list_channels();
+        if channels
+            .iter()
+            // only consider channels that are confirmed
+            .filter(|c| c.is_channel_ready)
+            .map(|c| c.balance_msat)
+            .sum::<u64>()
+            < amt_msats
+        {
+            // Channels exist but not enough capacity
+            return Err(MutinyError::InsufficientBalance);
+        }
+
+        // make sure node at least has one connection before attempting payment
+        // wait for connection before paying, or otherwise instant fail anyways
+        // also check we've completed initial sync this run, otherwise we might create
+        // htlcs that can cause a channel to be closed
+        for _ in 0..DEFAULT_PAYMENT_TIMEOUT {
+            // check if we've been stopped
+            if self.stop.load(Ordering::Relaxed) {
+                return Err(MutinyError::NotRunning);
+            }
+            if !self.channel_manager.list_usable_channels().is_empty()
+                && self.has_done_initial_sync.load(Ordering::SeqCst)
+            {
+                break;
+            }
+            sleep(1_000).await;
+        }
+
         let mut entropy = [0u8; 32];
         getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
         let payment_secret = PaymentSecret(entropy);
@@ -1602,8 +1652,6 @@ impl<S: MutinyStorage> Node<S> {
         let mut entropy = [0u8; 32];
         getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
         let preimage = PaymentPreimage(entropy);
-
-        let amt_msats = amt_sats * 1000;
 
         let payment_params = PaymentParameters::for_keysend(to_node, 40, false);
         let route_params: RouteParameters = RouteParameters {
@@ -1687,8 +1735,9 @@ impl<S: MutinyStorage> Node<S> {
         let payment_id = PaymentId(entropy);
 
         // initiate payment
-        let pay =
-            self.init_keysend_payment(to_node, amt_sats, message, labels.clone(), payment_id)?;
+        let pay = self
+            .init_keysend_payment(to_node, amt_sats, message, labels.clone(), payment_id)
+            .await?;
 
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
         let payment_hash = PaymentHash(pay.payment_hash.into_32());
