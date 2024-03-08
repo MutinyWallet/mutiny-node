@@ -1,3 +1,4 @@
+use crate::labels::Contact;
 use crate::logging::MutinyLogger;
 use crate::nostr::nip49::{NIP49BudgetPeriod, NIP49URI};
 use crate::nostr::nwc::{
@@ -14,6 +15,8 @@ use bitcoin::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{Secp256k1, Signing};
 use bitcoin::{hashes::hex::FromHex, secp256k1::ThirtyTwoByteHash};
+use fedimint_core::api::InviteCode;
+use fedimint_core::config::FederationId;
 use futures::{pin_mut, select, FutureExt};
 use futures_util::lock::Mutex;
 use lightning::util::logger::Logger;
@@ -27,7 +30,8 @@ use nostr::{
 };
 use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Metadata, Tag, Timestamp};
 use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
-use std::collections::HashSet;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::{atomic::Ordering, Arc, RwLock};
 use std::time::Duration;
 use std::{str::FromStr, sync::atomic::AtomicBool};
@@ -44,6 +48,9 @@ pub(crate) const SERVICE_ACCOUNT_INDEX: u32 = 2;
 pub(crate) const HERMES_CHAIN_INDEX: u32 = 0;
 
 const USER_NWC_PROFILE_START_INDEX: u32 = 1000;
+
+/// The number of trusted users we query for mint recommendations
+const NUM_TRUSTED_USERS: u32 = 1_000;
 
 const NWC_STORAGE_KEY: &str = "nwc_profiles";
 
@@ -109,6 +116,25 @@ pub struct NostrManager<S: MutinyStorage> {
     pub client: Client,
     /// Primal client
     pub primal_client: PrimalClient,
+}
+
+/// A fedimint we discovered on nostr
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NostrDiscoveredFedimint {
+    /// Invite Code to join the federation
+    pub invite_codes: Vec<InviteCode>,
+    /// The federation id
+    pub id: FederationId,
+    /// Pubkey of the nostr event
+    pub pubkey: Option<nostr::PublicKey>,
+    /// Event id of the nostr event
+    pub event_id: Option<EventId>,
+    /// Date this fedimint was announced on nostr
+    pub created_at: Option<u64>,
+    /// Metadata about the fedimint
+    pub metadata: Option<Metadata>,
+    /// Contacts that recommend this fedimint
+    pub recommendations: HashSet<Contact>,
 }
 
 impl<S: MutinyStorage> NostrManager<S> {
@@ -1335,6 +1361,186 @@ impl<S: MutinyStorage> NostrManager<S> {
     ) -> Result<EventId, MutinyError> {
         let event_id = self.client.send_direct_msg(pubkey, message, None).await?;
         Ok(event_id)
+    }
+
+    /// Queries our relays for federation announcements
+    pub async fn discover_federations(&self) -> Result<Vec<NostrDiscoveredFedimint>, MutinyError> {
+        // get contacts by npub
+        let mut npubs: HashMap<nostr::PublicKey, Contact> = self
+            .storage
+            .get_contacts()?
+            .into_iter()
+            .filter_map(|(_, c)| c.npub.map(|npub| (npub, c)))
+            .collect();
+
+        // our contacts might not have recommendation events, so pull in trusted users as well
+        match self
+            .primal_client
+            .get_trusted_users(NUM_TRUSTED_USERS)
+            .await
+        {
+            Ok(trusted) => {
+                for user in trusted {
+                    // skip if we already have this contact
+                    if npubs.contains_key(&user.pubkey) {
+                        continue;
+                    }
+                    // create a dummy contact from the metadata if available
+                    let dummy_contact = match user.metadata {
+                        Some(metadata) => Contact::create_from_metadata(user.pubkey, metadata),
+                        None => Contact {
+                            npub: Some(user.pubkey),
+                            ..Default::default()
+                        },
+                    };
+                    npubs.insert(user.pubkey, dummy_contact);
+                }
+            }
+            Err(e) => {
+                // if we fail to get trusted users, log the error and continue
+                // we don't want to fail the entire function because of this
+                // we'll just have less recommendations
+                log_error!(self.logger, "Failed to get trusted users: {e}");
+            }
+        }
+
+        // filter for finding mint announcements
+        let mints = Filter::new().kind(Kind::from(38173));
+        // filter for finding federation recommendations from trusted people
+        let trusted_recommendations = Filter::new()
+            .kind(Kind::from(18173))
+            .authors(npubs.keys().copied());
+        // filter for finding federation recommendations from random people
+        let recommendations = Filter::new()
+            .kind(Kind::from(18173))
+            .limit(NUM_TRUSTED_USERS as usize);
+        // fetch events
+        let events = self
+            .client
+            .get_events_of(
+                vec![mints, trusted_recommendations, recommendations],
+                Some(Duration::from_secs(5)),
+            )
+            .await?;
+
+        let mut mints: Vec<NostrDiscoveredFedimint> = events
+            .iter()
+            .filter_map(|event| {
+                // only process federation announcements
+                if event.kind != Kind::from(38173) {
+                    return None;
+                }
+
+                let federation_id = event.tags.iter().find_map(|tag| {
+                    if let Tag::Identifier(id) = tag {
+                        FederationId::from_str(id).ok()
+                    } else {
+                        None
+                    }
+                })?;
+
+                let invite_codes: Vec<InviteCode> = event
+                    .tags
+                    .iter()
+                    .filter_map(|tag| {
+                        if let Tag::AbsoluteURL(code) = tag {
+                            InviteCode::from_str(&code.to_string())
+                                .ok()
+                                // remove any invite codes that point to different federation
+                                .filter(|c| c.federation_id() == federation_id)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                // if we have no invite codes left, skip
+                if invite_codes.is_empty() {
+                    None
+                } else {
+                    // try to parse the metadata if available, it's okay if it fails
+                    // todo could lookup kind 0 of the federation to get the metadata as well
+                    let metadata = serde_json::from_str(&event.content).ok();
+                    Some(NostrDiscoveredFedimint {
+                        invite_codes,
+                        id: federation_id,
+                        pubkey: Some(event.pubkey),
+                        event_id: Some(event.id),
+                        created_at: Some(event.created_at.as_u64()),
+                        metadata,
+                        recommendations: HashSet::new(),
+                    })
+                }
+            })
+            .collect();
+
+        // add on contact recommendations to mints
+        for event in events {
+            // only process federation recommendations
+            if event.kind != Kind::from(18173) {
+                continue;
+            }
+
+            let contact = match npubs.get(&event.pubkey) {
+                Some(contact) => contact.clone(),
+                None => continue,
+            };
+
+            let invite_codes = event
+                .tags
+                .iter()
+                .filter_map(|tag| {
+                    let vec = tag.as_vec();
+                    // if there's 3 elements, make sure the identifier is for a fedimint
+                    // if there's 2 elements, just try to parse the invite code
+                    if (vec.len() == 3 && vec[0] == "u" && vec[2] == "fedimint")
+                        || (vec.len() == 2 && vec[0] == "u")
+                    {
+                        InviteCode::from_str(&vec[1]).ok()
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            // group invite codes by federation id so we don't duplicate mints
+            let mut by_federation: HashMap<FederationId, Vec<InviteCode>> = HashMap::new();
+            for invite_code in invite_codes {
+                let id = invite_code.federation_id();
+                by_federation.entry(id).or_default().push(invite_code);
+            }
+
+            // todo read federation id recommendations too
+
+            for (id, invite_codes) in by_federation {
+                match mints.iter_mut().find(|m| m.id == id) {
+                    Some(mint) => {
+                        mint.recommendations.insert(contact.clone());
+                    }
+                    None => {
+                        // if we don't have the mint announcement
+                        // Add to list with the contact as the recommendation
+                        let mut recommendations = HashSet::new();
+                        recommendations.insert(contact.clone());
+                        let mint = NostrDiscoveredFedimint {
+                            invite_codes,
+                            id,
+                            pubkey: None,
+                            event_id: None,
+                            created_at: None,
+                            metadata: None,
+                            recommendations,
+                        };
+                        mints.push(mint);
+                    }
+                }
+            }
+        }
+
+        // sort by most recommended
+        mints.sort_by(|a, b| b.recommendations.len().cmp(&a.recommendations.len()));
+
+        Ok(mints)
     }
 
     /// Derives the client and server keys for Nostr Wallet Connect given a profile index

@@ -1,6 +1,7 @@
 use crate::error::MutinyError;
 use crate::utils::parse_profile_metadata;
 use nostr::{Event, Kind, Metadata};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
@@ -122,6 +123,63 @@ impl PrimalClient {
 
         Ok(messages)
     }
+
+    /// Returns a list of trusted users from primal with their trust rating
+    pub async fn get_trusted_users(&self, limit: u32) -> Result<Vec<TrustedUser>, MutinyError> {
+        let body = json!(["trusted_users", {"limit": limit }]);
+        let data: Vec<Value> = self.primal_request(body).await?;
+
+        if let Some(json) = data.first().cloned() {
+            let event: PrimalEvent =
+                serde_json::from_value(json).map_err(|_| MutinyError::NostrError)?;
+
+            let mut trusted_users: Vec<TrustedUser> =
+                serde_json::from_str(&event.content).map_err(|_| MutinyError::NostrError)?;
+
+            // parse kind0 events
+            let metadata: HashMap<nostr::PublicKey, Metadata> = data
+                .into_iter()
+                .filter_map(|d| {
+                    Event::from_value(d.clone())
+                        .ok()
+                        .filter(|e| e.kind == Kind::Metadata)
+                        .and_then(|e| {
+                            serde_json::from_str(&e.content)
+                                .ok()
+                                .map(|m: Metadata| (e.pubkey, m))
+                        })
+                })
+                .collect();
+
+            // add metadata to trusted users
+            for user in trusted_users.iter_mut() {
+                if let Some(meta) = metadata.get(&user.pubkey) {
+                    user.metadata = Some(meta.clone());
+                }
+            }
+
+            return Ok(trusted_users);
+        };
+
+        Err(MutinyError::NostrError)
+    }
+}
+
+/// Primal will return nostr "events" which are just kind numbers
+/// and a string of content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrimalEvent {
+    pub kind: Kind,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustedUser {
+    #[serde(rename = "pk")]
+    pub pubkey: nostr::PublicKey,
+    #[serde(rename = "tr")]
+    pub trust_rating: f64,
+    pub metadata: Option<Metadata>,
 }
 
 #[cfg(test)]

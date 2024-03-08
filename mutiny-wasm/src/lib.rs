@@ -1218,6 +1218,14 @@ impl MutinyWallet {
         Ok(self.inner.recover_federation_backups().await?)
     }
 
+    /// Queries our relays for federation announcements
+    pub async fn discover_federations(
+        &self,
+    ) -> Result<JsValue /* Vec<NostrDiscoveredFedimint> */, MutinyJsError> {
+        let federations = self.inner.nostr.discover_federations().await?;
+        Ok(JsValue::from_serde(&federations)?)
+    }
+
     pub fn get_address_labels(
         &self,
     ) -> Result<JsValue /* Map<Address, Vec<String>> */, MutinyJsError> {
