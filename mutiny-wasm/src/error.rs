@@ -168,8 +168,10 @@ pub enum MutinyJsError {
     /// Token already spent.
     #[error("Token has been already spent.")]
     TokenAlreadySpent,
-    #[error("Fedimint external note reissuance failed.")]
+    #[error("Fedimint external note re-issuance failed.")]
     FedimintReissueFailed,
+    #[error("Fedimint external note re-issuance resulted in stale outcome state.")]
+    FedimintReissueStaleState,
     /// Unknown error.
     #[error("Unknown Error")]
     UnknownError,
@@ -241,6 +243,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::PayjoinCreateRequest => MutinyJsError::PayjoinCreateRequest,
             MutinyError::PayjoinResponse(e) => MutinyJsError::PayjoinResponse(e.to_string()),
             MutinyError::FedimintReissueFailed => MutinyJsError::FedimintReissueFailed,
+            MutinyError::FedimintReissueStaleState => MutinyJsError::FedimintReissueStaleState,
         }
     }
 }

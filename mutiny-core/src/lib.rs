@@ -119,7 +119,6 @@ use crate::utils::parse_profile_metadata;
 use mockall::{automock, predicate::*};
 
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
-const DEFAULT_REISSUE_TIMEOUT: u64 = 50;
 const MAX_FEDERATION_INVOICE_AMT: u64 = 200_000;
 const SWAP_LABEL: &str = "SWAP";
 const MELT_CASHU_TOKEN: &str = "Cashu Token Melt";
