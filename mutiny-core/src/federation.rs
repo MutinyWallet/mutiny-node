@@ -560,6 +560,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         let mut stored_payment: MutinyInvoice = invoice.clone().into();
         stored_payment.inbound = inbound;
         stored_payment.labels = labels;
+        stored_payment.status = HTLCStatus::InFlight;
         let hash = stored_payment.payment_hash.into_32();
         let payment_info = PaymentInfo::from(stored_payment);
         persist_payment_info(&self.storage, &hash, &payment_info, inbound)?;
