@@ -42,6 +42,8 @@ const USER_NWC_PROFILE_START_INDEX: u32 = 1000;
 
 const NWC_STORAGE_KEY: &str = "nwc_profiles";
 
+const DEFAULT_RELAY: &str = "wss://relay.mutinywallet.com";
+
 /// Reserved profiles that are used internally.
 /// Must not exceed `USER_NWC_PROFILE_START_INDEX`
 pub enum ReservedProfile {
@@ -487,7 +489,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             index,
             client_key: Some(uri.public_key),
             child_key_index,
-            relay: "wss://relay.mutinywallet.com".to_string(), // override with our relay
+            relay: DEFAULT_RELAY.to_string(), // override with our relay
             enabled: None,
             archived: None,
             spending_conditions,
@@ -530,7 +532,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             name,
             index,
             child_key_index,
-            relay: "wss://relay.mutinywallet.com".to_string(),
+            relay: DEFAULT_RELAY.to_string(),
             enabled: None,
             archived: None,
             spending_conditions,
@@ -629,7 +631,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         commands.extend_from_slice(&uri.optional_commands);
 
         let secret = uri.secret.clone();
-        let relay = uri.relay_url.to_string();
+        let relay = uri.relay_url.clone();
         let profile = self.nostr_wallet_auth(profile_type, uri, budget, tag, commands.clone())?;
 
         let nwc = self.nwc.try_read()?.iter().find_map(|nwc| {
@@ -643,22 +645,26 @@ impl<S: MutinyStorage> NostrManager<S> {
         if let Some(nwc) = nwc {
             let client = Client::new(self.primary_key.clone());
 
-            client
-                .add_relays(vec![relay, profile.relay.to_string()])
-                .await
-                .expect("Failed to add relays");
+            let mut relays = self.get_relays();
+            relays.push(relay.to_string());
+            relays.push(profile.relay.clone());
+            client.add_relays(relays).await?;
             client.connect().await;
 
-            if let Some(event) = nwc.create_auth_confirmation_event(secret, commands)? {
-                client.send_event(event).await.map_err(|e| {
-                    MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}"))
+            if let Some(event) = nwc.create_auth_confirmation_event(relay, secret, commands)? {
+                let id = client.send_event(event).await.map_err(|e| {
+                    MutinyError::Other(anyhow::anyhow!(
+                        "Failed to send nwa confirmation event: {e:?}"
+                    ))
                 })?;
+                log_info!(self.logger, "Broadcast NWA confirmation event: {id}");
             }
 
             let info_event = nwc.create_nwc_info_event()?;
-            client.send_event(info_event).await.map_err(|e| {
+            let id = client.send_event(info_event).await.map_err(|e| {
                 MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}"))
             })?;
+            log_info!(self.logger, "Broadcast NWC info event: {id}");
 
             let _ = client.disconnect().await;
         } else {
@@ -1575,7 +1581,7 @@ mod test {
             name,
             index: 1001,
             client_key: None,
-            relay: "wss://relay.mutinywallet.com".to_string(),
+            relay: DEFAULT_RELAY.to_string(),
             enabled: None,
             archived: None,
             child_key_index: None,
@@ -1703,7 +1709,7 @@ mod test {
 
         assert_eq!(profile.name, name);
         assert_eq!(profile.index, 1000);
-        assert_eq!(profile.relay.as_str(), "wss://relay.mutinywallet.com");
+        assert_eq!(profile.relay.as_str(), DEFAULT_RELAY);
 
         profile.relay = "wss://relay.damus.io".to_string();
 
@@ -1745,7 +1751,7 @@ mod test {
 
         assert_eq!(profile.name, name);
         assert_eq!(profile.index, 1000);
-        assert_eq!(profile.relay.as_str(), "wss://relay.mutinywallet.com");
+        assert_eq!(profile.relay.as_str(), DEFAULT_RELAY);
 
         nostr_manager.delete_nwc_profile(profile.index).unwrap();
 
