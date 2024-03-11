@@ -76,7 +76,7 @@ use crate::{
 use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::nips::nip57;
 use ::nostr::prelude::ZapRequestData;
-use ::nostr::{Event, EventId, JsonUtil, Kind, Metadata};
+use ::nostr::{EventId, JsonUtil, Kind};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
@@ -103,7 +103,7 @@ use moksha_core::token::TokenV3;
 use nostr_sdk::{Client, RelayPoolNotification};
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -114,7 +114,6 @@ use uuid::Uuid;
 use crate::labels::LabelItem;
 use crate::nostr::NostrKeySource;
 use crate::storage::{persist_payment_info, SUBSCRIPTION_TIMESTAMP};
-use crate::utils::parse_profile_metadata;
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 
@@ -790,6 +789,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             self.xprivkey,
             self.nostr_key_source,
             self.storage.clone(),
+            config.primal_url.clone(),
             logger.clone(),
             stop.clone(),
         )?);
@@ -1733,24 +1733,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Err(MutinyError::NostrError)
     }
 
-    /// Makes a request to the primal api
-    async fn primal_request(
-        client: &reqwest::Client,
-        url: &str,
-        body: Value,
-    ) -> Result<Vec<Value>, MutinyError> {
-        client
-            .post(url)
-            .header("Content-Type", "application/json")
-            .body(body.to_string())
-            .send()
-            .await
-            .map_err(|_| MutinyError::NostrError)?
-            .json()
-            .await
-            .map_err(|_| MutinyError::NostrError)
-    }
-
     /// Syncs all of our nostr data from the configured primal instance
     pub async fn sync_nostr(&self) -> Result<(), MutinyError> {
         let contacts_fut = self.sync_nostr_contacts(self.nostr.public_key);
@@ -1766,24 +1748,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     /// Fetches our latest nostr profile from primal and saves to storage
     async fn sync_nostr_profile(&self) -> Result<(), MutinyError> {
-        let url = self
-            .config
-            .primal_url
-            .as_deref()
-            .unwrap_or("https://primal-cache.mutinywallet.com/api");
-        let client = reqwest::Client::new();
-
-        let body = json!(["user_profile", { "pubkey": self.nostr.public_key } ]);
-        let data: Vec<Value> = Self::primal_request(&client, url, body).await?;
-
-        if let Some(json) = data.first().cloned() {
-            let event: Event = serde_json::from_value(json).map_err(|_| MutinyError::NostrError)?;
-            if event.kind != Kind::Metadata {
-                return Ok(());
-            }
-
-            let metadata: Metadata =
-                serde_json::from_str(&event.content).map_err(|_| MutinyError::NostrError)?;
+        if let Some(metadata) = self
+            .nostr
+            .primal_client
+            .get_user_profile(self.nostr.public_key)
+            .await?
+        {
             self.storage.set_nostr_profile(metadata)?;
         }
 
@@ -1792,25 +1762,16 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     /// Get contacts from the given npub and sync them to the wallet
     pub async fn sync_nostr_contacts(&self, npub: ::nostr::PublicKey) -> Result<(), MutinyError> {
-        let url = self
-            .config
-            .primal_url
-            .as_deref()
-            .unwrap_or("https://primal-cache.mutinywallet.com/api");
-        let client = reqwest::Client::new();
-
-        let body = json!(["contact_list", { "pubkey": npub } ]);
-        let data: Vec<Value> = Self::primal_request(&client, url, body).await?;
-        let mut metadata = parse_profile_metadata(data);
+        let mut metadata = self.nostr.primal_client.get_nostr_contacts(npub).await?;
 
         let contacts = self.storage.get_contacts()?;
 
         // get contacts that weren't in our npub contacts list
-        let missing_pks: Vec<String> = contacts
+        let missing_pks: Vec<::nostr::PublicKey> = contacts
             .iter()
             .filter_map(|(_, c)| {
                 if c.npub.is_some_and(|n| metadata.get(&n).is_none()) {
-                    c.npub.map(|n| n.to_hex())
+                    c.npub
                 } else {
                     None
                 }
@@ -1818,9 +1779,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .collect();
 
         if !missing_pks.is_empty() {
-            let body = json!(["user_infos", {"pubkeys": missing_pks }]);
-            let data: Vec<Value> = Self::primal_request(&client, url, body).await?;
-            let missing_metadata = parse_profile_metadata(data);
+            let missing_metadata = self
+                .nostr
+                .primal_client
+                .get_user_profiles(missing_pks)
+                .await?;
             metadata.extend(missing_metadata);
         }
 
@@ -1872,60 +1835,33 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         until: Option<u64>,
         since: Option<u64>,
     ) -> Result<Vec<DirectMessage>, MutinyError> {
-        let url = self
-            .config
-            .primal_url
-            .as_deref()
-            .unwrap_or("https://primal-cache.mutinywallet.com/api");
-        let client = reqwest::Client::new();
+        let events = self
+            .nostr
+            .primal_client
+            .get_dm_conversation(npub, self.nostr.public_key, limit, until, since)
+            .await?;
 
-        // api is a little weird, has sender and receiver but still gives full conversation
-        let sender = npub.to_hex();
-        let receiver = self.nostr.public_key.to_hex();
-        let body = match (until, since) {
-            (Some(until), Some(since)) => {
-                json!(["get_directmsgs", { "sender": sender, "receiver": receiver, "limit": limit, "until": until, "since": since }])
+        let mut messages = Vec::with_capacity(events.len());
+        for event in events {
+            if event.verify().is_err() {
+                continue;
             }
-            (None, Some(since)) => {
-                json!(["get_directmsgs", { "sender": sender, "receiver": receiver, "limit": limit, "since": since }])
-            }
-            (Some(until), None) => {
-                json!(["get_directmsgs", { "sender": sender, "receiver": receiver, "limit": limit, "until": until }])
-            }
-            (None, None) => {
-                json!(["get_directmsgs", { "sender": sender, "receiver": receiver, "limit": limit, "since": 0 }])
-            }
-        };
-        let data: Vec<Value> = Self::primal_request(&client, url, body).await?;
 
-        let mut messages = Vec::with_capacity(data.len());
-        for d in data {
-            let event = Event::from_value(d)
-                .ok()
-                .filter(|e| e.kind == Kind::EncryptedDirectMessage);
-
-            if let Some(event) = event {
-                // verify signature
-                if event.verify().is_err() {
-                    continue;
-                }
-
-                // if decryption fails, skip this message, just a bad dm
-                if let Ok(message) = self.nostr.decrypt_dm(npub, &event.content).await {
-                    let to = if event.pubkey == npub {
-                        self.nostr.public_key
-                    } else {
-                        npub
-                    };
-                    let dm = DirectMessage {
-                        from: event.pubkey,
-                        to,
-                        message,
-                        date: event.created_at.as_u64(),
-                        event_id: event.id,
-                    };
-                    messages.push(dm);
-                }
+            // if decryption fails, skip this message, just a bad dm
+            if let Ok(message) = self.nostr.decrypt_dm(npub, &event.content).await {
+                let to = if event.pubkey == npub {
+                    self.nostr.public_key
+                } else {
+                    npub
+                };
+                let dm = DirectMessage {
+                    from: event.pubkey,
+                    to,
+                    message,
+                    date: event.created_at.as_u64(),
+                    event_id: event.id,
+                };
+                messages.push(dm);
             }
         }
 

@@ -1223,6 +1223,7 @@ mod wasm_test {
             xprivkey,
             NostrKeySource::Derived,
             storage.clone(),
+            None,
             mw.logger.clone(),
             stop,
         )
@@ -1280,6 +1281,7 @@ mod wasm_test {
             xprivkey,
             NostrKeySource::Derived,
             storage.clone(),
+            None,
             logger.clone(),
             stop,
         )
@@ -1475,6 +1477,7 @@ mod wasm_test {
             xprivkey,
             NostrKeySource::Derived,
             storage.clone(),
+            None,
             Arc::new(MutinyLogger::default()),
             stop,
         )
@@ -1527,6 +1530,7 @@ mod wasm_test {
             xprivkey,
             NostrKeySource::Derived,
             storage.clone(),
+            None,
             mw.logger.clone(),
             stop,
         )
@@ -1614,6 +1618,7 @@ mod wasm_test {
             xprivkey,
             NostrKeySource::Derived,
             storage.clone(),
+            None,
             logger,
             stop,
         )
