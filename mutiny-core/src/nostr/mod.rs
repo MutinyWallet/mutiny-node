@@ -5,6 +5,7 @@ use crate::nostr::nwc::{
     NwcProfile, NwcProfileTag, PendingNwcInvoice, Profile, SingleUseSpendingConditions,
     SpendingConditions, PENDING_NWC_EVENTS_KEY,
 };
+use crate::nostr::primal::PrimalClient;
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
 use crate::{labels::LabelStorage, InvoiceHandler};
@@ -32,6 +33,7 @@ use url::Url;
 
 pub mod nip49;
 pub mod nwc;
+mod primal;
 
 const PROFILE_ACCOUNT_INDEX: u32 = 0;
 const NWC_ACCOUNT_INDEX: u32 = 1;
@@ -96,6 +98,8 @@ pub struct NostrManager<S: MutinyStorage> {
     pub stop: Arc<AtomicBool>,
     /// Nostr client
     pub client: Client,
+    /// Primal client
+    pub primal_client: PrimalClient,
 }
 
 impl<S: MutinyStorage> NostrManager<S> {
@@ -1223,6 +1227,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         xprivkey: ExtendedPrivKey,
         key_source: NostrKeySource,
         storage: S,
+        primal_url: Option<String>,
         logger: Arc<MutinyLogger>,
         stop: Arc<AtomicBool>,
     ) -> Result<Self, MutinyError> {
@@ -1261,6 +1266,10 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let client = Client::new(primary_key.clone());
 
+        let primal_client = PrimalClient::new(
+            primal_url.unwrap_or("https://primal-cache.mutinywallet.com/api".to_string()),
+        );
+
         Ok(Self {
             xprivkey,
             primary_key,
@@ -1268,6 +1277,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             nwc: Arc::new(RwLock::new(nwc)),
             storage,
             pending_nwc_lock: Arc::new(Mutex::new(())),
+            primal_client,
             logger,
             stop,
             client,
@@ -1332,8 +1342,15 @@ mod test {
 
         let stop = Arc::new(AtomicBool::new(false));
 
-        NostrManager::from_mnemonic(xprivkey, NostrKeySource::Derived, storage, logger, stop)
-            .unwrap()
+        NostrManager::from_mnemonic(
+            xprivkey,
+            NostrKeySource::Derived,
+            storage,
+            None,
+            logger,
+            stop,
+        )
+        .unwrap()
     }
 
     #[tokio::test]
