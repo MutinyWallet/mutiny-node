@@ -7,7 +7,6 @@
     clippy::arc_with_non_send_sync,
     type_alias_bounds
 )]
-extern crate core;
 
 pub mod auth;
 mod cashu;
@@ -85,6 +84,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
 use bitcoin::{hashes::sha256, Network};
 use fedimint_core::{api::InviteCode, config::FederationId};
+use fedimint_mint_client::OOBNotes;
 use futures::{pin_mut, select, FutureExt};
 use futures_util::join;
 use hex_conservative::{DisplayHex, FromHex};
@@ -1360,6 +1360,37 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             amount: current_balance - total_fees,
             fees: Some(total_fees),
         })
+    }
+
+    pub async fn reissue_oob_notes(&self, oob_notes: OOBNotes) -> Result<(), MutinyError> {
+        let federation_lock = self.federations.read().await;
+        let federation_ids = self.list_federation_ids().await?;
+
+        let maybe_federation_id = federation_ids
+            .iter()
+            .find(|id| id.to_prefix() == oob_notes.federation_id_prefix());
+
+        if let Some(fed_id) = maybe_federation_id {
+            log_trace!(self.logger, "found federation_id {:?}", fed_id);
+
+            let fedimint_client = federation_lock.get(fed_id).ok_or(MutinyError::NotFound)?;
+            log_trace!(
+                self.logger,
+                "got fedimint client for federation_id {:?}",
+                fed_id
+            );
+
+            fedimint_client.reissue(oob_notes).await?;
+            log_trace!(
+                self.logger,
+                "successfully reissued for federation_id {:?}",
+                fed_id
+            );
+
+            Ok(())
+        } else {
+            Err(MutinyError::NotFound)
+        }
     }
 
     /// Estimate the fee before trying to sweep from federation

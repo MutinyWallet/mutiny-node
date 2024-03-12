@@ -24,6 +24,7 @@ use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use fedimint_core::{api::InviteCode, config::FederationId};
+use fedimint_mint_client::OOBNotes;
 use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
 use hex_conservative::DisplayHex;
@@ -1020,6 +1021,17 @@ impl MutinyWallet {
         amount: Option<u64>,
     ) -> Result<FedimintSweepResult, MutinyJsError> {
         Ok(self.inner.sweep_federation_balance(amount).await?.into())
+    }
+
+    pub async fn reissue_oob_notes(&self, oob_notes: String) -> Result<(), MutinyJsError> {
+        let notes = OOBNotes::from_str(&oob_notes).map_err(|e| {
+            log_error!(
+                self.inner.logger,
+                "Error parsing federation `OOBNotes` ({oob_notes}): {e}"
+            );
+            MutinyJsError::InvalidArgumentsError
+        })?;
+        Ok(self.inner.reissue_oob_notes(notes).await?)
     }
 
     /// Estimate the fee before trying to sweep from federation

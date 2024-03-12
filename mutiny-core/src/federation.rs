@@ -52,7 +52,7 @@ use fedimint_ln_client::{
 };
 use fedimint_ln_common::lightning_invoice::RoutingFees;
 use fedimint_ln_common::LightningCommonInit;
-use fedimint_mint_client::MintClientInit;
+use fedimint_mint_client::{MintClientInit, MintClientModule, OOBNotes, ReissueExternalNotesState};
 use fedimint_wallet_client::{WalletClientInit, WalletClientModule};
 use futures::future::{self};
 use futures_util::{pin_mut, StreamExt};
@@ -71,6 +71,12 @@ use std::{
     str::FromStr,
     sync::atomic::{AtomicU32, Ordering},
 };
+
+// The amount of time in milliseconds to wait for
+// checking the status of a fedimint OOB re-issuance. This
+// is to work around their stream status checking
+// when wanting just the current status.
+const FEDIMINT_OOB_REISSUE_TIMEOUT_CHECK_MS: u64 = 30;
 
 // The amount of time in milliseconds to wait for
 // checking the status of a fedimint payment. This
@@ -613,6 +619,42 @@ impl<S: MutinyStorage> FederationClient<S> {
         }
     }
 
+    pub(crate) async fn reissue(&self, oob_notes: OOBNotes) -> Result<(), MutinyError> {
+        // Get the `MintClientModule`
+        let mint_module = self.fedimint_client.get_first_module::<MintClientModule>();
+
+        // Reissue `OOBNotes`
+        let operation_id = mint_module.reissue_external_notes(oob_notes, ()).await?;
+
+        match process_reissue_outcome(
+            &mint_module,
+            operation_id,
+            FEDIMINT_OOB_REISSUE_TIMEOUT_CHECK_MS,
+            self.logger.clone(),
+        )
+        .await?
+        {
+            ReissueExternalNotesState::Done => {
+                log_trace!(self.logger, "re-issuance of OOBNotes was successful!");
+                Ok(())
+            }
+            ReissueExternalNotesState::Failed(reason) => {
+                log_trace!(
+                    self.logger,
+                    "re-issuance of OOBNotes failed explicitly, reason: {reason}"
+                );
+                Err(MutinyError::FedimintReissueFailed)
+            }
+            _ => {
+                log_trace!(
+                    self.logger,
+                    "re-issuance of OOBNotes explicitly failed, due to outcome with a stale state!"
+                );
+                Err(MutinyError::FedimintReissueStaleState)
+            }
+        }
+    }
+
     pub async fn get_mutiny_federation_identity(&self) -> FederationIdentity {
         let gateway_fees = self.gateway_fee().await.ok();
 
@@ -869,6 +911,60 @@ where
     }
 
     invoice
+}
+
+async fn process_reissue_outcome(
+    mint_module: &MintClientModule,
+    operation_id: OperationId,
+    timeout: u64,
+    logger: Arc<MutinyLogger>,
+) -> Result<ReissueExternalNotesState, MutinyError> {
+    // Subscribe to the outcome based on `ReissueExternalNotesState`
+    let stream_or_outcome = mint_module
+        .subscribe_reissue_external_notes(operation_id)
+        .await
+        .map_err(MutinyError::Other)?;
+
+    // Process the outcome based on `ReissueExternalNotesState`
+    match stream_or_outcome {
+        UpdateStreamOrOutcome::Outcome(outcome) => {
+            log_trace!(logger, "outcome received {:?}", outcome);
+            Ok(outcome)
+        }
+        UpdateStreamOrOutcome::UpdateStream(mut stream) => {
+            let timeout_fut = sleep(timeout as i32);
+            pin_mut!(timeout_fut);
+
+            log_trace!(logger, "started timeout future {:?}", timeout);
+
+            while let future::Either::Left((outcome_opt, _)) =
+                future::select(stream.next(), &mut timeout_fut).await
+            {
+                if let Some(outcome) = outcome_opt {
+                    log_trace!(logger, "streamed outcome received {:?}", outcome);
+
+                    match outcome {
+                        ReissueExternalNotesState::Failed(_) | ReissueExternalNotesState::Done => {
+                            log_trace!(
+                                logger,
+                                "streamed outcome received is final {:?}, returning",
+                                outcome
+                            );
+                            return Ok(outcome);
+                        }
+                        _ => {
+                            log_trace!(
+                                logger,
+                                "streamed outcome received is not final {:?}, skipping",
+                                outcome
+                            );
+                        }
+                    }
+                };
+            }
+            Err(MutinyError::FedimintReissueFailed)
+        }
+    }
 }
 
 #[derive(Clone)]

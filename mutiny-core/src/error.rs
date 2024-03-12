@@ -171,6 +171,10 @@ pub enum MutinyError {
     /// Token already spent.
     #[error("Token has been already spent.")]
     TokenAlreadySpent,
+    #[error("Fedimint external note re-issuance failed.")]
+    FedimintReissueFailed,
+    #[error("Fedimint external note re-issuance resulted in stale outcome state.")]
+    FedimintReissueStaleState,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
