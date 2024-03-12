@@ -11,16 +11,18 @@ The frontend for Mutiny Wallet is [here](https://github.com/MutinyWallet/mutiny-
 
 ## Importing
 
-Both of those current web frontends import the NPM package that this project creates [here](https://www.npmjs.com/package/@mutinywallet/node-manager).
-
+The web front end imports the NPM package that this project
+creates [here](https://www.npmjs.com/package/@mutinywallet/mutiny-wasm).
 
 ## Development
 
 ### Nixos
 
-A `flake.nix` file has been added for easier nix development and testing. Pretty much all cargo / wasm commands work, though right now optimized for `aarch64-unknown-linux-gnu` and `wasm32-unknown-unknown` compilation in the nix shell. 
+A `flake.nix` file has been added for easier nix development and testing. Pretty much all cargo / wasm commands work,
+though right now optimized for `aarch64-unknown-linux-gnu` and `wasm32-unknown-unknown` compilation in the nix shell.
 
 To start:
+
 ```
 nix develop
 ```
@@ -47,7 +49,8 @@ AR=/opt/homebrew/opt/llvm/bin/llvm-ar CC=/opt/homebrew/opt/llvm/bin/clang
 
 ### Dependencies
 
-- [rust](https://www.rust-lang.org/) (specifically, nightly: `rustup toolchain install nightly-2023-10-24` and `rustup target add wasm32-unknown-unknown --toolchain nightly`)
+- [rust](https://www.rust-lang.org/) (specifically, nightly: `rustup toolchain install nightly-2023-10-24`
+  and `rustup target add wasm32-unknown-unknown --toolchain nightly`)
 
 - [node](https://nodejs.org/en/)
 
@@ -75,39 +78,38 @@ Build the rust wasm stuff:
 just pack
 ```
 
-### Websocket proxy
+### Testing
 
-You can use the default websocket proxy @ p.mutinywallet.com no matter what network you are on. To run it locally, follow the docker instructions [here](https://github.com/Mutiny-Wallet/ln-websocket-proxy).
-
-### Bitcoin networks
-
-You'll need a regtest bitcoin node, electrs, and an exposed port to whatever regtest node you are connecting to.
-
-#### For [electrs](https://github.com/Blockstream/electrs)
-
-First build it, then run this script for regtest, replacing paths and passwords where necessary. YMMV. One special note is that this is for cookie password based auth.
+To run the local tests you can simply use
 
 ```
-/path/to/target/release/electrs -vvvv --daemon-dir /path/to/.bitcoin/regtest/data/ --timestamp --blocks-dir /path/to/.bitcoin/regtest/data/regtest/blocks/ --cookie="bitcoinrpc:{cookiebasedpassword}" --db-dir /path/to/.electrs/ --network regtest --http-addr 0.0.0.0:3003
+just test
 ```
 
-#### Expose lightning node regtest
-
-I use bore for this. Swap out 9735 with whatever your OTHER node's port is running on. Typically 9735.
+To test running mutiny with [mutiny-web](https://github.com/MutinyWallet/mutiny-web) you'll need to run the following:
 
 ```
-bore local 9735 --to bore.pub
+just pack
+just link
 ```
 
-Whenever you are wanting to connect to this node from the webbrowser, put our default websocket proxy url into it along with the following for the pubkey connect string.
-
-You'll want the pubkey you're connecting to, the IP address of bore (this could change but hasn't changed for me yet), and the port that bore returns that always changes, so look at the bore logs.
+Then in the mutiny-web repo:
 
 ```
-{other_node_pubkey}@159.223.171.199:{port_returned_from_bore}
+just local
 ```
+
+Then you can run the mutiny-web project and it will use the locally built mutiny-node instead of the published npm
+package.
+
+You only need to run `just link` once, but you'll need to run `just pack` every time you make changes to the rust code.
+`just link` creates a symlink in the `mutiny-web` project to the `mutiny-node` project. This allows you to make changes
+to the `mutiny-node` project and see them reflected in the `mutiny-web` project without having to publish the npm
+package. `just pack` builds the wasm binary and needs to be run every time you make changes to the rust code.
 
 ### Publishing
 
-The `mutiny-core` rust library and `mutiny-wasm` typescript packages are published when new github releases are created. Just bump both of those cargo.toml package numbers and [create release](https://github.com/MutinyWallet/mutiny-node/releases/new)
+The `mutiny-core` rust library and `mutiny-wasm` typescript packages are published when new github releases are created.
+Just bump both of those cargo.toml package numbers
+and [create release](https://github.com/MutinyWallet/mutiny-node/releases/new)
 just publish.
