@@ -26,9 +26,9 @@ use lnurl::lnurl::LnUrl;
 use nostr::nips::nip47::*;
 use nostr::{
     nips::nip04::{decrypt, encrypt},
-    SecretKey,
+    Alphabet, Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Metadata, SecretKey,
+    SingleLetterTag, Tag, TagKind, Timestamp,
 };
-use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Metadata, Tag, Timestamp};
 use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -1363,6 +1363,39 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(event_id)
     }
 
+    /// Creates a recommendation event for a federation
+    pub async fn recommend_federation(
+        &self,
+        invite_code: &InviteCode,
+        review: Option<&str>,
+    ) -> Result<EventId, MutinyError> {
+        let kind = Kind::from(38000);
+
+        // properly tag the event as a federation with the federation id
+        let d_tag = Tag::Identifier(invite_code.federation_id().to_string());
+        let k_tag = Tag::Generic(
+            TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::K)),
+            vec!["38173".to_string()],
+        );
+
+        // tag the federation invite code
+        let invite_code_tag = Tag::Generic(
+            TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::U)),
+            vec![invite_code.to_string()],
+        );
+
+        // todo tag the federation announcement event, to do so we need to have the pubkey of the federation
+
+        let builder = EventBuilder::new(
+            kind,
+            review.unwrap_or_default(),
+            [d_tag, k_tag, invite_code_tag],
+        );
+
+        // send the event
+        Ok(self.client.send_event_builder(builder).await?)
+    }
+
     /// Queries our relays for federation announcements
     pub async fn discover_federations(&self) -> Result<Vec<NostrDiscoveredFedimint>, MutinyError> {
         // get contacts by npub
@@ -1408,11 +1441,13 @@ impl<S: MutinyStorage> NostrManager<S> {
         let mints = Filter::new().kind(Kind::from(38173));
         // filter for finding federation recommendations from trusted people
         let trusted_recommendations = Filter::new()
-            .kind(Kind::from(18173))
+            .kind(Kind::from(38000))
+            .custom_tag(SingleLetterTag::lowercase(Alphabet::K), ["38173"])
             .authors(npubs.keys().copied());
         // filter for finding federation recommendations from random people
         let recommendations = Filter::new()
-            .kind(Kind::from(18173))
+            .kind(Kind::from(38000))
+            .custom_tag(SingleLetterTag::lowercase(Alphabet::K), ["38173"])
             .limit(NUM_TRUSTED_USERS as usize);
         // fetch events
         let events = self
@@ -1477,10 +1512,16 @@ impl<S: MutinyStorage> NostrManager<S> {
         // add on contact recommendations to mints
         for event in events {
             // only process federation recommendations
-            if event.kind != Kind::from(18173) {
+            if event.kind != Kind::from(38000)
+                && event.tags.iter().any(|tag| {
+                    tag.kind() == TagKind::Custom("k".to_string())
+                        && tag.as_vec().get(1).is_some_and(|x| x == "38173")
+                })
+            {
                 continue;
             }
 
+            // if we don't have the contact, skip
             let contact = match npubs.get(&event.pubkey) {
                 Some(contact) => contact.clone(),
                 None => continue,
@@ -1490,12 +1531,9 @@ impl<S: MutinyStorage> NostrManager<S> {
                 .tags
                 .iter()
                 .filter_map(|tag| {
+                    // try to parse the invite code
                     let vec = tag.as_vec();
-                    // if there's 3 elements, make sure the identifier is for a fedimint
-                    // if there's 2 elements, just try to parse the invite code
-                    if (vec.len() == 3 && vec[0] == "u" && vec[2] == "fedimint")
-                        || (vec.len() == 2 && vec[0] == "u")
-                    {
+                    if vec.len() == 2 && vec[0] == "u" {
                         InviteCode::from_str(&vec[1]).ok()
                     } else {
                         None
