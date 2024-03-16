@@ -987,7 +987,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     .expect("Failed to add relays");
                 client.connect().await;
 
-                client.subscribe(last_filters.clone()).await;
+                client.subscribe(last_filters.clone(), None).await;
 
                 // handle NWC requests
                 let mut notifications = client.notifications();
@@ -1015,7 +1015,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                     if event.verify().is_ok() {
                                         match event.kind {
                                             Kind::WalletConnectRequest => {
-                                                match nostr.handle_nwc_request(event, &self_clone).await {
+                                                match nostr.handle_nwc_request(*event, &self_clone).await {
                                                     Ok(Some(event)) => {
                                                         if let Err(e) = client.send_event(event).await {
                                                             log_warn!(logger, "Error sending NWC event: {e}");
@@ -1028,7 +1028,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                                 }
                                             }
                                             Kind::EncryptedDirectMessage => {
-                                                if let Err(e) = nostr.handle_direct_message(event, &self_clone).await {
+                                                if let Err(e) = nostr.handle_direct_message(*event, &self_clone).await {
                                                         log_error!(logger, "Error handling dm: {e}");
                                                 }
                                             }
@@ -1053,7 +1053,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                             if let Ok(current_filters) = nostr.get_filters() {
                                 if !utils::compare_filters_vec(&current_filters, &last_filters) {
                                     log_debug!(logger, "subscribing to new nwc filters");
-                                    client.subscribe(current_filters.clone()).await;
+                                    client.subscribe(current_filters.clone(), None).await;
                                     last_filters = current_filters;
                                 }
                             }

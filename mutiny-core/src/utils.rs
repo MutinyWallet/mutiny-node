@@ -231,18 +231,28 @@ pub fn compare_filters_vec(a: &[Filter], b: &[Filter]) -> bool {
     }
 
     // compare that we have all the same kinds
-    let agg_kinds_a: HashSet<Kind> = a.iter().flat_map(|i| i.kinds.clone()).collect();
-    let agg_kinds_b: HashSet<Kind> = b.iter().flat_map(|i| i.kinds.clone()).collect();
+    let agg_kinds_a: HashSet<Kind> = a
+        .iter()
+        .flat_map(|i| i.kinds.clone().unwrap_or_default())
+        .collect();
+    let agg_kinds_b: HashSet<Kind> = b
+        .iter()
+        .flat_map(|i| i.kinds.clone().unwrap_or_default())
+        .collect();
 
     if agg_kinds_a != agg_kinds_b {
         return false;
     }
 
     // compare same authors
-    let agg_authors_a: HashSet<nostr::PublicKey> =
-        a.iter().flat_map(|i| i.authors.clone()).collect();
-    let agg_authors_b: HashSet<nostr::PublicKey> =
-        b.iter().flat_map(|i| i.authors.clone()).collect();
+    let agg_authors_a: HashSet<nostr::PublicKey> = a
+        .iter()
+        .flat_map(|i| i.authors.clone().unwrap_or_default())
+        .collect();
+    let agg_authors_b: HashSet<nostr::PublicKey> = b
+        .iter()
+        .flat_map(|i| i.authors.clone().unwrap_or_default())
+        .collect();
 
     if agg_authors_a != agg_authors_b {
         return false;
