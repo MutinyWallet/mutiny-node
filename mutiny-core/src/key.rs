@@ -8,6 +8,7 @@ use crate::error::MutinyError;
 pub(crate) enum ChildKey {
     NodeChildKey,
     FederationChildKey,
+    BlindAuthChildKey,
 }
 
 impl ChildKey {
@@ -15,6 +16,7 @@ impl ChildKey {
         match self {
             ChildKey::NodeChildKey => 0,
             ChildKey::FederationChildKey => 1,
+            ChildKey::BlindAuthChildKey => 2,
         }
     }
 }

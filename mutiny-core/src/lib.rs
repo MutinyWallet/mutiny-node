@@ -10,6 +10,7 @@
 extern crate core;
 
 pub mod auth;
+mod blindauth;
 mod cashu;
 mod chain;
 pub mod encrypt;

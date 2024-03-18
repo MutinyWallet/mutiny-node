@@ -1,8 +1,8 @@
 use crate::event::HTLCStatus;
-use crate::logging::MutinyLogger;
 use crate::nodemanager::{ChannelClosure, NodeStorage, DEVICE_LOCK_INTERVAL_SECS};
 use crate::utils::{now, spawn};
 use crate::vss::{MutinyVssClient, VssKeyValueItem};
+use crate::{blindauth::TokenStorage, logging::MutinyLogger};
 use crate::{
     encrypt::{decrypt_with_password, encrypt, encryption_key_from_pass, Cipher},
     federation::FederationStorage,
@@ -33,6 +33,7 @@ pub const MNEMONIC_KEY: &str = "mnemonic";
 pub(crate) const NEED_FULL_SYNC_KEY: &str = "needs_full_sync";
 pub const NODES_KEY: &str = "nodes";
 pub const FEDERATIONS_KEY: &str = "federations";
+pub const SERVICE_TOKENS: &str = "service_tokens";
 const FEE_ESTIMATES_KEY: &str = "fee_estimates";
 pub const BITCOIN_PRICE_CACHE_KEY: &str = "bitcoin_price_cache";
 const FIRST_SYNC_KEY: &str = "first_sync";
@@ -488,6 +489,22 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
     async fn insert_federations(&self, federations: FederationStorage) -> Result<(), MutinyError> {
         let version = Some(federations.version);
         self.set_data_async(FEDERATIONS_KEY.to_string(), federations, version)
+            .await
+    }
+
+    /// Gets the token storage
+    fn get_token_storage(&self) -> Result<TokenStorage, MutinyError> {
+        let res: Option<TokenStorage> = self.get_data(SERVICE_TOKENS)?;
+        match res {
+            Some(f) => Ok(f),
+            None => Ok(TokenStorage::default()),
+        }
+    }
+
+    /// Inserts the tokens into storage
+    async fn insert_token_storage(&self, tokens: TokenStorage) -> Result<(), MutinyError> {
+        let version = Some(tokens.version);
+        self.set_data_async(SERVICE_TOKENS.to_string(), tokens, version)
             .await
     }
 
