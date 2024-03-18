@@ -1052,7 +1052,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             .pubkey(secret.public_key())
             .event(request_event.id);
 
-        client.subscribe(vec![filter]).await;
+        client.subscribe(vec![filter], None).await;
 
         client
             .send_event(request_event.clone())

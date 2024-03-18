@@ -75,8 +75,12 @@ use crate::{
 };
 use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::nips::nip57;
+#[cfg(target_arch = "wasm32")]
+use ::nostr::prelude::rand::rngs::OsRng;
 use ::nostr::prelude::ZapRequestData;
-use ::nostr::{EventId, JsonUtil, Kind};
+use ::nostr::{EventBuilder, EventId, JsonUtil, Kind};
+#[cfg(target_arch = "wasm32")]
+use ::nostr::{Keys, Tag};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
@@ -100,7 +104,7 @@ use moksha_core::primitives::{
     PostMeltQuoteBolt11Response,
 };
 use moksha_core::token::TokenV3;
-use nostr_sdk::{Client, RelayPoolNotification};
+use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -987,7 +991,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     .expect("Failed to add relays");
                 client.connect().await;
 
-                client.subscribe(last_filters.clone()).await;
+                client.subscribe(last_filters.clone(), None).await;
 
                 // handle NWC requests
                 let mut notifications = client.notifications();
@@ -1015,7 +1019,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                     if event.verify().is_ok() {
                                         match event.kind {
                                             Kind::WalletConnectRequest => {
-                                                match nostr.handle_nwc_request(event, &self_clone).await {
+                                                match nostr.handle_nwc_request(*event, &self_clone).await {
                                                     Ok(Some(event)) => {
                                                         if let Err(e) = client.send_event(event).await {
                                                             log_warn!(logger, "Error sending NWC event: {e}");
@@ -1028,7 +1032,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                                 }
                                             }
                                             Kind::EncryptedDirectMessage => {
-                                                if let Err(e) = nostr.handle_direct_message(event, &self_clone).await {
+                                                if let Err(e) = nostr.handle_direct_message(*event, &self_clone).await {
                                                         log_error!(logger, "Error handling dm: {e}");
                                                 }
                                             }
@@ -1053,7 +1057,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                             if let Ok(current_filters) = nostr.get_filters() {
                                 if !utils::compare_filters_vec(&current_filters, &last_filters) {
                                     log_debug!(logger, "subscribing to new nwc filters");
-                                    client.subscribe(current_filters.clone()).await;
+                                    client.subscribe(current_filters.clone(), None).await;
                                     last_filters = current_filters;
                                 }
                             }
@@ -2178,6 +2182,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         zap_npub: Option<::nostr::PublicKey>,
         mut labels: Vec<String>,
         comment: Option<String>,
+        privacy_level: PrivacyLevel,
     ) -> Result<MutinyInvoice, MutinyError> {
         let response = self.lnurl_client.make_request(&lnurl.url).await?;
 
@@ -2186,7 +2191,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 let msats = amount_sats * 1000;
 
                 // if user's npub is given, do an anon zap
-                let (zap_request, comment, privacy_level) = match zap_npub {
+                let (zap_request, comment) = match zap_npub {
                     Some(zap_npub) => {
                         let data = ZapRequestData {
                             public_key: zap_npub,
@@ -2200,15 +2205,84 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                             event_id: None,
                             event_coordinate: None,
                         };
-                        let event = nip57::anonymous_zap_request(data)?;
 
-                        (Some(event.as_json()), None, PrivacyLevel::Anonymous)
+                        let event = match privacy_level {
+                            PrivacyLevel::Public => {
+                                self.nostr
+                                    .primary_key
+                                    .sign_event_builder(EventBuilder::public_zap_request(data))
+                                    .await?
+                            }
+                            PrivacyLevel::Private => {
+                                // if we have access to the keys, use those
+                                // otherwise need to implement ourselves to use with NIP-07
+                                match &self.nostr.primary_key {
+                                    NostrSigner::Keys(keys) => {
+                                        nip57::private_zap_request(data, keys)?
+                                    }
+                                    #[cfg(target_arch = "wasm32")]
+                                    NostrSigner::NIP07(_) => {
+                                        // Generate encryption key
+                                        // Since we are not doing deterministically, we will
+                                        // not be able to decrypt this ourself in the future.
+                                        // Unsure of how to best do this without access to the actual secret.
+                                        // Everything is saved locally in Mutiny so not the end of the world,
+                                        // however clients like Damus won't detect our own private zaps
+                                        // that we sent.
+                                        let private_zap_keys: Keys = Keys::generate();
+
+                                        let mut tags: Vec<Tag> =
+                                            vec![Tag::public_key(data.public_key)];
+                                        if let Some(event_id) = data.event_id {
+                                            tags.push(Tag::event(event_id));
+                                        }
+                                        let msg_builder = EventBuilder::new(
+                                            Kind::ZapPrivateMessage,
+                                            &data.message,
+                                            tags,
+                                        );
+                                        let msg = self
+                                            .nostr
+                                            .primary_key
+                                            .sign_event_builder(msg_builder)
+                                            .await?;
+                                        let created_at = msg.created_at;
+                                        let msg: String = nip57::encrypt_private_zap_message(
+                                            &mut OsRng,
+                                            private_zap_keys.secret_key().expect("just generated"),
+                                            &data.public_key,
+                                            msg.as_json(),
+                                        )?;
+
+                                        // Create final zap event
+                                        let mut tags: Vec<Tag> = data.into();
+                                        tags.push(Tag::Anon { msg: Some(msg) });
+                                        let private_zap_keys: Keys = Keys::generate();
+                                        EventBuilder::new(Kind::ZapRequest, "", tags)
+                                            .custom_created_at(created_at)
+                                            .to_event(&private_zap_keys)?
+                                    }
+                                }
+                            }
+                            PrivacyLevel::Anonymous => nip57::anonymous_zap_request(data)?,
+                            PrivacyLevel::NotAvailable => {
+                                // a zap npub with the privacy level NotAvailable
+                                // is invalid
+                                return Err(MutinyError::InvalidArgumentsError);
+                            }
+                        };
+
+                        (Some(event.as_json()), None)
                     }
-                    None => (
-                        None,
-                        comment.filter(|c| !c.is_empty()),
-                        PrivacyLevel::NotAvailable,
-                    ),
+                    None => {
+                        // PrivacyLevel only applicable to zaps, without
+                        // a zap npub we cannot do a zap
+                        if privacy_level != PrivacyLevel::NotAvailable {
+                            return Err(MutinyError::InvalidArgumentsError);
+                        }
+
+                        (None, comment.filter(|c| !c.is_empty()))
+                    }
                 };
 
                 let invoice = self

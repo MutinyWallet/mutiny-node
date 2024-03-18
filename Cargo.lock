@@ -244,6 +244,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomic-destructor"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4653a42bf04120a1d4e92452e006b4e3af4ab4afff8fb4af0f1bbb98418adf3e"
+dependencies = [
+ "tracing",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -437,8 +446,8 @@ checksum = "73290177011694f38ec25e165d0387ab7ea749a4b81cd4c80dae5988229f7a57"
 
 [[package]]
 name = "bitcoin-waila"
-version = "0.4.0"
-source = "git+https://github.com/mutinywallet/bitcoin-waila?rev=b8b6a4d709e438fbadeb16bdf0c577c59be4a7f2#b8b6a4d709e438fbadeb16bdf0c577c59be4a7f2"
+version = "0.4.1"
+source = "git+https://github.com/mutinywallet/bitcoin-waila?rev=311f8efcb5da9d351dd3445a4236f5f743605aa9#311f8efcb5da9d351dd3445a4236f5f743605aa9"
 dependencies = [
  "bech32",
  "bip21",
@@ -2608,9 +2617,9 @@ checksum = "61807f77802ff30975e01f4f071c8ba10c022052f98b3294119f3e615d13e5be"
 
 [[package]]
 name = "nostr"
-version = "0.28.1"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62abb4201e9d6b8b25660bebcad7bc0eb0cf25ecf9fd139c8d8c36ac455d37da"
+checksum = "255485c2f41cf8f39d4e4a1901199549f54e32def81a71a8afe05f75809f441d"
 dependencies = [
  "aes",
  "base64 0.21.7",
@@ -2638,9 +2647,9 @@ dependencies = [
 
 [[package]]
 name = "nostr-database"
-version = "0.28.0"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b03cb406ff8efa194161b1cc1f6a81e46ad7ca4029acdf69d233775cc144bb2"
+checksum = "8e15ab55f96ea5e560af0c75f1d942b1064266d443d11b2afbe51ca9ad78a018"
 dependencies = [
  "async-trait",
  "lru",
@@ -2652,12 +2661,13 @@ dependencies = [
 
 [[package]]
 name = "nostr-relay-pool"
-version = "0.28.0"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3c5f1df666ffd52c274dbf1061a51e9cf363b525202d63ac08822a309b746cd"
+checksum = "83b39b3dc3f1fe912a0f530ad8bd2e71c55608679c8c427952f71c13f0a4c545"
 dependencies = [
  "async-utility",
  "async-wsocket",
+ "atomic-destructor",
  "nostr",
  "nostr-database",
  "thiserror",
@@ -2667,9 +2677,9 @@ dependencies = [
 
 [[package]]
 name = "nostr-sdk"
-version = "0.28.0"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "531fbbb39aef79311b60488f2d4aacc5f8156d76a5fb1bb110486746b3cfe873"
+checksum = "81ed0ab9cbc3b20d3dba99337f2e0739f052ebe32133d690e212022a06a22044"
 dependencies = [
  "async-utility",
  "lnurl-pay",
@@ -2686,9 +2696,9 @@ dependencies = [
 
 [[package]]
 name = "nostr-signer"
-version = "0.28.0"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "305c33e0ddde9c4288af000cc3fee665190a4ebef4841ce5bcb3eb4a2f473e62"
+checksum = "307bdc7c26887d7e65632e66872989a19892dfe9f2c6dbd9a1d3f959c5c524d5"
 dependencies = [
  "async-utility",
  "nostr",
@@ -2698,9 +2708,9 @@ dependencies = [
 
 [[package]]
 name = "nostr-zapper"
-version = "0.28.0"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "523d787e19fbca8ad6ae4edf42db266a89d24aa3bfb1ce558ab87f3c5d10e2d5"
+checksum = "061d5eb00b430747a984ea9e41cd82c849832151b4263d8230c9c220dc2c62f8"
 dependencies = [
  "async-trait",
  "nostr",
@@ -2744,9 +2754,9 @@ dependencies = [
 
 [[package]]
 name = "nwc"
-version = "0.28.0"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bad79eb9f4819bfd6216c78bbab5310dcbe408fb1ec977b0e905e5815f57055a"
+checksum = "d1894ffe54a1e5adf8dbb22b5a290c0748ec4a88aa07fa69c4359010edea49ed"
 dependencies = [
  "async-utility",
  "nostr",

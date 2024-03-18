@@ -31,7 +31,7 @@ lightning-invoice = { version = "0.29.0" }
 thiserror = "1.0"
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 lnurl-rs = { version = "0.4.1", default-features = false }
-nostr = { version = "0.28.1", default-features = false, features = ["nip04", "nip05", "nip07", "nip47", "nip57"] }
+nostr = { version = "0.29.0", default-features = false, features = ["nip04", "nip05", "nip07", "nip47", "nip57"] }
 wasm-logger = "0.2.0"
 log = "0.4.17"
 rexie = "0.5.0"
@@ -47,7 +47,7 @@ payjoin = { version = "0.13.0", features = ["send", "base64"] }
 fedimint-core = { git = "https://github.com/fedimint/fedimint", rev = "5ade2536015a12a7e003a42b159ccc4a431e1a32" }
 moksha-core = { git = "https://github.com/ngutech21/moksha", rev = "18d99977965662d46ccec29fecdb0ce493745917" }
 
-bitcoin-waila = { git = "https://github.com/mutinywallet/bitcoin-waila", rev = "b8b6a4d709e438fbadeb16bdf0c577c59be4a7f2" }
+bitcoin-waila = { git = "https://github.com/mutinywallet/bitcoin-waila", rev = "311f8efcb5da9d351dd3445a4236f5f743605aa9" }
 
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires
