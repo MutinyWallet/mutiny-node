@@ -74,11 +74,11 @@ use crate::{
     subscription::MutinySubscriptionClient,
 };
 use crate::{nostr::NostrManager, utils::sleep};
+use ::nostr::nips::nip47::Method;
 use ::nostr::nips::nip57;
 #[cfg(target_arch = "wasm32")]
 use ::nostr::prelude::rand::rngs::OsRng;
 use ::nostr::prelude::ZapRequestData;
-use ::nostr::nips::nip47::Method;
 use ::nostr::{EventBuilder, EventId, JsonUtil, Kind};
 #[cfg(target_arch = "wasm32")]
 use ::nostr::{Keys, Tag};

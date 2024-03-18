@@ -1406,7 +1406,13 @@ impl MutinyWallet {
         commands: Option<Vec<String>>,
     ) -> Result<models::NwcProfile, MutinyJsError> {
         let commands = match commands {
-            None => vec![Method::PayInvoice],
+            None => vec![
+                Method::PayInvoice,
+                Method::GetInfo,
+                Method::GetBalance,
+                Method::LookupInvoice,
+                Method::MakeInvoice,
+            ],
             Some(strs) => strs
                 .into_iter()
                 .map(|s| Method::from_str(&s))
@@ -1437,7 +1443,13 @@ impl MutinyWallet {
         commands: Option<Vec<String>>,
     ) -> Result<models::NwcProfile, MutinyJsError> {
         let commands = match commands {
-            None => vec![Method::PayInvoice],
+            None => vec![
+                Method::PayInvoice,
+                Method::GetInfo,
+                Method::GetBalance,
+                Method::LookupInvoice,
+                Method::MakeInvoice,
+            ],
             Some(strs) => strs
                 .into_iter()
                 .map(|s| Method::from_str(&s))
