@@ -49,6 +49,7 @@ use mutiny_core::{
     nodemanager::{create_lsp_config, NodeManager},
 };
 use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
+use nostr::prelude::Method;
 use nostr::{Keys, ToBech32};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -1402,7 +1403,22 @@ impl MutinyWallet {
     pub async fn create_nwc_profile(
         &self,
         name: String,
+        commands: Option<Vec<String>>,
     ) -> Result<models::NwcProfile, MutinyJsError> {
+        let commands = match commands {
+            None => vec![
+                Method::PayInvoice,
+                Method::GetInfo,
+                Method::GetBalance,
+                Method::LookupInvoice,
+                Method::MakeInvoice,
+            ],
+            Some(strs) => strs
+                .into_iter()
+                .map(|s| Method::from_str(&s))
+                .collect::<Result<_, _>>()
+                .map_err(|_| MutinyJsError::InvalidArgumentsError)?,
+        };
         Ok(self
             .inner
             .nostr
@@ -1410,6 +1426,7 @@ impl MutinyWallet {
                 ProfileType::Normal { name },
                 SpendingConditions::default(),
                 NwcProfileTag::General,
+                commands,
             )
             .await?
             .into())
@@ -1423,7 +1440,22 @@ impl MutinyWallet {
         budget: u64,
         period: BudgetPeriod,
         single_max: Option<u64>,
+        commands: Option<Vec<String>>,
     ) -> Result<models::NwcProfile, MutinyJsError> {
+        let commands = match commands {
+            None => vec![
+                Method::PayInvoice,
+                Method::GetInfo,
+                Method::GetBalance,
+                Method::LookupInvoice,
+                Method::MakeInvoice,
+            ],
+            Some(strs) => strs
+                .into_iter()
+                .map(|s| Method::from_str(&s))
+                .collect::<Result<_, _>>()
+                .map_err(|_| MutinyJsError::InvalidArgumentsError)?,
+        };
         let budget = BudgetedSpendingConditions {
             budget,
             period: period.into(),
@@ -1435,7 +1467,12 @@ impl MutinyWallet {
         Ok(self
             .inner
             .nostr
-            .create_new_nwc_profile(ProfileType::Normal { name }, sp, NwcProfileTag::General)
+            .create_new_nwc_profile(
+                ProfileType::Normal { name },
+                sp,
+                NwcProfileTag::General,
+                commands,
+            )
             .await?
             .into())
     }

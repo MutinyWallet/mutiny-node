@@ -74,6 +74,7 @@ use crate::{
     subscription::MutinySubscriptionClient,
 };
 use crate::{nostr::NostrManager, utils::sleep};
+use ::nostr::nips::nip47::Method;
 use ::nostr::nips::nip57;
 #[cfg(target_arch = "wasm32")]
 use ::nostr::prelude::rand::rngs::OsRng;
@@ -94,6 +95,7 @@ use futures_util::join;
 use hex_conservative::{DisplayHex, FromHex};
 #[cfg(target_arch = "wasm32")]
 use instant::Instant;
+use lightning::chain::BestBlock;
 use lightning::ln::PaymentHash;
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
@@ -130,7 +132,9 @@ const MELT_CASHU_TOKEN: &str = "Cashu Token Melt";
 pub trait InvoiceHandler {
     fn logger(&self) -> &MutinyLogger;
     fn skip_hodl_invoices(&self) -> bool;
-    async fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus>;
+    fn get_network(&self) -> Network;
+    async fn get_best_block(&self) -> Result<BestBlock, MutinyError>;
+    async fn lookup_payment(&self, payment_hash: &[u8; 32]) -> Option<MutinyInvoice>;
     async fn pay_invoice(
         &self,
         invoice: &Bolt11Invoice,
@@ -335,6 +339,27 @@ pub struct MutinyInvoice {
     pub inbound: bool,
     pub labels: Vec<String>,
     pub last_updated: u64,
+}
+
+#[cfg(test)]
+impl Default for MutinyInvoice {
+    fn default() -> Self {
+        MutinyInvoice {
+            bolt11: None,
+            description: None,
+            payment_hash: sha256::Hash::all_zeros(),
+            preimage: None,
+            payee_pubkey: None,
+            amount_sats: None,
+            expire: 0,
+            status: HTLCStatus::Pending,
+            privacy_level: PrivacyLevel::NotAvailable,
+            fees_paid: None,
+            inbound: false,
+            labels: vec![],
+            last_updated: 0,
+        }
+    }
 }
 
 impl MutinyInvoice {
@@ -1653,6 +1678,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                 period: BudgetPeriod::Month,
                             }),
                             NwcProfileTag::Subscription,
+                            vec![Method::PayInvoice], // subscription only needs pay invoice
                         )
                         .await?
                         .nwc_uri
@@ -1662,6 +1688,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                             ProfileType::Reserved(ReservedProfile::MutinySubscription),
                             SpendingConditions::RequireApproval,
                             NwcProfileTag::Subscription,
+                            vec![Method::PayInvoice], // subscription only needs pay invoice
                         )
                         .await?
                         .nwc_uri
@@ -2449,11 +2476,19 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
         self.skip_hodl_invoices
     }
 
-    async fn get_outbound_payment_status(&self, payment_hash: &[u8; 32]) -> Option<HTLCStatus> {
+    fn get_network(&self) -> Network {
+        self.network
+    }
+
+    async fn get_best_block(&self) -> Result<BestBlock, MutinyError> {
+        let node = self.node_manager.get_node_by_key_or_first(None).await?;
+        Ok(node.channel_manager.current_best_block())
+    }
+
+    async fn lookup_payment(&self, payment_hash: &[u8; 32]) -> Option<MutinyInvoice> {
         self.get_invoice_by_hash(&sha256::Hash::from_byte_array(*payment_hash))
             .await
             .ok()
-            .map(|p| p.status)
     }
 
     async fn pay_invoice(
