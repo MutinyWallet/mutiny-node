@@ -710,6 +710,8 @@ pub struct TagItem {
     primal_image_url: Option<String>,
     /// Epoch time in seconds when this tag was last used
     pub last_used_time: u64,
+    /// If we follow this npub on nostr
+    pub is_followed: bool,
 }
 
 impl PartialOrd for TagItem {
@@ -773,8 +775,8 @@ impl TagItem {
     }
 }
 
-impl From<(String, MutinyContact)> for TagItem {
-    fn from((id, contact): (String, MutinyContact)) -> Self {
+impl TagItem {
+    pub fn from(id: String, contact: MutinyContact, is_followed: bool) -> Self {
         TagItem {
             id,
             kind: TagKind::Contact,
@@ -790,6 +792,7 @@ impl From<(String, MutinyContact)> for TagItem {
             }),
             image_url: contact.image_url,
             last_used_time: contact.last_used,
+            is_followed,
         }
     }
 }
@@ -807,8 +810,9 @@ impl From<labels::TagItem> for TagItem {
                 image_url: None,
                 primal_image_url: None,
                 last_used_time: item.last_used_time,
+                is_followed: false,
             },
-            labels::TagItem::Contact(contact) => contact.into(),
+            labels::TagItem::Contact((id, contact)) => TagItem::from(id, contact, false),
         }
     }
 }

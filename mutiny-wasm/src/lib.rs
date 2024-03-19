@@ -1110,12 +1110,18 @@ impl MutinyWallet {
 
         // add contacts to the activity
         let contacts = self.inner.node_manager.get_contacts()?;
+        let follows = self.inner.nostr.get_follow_list()?;
         for a in activity.iter_mut() {
             // find labels that have a contact and add them to the item
             for label in a.labels.iter() {
                 if let Some(contact) = contacts.get(label) {
+                    let is_followed = contact
+                        .npub
+                        .as_ref()
+                        .map(|n| follows.contains(n))
+                        .unwrap_or(false);
                     a.contacts
-                        .push(TagItem::from((label.clone(), contact.clone())));
+                        .push(TagItem::from(label.clone(), contact.clone(), is_followed));
                 }
             }
             // remove labels that have a contact to prevent duplicates
@@ -1141,11 +1147,18 @@ impl MutinyWallet {
             None => return Ok(JsValue::from_serde(&activity)?),
         };
 
+        let follows = self.inner.nostr.get_follow_list()?;
+        let is_followed = contact
+            .npub
+            .as_ref()
+            .map(|n| follows.contains(n))
+            .unwrap_or(false);
+
         // if we have a contact, add it to the activity item, remove it as a label
         // This is the same as we do in get_activity
         for a in activity.iter_mut() {
             a.contacts
-                .push(TagItem::from((label.clone(), contact.clone())));
+                .push(TagItem::from(label.clone(), contact.clone(), is_followed));
             a.labels.retain(|l| l != &label);
         }
 
@@ -1252,24 +1265,68 @@ impl MutinyWallet {
     }
 
     pub async fn get_contacts(&self) -> Result<JsValue /* Map<String, TagItem>*/, MutinyJsError> {
+        let follows = self.inner.nostr.get_follow_list()?;
         Ok(JsValue::from_serde(
             &self
                 .inner
                 .node_manager
                 .get_contacts()?
                 .into_iter()
-                .map(|(k, v)| (k.clone(), (k, v).into()))
+                .map(|(id, c)| {
+                    let is_followed = c
+                        .npub
+                        .as_ref()
+                        .map(|n| follows.contains(n))
+                        .unwrap_or(false);
+                    (id.clone(), TagItem::from(id, c, is_followed))
+                })
                 .collect::<HashMap<String, TagItem>>(),
         )?)
     }
 
+    /// Gets all contacts sorted by last used
     pub async fn get_contacts_sorted(&self) -> Result<JsValue /* Vec<TagItem>*/, MutinyJsError> {
+        let follows = self.inner.nostr.get_follow_list()?;
         let mut contacts: Vec<TagItem> = self
             .inner
             .node_manager
             .get_contacts()?
             .into_iter()
-            .map(|v| v.into())
+            .map(|(id, c)| {
+                let is_followed = c
+                    .npub
+                    .as_ref()
+                    .map(|n| follows.contains(n))
+                    .unwrap_or(false);
+                TagItem::from(id, c, is_followed)
+            })
+            .collect();
+
+        contacts.sort();
+
+        Ok(JsValue::from_serde(&contacts)?)
+    }
+
+    /// Get the contacts that are followed by the user sorted by last used
+    pub async fn get_follows_sorted(&self) -> Result<JsValue /* Vec<TagItem>*/, MutinyJsError> {
+        let follows = self.inner.nostr.get_follow_list()?;
+        let mut contacts: Vec<TagItem> = self
+            .inner
+            .node_manager
+            .get_contacts()?
+            .into_iter()
+            .flat_map(|(id, c)| {
+                let is_followed = c
+                    .npub
+                    .as_ref()
+                    .map(|n| follows.contains(n))
+                    .unwrap_or(false);
+                if is_followed {
+                    Some(TagItem::from(id, c, is_followed))
+                } else {
+                    None
+                }
+            })
             .collect();
 
         contacts.sort();
@@ -1278,11 +1335,18 @@ impl MutinyWallet {
     }
 
     pub fn get_tag_item(&self, label: String) -> Result<Option<TagItem>, MutinyJsError> {
-        Ok(self
-            .inner
-            .node_manager
-            .get_contact(&label)?
-            .map(|c| (label, c).into()))
+        match self.inner.node_manager.get_contact(&label)? {
+            Some(contact) => {
+                let follows = self.inner.nostr.get_follow_list()?;
+                let is_followed = contact
+                    .npub
+                    .as_ref()
+                    .map(|n| follows.contains(n))
+                    .unwrap_or(false);
+                Ok(Some(TagItem::from(label, contact, is_followed)))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Create a new contact from an existing label and returns the new identifying label
@@ -1368,7 +1432,15 @@ impl MutinyWallet {
         let contact = self.inner.node_manager.get_contact_for_npub(npub)?;
 
         match contact {
-            Some((id, c)) => Ok(Some((id, c).into())),
+            Some((id, c)) => {
+                let follows = self.inner.nostr.get_follow_list()?;
+                let is_followed = c
+                    .npub
+                    .as_ref()
+                    .map(|n| follows.contains(n))
+                    .unwrap_or(false);
+                Ok(Some(TagItem::from(id, c, is_followed)))
+            }
             None => Ok(None),
         }
     }
@@ -1767,6 +1839,32 @@ impl MutinyWallet {
         let npub = parse_npub_or_nip05(&npub_str).await?;
         self.inner.sync_nostr_contacts(npub).await?;
         Ok(())
+    }
+
+    /// Gets the list of npubs we're following
+    pub async fn get_follow_list(
+        &self,
+    ) -> Result<JsValue /* Vec<nostr::PublicKey> */, MutinyJsError> {
+        let list = self.inner.nostr.get_follow_list()?;
+        let npubs: Vec<String> = list
+            .into_iter()
+            .map(|n| n.to_bech32().expect("bech32"))
+            .collect();
+        Ok(JsValue::from_serde(&npubs)?)
+    }
+
+    /// Follows the npub on nostr if we're not already following
+    pub async fn follow_npub(&self, npub: String) -> Result<(), MutinyJsError> {
+        let npub = parse_npub(&npub)?;
+        Ok(self.inner.nostr.follow_npub(npub).await?)
+    }
+
+    /// Unfollows the npub on nostr if we're following them
+    ///
+    /// Returns true if we were following them before
+    pub async fn unfollow_npub(&self, npub: String) -> Result<(), MutinyJsError> {
+        let npub = parse_npub(&npub)?;
+        Ok(self.inner.nostr.unfollow_npub(npub).await?)
     }
 
     /// Get dm conversation between us and given npub
