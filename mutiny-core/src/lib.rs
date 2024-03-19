@@ -972,6 +972,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     /// Starts a background process that will watch for nostr events
     pub(crate) async fn start_nostr(&self) {
+        // spawn thread to fetch nostr events for NWC, DMs, etc.
         let nostr = self.nostr.clone();
         let logger = self.logger.clone();
         let stop = self.stop.clone();
@@ -1095,6 +1096,25 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 if let Err(e) = client.disconnect().await {
                     log_warn!(logger, "Error disconnecting from relays: {e}");
                 }
+            }
+        });
+
+        // spawn thread to sync nostr profile and contacts
+        let self_clone = self.clone();
+        utils::spawn(async move {
+            // keep trying until it succeeds
+            loop {
+                match self_clone.sync_nostr().await {
+                    Ok(_) => break,
+                    Err(e) => {
+                        log_error!(self_clone.logger, "Failed to sync nostr: {e}");
+                        sleep(5_000).await;
+                    }
+                }
+
+                if self_clone.stop.load(Ordering::Relaxed) {
+                    break;
+                };
             }
         });
     }
