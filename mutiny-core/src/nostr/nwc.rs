@@ -23,6 +23,7 @@ use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Tag, Tim
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::str::FromStr;
+use url::Url;
 
 pub(crate) const PENDING_NWC_EVENTS_KEY: &str = "pending_nwc_events";
 
@@ -297,6 +298,7 @@ impl NostrWalletConnect {
     /// Create Nostr Wallet Auth Confirmation event
     pub fn create_auth_confirmation_event(
         &self,
+        uri_relay: Url,
         secret: String,
         commands: Vec<Method>,
     ) -> anyhow::Result<Option<Event>> {
@@ -305,10 +307,17 @@ impl NostrWalletConnect {
             return Ok(None);
         }
 
+        // if the relay is the same as the profile, we don't need to send it
+        let relay = if uri_relay == Url::parse(&self.profile.relay)? {
+            None
+        } else {
+            Some(self.profile.relay.clone())
+        };
+
         let json = NIP49Confirmation {
             secret,
             commands,
-            relay: Some(self.profile.relay.clone()),
+            relay,
         };
         let content = encrypt(
             self.server_key.secret_key()?,
