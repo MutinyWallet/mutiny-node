@@ -6,7 +6,7 @@ use crate::nostr::nwc::{
     SpendingConditions, PENDING_NWC_EVENTS_KEY,
 };
 use crate::nostr::primal::PrimalClient;
-use crate::storage::MutinyStorage;
+use crate::storage::{MutinyStorage, NOSTR_CONTACT_LIST};
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
 use crate::{labels::LabelStorage, InvoiceHandler};
 use crate::{utils, HTLCStatus};
@@ -196,10 +196,27 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(received_dm_filter)
     }
 
+    /// Filter for getting updates to our nostr contacts list
+    fn get_contacts_list_filter(&self) -> Result<Filter, MutinyError> {
+        let event = self.storage.get_data::<Event>(NOSTR_CONTACT_LIST)?;
+
+        // listen for latest contact list events
+        let time_stamp = match event.map(|e| e.created_at) {
+            None => Timestamp::from(0),
+            Some(time) => time + 1_i64, // add one so we get only new events
+        };
+
+        Ok(Filter::new()
+            .kind(Kind::ContactList)
+            .author(self.public_key)
+            .since(time_stamp))
+    }
+
     pub fn get_filters(&self) -> Result<Vec<Filter>, MutinyError> {
         let mut nwc = self.get_nwc_filters()?;
         let dm = self.get_dm_filter()?;
-        nwc.push(dm);
+        let contacts_list = self.get_contacts_list_filter()?;
+        nwc.extend([dm, contacts_list]);
 
         Ok(nwc)
     }
