@@ -12,6 +12,12 @@ pub struct Config {
     #[clap(long)]
     /// Password used for encrypting sensitive data in database
     pub password: Option<String>,
+    #[clap(default_value_t = String::from("0.0.0.0"), long)]
+    /// Bind address for mutiny server
+    pub bind: String,
+    #[clap(default_value_t = 3000, long)]
+    /// Port for mutiny server
+    pub port: u16,
     #[clap(default_value_t = String::from("signet"), short, long)]
     /// Network to run on ["bitcoin", "testnet", "signet, "regtest"]
     pub network: String,

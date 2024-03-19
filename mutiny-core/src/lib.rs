@@ -657,6 +657,34 @@ pub struct MutinyWalletConfig {
     skip_hodl_invoices: bool,
 }
 
+impl MutinyWalletConfig {
+    pub fn new(
+        xprivkey: ExtendedPrivKey,
+        network: Network,
+        esplora: Option<String>,
+        rgs: Option<String>,
+        lsp: Option<String>,
+    ) -> MutinyWalletConfig {
+        MutinyWalletConfig {
+            xprivkey,
+            network,
+            user_esplora_url: esplora,
+            user_rgs_url: rgs,
+            lsp_url: lsp,
+            lsp_token: None,
+            lsp_connection_string: None,
+            auth_client: None,
+            subscription_url: None,
+            scorer_url: None,
+            primal_url: None,
+            do_not_connect_peers: true,
+            skip_device_lock: false,
+            safe_mode: false,
+            skip_hodl_invoices: true,
+        }
+    }
+}
+
 pub struct MutinyWalletBuilder<S: MutinyStorage> {
     xprivkey: ExtendedPrivKey,
     nostr_key_source: NostrKeySource,

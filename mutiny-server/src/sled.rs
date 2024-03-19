@@ -1,11 +1,13 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bitcoin::hashes::serde::{Deserialize, Serialize};
+use futures_util::lock::Mutex;
 use mutiny_core::encrypt::{encryption_key_from_pass, Cipher};
 use mutiny_core::error::MutinyError;
-use mutiny_core::storage::{DeviceLock, MutinyStorage};
+use mutiny_core::storage::{DelayedKeyValueItem, DeviceLock, MutinyStorage};
 use mutiny_core::vss::MutinyVssClient;
 use sled::IVec;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -60,16 +62,23 @@ impl MutinyStorage for SledStorage {
         None
     }
 
-    fn set<T>(&self, key: String, value: T) -> Result<(), MutinyError>
-    where
-        T: Serialize,
-    {
-        let json = serde_json::to_string(&value).map_err(|e| {
-            MutinyError::Other(anyhow!("Error serializing value: {e} for key: {key}"))
-        })?;
-        self.db.insert(&key, json.as_bytes()).map_err(|e| {
-            MutinyError::Other(anyhow!("Error inserting key: {e} into sled: {key}"))
-        })?;
+    fn set(&self, items: Vec<(String, impl Serialize)>) -> Result<(), MutinyError> {
+        let items = items
+            .into_iter()
+            .map(|(k, v)| {
+                serde_json::to_string(&v)
+                    .map_err(|e| {
+                        MutinyError::Other(anyhow!("Error serializing value: {e} for key: {k}"))
+                    })
+                    .map(|d| (k, d))
+            })
+            .collect::<Result<Vec<(String, String)>, MutinyError>>()?;
+
+        for (k, v) in items {
+            self.db
+                .insert(&k, v.as_bytes())
+                .map_err(|e| MutinyError::Other(anyhow!("Error inserting key: {e} into sled: {k}")))?;
+        }
 
         Ok(())
     }
@@ -112,8 +121,10 @@ impl MutinyStorage for SledStorage {
         Ok(())
     }
 
+    // TODO
     fn stop(&self) {}
 
+    // TODO
     fn connected(&self) -> Result<bool, MutinyError> {
         Ok(true)
     }
@@ -154,5 +165,9 @@ impl MutinyStorage for SledStorage {
 
     async fn fetch_device_lock(&self) -> Result<Option<DeviceLock>, MutinyError> {
         self.get_device_lock()
+    }
+
+    fn get_delayed_objects(&self) -> Arc<Mutex<HashMap<String, DelayedKeyValueItem>>> {
+        Arc::new(Mutex::new(HashMap::new()))
     }
 }
