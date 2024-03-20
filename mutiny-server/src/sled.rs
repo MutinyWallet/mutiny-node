@@ -1,11 +1,13 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bitcoin::hashes::serde::{Deserialize, Serialize};
+use futures_util::lock::Mutex;
 use mutiny_core::encrypt::{encryption_key_from_pass, Cipher};
 use mutiny_core::error::MutinyError;
-use mutiny_core::storage::{DeviceLock, MutinyStorage};
+use mutiny_core::storage::{DelayedKeyValueItem, DeviceLock, MutinyStorage};
 use mutiny_core::vss::MutinyVssClient;
 use sled::IVec;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -13,6 +15,7 @@ pub struct SledStorage {
     pub(crate) password: Option<String>,
     pub cipher: Option<Cipher>,
     db: sled::Db,
+    delayed_keys: Arc<Mutex<HashMap<String, DelayedKeyValueItem>>>,
 }
 
 impl SledStorage {
@@ -37,6 +40,7 @@ impl SledStorage {
             password,
             cipher,
             db,
+            delayed_keys: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 }
@@ -60,18 +64,23 @@ impl MutinyStorage for SledStorage {
         None
     }
 
-    fn set<T>(&self, key: String, value: T) -> Result<(), MutinyError>
-    where
-        T: Serialize,
-    {
-        let json = serde_json::to_string(&value).map_err(|e| {
-            MutinyError::Other(anyhow!("Error serializing value: {e} for key: {key}"))
-        })?;
-        self.db.insert(&key, json.as_bytes()).map_err(|e| {
-            MutinyError::Other(anyhow!("Error inserting key: {e} into sled: {key}"))
-        })?;
+    fn set(&self, items: Vec<(String, impl Serialize)>) -> Result<(), MutinyError> {
+        let mut batch = sled::Batch::default();
+        for (key, value) in items {
+            let json = serde_json::to_string(&value).map_err(|e| {
+                MutinyError::Other(anyhow!("Error serializing value: {e} for key: {key}"))
+            })?;
+            batch.insert(key.as_str(), json.as_bytes());
+        }
+        self.db
+            .apply_batch(batch)
+            .map_err(|e| MutinyError::Other(anyhow!("Error inserting keys: into sled: {e}")))?;
 
         Ok(())
+    }
+
+    fn get_delayed_objects(&self) -> Arc<Mutex<HashMap<String, DelayedKeyValueItem>>> {
+        self.delayed_keys.clone()
     }
 
     fn get<T>(&self, key: impl AsRef<str>) -> Result<Option<T>, MutinyError>

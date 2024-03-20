@@ -2706,6 +2706,7 @@ dependencies = [
  "async-trait",
  "bitcoin 0.29.2",
  "clap",
+ "futures-util",
  "log",
  "mutiny-core",
  "pretty_env_logger",
