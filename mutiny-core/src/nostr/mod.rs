@@ -113,6 +113,15 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(())
     }
 
+    /// Export the primary key's secret key if available
+    pub fn export_nsec(&self) -> Option<SecretKey> {
+        match &self.primary_key {
+            NostrSigner::Keys(keys) => keys.secret_key().ok().cloned(),
+            #[cfg(target_arch = "wasm32")]
+            NostrSigner::NIP07(_) => None,
+        }
+    }
+
     pub fn get_relays(&self) -> Vec<String> {
         let mut relays: Vec<String> = self
             .nwc
