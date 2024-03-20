@@ -158,7 +158,7 @@ pub struct Plan {
     pub amount_sat: u64,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize)]
 pub struct MutinyBalance {
     pub confirmed: u64,
     pub unconfirmed: u64,

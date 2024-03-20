@@ -2,18 +2,18 @@
 
 mod config;
 mod sled;
+mod routes;
 
 use crate::config::Config;
 use crate::sled::SledStorage;
 use axum::http::{StatusCode, Uri};
-use axum::routing::get;
-use axum::{Extension, Router, Json};
+use axum::routing::{get, post};
+use axum::{Extension, Router};
 use bitcoin::bip32::ExtendedPrivKey;
 use clap::Parser;
 use log::{debug, info};
 use mutiny_core::storage::MutinyStorage;
-use mutiny_core::{generate_seed, MutinyWallet, MutinyWalletBuilder, MutinyWalletConfig};
-use serde_json::{json, Value};
+use mutiny_core::{generate_seed, MutinyWalletBuilder, MutinyWalletConfig};
 use shutdown::Shutdown;
 use std::time::Duration;
 
@@ -66,12 +66,18 @@ async fn main() -> anyhow::Result<()> {
     //println!("mutiny server running on http://{}", &listener.into());
     println!("mutiny server running");
 
-    let state = State {
+    let state = routes::State {
         mutiny_wallet: wallet.clone(),
     };
 
     let server_router = Router::new()
-        .route("/newaddress", get(new_address))
+        .route("/newaddress", get(routes::new_address))
+        .route("/sendtoaddress", post(routes::send_to_address))
+        .route("/openchannel", post(routes::open_channel))
+        .route("/invoice", post(routes::create_invoice))
+        .route("/payinvoice", post(routes::pay_invoice))
+        .route("/balance", get(routes::get_balance))
+
         .fallback(fallback)
         .layer(Extension(state.clone()));
 
@@ -85,21 +91,6 @@ async fn main() -> anyhow::Result<()> {
     // sleep 1 second to make sure fully shutdown
     tokio::time::sleep(Duration::from_secs(1)).await;
     Ok(())
-}
-
-#[derive(Clone)]
-pub struct State {
-    pub mutiny_wallet: MutinyWallet<SledStorage>,
-}
-
-pub async fn new_address(Extension(state): Extension<State>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let address = state.mutiny_wallet.node_manager.get_new_address(vec![]).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        )
-    })?;
-    Ok(Json(json!(address)))
 }
 
 async fn fallback(uri: Uri) -> (StatusCode, String) {
