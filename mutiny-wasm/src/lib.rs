@@ -434,6 +434,15 @@ impl MutinyWallet {
         self.inner.nostr.public_key.to_bech32().expect("bech32")
     }
 
+    /// Export the user's nostr secret key if available
+    #[wasm_bindgen]
+    pub fn export_nsec(&self) -> Option<String> {
+        self.inner
+            .nostr
+            .export_nsec()
+            .map(|s| s.to_bech32().expect("bech32"))
+    }
+
     /// Returns the network of the wallet.
     #[wasm_bindgen]
     pub fn get_network(&self) -> String {
