@@ -172,6 +172,9 @@ pub enum MutinyError {
     /// Token already spent.
     #[error("Token has been already spent.")]
     TokenAlreadySpent,
+    /// Federation required.
+    #[error("A federation is required")]
+    FederationRequired,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

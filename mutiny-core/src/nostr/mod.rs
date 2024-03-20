@@ -37,6 +37,9 @@ mod primal;
 
 const PROFILE_ACCOUNT_INDEX: u32 = 0;
 const NWC_ACCOUNT_INDEX: u32 = 1;
+pub(crate) const SERVICE_ACCOUNT_INDEX: u32 = 2;
+
+pub(crate) const HERMES_CHAIN_INDEX: u32 = 0;
 
 const USER_NWC_PROFILE_START_INDEX: u32 = 1000;
 
@@ -1339,14 +1342,14 @@ impl<S: MutinyStorage> NostrManager<S> {
         xprivkey: ExtendedPrivKey,
         profile_index: u32,
     ) -> Result<(Keys, Keys), MutinyError> {
-        let client_key = Self::derive_nostr_key(
+        let client_key = derive_nostr_key(
             context,
             xprivkey,
             NWC_ACCOUNT_INDEX,
             Some(profile_index),
             Some(0),
         )?;
-        let server_key = Self::derive_nostr_key(
+        let server_key = derive_nostr_key(
             context,
             xprivkey,
             NWC_ACCOUNT_INDEX,
@@ -1355,31 +1358,6 @@ impl<S: MutinyStorage> NostrManager<S> {
         )?;
 
         Ok((client_key, server_key))
-    }
-
-    fn derive_nostr_key<C: Signing>(
-        context: &Secp256k1<C>,
-        xprivkey: ExtendedPrivKey,
-        account: u32,
-        chain: Option<u32>,
-        index: Option<u32>,
-    ) -> Result<Keys, MutinyError> {
-        let chain = match chain {
-            Some(chain) => ChildNumber::from_hardened_idx(chain)?,
-            None => ChildNumber::from_normal_idx(0)?,
-        };
-
-        let index = match index {
-            Some(index) => ChildNumber::from_hardened_idx(index)?,
-            None => ChildNumber::from_normal_idx(0)?,
-        };
-
-        let path = DerivationPath::from_str(&format!("m/44'/1237'/{account}'/{chain}/{index}"))?;
-        let key = xprivkey.derive_priv(context, &path)?;
-
-        // just converting to nostr secret key, unwrap is safe
-        let secret_key = SecretKey::from_slice(&key.private_key.secret_bytes()).unwrap();
-        Ok(Keys::new(secret_key))
     }
 
     /// Creates a new NostrManager
@@ -1396,8 +1374,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         // use provided nsec, otherwise generate it from seed
         let (primary_key, public_key) = match key_source {
             NostrKeySource::Derived => {
-                let keys =
-                    Self::derive_nostr_key(&context, xprivkey, PROFILE_ACCOUNT_INDEX, None, None)?;
+                let keys = derive_nostr_key(&context, xprivkey, PROFILE_ACCOUNT_INDEX, None, None)?;
                 let public_key = keys.public_key();
                 let signer = NostrSigner::Keys(keys);
                 (signer, public_key)
@@ -1444,6 +1421,28 @@ impl<S: MutinyStorage> NostrManager<S> {
             client,
         })
     }
+}
+
+pub fn derive_nostr_key<C: Signing>(
+    context: &Secp256k1<C>,
+    xprivkey: ExtendedPrivKey,
+    account: u32,
+    chain: Option<u32>,
+    index: Option<u32>,
+) -> Result<Keys, MutinyError> {
+    let chain = match chain {
+        Some(chain) => ChildNumber::from_hardened_idx(chain)?,
+        None => ChildNumber::from_normal_idx(0)?,
+    };
+
+    let index = match index {
+        Some(index) => ChildNumber::from_hardened_idx(index)?,
+        None => ChildNumber::from_normal_idx(0)?,
+    };
+
+    let path = DerivationPath::from_str(&format!("m/44'/1237'/{account}'/{chain}/{index}"))?;
+    let key = xprivkey.derive_priv(context, &path)?;
+    Ok(Keys::new(key.private_key.into()))
 }
 
 fn get_next_nwc_index(

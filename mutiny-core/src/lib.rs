@@ -19,6 +19,7 @@ pub mod event;
 pub mod federation;
 mod fees;
 mod gossip;
+mod hermes;
 mod key;
 mod keymanager;
 pub mod labels;

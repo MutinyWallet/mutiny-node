@@ -259,6 +259,13 @@ impl<S: MutinyStorage> BlindAuthClient<S> {
 
         Ok(())
     }
+
+    pub fn get_unblinded_info_from_token(
+        &self,
+        token: &SignedToken,
+    ) -> (fedimint_mint_client::Nonce, BlindingKey) {
+        generate_nonce(&self.secret, token.service_id, token.plan_id, token.counter)
+    }
 }
 
 async fn get_available_tokens(
@@ -301,6 +308,25 @@ async fn derive_blind_token(
     plan_id: u32,
     counter: u32,
 ) -> Result<UnsignedToken, MutinyError> {
+    let (nonce, blinding_key) = generate_nonce(secret, service_id, plan_id, counter);
+    let blinded_message = blind_message(nonce.to_message(), blinding_key);
+
+    let unsigned_token = UnsignedToken {
+        counter,
+        service_id,
+        plan_id,
+        blinded_message,
+    };
+
+    Ok(unsigned_token)
+}
+
+fn generate_nonce(
+    secret: &DerivableSecret,
+    service_id: u32,
+    plan_id: u32,
+    counter: u32,
+) -> (fedimint_mint_client::Nonce, BlindingKey) {
     let child_secret = secret
         .child_key(SERVICE_REGISTRATION_CHILD_ID)
         .child_key(ChildId(service_id.into()))
@@ -312,21 +338,13 @@ async fn derive_blind_token(
         .to_secp_key(fedimint_ln_common::bitcoin::secp256k1::SECP256K1);
 
     let nonce = fedimint_mint_client::Nonce(spend_key.public_key());
+
     let blinding_key = BlindingKey(
         child_secret
             .child_key(BLINDING_KEY_CHILD_ID)
             .to_bls12_381_key(),
     );
-    let blinded_message = blind_message(nonce.to_message(), blinding_key);
-
-    let signed_token = UnsignedToken {
-        counter,
-        service_id,
-        plan_id,
-        blinded_message,
-    };
-
-    Ok(signed_token)
+    (nonce, blinding_key)
 }
 
 // Creates the root derivation secret for the blind auth client:
