@@ -411,13 +411,16 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                 log_info!(logger, "no lsp saved, using configured one if present");
                 self.lsp_config
             }
-            Some(ref lsp) => {
-                if self.lsp_config.as_ref().is_some_and(|l| l.matches(lsp)) {
+            Some(lsp) => {
+                if self.lsp_config.as_ref().is_some_and(|l| l.matches(&lsp)) {
                     log_info!(logger, "lsp config matches saved lsp config");
                     self.lsp_config
                 } else {
-                    log_info!(logger, "lsp config does not match saved lsp config");
-                    None
+                    log_warn!(
+                        logger,
+                        "lsp config does not match saved lsp config, using saved one"
+                    );
+                    Some(lsp)
                 }
             }
         };
