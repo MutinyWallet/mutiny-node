@@ -43,7 +43,6 @@ pub mod vss;
 #[cfg(test)]
 mod test_utils;
 
-use crate::cashu::CashuHttpClient;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
@@ -52,7 +51,8 @@ use crate::storage::{
     DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX,
     PAYMENT_INBOUND_PREFIX_KEY, PAYMENT_OUTBOUND_PREFIX_KEY, SUBSCRIPTION_TIMESTAMP,
 };
-use crate::{auth::MutinyAuthClient, logging::MutinyLogger};
+use crate::{auth::MutinyAuthClient, hermes::HermesClient, logging::MutinyLogger};
+use crate::{blindauth::BlindAuthClient, cashu::CashuHttpClient};
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{
     event::{HTLCStatus, MillisatAmount, PaymentInfo},
@@ -523,6 +523,8 @@ pub struct MutinyWalletConfigBuilder {
     subscription_url: Option<String>,
     scorer_url: Option<String>,
     primal_url: Option<String>,
+    blind_auth_url: Option<String>,
+    hermes_url: Option<String>,
     do_not_connect_peers: bool,
     skip_device_lock: bool,
     pub safe_mode: bool,
@@ -571,6 +573,8 @@ impl MutinyWalletConfigBuilder {
             subscription_url: None,
             scorer_url: None,
             primal_url: None,
+            blind_auth_url: None,
+            hermes_url: None,
             do_not_connect_peers: false,
             skip_device_lock: false,
             safe_mode: false,
@@ -625,6 +629,14 @@ impl MutinyWalletConfigBuilder {
         self.primal_url = Some(primal_url);
     }
 
+    pub fn with_blind_auth_url(&mut self, blind_auth_url: String) {
+        self.blind_auth_url = Some(blind_auth_url);
+    }
+
+    pub fn with_hermes_url(&mut self, hermes_url: String) {
+        self.hermes_url = Some(hermes_url);
+    }
+
     pub fn do_not_connect_peers(&mut self) {
         self.do_not_connect_peers = true;
     }
@@ -659,6 +671,8 @@ impl MutinyWalletConfigBuilder {
             subscription_url: self.subscription_url,
             scorer_url: self.scorer_url,
             primal_url: self.primal_url,
+            blind_auth_url: self.blind_auth_url,
+            hermes_url: self.hermes_url,
             do_not_connect_peers: self.do_not_connect_peers,
             skip_device_lock: self.skip_device_lock,
             safe_mode: self.safe_mode,
@@ -682,6 +696,8 @@ pub struct MutinyWalletConfig {
     subscription_url: Option<String>,
     scorer_url: Option<String>,
     primal_url: Option<String>,
+    blind_auth_url: Option<String>,
+    hermes_url: Option<String>,
     do_not_connect_peers: bool,
     skip_device_lock: bool,
     pub safe_mode: bool,
@@ -696,6 +712,8 @@ pub struct MutinyWalletBuilder<S: MutinyStorage> {
     session_id: Option<String>,
     network: Option<Network>,
     auth_client: Option<Arc<MutinyAuthClient>>,
+    blind_auth_url: Option<String>,
+    hermes_url: Option<String>,
     subscription_url: Option<String>,
     do_not_connect_peers: bool,
     skip_hodl_invoices: bool,
@@ -714,6 +732,8 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             network: None,
             auth_client: None,
             subscription_url: None,
+            blind_auth_url: None,
+            hermes_url: None,
             do_not_connect_peers: false,
             skip_device_lock: false,
             safe_mode: false,
@@ -729,6 +749,8 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         self.safe_mode = config.safe_mode;
         self.auth_client = config.auth_client.clone();
         self.subscription_url = config.subscription_url.clone();
+        self.blind_auth_url = config.blind_auth_url.clone();
+        self.hermes_url = config.hermes_url.clone();
         self.config = Some(config);
         self
     }
@@ -747,6 +769,14 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
 
     pub fn with_subscription_url(&mut self, subscription_url: String) {
         self.subscription_url = Some(subscription_url);
+    }
+
+    pub fn with_blind_auth_url(&mut self, blind_auth_url: String) {
+        self.blind_auth_url = Some(blind_auth_url);
+    }
+
+    pub fn with_hermes_url(&mut self, hermes_url: String) {
+        self.hermes_url = Some(hermes_url);
     }
 
     pub fn with_nostr_key_source(&mut self, key_source: NostrKeySource) {
@@ -847,6 +877,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         } else {
             Arc::new(RwLock::new(HashMap::new()))
         };
+        let federation_storage = Arc::new(RwLock::new(federation_storage));
 
         if !self.skip_hodl_invoices {
             log_warn!(
@@ -863,21 +894,69 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
                 .expect("failed to make lnurl client"),
         );
 
-        let (subscription_client, auth) = if let Some(auth_client) = self.auth_client.clone() {
+        // auth manager, take from auth_client if it already exists
+        let auth = if let Some(auth_client) = self.auth_client.clone() {
+            auth_client.auth.clone()
+        } else {
+            AuthManager::new(self.xprivkey)?
+        };
+
+        // Subscription client, only usable if we have an auth client
+        let subscription_client = if let Some(auth_client) = self.auth_client.clone() {
             if let Some(subscription_url) = self.subscription_url {
-                let auth = auth_client.auth.clone();
                 let s = Arc::new(MutinySubscriptionClient::new(
                     auth_client,
                     subscription_url,
                     logger.clone(),
                 ));
-                (Some(s), auth)
+                Some(s)
             } else {
-                (None, auth_client.auth.clone())
+                None
             }
         } else {
-            let auth_manager = AuthManager::new(self.xprivkey)?;
-            (None, auth_manager)
+            None
+        };
+
+        // Blind auth client, only usable if we have an auth client
+        let blind_auth_client = if let Some(auth_client) = self.auth_client.clone() {
+            if let Some(blind_auth_url) = self.blind_auth_url {
+                let s = Arc::new(BlindAuthClient::new(
+                    self.xprivkey.clone(),
+                    auth_client,
+                    network,
+                    blind_auth_url,
+                    &self.storage,
+                    logger.clone(),
+                )?);
+                Some(s)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Hermes client, only usable if we have the blind auth client
+        let hermes_client = if let Some(blind_auth_client) = blind_auth_client.clone() {
+            if let Some(hermes_url) = self.hermes_url {
+                let s = Arc::new(
+                    HermesClient::new(
+                        self.xprivkey.clone(),
+                        hermes_url,
+                        federations.clone(),
+                        blind_auth_client,
+                        &self.storage,
+                        logger.clone(),
+                        stop.clone(),
+                    )
+                    .await?,
+                );
+                Some(s)
+            } else {
+                None
+            }
+        } else {
+            None
         };
 
         // populate the activity index
@@ -945,10 +1024,12 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             storage: self.storage,
             node_manager,
             nostr,
-            federation_storage: Arc::new(RwLock::new(federation_storage)),
+            federation_storage,
             federations,
             lnurl_client,
             subscription_client,
+            blind_auth_client,
+            hermes_client,
             auth,
             stop,
             logger,
@@ -1006,6 +1087,8 @@ pub struct MutinyWallet<S: MutinyStorage> {
     lnurl_client: Arc<LnUrlClient>,
     auth: AuthManager,
     subscription_client: Option<Arc<MutinySubscriptionClient>>,
+    blind_auth_client: Option<Arc<BlindAuthClient<S>>>,
+    hermes_client: Option<Arc<HermesClient<S>>>,
     pub stop: Arc<AtomicBool>,
     pub logger: Arc<MutinyLogger>,
     network: Network,
