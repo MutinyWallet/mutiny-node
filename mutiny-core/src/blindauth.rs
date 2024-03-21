@@ -235,7 +235,7 @@ impl<S: MutinyStorage> BlindAuthClient<S> {
             .collect::<Vec<SignedToken>>()
     }
 
-    pub async fn used_token(&self, token: SignedToken) -> Result<(), MutinyError> {
+    pub async fn used_token(&self, token: &SignedToken) -> Result<(), MutinyError> {
         // once a token has sufficiently been used, mark it as spent and save it back
         let mut token_storage_guard = self.token_storage.write().await;
 

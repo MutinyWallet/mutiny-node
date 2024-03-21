@@ -1062,6 +1062,12 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         // start the federation background processor
         mw.start_fedimint_background_checker().await;
 
+        // start the blind auth fetching process
+        mw.check_blind_tokens();
+
+        // start the hermes background process
+        mw.start_hermes()?;
+
         log_info!(
             mw.logger,
             "Final setup took {}ms",
@@ -2721,6 +2727,58 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             }
         }
         Ok(invoices)
+    }
+
+    pub async fn check_available_lnurl_name(&self, name: String) -> Result<bool, MutinyError> {
+        if let Some(hermes_client) = self.hermes_client.clone() {
+            Ok(hermes_client.check_available_name(name).await?)
+        } else {
+            Err(MutinyError::NotFound)
+        }
+    }
+
+    pub async fn reserve_lnurl_name(&self, name: String) -> Result<(), MutinyError> {
+        if let Some(hermes_client) = self.hermes_client.clone() {
+            Ok(hermes_client.reserve_name(name).await?)
+        } else {
+            Err(MutinyError::NotFound)
+        }
+    }
+
+    /// Starts up the hermes client if available
+    pub fn start_hermes(&self) -> Result<(), MutinyError> {
+        if let Some(hermes_client) = self.hermes_client.clone() {
+            hermes_client.start()?
+        }
+        Ok(())
+    }
+
+    /// Checks available blind tokens
+    /// Only needs to be ran once successfully on startup
+    pub fn check_blind_tokens(&self) {
+        if let Some(blind_auth_client) = self.blind_auth_client.clone() {
+            let logger = self.logger.clone();
+            let stop = self.stop.clone();
+            utils::spawn(async move {
+                loop {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    };
+
+                    match blind_auth_client.redeem_available_tokens().await {
+                        Ok(_) => {
+                            log_debug!(logger, "checked available tokens");
+                            break;
+                        }
+                        Err(e) => {
+                            log_error!(logger, "error checking redeeming available tokens: {e}")
+                        }
+                    }
+
+                    sleep(10_000).await;
+                }
+            });
+        }
     }
 }
 

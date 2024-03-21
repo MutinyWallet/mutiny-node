@@ -108,6 +108,9 @@ impl<S: MutinyStorage> HermesClient<S> {
         })
     }
 
+    /// Starts the hermes background checker
+    /// This should only error if there's an initial unrecoverable error
+    /// Otherwise it will loop in the background until a stop signal
     pub fn start(&self) -> Result<(), MutinyError> {
         let logger = self.logger.clone();
         let stop = self.stop.clone();
@@ -229,11 +232,15 @@ impl<S: MutinyStorage> HermesClient<S> {
             sig: unblinded_sig,
         };
         register_name(&self.http_client.clone(), &self.base_url, req).await?;
+        // TODO store the fact that this succeeded
+
+        // Mark the token as spent successfully
+        self.blind_auth.used_token(available_paid_token).await?;
 
         Ok(())
     }
 
-    pub async fn get_first_federation(&self) -> Option<FederationIdentity> {
+    async fn get_first_federation(&self) -> Option<FederationIdentity> {
         let federations = self.federations.read().await;
         match federations.iter().next() {
             Some((_, n)) => Some(n.get_mutiny_federation_identity().await),
