@@ -411,13 +411,18 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                 log_info!(logger, "no lsp saved, using configured one if present");
                 self.lsp_config
             }
-            Some(ref lsp) => {
-                if self.lsp_config.as_ref().is_some_and(|l| l.matches(lsp)) {
+            Some(lsp) => {
+                if self.lsp_config.as_ref().is_some_and(|l| l.matches(&lsp)) {
                     log_info!(logger, "lsp config matches saved lsp config");
-                    self.lsp_config
+                    // prefer node index lsp config over configured one
+                    // as it may have extra info like the LSP connection info
+                    Some(lsp)
                 } else {
-                    log_info!(logger, "lsp config does not match saved lsp config");
-                    None
+                    log_warn!(
+                        logger,
+                        "lsp config does not match saved lsp config, using saved one"
+                    );
+                    Some(lsp)
                 }
             }
         };
@@ -448,7 +453,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
 
         let (lsp_client, lsp_client_pubkey, liquidity) = match lsp_config {
             Some(LspConfig::VoltageFlow(config)) => {
-                let lsp = AnyLsp::new_voltage_flow(config).await?;
+                let lsp = AnyLsp::new_voltage_flow(config, logger.clone()).await?;
                 let pubkey = lsp.get_lsp_pubkey().await;
                 (Some(lsp), Some(pubkey), None)
             }

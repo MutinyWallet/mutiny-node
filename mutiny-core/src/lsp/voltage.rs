@@ -1,13 +1,17 @@
+use crate::logging::MutinyLogger;
 use crate::lsp::{FeeRequest, InvoiceRequest, Lsp, LspConfig};
 use crate::{error::MutinyError, utils};
 use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
 use lightning::ln::PaymentHash;
+use lightning::log_error;
+use lightning::util::logger::Logger;
 use lightning_invoice::Bolt11Invoice;
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use super::FeeResponse;
 
@@ -60,12 +64,13 @@ impl<'de> Deserialize<'de> for VoltageConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct LspClient {
     pub pubkey: PublicKey,
     pub connection_string: String,
     pub url: String,
     pub http_client: Client,
+    pub logger: Arc<MutinyLogger>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -120,13 +125,16 @@ const PROPOSAL_PATH: &str = "/api/v1/proposal";
 const FEE_PATH: &str = "/api/v1/fee";
 
 impl LspClient {
-    pub async fn new(config: VoltageConfig) -> Result<Self, MutinyError> {
+    pub async fn new(
+        config: VoltageConfig,
+        logger: Arc<MutinyLogger>,
+    ) -> Result<Self, MutinyError> {
         let http_client = Client::new();
 
         // if we have both pubkey and connection string, use them, otherwise request them from the LSP
         let (pubkey, connection_string) = match (config.pubkey, config.connection_string) {
             (Some(pk), Some(string)) => (pk, string),
-            _ => Self::fetch_connection_info(&http_client, &config.url).await?,
+            _ => Self::fetch_connection_info(&http_client, &config.url, &logger).await?,
         };
 
         Ok(LspClient {
@@ -134,6 +142,7 @@ impl LspClient {
             url: config.url,
             connection_string,
             http_client,
+            logger,
         })
     }
 
@@ -141,17 +150,26 @@ impl LspClient {
     async fn fetch_connection_info(
         http_client: &Client,
         url: &str,
+        logger: &MutinyLogger,
     ) -> Result<(PublicKey, String), MutinyError> {
         let request = http_client
             .get(format!("{}{}", url, GET_INFO_PATH))
             .build()
-            .map_err(|_| MutinyError::LspGenericError)?;
-        let response: reqwest::Response = utils::fetch_with_timeout(http_client, request).await?;
-
-        let get_info_response: GetInfoResponse = response
-            .json()
+            .map_err(|e| {
+                log_error!(logger, "Error building connection info request: {e}");
+                MutinyError::LspGenericError
+            })?;
+        let response: reqwest::Response = utils::fetch_with_timeout(http_client, request)
             .await
-            .map_err(|_| MutinyError::LspGenericError)?;
+            .map_err(|e| {
+                log_error!(logger, "Error fetching connection info: {e}");
+                MutinyError::LspGenericError
+            })?;
+
+        let get_info_response: GetInfoResponse = response.json().await.map_err(|e| {
+            log_error!(logger, "Error fetching connection info: {e}");
+            MutinyError::LspGenericError
+        })?;
 
         let connection_string = get_info_response
             .connection_methods
@@ -185,7 +203,7 @@ impl LspClient {
     /// and set them on the LSP client
     pub(crate) async fn set_connection_info(&mut self) -> Result<(), MutinyError> {
         let (pubkey, connection_string) =
-            Self::fetch_connection_info(&self.http_client, &self.url).await?;
+            Self::fetch_connection_info(&self.http_client, &self.url, &self.logger).await?;
         self.pubkey = pubkey;
         self.connection_string = connection_string;
         Ok(())
@@ -276,20 +294,25 @@ impl Lsp for LspClient {
             utils::fetch_with_timeout(&self.http_client, request).await?;
         let status = response.status().as_u16();
         if (200..300).contains(&status) {
-            let proposal_response: ProposalResponse = response
-                .json()
-                .await
-                .map_err(|_| MutinyError::LspGenericError)?;
+            let proposal_response: ProposalResponse = response.json().await.map_err(|e| {
+                log_error!(
+                    self.logger,
+                    "Error fetching invoice, could not parse response: {e}"
+                );
+                MutinyError::LspGenericError
+            })?;
 
             let inv = Bolt11Invoice::from_str(&proposal_response.jit_bolt11)?;
             return Ok(inv);
         } else if response.status().as_u16() >= 400 {
             // If it's not OK, copy the response body to a string and try to parse as ErrorResponse
-            let response_body = response
-                .text()
-                .await
-                .map_err(|_| MutinyError::LspGenericError)?;
-
+            let response_body = response.text().await.map_err(|e| {
+                log_error!(
+                    self.logger,
+                    "Error fetching invoice, could not parse error response: {e}"
+                );
+                MutinyError::LspGenericError
+            })?;
             if let Ok(error_body) = serde_json::from_str::<ErrorResponse>(&response_body) {
                 if error_body.error == "Internal Server Error" {
                     if error_body.message == "Cannot fund new channel at this time" {
@@ -300,8 +323,18 @@ impl Lsp for LspClient {
                         return Err(MutinyError::LspAmountTooHighError);
                     }
                 }
+            } else {
+                log_error!(
+                    self.logger,
+                    "Error fetching invoice, could not parse error response: {response_body}"
+                );
             }
         }
+
+        log_error!(
+            self.logger,
+            "Error fetching invoice, got unexpected status code from LSP {status}"
+        );
 
         Err(MutinyError::LspGenericError)
     }
@@ -313,13 +346,20 @@ impl Lsp for LspClient {
             .json(&fee_request)
             .build()
             .map_err(|_| MutinyError::LspGenericError)?;
-        let response: reqwest::Response =
-            utils::fetch_with_timeout(&self.http_client, request).await?;
-
-        let fee_response: FeeResponse = response
-            .json()
+        let response: reqwest::Response = utils::fetch_with_timeout(&self.http_client, request)
             .await
-            .map_err(|_| MutinyError::LspGenericError)?;
+            .map_err(|e| {
+                log_error!(self.logger, "Error fetching fee from LSP: {e}");
+                MutinyError::LspGenericError
+            })?;
+
+        let fee_response: FeeResponse = response.json().await.map_err(|e| {
+            log_error!(
+                self.logger,
+                "Error fetching fee from LSP, could not parse response: {e}"
+            );
+            MutinyError::LspGenericError
+        })?;
 
         Ok(fee_response)
     }
@@ -347,22 +387,27 @@ impl Lsp for LspClient {
 
 #[cfg(test)]
 mod test {
+    use crate::logging::MutinyLogger;
     use crate::lsp::voltage::{LspClient, VoltageConfig};
     use crate::test_utils::{create_dummy_invoice, create_dummy_invoice_with_payment_hash};
     use bitcoin::hashes::{sha256, Hash};
     use bitcoin::secp256k1::{Secp256k1, SecretKey};
     use bitcoin::Network;
     use futures::executor::block_on;
+    use std::sync::Arc;
 
     #[test]
     fn test_verify_invoice() {
         let secret = SecretKey::from_slice(&[0x42; 32]).unwrap();
         let pk = secret.public_key(&Secp256k1::new());
-        let client = block_on(LspClient::new(VoltageConfig {
-            url: "http://localhost:8080".to_string(),
-            pubkey: Some(pk),
-            connection_string: Some(format!("{pk}@localhost:9735")),
-        }))
+        let client = block_on(LspClient::new(
+            VoltageConfig {
+                url: "http://localhost:8080".to_string(),
+                pubkey: Some(pk),
+                connection_string: Some(format!("{pk}@localhost:9735")),
+            },
+            Arc::new(MutinyLogger::default()),
+        ))
         .unwrap();
 
         let invoice_amount_msats = 100_000_000; // 100k sats
