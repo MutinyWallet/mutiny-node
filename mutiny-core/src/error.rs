@@ -2,6 +2,7 @@ use aes::cipher::block_padding::UnpadError;
 use bdk::signer::SignerError;
 use bdk::wallet::error::BuildFeeBumpError;
 use bdk::wallet::tx_builder::AddUtxoError;
+use hex_conservative::HexToArrayError;
 use lightning::ln::channelmanager::RetryableSendFailure;
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning_invoice::ParseOrSemanticError;
@@ -448,6 +449,14 @@ impl From<bitcoin::hashes::hex::Error> for MutinyError {
     fn from(_e: bitcoin::hashes::hex::Error) -> Self {
         MutinyError::ReadError {
             source: MutinyStorageError::Other(anyhow::anyhow!("Failed to decode hex")),
+        }
+    }
+}
+
+impl From<HexToArrayError> for MutinyError {
+    fn from(value: HexToArrayError) -> Self {
+        MutinyError::ReadError {
+            source: MutinyStorageError::Other(anyhow::anyhow!(value)),
         }
     }
 }

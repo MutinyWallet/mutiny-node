@@ -1,5 +1,6 @@
+use crate::event::HTLCStatus;
 use crate::logging::MutinyLogger;
-use crate::nodemanager::{NodeStorage, DEVICE_LOCK_INTERVAL_SECS};
+use crate::nodemanager::{ChannelClosure, NodeStorage, DEVICE_LOCK_INTERVAL_SECS};
 use crate::utils::{now, spawn};
 use crate::vss::{MutinyVssClient, VssKeyValueItem};
 use crate::{
@@ -22,7 +23,7 @@ use lightning::{log_error, log_trace};
 use nostr::Metadata;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -39,8 +40,9 @@ pub const LAST_NWC_SYNC_TIME_KEY: &str = "last_nwc_sync_time";
 pub(crate) const DEVICE_ID_KEY: &str = "device_id";
 pub const DEVICE_LOCK_KEY: &str = "device_lock";
 pub(crate) const EXPECTED_NETWORK_KEY: &str = "network";
-const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
-const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
+pub const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
+pub const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
+pub(crate) const ONCHAIN_PREFIX: &str = "onchain_tx/";
 pub const LAST_DM_SYNC_TIME_KEY: &str = "last_dm_sync_time";
 pub const NOSTR_PROFILE_METADATA: &str = "nostr_profile_metadata";
 const DELAYED_WRITE_MS: i32 = 50;
@@ -107,6 +109,29 @@ pub fn decrypt_value(
     Ok(json)
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IndexItem {
+    pub timestamp: Option<u64>,
+    pub key: String,
+}
+
+impl PartialOrd for IndexItem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for IndexItem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (self.timestamp, other.timestamp) {
+            (Some(a), Some(b)) => b.cmp(&a).then_with(|| self.key.cmp(&other.key)),
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (None, None) => self.key.cmp(&other.key),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionedValue {
     pub version: u32,
@@ -151,6 +176,10 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
 
     /// Get the VSS client used for storage
     fn vss_client(&self) -> Option<Arc<MutinyVssClient>>;
+
+    /// An index of the activity in the storage, this should be a list of (timestamp, key) tuples
+    /// This is used to for getting a sorted list of keys quickly
+    fn activity_index(&self) -> Arc<RwLock<BTreeSet<IndexItem>>>;
 
     /// Set a value in the storage, the value will already be encrypted if needed
     fn set(&self, items: Vec<(String, impl Serialize)>) -> Result<(), MutinyError>;
@@ -473,6 +502,16 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
         self.set_data(FEE_ESTIMATES_KEY.to_string(), fees, None)
     }
 
+    /// Gets a channel closure and handles setting the user_channel_id if needed
+    fn get_channel_closure(&self, key: &str) -> Result<Option<ChannelClosure>, MutinyError> {
+        if let Some(mut closure) = self.get_data::<ChannelClosure>(key)? {
+            closure.set_user_channel_id_from_key(key)?;
+            Ok(Some(closure))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Get the current bitcoin price cache from storage
     fn get_bitcoin_price_cache(&self) -> Result<HashMap<String, f32>, MutinyError> {
         Ok(self.get_data(BITCOIN_PRICE_CACHE_KEY)?.unwrap_or_default())
@@ -567,6 +606,7 @@ pub struct MemoryStorage {
     pub memory: Arc<RwLock<HashMap<String, Value>>>,
     pub vss_client: Option<Arc<MutinyVssClient>>,
     delayed_keys: Arc<Mutex<HashMap<String, DelayedKeyValueItem>>>,
+    pub activity_index: Arc<RwLock<BTreeSet<IndexItem>>>,
 }
 
 impl MemoryStorage {
@@ -581,6 +621,7 @@ impl MemoryStorage {
             memory: Arc::new(RwLock::new(HashMap::new())),
             vss_client,
             delayed_keys: Arc::new(Mutex::new(HashMap::new())),
+            activity_index: Arc::new(RwLock::new(BTreeSet::new())),
         }
     }
 
@@ -622,6 +663,10 @@ impl MutinyStorage for MemoryStorage {
 
     fn vss_client(&self) -> Option<Arc<MutinyVssClient>> {
         self.vss_client.clone()
+    }
+
+    fn activity_index(&self) -> Arc<RwLock<BTreeSet<IndexItem>>> {
+        self.activity_index.clone()
     }
 
     fn set(&self, items: Vec<(String, impl Serialize)>) -> Result<(), MutinyError> {
@@ -738,6 +783,10 @@ impl MutinyStorage for () {
         None
     }
 
+    fn activity_index(&self) -> Arc<RwLock<BTreeSet<IndexItem>>> {
+        Arc::new(RwLock::new(BTreeSet::new()))
+    }
+
     fn set(&self, _: Vec<(String, impl Serialize)>) -> Result<(), MutinyError> {
         Ok(())
     }
@@ -792,7 +841,7 @@ impl MutinyStorage for () {
     }
 }
 
-fn payment_key(inbound: bool, payment_hash: &[u8; 32]) -> String {
+pub(crate) fn payment_key(inbound: bool, payment_hash: &[u8; 32]) -> String {
     if inbound {
         format!("{}{}", PAYMENT_INBOUND_PREFIX_KEY, payment_hash.as_hex())
     } else {
@@ -805,11 +854,45 @@ pub(crate) fn persist_payment_info<S: MutinyStorage>(
     payment_hash: &[u8; 32],
     payment_info: &PaymentInfo,
     inbound: bool,
-) -> std::io::Result<()> {
+) -> Result<(), MutinyError> {
     let key = payment_key(inbound, payment_hash);
-    storage
-        .set_data(key, payment_info, None)
-        .map_err(std::io::Error::other)
+    storage.set_data(key.clone(), payment_info, None)?;
+
+    // insert into activity index
+    match payment_info.status {
+        HTLCStatus::InFlight => {
+            let index = storage.activity_index();
+            let mut index = index.try_write()?;
+            index.insert(IndexItem {
+                timestamp: None,
+                key,
+            });
+        }
+        HTLCStatus::Succeeded => {
+            let index = storage.activity_index();
+            let mut index = index.try_write()?;
+            // remove old version
+            index.remove(&IndexItem {
+                timestamp: None, // timestamp would be None for InFlight / Pending
+                key: key.clone(),
+            });
+            index.insert(IndexItem {
+                timestamp: Some(payment_info.last_update),
+                key,
+            });
+        }
+        HTLCStatus::Failed => {
+            let index = storage.activity_index();
+            let mut index = index.try_write()?;
+            index.remove(&IndexItem {
+                timestamp: None, // timestamp would be None for InFlight / Pending
+                key,
+            });
+        }
+        HTLCStatus::Pending => {} // don't add to index until invoice is paid
+    }
+
+    Ok(())
 }
 
 pub(crate) fn get_payment_info<S: MutinyStorage>(

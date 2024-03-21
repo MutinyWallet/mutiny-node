@@ -1354,19 +1354,7 @@ impl<S: MutinyStorage> Node<S> {
 
     /// Gets all the closed channels for this node
     pub fn get_channel_closures(&self) -> Result<Vec<ChannelClosure>, MutinyError> {
-        Ok(self
-            .persister
-            .list_channel_closures()?
-            .into_iter()
-            .map(|(id, mut c)| {
-                // some old closures might not have the user_channel_id set
-                // we set it here to avoid breaking the API
-                if c.user_channel_id.is_none() {
-                    c.user_channel_id = Some(id.to_be_bytes())
-                }
-                c
-            })
-            .collect())
+        self.persister.list_channel_closures()
     }
 
     pub fn get_payment_info_from_persisters(

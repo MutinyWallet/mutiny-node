@@ -26,7 +26,10 @@ use crate::fees::MutinyFeeEstimator;
 use crate::labels::*;
 use crate::logging::MutinyLogger;
 use crate::nodemanager::TransactionDetails;
-use crate::storage::{MutinyStorage, OnChainStorage, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY};
+use crate::storage::{
+    IndexItem, MutinyStorage, OnChainStorage, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY,
+    ONCHAIN_PREFIX,
+};
 use crate::utils::{now, sleep};
 
 pub(crate) const FULL_SYNC_STOP_GAP: usize = 150;
@@ -136,6 +139,28 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                 Ok(_) => {
                     // commit the changes
                     wallet.commit()?;
+                    drop(wallet); // drop so we can read from wallet
+
+                    // update the activity index, just get the list of transactions
+                    // and insert them into the index, this is done in background so shouldn't
+                    // block the wallet update
+                    let index_items = self
+                        .list_transactions(false)?
+                        .into_iter()
+                        .map(|t| IndexItem {
+                            timestamp: match t.confirmation_time {
+                                ConfirmationTime::Confirmed { time, .. } => Some(time),
+                                ConfirmationTime::Unconfirmed { .. } => None,
+                            },
+                            key: format!("{ONCHAIN_PREFIX}{}", t.txid),
+                        })
+                        .collect::<Vec<_>>();
+
+                    let index = self.storage.activity_index();
+                    let mut index = index.try_write()?;
+                    // remove old-onchain txs
+                    index.retain(|i| !i.key.starts_with(ONCHAIN_PREFIX));
+                    index.extend(index_items);
 
                     Ok(true)
                 }
@@ -276,6 +301,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         position: ConfirmationTime,
         block_id: Option<BlockId>,
     ) -> Result<(), MutinyError> {
+        let txid = tx.txid();
         match position {
             ConfirmationTime::Confirmed { .. } => {
                 // if the transaction is confirmed and we have the block id,
@@ -288,7 +314,9 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                     // if the transaction is confirmed and we don't have the block id,
                     // we should just sync the wallet otherwise we can get an error
                     // with the wallet being behind the blockchain
-                    self.sync().await?
+                    self.sync().await?;
+
+                    return Ok(());
                 }
             }
             ConfirmationTime::Unconfirmed { .. } => {
@@ -296,19 +324,33 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                 let mut wallet = self.wallet.try_write()?;
 
                 // if we already have the transaction, we don't need to insert it
-                if wallet.get_tx(tx.txid()).is_none() {
+                if wallet.get_tx(txid).is_none() {
                     // insert tx and commit changes
                     wallet.insert_tx(tx, position)?;
                     wallet.commit()?;
                 } else {
                     log_debug!(
                         self.logger,
-                        "Tried to insert already existing transaction ({})",
-                        tx.txid()
+                        "Tried to insert already existing transaction ({txid})",
                     )
                 }
             }
         }
+
+        // update activity index
+        let index = self.storage.activity_index();
+        let mut index = index.try_write()?;
+        let key = format!("{ONCHAIN_PREFIX}{txid}");
+        index.retain(|i| i.key != key); // remove old version
+
+        // then insert the new version
+        index.insert(IndexItem {
+            timestamp: match position {
+                ConfirmationTime::Confirmed { time, .. } => Some(time),
+                ConfirmationTime::Unconfirmed { .. } => None,
+            },
+            key,
+        });
 
         Ok(())
     }

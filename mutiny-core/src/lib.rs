@@ -42,20 +42,19 @@ pub mod vss;
 mod test_utils;
 
 use crate::cashu::CashuHttpClient;
+use crate::federation::GatewayFees;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
-pub use crate::ldkstorage::{CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
+pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
+use crate::storage::{
+    list_payment_info, IndexItem, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY,
+    NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX, PAYMENT_INBOUND_PREFIX_KEY, PAYMENT_OUTBOUND_PREFIX_KEY,
+};
 use crate::{auth::MutinyAuthClient, logging::MutinyLogger};
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{
     event::{HTLCStatus, MillisatAmount, PaymentInfo},
     onchain::FULL_SYNC_STOP_GAP,
-};
-use crate::{
-    federation::GatewayFees,
-    storage::{
-        list_payment_info, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY,
-    },
 };
 use crate::{
     federation::{FederationClient, FederationIdentity, FederationIndex, FederationStorage},
@@ -88,13 +87,14 @@ use bip39::Mnemonic;
 use bitcoin::bip32::ExtendedPrivKey;
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
-use bitcoin::{hashes::sha256, Network};
+use bitcoin::{hashes::sha256, Network, Txid};
 use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::{pin_mut, select, FutureExt};
 use futures_util::join;
 use hex_conservative::{DisplayHex, FromHex};
 #[cfg(target_arch = "wasm32")]
 use instant::Instant;
+use itertools::Itertools;
 use lightning::chain::BestBlock;
 use lightning::ln::PaymentHash;
 use lightning::util::logger::Logger;
@@ -877,6 +877,65 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             (None, auth_manager)
         };
 
+        // populate the activity index
+        let mut activity_index = node_manager
+            .wallet
+            .list_transactions(false)?
+            .into_iter()
+            .map(|t| IndexItem {
+                timestamp: match t.confirmation_time {
+                    ConfirmationTime::Confirmed { time, .. } => Some(time),
+                    ConfirmationTime::Unconfirmed { .. } => None,
+                },
+                key: format!("{ONCHAIN_PREFIX}{}", t.txid),
+            })
+            .collect::<Vec<_>>();
+
+        // add the channel closures to the activity index
+        let closures = self
+            .storage
+            .scan::<ChannelClosure>(CHANNEL_CLOSURE_PREFIX, None)?
+            .into_iter()
+            .map(|(k, v)| IndexItem {
+                timestamp: Some(v.timestamp),
+                key: k,
+            })
+            .collect::<Vec<_>>();
+        activity_index.extend(closures);
+
+        // add inbound invoices to the activity index
+        let inbound = self
+            .storage
+            .scan::<PaymentInfo>(PAYMENT_INBOUND_PREFIX_KEY, None)?
+            .into_iter()
+            .filter(|(_, p)| matches!(p.status, HTLCStatus::Succeeded | HTLCStatus::InFlight))
+            .map(|(k, v)| IndexItem {
+                timestamp: Some(v.last_update),
+                key: k,
+            })
+            .collect::<Vec<_>>();
+
+        let outbound = self
+            .storage
+            .scan::<PaymentInfo>(PAYMENT_OUTBOUND_PREFIX_KEY, None)?
+            .into_iter()
+            .filter(|(_, p)| matches!(p.status, HTLCStatus::Succeeded | HTLCStatus::InFlight))
+            .map(|(k, v)| IndexItem {
+                timestamp: Some(v.last_update),
+                key: k,
+            })
+            .collect::<Vec<_>>();
+
+        activity_index.extend(inbound);
+        activity_index.extend(outbound);
+
+        // add the activity index to the storage
+        {
+            let index = self.storage.activity_index();
+            let mut read = index.try_write()?;
+            read.extend(activity_index);
+        }
+
         let mw = MutinyWallet {
             xprivkey: self.xprivkey,
             config,
@@ -1501,39 +1560,107 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(MutinyBalance::new(ln_balance, federation_balance))
     }
 
+    fn get_invoice_internal(
+        &self,
+        key: &str,
+        inbound: bool,
+        labels_map: &HashMap<Bolt11Invoice, Vec<String>>,
+    ) -> Result<Option<MutinyInvoice>, MutinyError> {
+        if let Some(info) = self.storage.get_data::<PaymentInfo>(key)? {
+            let labels = match info.bolt11.clone() {
+                None => vec![],
+                Some(i) => labels_map.get(&i).cloned().unwrap_or_default(),
+            };
+            let prefix = match inbound {
+                true => PAYMENT_INBOUND_PREFIX_KEY,
+                false => PAYMENT_OUTBOUND_PREFIX_KEY,
+            };
+            let payment_hash_str = key
+                .trim_start_matches(prefix)
+                .splitn(2, '_') // To support the old format that had `_{node_id}` at the end
+                .collect::<Vec<&str>>()[0];
+            let hash: [u8; 32] = FromHex::from_hex(payment_hash_str)?;
+
+            return MutinyInvoice::from(info, PaymentHash(hash), inbound, labels).map(Some);
+        };
+
+        Ok(None)
+    }
+
     /// Get the sorted activity list for lightning payments, channels, and txs.
-    pub async fn get_activity(&self) -> Result<Vec<ActivityItem>, MutinyError> {
-        // Get activity for lightning invoices
-        let lightning = self
-            .list_invoices()
-            .map_err(|e| {
-                log_warn!(self.logger, "Failed to get lightning activity: {e}");
-                e
-            })
-            .unwrap_or_default();
+    pub fn get_activity(
+        &self,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<ActivityItem>, MutinyError> {
+        let index = {
+            let index = self.storage.activity_index();
+            let vec = index.try_read()?.clone().into_iter().collect_vec();
 
-        // Get activities from node manager
-        let (closures, onchain) = self.node_manager.get_activity().await?;
-
-        let mut activities = Vec::with_capacity(lightning.len() + onchain.len() + closures.len());
-        for ln in lightning {
-            // Only show paid and in-flight invoices
-            match ln.status {
-                HTLCStatus::Succeeded | HTLCStatus::InFlight => {
-                    activities.push(ActivityItem::Lightning(Box::new(ln)));
+            let (start, end) = match (offset, limit) {
+                (None, None) => (0, vec.len()),
+                (Some(offset), Some(limit)) => {
+                    let end = offset.saturating_add(limit).min(vec.len());
+                    (offset, end)
                 }
-                HTLCStatus::Pending | HTLCStatus::Failed => {}
+                (Some(offset), None) => (offset, vec.len()),
+                (None, Some(limit)) => (0, limit),
+            };
+
+            // handle out of bounds
+            let start = start.min(vec.len());
+            let end = end.min(vec.len());
+
+            // handle start > end
+            if start > end {
+                return Ok(vec![]);
+            }
+
+            vec[start..end].to_vec()
+        };
+
+        let labels_map = self.storage.get_invoice_labels()?;
+
+        let mut activities = Vec::with_capacity(index.len());
+        for item in index {
+            if item.key.starts_with(PAYMENT_INBOUND_PREFIX_KEY) {
+                if let Some(mutiny_invoice) =
+                    self.get_invoice_internal(&item.key, true, &labels_map)?
+                {
+                    activities.push(ActivityItem::Lightning(Box::new(mutiny_invoice)));
+                }
+            } else if item.key.starts_with(PAYMENT_OUTBOUND_PREFIX_KEY) {
+                if let Some(mutiny_invoice) =
+                    self.get_invoice_internal(&item.key, false, &labels_map)?
+                {
+                    activities.push(ActivityItem::Lightning(Box::new(mutiny_invoice)));
+                }
+            } else if item.key.starts_with(CHANNEL_CLOSURE_PREFIX) {
+                if let Some(mut closure) = self.storage.get_data::<ChannelClosure>(&item.key)? {
+                    if closure.user_channel_id.is_none() {
+                        // convert keys to u128
+                        let user_channel_id_str = item
+                            .key
+                            .trim_start_matches(CHANNEL_CLOSURE_PREFIX)
+                            .splitn(2, '_') // Channel closures have `_{node_id}` at the end
+                            .collect::<Vec<&str>>()[0];
+                        let user_channel_id: [u8; 16] = FromHex::from_hex(user_channel_id_str)?;
+                        closure.user_channel_id = Some(user_channel_id);
+                    }
+                    activities.push(ActivityItem::ChannelClosed(closure));
+                }
+            } else if item.key.starts_with(ONCHAIN_PREFIX) {
+                // convert keys to txid
+                let txid_str = item.key.trim_start_matches(ONCHAIN_PREFIX);
+                let txid: Txid = Txid::from_str(txid_str)?;
+                if let Some(tx_details) = self.node_manager.get_transaction(txid)? {
+                    // make sure it is a relevant transaction
+                    if tx_details.sent != 0 || tx_details.received != 0 {
+                        activities.push(ActivityItem::OnChain(tx_details));
+                    }
+                }
             }
         }
-        for on in onchain {
-            activities.push(ActivityItem::OnChain(on));
-        }
-        for chan in closures {
-            activities.push(ActivityItem::ChannelClosed(chan));
-        }
-
-        // Sort all activities, newest first
-        activities.sort_by(|a, b| b.cmp(a));
 
         Ok(activities)
     }
@@ -2800,19 +2927,33 @@ mod tests {
 #[cfg(test)]
 #[cfg(target_arch = "wasm32")]
 mod tests {
+    use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
+    use crate::ldkstorage::CHANNEL_CLOSURE_PREFIX;
+    use crate::nodemanager::ChannelClosure;
+    use crate::storage::{
+        payment_key, persist_payment_info, IndexItem, MemoryStorage, MutinyStorage, ONCHAIN_PREFIX,
+        PAYMENT_OUTBOUND_PREFIX_KEY,
+    };
     use crate::{
         encrypt::encryption_key_from_pass, generate_seed, max_routing_fee_amount,
         nodemanager::NodeManager, MutinyWallet, MutinyWalletBuilder, MutinyWalletConfigBuilder,
     };
+    use bdk_chain::{BlockId, ConfirmationTime};
+    use bitcoin::absolute::LockTime;
     use bitcoin::bip32::ExtendedPrivKey;
-    use bitcoin::Network;
+    use bitcoin::hashes::hex::FromHex;
+    use bitcoin::hashes::Hash;
+    use bitcoin::secp256k1::PublicKey;
+    use bitcoin::{BlockHash, Network, Transaction, TxOut};
+    use hex_conservative::DisplayHex;
+    use itertools::Itertools;
+    use std::str::FromStr;
 
     use crate::test_utils::*;
 
     use crate::labels::{Contact, LabelStorage};
     use crate::nostr::NostrKeySource;
-    use crate::storage::{MemoryStorage, MutinyStorage};
-    use crate::utils::{parse_npub, sleep};
+    use crate::utils::{now, parse_npub, sleep};
     use nostr::Keys;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
@@ -3128,5 +3269,254 @@ mod tests {
     #[test]
     fn test_max_routing_fee_amount() {
         max_routing_fee_amount();
+    }
+
+    #[test]
+    async fn test_sort_index_item() {
+        let storage = MemoryStorage::new(None, None, None);
+        let seed = generate_seed(12).expect("Failed to gen seed");
+        let network = Network::Regtest;
+        let xpriv = ExtendedPrivKey::new_master(network, &seed.to_seed("")).unwrap();
+        let c = MutinyWalletConfigBuilder::new(xpriv)
+            .with_network(network)
+            .build();
+        let mw = MutinyWalletBuilder::new(xpriv, storage.clone())
+            .with_config(c)
+            .build()
+            .await
+            .expect("mutiny wallet should initialize");
+
+        loop {
+            if !mw.node_manager.list_nodes().await.unwrap().is_empty() {
+                break;
+            }
+            sleep(100).await;
+        }
+
+        let node = mw
+            .node_manager
+            .get_node_by_key_or_first(None)
+            .await
+            .unwrap();
+
+        let closure: ChannelClosure = ChannelClosure {
+            user_channel_id: None,
+            channel_id: None,
+            node_id: None,
+            reason: "".to_string(),
+            timestamp: 1686258926,
+        };
+        let closure_chan_id: u128 = 6969;
+        node.persister
+            .persist_channel_closure(closure_chan_id, closure.clone())
+            .unwrap();
+
+        let address = mw.node_manager.get_new_address(vec![]).unwrap();
+        let output = TxOut {
+            value: 10_000,
+            script_pubkey: address.script_pubkey(),
+        };
+        let tx1 = Transaction {
+            version: 1,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![output.clone()],
+        };
+        mw.node_manager
+            .wallet
+            .insert_tx(
+                tx1.clone(),
+                ConfirmationTime::Unconfirmed { last_seen: 0 },
+                None,
+            )
+            .await
+            .unwrap();
+
+        let tx2 = Transaction {
+            version: 2, // tx2 has different version than tx1 so they have different txids
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![output],
+        };
+        mw.node_manager
+            .wallet
+            .insert_tx(
+                tx2.clone(),
+                ConfirmationTime::Confirmed {
+                    height: 1,
+                    time: 1234,
+                },
+                Some(BlockId {
+                    height: 1,
+                    hash: BlockHash::all_zeros(),
+                }),
+            )
+            .await
+            .unwrap();
+
+        let pubkey = PublicKey::from_str(
+            "02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b",
+        )
+        .unwrap();
+
+        let payment_hash1: [u8; 32] =
+            FromHex::from_hex("55ecf9169a6fa07e8ba181fdddf5b0bcc7860176659fa22a7cca9da2a359a33b")
+                .unwrap();
+        let invoice1 = PaymentInfo {
+            bolt11: None,
+            preimage: None,
+            payee_pubkey: Some(pubkey),
+            status: HTLCStatus::Succeeded,
+            amt_msat: MillisatAmount(Some(100 * 1_000)),
+            last_update: 1681781585,
+            secret: None,
+            fee_paid_msat: None,
+            privacy_level: Default::default(),
+        };
+        persist_payment_info(&storage, &payment_hash1, &invoice1, false).unwrap();
+
+        let payment_hash2: [u8; 32] =
+            FromHex::from_hex("661ab24752eb99fc9c90236ffe348b1f8b9da5b9c00601c711d53589d98e7919")
+                .unwrap();
+        let invoice2 = PaymentInfo {
+            bolt11: None,
+            preimage: None,
+            secret: None,
+            payee_pubkey: Some(pubkey),
+            amt_msat: MillisatAmount(Some(100 * 1_000)),
+            last_update: 1781781585,
+            status: HTLCStatus::Succeeded,
+            fee_paid_msat: None,
+            privacy_level: Default::default(),
+        };
+        persist_payment_info(&storage, &payment_hash2, &invoice2, false).unwrap();
+
+        let payment_hash3: [u8; 32] =
+            FromHex::from_hex("ab98fb003849d440b49346c213bdae018468b9f2dbd731726f0aaf581fda4ad1")
+                .unwrap();
+        let invoice3 = PaymentInfo {
+            bolt11: None,
+            preimage: None,
+            payee_pubkey: Some(pubkey),
+            amt_msat: MillisatAmount(Some(101 * 1_000)),
+            status: HTLCStatus::InFlight,
+            last_update: 1581781585,
+            secret: None,
+            fee_paid_msat: None,
+            privacy_level: Default::default(),
+        };
+        persist_payment_info(&storage, &payment_hash3, &invoice3, false).unwrap();
+
+        let payment_hash4: [u8; 32] =
+            FromHex::from_hex("3287bdd9c82dbb91acdffcb103b1235c74060c01b9d22b4a62184bff290e1e7e")
+                .unwrap();
+        let mut invoice4 = PaymentInfo {
+            bolt11: None,
+            preimage: None,
+            payee_pubkey: Some(pubkey),
+            amt_msat: MillisatAmount(Some(102 * 1_000)),
+            status: HTLCStatus::InFlight,
+            fee_paid_msat: None,
+            last_update: 1581781585,
+            secret: None,
+            privacy_level: Default::default(),
+        };
+        persist_payment_info(&storage, &payment_hash4, &invoice4, false).unwrap();
+
+        let vec = {
+            let index = storage.activity_index();
+            let vec = index.read().unwrap().clone().into_iter().collect_vec();
+            vec
+        };
+
+        let expected = vec![
+            IndexItem {
+                timestamp: None,
+                key: format!("{ONCHAIN_PREFIX}{}", tx1.txid()),
+            },
+            IndexItem {
+                timestamp: None,
+                key: format!(
+                    "{PAYMENT_OUTBOUND_PREFIX_KEY}{}",
+                    payment_hash4.to_lower_hex_string()
+                ),
+            },
+            IndexItem {
+                timestamp: None,
+                key: format!(
+                    "{PAYMENT_OUTBOUND_PREFIX_KEY}{}",
+                    payment_hash3.to_lower_hex_string()
+                ),
+            },
+            IndexItem {
+                timestamp: Some(invoice2.last_update),
+                key: format!(
+                    "{PAYMENT_OUTBOUND_PREFIX_KEY}{}",
+                    payment_hash2.to_lower_hex_string()
+                ),
+            },
+            IndexItem {
+                timestamp: Some(closure.timestamp),
+                key: format!(
+                    "{CHANNEL_CLOSURE_PREFIX}{}_{}",
+                    closure_chan_id.to_be_bytes().to_lower_hex_string(),
+                    node.uuid
+                ),
+            },
+            IndexItem {
+                timestamp: Some(invoice1.last_update),
+                key: format!(
+                    "{PAYMENT_OUTBOUND_PREFIX_KEY}{}",
+                    payment_hash1.to_lower_hex_string()
+                ),
+            },
+            IndexItem {
+                timestamp: Some(1234),
+                key: format!("{ONCHAIN_PREFIX}{}", tx2.txid()),
+            },
+        ];
+
+        assert_eq!(vec.len(), expected.len()); // make sure im not dumb
+        assert_eq!(vec, expected);
+
+        let activity = mw.get_activity(None, None).unwrap();
+        assert_eq!(activity.len(), expected.len());
+
+        let with_limit = mw.get_activity(Some(3), None).unwrap();
+        assert_eq!(with_limit.len(), 3);
+
+        let with_offset = mw.get_activity(None, Some(3)).unwrap();
+        assert_eq!(with_offset.len(), activity.len() - 3);
+
+        let with_both = mw.get_activity(Some(3), Some(3)).unwrap();
+        assert_eq!(with_limit.len(), 3);
+        assert_ne!(with_both, with_limit);
+
+        // check we handle out of bounds errors
+        let with_limit_oob = mw.get_activity(Some(usize::MAX), None).unwrap();
+        assert_eq!(with_limit_oob.len(), expected.len());
+        let with_offset_oob = mw.get_activity(None, Some(usize::MAX)).unwrap();
+        assert!(with_offset_oob.is_empty());
+        let with_offset_oob = mw.get_activity(None, Some(expected.len())).unwrap();
+        assert!(with_offset_oob.is_empty());
+        let with_both_oob = mw.get_activity(Some(usize::MAX), Some(usize::MAX)).unwrap();
+        assert!(with_both_oob.is_empty());
+
+        // update an inflight payment and make sure it isn't duplicated
+        invoice4.last_update = now().as_secs();
+        invoice4.status = HTLCStatus::Succeeded;
+        persist_payment_info(&storage, &payment_hash4, &invoice4, false).unwrap();
+
+        let vec = {
+            let index = storage.activity_index();
+            let vec = index.read().unwrap().clone().into_iter().collect_vec();
+            vec
+        };
+
+        let item = vec
+            .iter()
+            .find(|i| i.key == payment_key(false, &payment_hash4));
+        assert!(item.is_some_and(|i| i.timestamp == Some(invoice4.last_update))); // make sure timestamp got updated
+        assert_eq!(vec.len(), expected.len()); // make sure no duplicates
     }
 }

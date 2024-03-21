@@ -1099,9 +1099,13 @@ impl MutinyWallet {
 
     /// Returns all the on-chain and lightning activity from the wallet.
     #[wasm_bindgen]
-    pub async fn get_activity(&self) -> Result<JsValue /* Vec<ActivityItem> */, MutinyJsError> {
+    pub async fn get_activity(
+        &self,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<JsValue /* Vec<ActivityItem> */, MutinyJsError> {
         // get activity from the node manager
-        let activity = self.inner.get_activity().await?;
+        let activity = self.inner.get_activity(limit, offset)?;
         let mut activity: Vec<ActivityItem> = activity.into_iter().map(|a| a.into()).collect();
 
         // add contacts to the activity

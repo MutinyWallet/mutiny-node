@@ -19,7 +19,7 @@ use mutiny_core::{federation::FEDIMINTS_PREFIX_KEY, nodemanager::NodeStorage};
 use rexie::{ObjectStore, Rexie, TransactionMode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::spawn_local;
@@ -46,6 +46,7 @@ pub struct IndexedDbStorage {
     vss: Option<Arc<MutinyVssClient>>,
     logger: Arc<MutinyLogger>,
     delayed_keys: Arc<Mutex<HashMap<String, DelayedKeyValueItem>>>,
+    activity_index: Arc<RwLock<BTreeSet<IndexItem>>>,
 }
 
 impl IndexedDbStorage {
@@ -77,6 +78,7 @@ impl IndexedDbStorage {
             vss,
             logger,
             delayed_keys: Arc::new(Mutex::new(HashMap::new())),
+            activity_index: Arc::new(RwLock::new(BTreeSet::new())),
         })
     }
 
@@ -600,6 +602,10 @@ impl MutinyStorage for IndexedDbStorage {
 
     fn vss_client(&self) -> Option<Arc<MutinyVssClient>> {
         self.vss.clone()
+    }
+
+    fn activity_index(&self) -> Arc<RwLock<BTreeSet<IndexItem>>> {
+        self.activity_index.clone()
     }
 
     fn set(&self, items: Vec<(String, impl Serialize)>) -> Result<(), MutinyError> {

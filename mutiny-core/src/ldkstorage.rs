@@ -6,7 +6,7 @@ use crate::logging::MutinyLogger;
 use crate::node::{default_user_config, ChainMonitor};
 use crate::node::{NetworkGraph, Router};
 use crate::nodemanager::ChannelClosure;
-use crate::storage::{MutinyStorage, VersionedValue};
+use crate::storage::{IndexItem, MutinyStorage, VersionedValue};
 use crate::utils;
 use crate::utils::{sleep, spawn};
 use crate::{chain::MutinyChain, scorer::HubPreferentialScorer};
@@ -40,7 +40,7 @@ use std::sync::Arc;
 pub const CHANNEL_MANAGER_KEY: &str = "manager";
 pub const MONITORS_PREFIX_KEY: &str = "monitors/";
 const CHANNEL_OPENING_PARAMS_PREFIX: &str = "chan_open_params/";
-const CHANNEL_CLOSURE_PREFIX: &str = "channel_closure/";
+pub const CHANNEL_CLOSURE_PREFIX: &str = "channel_closure/";
 const FAILED_SPENDABLE_OUTPUT_DESCRIPTOR_KEY: &str = "failed_spendable_outputs";
 
 pub(crate) type PhantomChannelManager<S: MutinyStorage> = LdkChannelManager<
@@ -367,7 +367,16 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             "{CHANNEL_CLOSURE_PREFIX}{}",
             user_channel_id.to_be_bytes().to_lower_hex_string()
         ));
-        self.storage.set_data(key, closure, None)?;
+        self.storage.set_data(key.clone(), &closure, None)?;
+
+        let index = self.storage.activity_index();
+        let mut index = index.try_write()?;
+        index.retain(|i| i.key != key); // remove old version
+        index.insert(IndexItem {
+            timestamp: Some(closure.timestamp),
+            key,
+        });
+
         Ok(())
     }
 
@@ -379,28 +388,17 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             "{CHANNEL_CLOSURE_PREFIX}{}",
             user_channel_id.to_be_bytes().to_lower_hex_string()
         ));
-        self.storage.get_data(key)
+        self.storage.get_channel_closure(&key)
     }
 
-    pub(crate) fn list_channel_closures(&self) -> Result<Vec<(u128, ChannelClosure)>, MutinyError> {
+    pub(crate) fn list_channel_closures(&self) -> Result<Vec<ChannelClosure>, MutinyError> {
         let suffix = format!("_{}", self.node_id);
         let map: HashMap<String, ChannelClosure> =
             self.storage.scan(CHANNEL_CLOSURE_PREFIX, Some(&suffix))?;
 
-        Ok(map
-            .into_iter()
-            .map(|(key, value)| {
-                // convert keys to u128
-                let user_channel_id_str = key
-                    .trim_start_matches(CHANNEL_CLOSURE_PREFIX)
-                    .trim_end_matches(&suffix);
-                let user_channel_id: [u8; 16] = FromHex::from_hex(user_channel_id_str)
-                    .unwrap_or_else(|_| panic!("key should be a u128 got {user_channel_id_str}"));
-
-                let user_channel_id = u128::from_be_bytes(user_channel_id);
-                (user_channel_id, value)
-            })
-            .collect())
+        map.into_iter()
+            .map(|(key, mut closure)| closure.set_user_channel_id_from_key(&key).map(|_| closure))
+            .collect::<Result<Vec<_>, _>>()
     }
 
     /// Persists the failed spendable outputs to storage.
@@ -821,7 +819,7 @@ mod test {
         assert!(result.is_ok());
 
         let result = persister.list_channel_closures().unwrap();
-        assert_eq!(result, vec![(user_channel_id, closure.clone())]);
+        assert_eq!(result, vec![closure.clone()]);
 
         let result = persister.get_channel_closure(user_channel_id).unwrap();
         assert_eq!(result, Some(closure));
