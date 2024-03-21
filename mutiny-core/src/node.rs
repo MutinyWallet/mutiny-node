@@ -414,7 +414,9 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             Some(lsp) => {
                 if self.lsp_config.as_ref().is_some_and(|l| l.matches(&lsp)) {
                     log_info!(logger, "lsp config matches saved lsp config");
-                    self.lsp_config
+                    // prefer node index lsp config over configured one
+                    // as it may have extra info like the LSP connection info
+                    Some(lsp)
                 } else {
                     log_warn!(
                         logger,
