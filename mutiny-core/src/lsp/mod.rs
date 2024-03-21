@@ -124,9 +124,12 @@ pub enum AnyLsp<S: MutinyStorage> {
 }
 
 impl<S: MutinyStorage> AnyLsp<S> {
-    pub async fn new_voltage_flow(config: VoltageConfig) -> Result<Self, MutinyError> {
+    pub async fn new_voltage_flow(
+        config: VoltageConfig,
+        logger: Arc<MutinyLogger>,
+    ) -> Result<Self, MutinyError> {
         Ok(Self::VoltageFlow(Arc::new(RwLock::new(
-            LspClient::new(config).await?,
+            LspClient::new(config, logger).await?,
         ))))
     }
 

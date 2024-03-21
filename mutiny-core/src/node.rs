@@ -448,7 +448,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
 
         let (lsp_client, lsp_client_pubkey, liquidity) = match lsp_config {
             Some(LspConfig::VoltageFlow(config)) => {
-                let lsp = AnyLsp::new_voltage_flow(config).await?;
+                let lsp = AnyLsp::new_voltage_flow(config, logger.clone()).await?;
                 let pubkey = lsp.get_lsp_pubkey().await;
                 (Some(lsp), Some(pubkey), None)
             }
