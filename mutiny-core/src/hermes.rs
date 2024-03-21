@@ -14,7 +14,7 @@ use lightning::util::logger::Logger;
 use lightning::{log_error, log_warn};
 use nostr::{nips::nip04::decrypt, Keys};
 use nostr::{Filter, Kind, Timestamp};
-use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
+use nostr_sdk::{Client, RelayPoolNotification};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use tbs::unblind_signature;
@@ -31,6 +31,7 @@ use crate::{
 };
 
 const HERMES_SERVICE_ID: u32 = 1;
+#[allow(dead_code)]
 const HERMES_FREE_PLAN_ID: u32 = 1;
 const HERMES_PAID_PLAN_ID: u32 = 2;
 
@@ -115,7 +116,7 @@ impl<S: MutinyStorage> HermesClient<S> {
         let logger = self.logger.clone();
         let stop = self.stop.clone();
         let client = self.client.clone();
-        let public_key = self.public_key.clone();
+        let public_key = self.public_key;
         let storage = self.storage.clone();
         let primary_key = self.primary_key.clone();
 
@@ -145,7 +146,7 @@ impl<S: MutinyStorage> HermesClient<S> {
 
                 client.connect().await;
 
-                client.subscribe(vec![received_dm_filter]).await;
+                client.subscribe(vec![received_dm_filter], None).await;
 
                 let mut notifications = client.notifications();
 
@@ -252,7 +253,7 @@ impl<S: MutinyStorage> HermesClient<S> {
 }
 
 fn find_hermes_token(
-    tokens: &Vec<SignedToken>,
+    tokens: &[SignedToken],
     service_id: u32,
     plan_id: u32,
 ) -> Option<&SignedToken> {

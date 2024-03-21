@@ -6,17 +6,17 @@ use bitcoin::{
 use crate::error::MutinyError;
 
 pub(crate) enum ChildKey {
-    NodeChildKey,
-    FederationChildKey,
-    BlindAuthChildKey,
+    Node,
+    Federation,
+    BlindAuth,
 }
 
 impl ChildKey {
     pub(crate) fn to_child_number(&self) -> u32 {
         match self {
-            ChildKey::NodeChildKey => 0,
-            ChildKey::FederationChildKey => 1,
-            ChildKey::BlindAuthChildKey => 2,
+            ChildKey::Node => 0,
+            ChildKey::Federation => 1,
+            ChildKey::BlindAuth => 2,
         }
     }
 }
@@ -41,11 +41,11 @@ fn run_key_generation_tests() {
     let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
     let xpriv = ExtendedPrivKey::new_master(Network::Testnet, &mnemonic.to_seed("")).unwrap();
 
-    let first_root_key = create_root_child_key(&context, xpriv, ChildKey::NodeChildKey);
-    let copy_root_key = create_root_child_key(&context, xpriv, ChildKey::NodeChildKey);
+    let first_root_key = create_root_child_key(&context, xpriv, ChildKey::Node);
+    let copy_root_key = create_root_child_key(&context, xpriv, ChildKey::Node);
     assert_eq!(first_root_key, copy_root_key);
 
-    let federation_root_key = create_root_child_key(&context, xpriv, ChildKey::FederationChildKey);
+    let federation_root_key = create_root_child_key(&context, xpriv, ChildKey::Federation);
     assert_ne!(first_root_key, federation_root_key);
 }
 

@@ -20,9 +20,11 @@ use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lnurl::LnUrl;
-use nostr::key::SecretKey;
-use nostr::nips::nip04::{decrypt, encrypt};
 use nostr::nips::nip47::*;
+use nostr::{
+    nips::nip04::{decrypt, encrypt},
+    SecretKey,
+};
 use nostr::{Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Metadata, Tag, Timestamp};
 use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
 use std::collections::HashSet;

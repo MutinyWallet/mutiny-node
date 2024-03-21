@@ -921,7 +921,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         let blind_auth_client = if let Some(auth_client) = self.auth_client.clone() {
             if let Some(blind_auth_url) = self.blind_auth_url {
                 let s = Arc::new(BlindAuthClient::new(
-                    self.xprivkey.clone(),
+                    self.xprivkey,
                     auth_client,
                     network,
                     blind_auth_url,
@@ -941,7 +941,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             if let Some(hermes_url) = self.hermes_url {
                 let s = Arc::new(
                     HermesClient::new(
-                        self.xprivkey.clone(),
+                        self.xprivkey,
                         hermes_url,
                         federations.clone(),
                         blind_auth_client,

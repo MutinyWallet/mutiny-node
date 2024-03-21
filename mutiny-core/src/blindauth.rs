@@ -357,7 +357,7 @@ fn create_blind_auth_secret(
 ) -> Result<DerivableSecret, MutinyError> {
     let context = Secp256k1::new();
 
-    let shared_key = create_root_child_key(&context, xprivkey, ChildKey::BlindAuthChildKey)?;
+    let shared_key = create_root_child_key(&context, xprivkey, ChildKey::BlindAuth)?;
     let xpriv = shared_key.derive_priv(
         &context,
         &DerivationPath::from(vec![ChildNumber::from_hardened_idx(
