@@ -52,19 +52,10 @@ async fn main() -> anyhow::Result<()> {
     debug!("Initializing wallet...");
     let wallet = MutinyWalletBuilder::new(xprivkey, storage).with_config(wallet_config).build().await?;
 
-    // create node
-    let _node = match wallet.node_manager.list_nodes().await?.first() {
-        None => wallet.node_manager.new_node().await?.pubkey,
-        Some(node) => *node
-    };
-
-    debug!("Wallet initialized!");
-
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", config.bind, config.port))
         .await?;
 
-    //println!("mutiny server running on http://{}", &listener.into());
-    println!("mutiny server running");
+    debug!("Wallet initialized!");
 
     let state = routes::State {
         mutiny_wallet: wallet.clone(),
@@ -77,7 +68,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/invoice", post(routes::create_invoice))
         .route("/payinvoice", post(routes::pay_invoice))
         .route("/balance", get(routes::get_balance))
-
         .fallback(fallback)
         .layer(Extension(state.clone()));
 

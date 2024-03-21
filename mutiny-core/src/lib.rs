@@ -677,7 +677,7 @@ impl MutinyWalletConfig {
             subscription_url: None,
             scorer_url: None,
             primal_url: None,
-            do_not_connect_peers: true,
+            do_not_connect_peers: false,
             skip_device_lock: false,
             safe_mode: false,
             skip_hodl_invoices: true,

@@ -15,6 +15,7 @@ pub struct SledStorage {
     pub(crate) password: Option<String>,
     pub cipher: Option<Cipher>,
     db: sled::Db,
+    delayed_keys: Arc<Mutex<HashMap<String, DelayedKeyValueItem>>>,
 }
 
 impl SledStorage {
@@ -39,6 +40,7 @@ impl SledStorage {
             password,
             cipher,
             db,
+            delayed_keys: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 }
@@ -63,22 +65,16 @@ impl MutinyStorage for SledStorage {
     }
 
     fn set(&self, items: Vec<(String, impl Serialize)>) -> Result<(), MutinyError> {
-        let items = items
-            .into_iter()
-            .map(|(k, v)| {
-                serde_json::to_string(&v)
-                    .map_err(|e| {
-                        MutinyError::Other(anyhow!("Error serializing value: {e} for key: {k}"))
-                    })
-                    .map(|d| (k, d))
-            })
-            .collect::<Result<Vec<(String, String)>, MutinyError>>()?;
-
-        for (k, v) in items {
-            self.db
-                .insert(&k, v.as_bytes())
-                .map_err(|e| MutinyError::Other(anyhow!("Error inserting key: {e} into sled: {k}")))?;
+        let mut batch = sled::Batch::default();
+        for (key, value) in items {
+            let json = serde_json::to_string(&value).map_err(|e| {
+                MutinyError::Other(anyhow!("Error serializing value: {e} for key: {key}"))
+            })?;
+            batch.insert(key.as_str(), json.as_bytes());
         }
+        self.db
+            .apply_batch(batch)
+            .map_err(|e| MutinyError::Other(anyhow!("Error inserting keys: into sled: {e}")))?;
 
         Ok(())
     }
@@ -168,6 +164,6 @@ impl MutinyStorage for SledStorage {
     }
 
     fn get_delayed_objects(&self) -> Arc<Mutex<HashMap<String, DelayedKeyValueItem>>> {
-        Arc::new(Mutex::new(HashMap::new()))
+        self.delayed_keys.clone()
     }
 }

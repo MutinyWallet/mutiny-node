@@ -4,6 +4,7 @@ use bitcoin::{Address};
 use serde_json::{json, Value};
 use mutiny_core::{InvoiceHandler, MutinyWallet};
 use lightning_invoice::Bolt11Invoice;
+use lightning::util::logger::Logger;
 use std::str::FromStr;
 use mutiny_core::error::MutinyError;
 use serde::Deserialize;
@@ -54,7 +55,6 @@ pub async fn open_channel(
     Extension(state): Extension<State>,
     Json(payload): Json<Amount>
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    //let amount = get_amount_params(&params)?;
     let channel = state.mutiny_wallet.node_manager.open_channel(None, None, payload.amount, None, None)
         .await
         .map_err(|e| handle_mutiny_err(e))?;
