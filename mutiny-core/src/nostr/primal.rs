@@ -68,10 +68,19 @@ impl PrimalClient {
     pub async fn get_nostr_contacts(
         &self,
         npub: nostr::PublicKey,
-    ) -> Result<HashMap<nostr::PublicKey, Metadata>, MutinyError> {
+    ) -> Result<(Option<Event>, HashMap<nostr::PublicKey, Metadata>), MutinyError> {
         let body = json!(["contact_list", { "pubkey": npub } ]);
         let data: Vec<Value> = self.primal_request(body).await?;
-        Ok(parse_profile_metadata(data))
+
+        // contact list should be the first event, followed by metadata of the contacts
+        let contact_list = match data.first().cloned() {
+            Some(json) => serde_json::from_value::<Event>(json.clone())
+                .ok()
+                .filter(|e| e.kind == Kind::ContactList),
+            None => return Ok((None, HashMap::new())), // if no data, return empty
+        };
+
+        Ok((contact_list, parse_profile_metadata(data)))
     }
 
     pub async fn get_dm_conversation(

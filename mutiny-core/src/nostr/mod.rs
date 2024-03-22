@@ -6,7 +6,7 @@ use crate::nostr::nwc::{
     SpendingConditions, PENDING_NWC_EVENTS_KEY,
 };
 use crate::nostr::primal::PrimalClient;
-use crate::storage::MutinyStorage;
+use crate::storage::{update_nostr_contact_list, MutinyStorage, NOSTR_CONTACT_LIST};
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
 use crate::{labels::LabelStorage, InvoiceHandler};
 use crate::{utils, HTLCStatus};
@@ -94,6 +94,8 @@ pub struct NostrManager<S: MutinyStorage> {
     pub storage: S,
     /// Lock for pending nwc invoices
     pending_nwc_lock: Arc<Mutex<()>>,
+    /// Lock for following and unfollowing npubs
+    follow_lock: Arc<Mutex<()>>,
     /// Logger
     pub logger: Arc<MutinyLogger>,
     /// Atomic stop signal
@@ -196,10 +198,27 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(received_dm_filter)
     }
 
+    /// Filter for getting updates to our nostr contacts list
+    fn get_contacts_list_filter(&self) -> Result<Filter, MutinyError> {
+        let event = self.storage.get_data::<Event>(NOSTR_CONTACT_LIST)?;
+
+        // listen for latest contact list events
+        let time_stamp = match event.map(|e| e.created_at) {
+            None => Timestamp::from(0),
+            Some(time) => time + 1_i64, // add one so we get only new events
+        };
+
+        Ok(Filter::new()
+            .kind(Kind::ContactList)
+            .author(self.public_key)
+            .since(time_stamp))
+    }
+
     pub fn get_filters(&self) -> Result<Vec<Filter>, MutinyError> {
         let mut nwc = self.get_nwc_filters()?;
         let dm = self.get_dm_filter()?;
-        nwc.push(dm);
+        let contacts_list = self.get_contacts_list_filter()?;
+        nwc.extend([dm, contacts_list]);
 
         Ok(nwc)
     }
@@ -248,6 +267,106 @@ impl<S: MutinyStorage> NostrManager<S> {
 
     pub fn get_profile(&self) -> Result<Metadata, MutinyError> {
         Ok(self.storage.get_nostr_profile()?.unwrap_or_default())
+    }
+
+    /// Follows the npub on nostr if we're not already following
+    ///
+    /// Returns true if we're now following, false if we were already following
+    pub async fn follow_npub(&self, npub: nostr::PublicKey) -> Result<(), MutinyError> {
+        let _lock = self.follow_lock.lock().await;
+        let event = self.storage.get_data::<Event>(NOSTR_CONTACT_LIST)?;
+
+        let builder = match event {
+            Some(event) => {
+                // check if we're already following
+                if event.iter_tags().any(|tag| {
+                    matches!(tag, Tag::PublicKey { public_key, uppercase: false, .. } if *public_key == npub)
+                }) {
+                    return Ok(());
+                }
+
+                let mut tags = event.tags.clone();
+                tags.push(Tag::public_key(npub));
+                EventBuilder::new(Kind::ContactList, &event.content, tags)
+            }
+            None => EventBuilder::new(Kind::ContactList, "", [Tag::public_key(npub)]),
+        };
+
+        let event = self.primary_key.sign_event_builder(builder).await?;
+        let event_id = self.client.send_event(event.clone()).await?;
+
+        update_nostr_contact_list(&self.storage, event)?;
+
+        log_info!(
+            self.logger,
+            "Followed npub: {npub}, new contact list event: {event_id}"
+        );
+
+        Ok(())
+    }
+
+    /// Unfollows the npub on nostr if we're following them
+    ///
+    /// Returns true if we were following them before
+    pub async fn unfollow_npub(&self, npub: nostr::PublicKey) -> Result<(), MutinyError> {
+        let _lock = self.follow_lock.lock().await;
+        let event = self.storage.get_data::<Event>(NOSTR_CONTACT_LIST)?;
+
+        match event {
+            None => Ok(()), // no follow list, nothing to unfollow
+            Some(event) => {
+                let mut tags = event.tags.clone();
+                tags.retain(|tag| {
+                    !matches!(tag, Tag::PublicKey { public_key, uppercase: false, .. } if *public_key == npub)
+                });
+
+                // check if we actually removed a tag,
+                // if not then we weren't following them
+                if tags.len() == event.tags.len() {
+                    return Ok(());
+                }
+
+                let builder = EventBuilder::new(Kind::ContactList, &event.content, tags);
+                let event = self.primary_key.sign_event_builder(builder).await?;
+                let event_id = self.client.send_event(event.clone()).await?;
+
+                update_nostr_contact_list(&self.storage, event)?;
+
+                log_info!(
+                    self.logger,
+                    "Unfollowed npub: {npub}, new contact list event: {event_id}"
+                );
+
+                Ok(())
+            }
+        }
+    }
+
+    /// Gets the list of npubs we're following
+    pub fn get_follow_list(&self) -> Result<HashSet<nostr::PublicKey>, MutinyError> {
+        let event = self.storage.get_data::<Event>(NOSTR_CONTACT_LIST)?;
+
+        match event {
+            None => Ok(HashSet::new()),
+            Some(event) => {
+                let npubs = event
+                    .into_iter_tags()
+                    .filter_map(|tag| {
+                        if let Tag::PublicKey {
+                            public_key,
+                            uppercase: false,
+                            ..
+                        } = tag
+                        {
+                            Some(public_key)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                Ok(npubs)
+            }
+        }
     }
 
     pub fn get_nwc_uri(&self, index: u32) -> Result<Option<NostrWalletConnectURI>, MutinyError> {
@@ -1318,6 +1437,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             nwc: Arc::new(RwLock::new(nwc)),
             storage,
             pending_nwc_lock: Arc::new(Mutex::new(())),
+            follow_lock: Arc::new(Mutex::new(())),
             primal_client,
             logger,
             stop,

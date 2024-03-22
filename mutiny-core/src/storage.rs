@@ -20,7 +20,7 @@ use futures_util::lock::Mutex;
 use hex_conservative::*;
 use lightning::{ln::PaymentHash, util::logger::Logger};
 use lightning::{log_error, log_trace};
-use nostr::Metadata;
+use nostr::{Event, Kind, Metadata};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
@@ -45,6 +45,7 @@ pub const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
 pub(crate) const ONCHAIN_PREFIX: &str = "onchain_tx/";
 pub const LAST_DM_SYNC_TIME_KEY: &str = "last_dm_sync_time";
 pub const NOSTR_PROFILE_METADATA: &str = "nostr_profile_metadata";
+pub const NOSTR_CONTACT_LIST: &str = "nostr_contact_list";
 const DELAYED_WRITE_MS: i32 = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -957,6 +958,28 @@ pub(crate) fn list_payment_info<S: MutinyStorage>(
             (PaymentHash(hash), value)
         })
         .collect())
+}
+
+/// Update the contact list in storage, chooses the event that is newer
+/// If the event is older than the one in storage, it will be ignored
+///
+/// Returns true if the event was updated
+pub(crate) fn update_nostr_contact_list<S: MutinyStorage>(
+    storage: &S,
+    contact_list_event: Event,
+) -> Result<bool, MutinyError> {
+    if contact_list_event.kind != Kind::ContactList {
+        return Err(MutinyError::InvalidArgumentsError);
+    }
+
+    // if the event is newer than the one in storage, update it
+    // otherwise ignore it
+    match storage.get_data::<Event>(NOSTR_CONTACT_LIST) {
+        Ok(Some(event)) if event.created_at > contact_list_event.created_at => Ok(false),
+        _ => storage
+            .set_data(NOSTR_CONTACT_LIST.to_string(), contact_list_event, None)
+            .map(|_| true),
+    }
 }
 
 #[derive(Clone)]

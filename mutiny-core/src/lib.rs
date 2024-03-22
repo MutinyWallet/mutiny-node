@@ -42,13 +42,13 @@ pub mod vss;
 mod test_utils;
 
 use crate::cashu::CashuHttpClient;
-use crate::federation::GatewayFees;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 use crate::storage::{
-    list_payment_info, IndexItem, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY,
-    NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX, PAYMENT_INBOUND_PREFIX_KEY, PAYMENT_OUTBOUND_PREFIX_KEY,
+    list_payment_info, persist_payment_info, update_nostr_contact_list, IndexItem, MutinyStorage,
+    DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX,
+    PAYMENT_INBOUND_PREFIX_KEY, PAYMENT_OUTBOUND_PREFIX_KEY, SUBSCRIPTION_TIMESTAMP,
 };
 use crate::{auth::MutinyAuthClient, logging::MutinyLogger};
 use crate::{error::MutinyError, nostr::ReservedProfile};
@@ -57,7 +57,9 @@ use crate::{
     onchain::FULL_SYNC_STOP_GAP,
 };
 use crate::{
-    federation::{FederationClient, FederationIdentity, FederationIndex, FederationStorage},
+    federation::{
+        FederationClient, FederationIdentity, FederationIndex, FederationStorage, GatewayFees,
+    },
     labels::{get_contact_key, Contact, LabelStorage},
     nodemanager::NodeBalance,
 };
@@ -119,7 +121,6 @@ use uuid::Uuid;
 
 use crate::labels::LabelItem;
 use crate::nostr::NostrKeySource;
-use crate::storage::{persist_payment_info, SUBSCRIPTION_TIMESTAMP};
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 
@@ -1121,6 +1122,24 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                                         log_error!(logger, "Error handling dm: {e}");
                                                 }
                                             }
+                                            Kind::ContactList => {
+                                                match update_nostr_contact_list(&nostr.storage, *event) {
+                                                    Err(e) =>log_error!(logger, "Error handling contact list: {e}"),
+                                                    Ok(true) => {
+                                                        log_debug!(logger, "Got new contact list, syncing...");
+
+                                                        // sync in background so we don't block processing other events
+                                                        let self_clone = self_clone.clone();
+                                                        utils::spawn(async move {
+                                                            match self_clone.sync_nostr_contacts(self_clone.nostr.public_key).await {
+                                                                Err(e) => log_error!(self_clone.logger, "Failed to sync nostr: {e}"),
+                                                                Ok(_) => log_debug!(self_clone.logger, "Successfully synced nostr contacts"),
+                                                            }
+                                                        });
+                                                    }
+                                                    Ok(false) => log_debug!(logger, "Got older contact list, ignoring..."),
+                                                }
+                                            }
                                             kind => log_warn!(logger, "Received unexpected note of kind {kind}")
                                         }
                                     }
@@ -1940,7 +1959,13 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     /// Get contacts from the given npub and sync them to the wallet
     pub async fn sync_nostr_contacts(&self, npub: ::nostr::PublicKey) -> Result<(), MutinyError> {
-        let mut metadata = self.nostr.primal_client.get_nostr_contacts(npub).await?;
+        let (contact_list, mut metadata) =
+            self.nostr.primal_client.get_nostr_contacts(npub).await?;
+
+        // update contact list event in storage
+        if let Some(event) = contact_list {
+            update_nostr_contact_list(&self.storage, event)?;
+        }
 
         let contacts = self.storage.get_contacts()?;
 
