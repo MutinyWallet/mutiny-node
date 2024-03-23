@@ -79,6 +79,10 @@ impl MutinyStorage for SledStorage {
         Ok(())
     }
 
+    fn get_delayed_objects(&self) -> Arc<Mutex<HashMap<String, DelayedKeyValueItem>>> {
+        self.delayed_keys.clone()
+    }
+
     fn get<T>(&self, key: impl AsRef<str>) -> Result<Option<T>, MutinyError>
     where
         T: for<'de> Deserialize<'de>,
@@ -126,17 +130,25 @@ impl MutinyStorage for SledStorage {
     }
 
     fn scan_keys(&self, prefix: &str, suffix: Option<&str>) -> Result<Vec<String>, MutinyError> {
-        let prefix = prefix.as_bytes();
-        let suffix = suffix.map(|s| s.as_bytes());
+        Ok(self.db.iter()
+            .keys()
+            .filter_map(|key| key.ok()) // Unwrap the Option<IVec> to Option<&[u8]>
+            .map(|key| ivec_to_string(key)) // Convert IVec to String
+            .filter_map(Result::ok) // Filter out any errors from ivec_to_string
+            .filter(|key| key.starts_with(prefix) && (suffix.is_none() || key.ends_with(suffix.unwrap()))) // Filter keys based on prefix and suffix
+            .collect())
 
-        let mut keys: Vec<String> = vec![];
-        while let Some(Ok(k)) = self.db.iter().keys().next() {
-            if k.starts_with(prefix) && suffix.map_or(true, |s| k.ends_with(s)) {
-                keys.push(ivec_to_string(k)?);
-            }
-        }
-
-        Ok(keys)
+        // let prefix = prefix.as_bytes();
+        // let suffix = suffix.map(|s| s.as_bytes());
+        //
+        // let mut keys: Vec<String> = vec![];
+        // while let Some(Ok(k)) = self.db.iter().keys().next() {
+        //     if k.starts_with(prefix) && suffix.map_or(true, |s| k.ends_with(s)) {
+        //         keys.push(ivec_to_string(k)?);
+        //     }
+        // }
+        //
+        // Ok(keys)
     }
 
     fn change_password(
@@ -161,9 +173,5 @@ impl MutinyStorage for SledStorage {
 
     async fn fetch_device_lock(&self) -> Result<Option<DeviceLock>, MutinyError> {
         self.get_device_lock()
-    }
-
-    fn get_delayed_objects(&self) -> Arc<Mutex<HashMap<String, DelayedKeyValueItem>>> {
-        self.delayed_keys.clone()
     }
 }

@@ -15,7 +15,7 @@ use lightning::ln::msgs;
 use lightning::ln::msgs::{LightningError, RoutingMessageHandler};
 use lightning::ln::peer_handler::PeerHandleError;
 use lightning::ln::peer_handler::PeerManager as LdkPeerManager;
-use lightning::log_warn;
+use lightning::{log_info, log_warn};
 use lightning::onion_message::messenger::{Destination, MessageRouter, OnionMessagePath};
 use lightning::routing::gossip::NodeId;
 use lightning::sign::EntropySource;
@@ -462,6 +462,15 @@ async fn connect_peer<P: PeerManager>(
         "sent {sent_bytes} to node: {}",
         peer_connection_info.pubkey
     );
+    
+    // match descriptor {
+    //     MutinySocketDescriptor::Native(ref socket) => {
+    //         let addr = socket.conn.lock().await.local_addr().unwrap();
+    //         let other_add = socket.conn.lock().await.peer_addr().unwrap();
+    //         log_info!(logger, "addr: {:?}", addr);
+    //         log_info!(logger, "peer: {:?}", other_add)
+    //     }
+    // }
 
     // schedule a reader on the connection
     schedule_descriptor_read(

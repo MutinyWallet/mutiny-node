@@ -667,6 +667,8 @@ impl MutinyWalletConfig {
     ) -> MutinyWalletConfig {
         MutinyWalletConfig {
             xprivkey,
+            #[cfg(target_arch = "wasm32")]
+            websocket_proxy_addr: None,
             network,
             user_esplora_url: esplora,
             user_rgs_url: rgs,

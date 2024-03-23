@@ -4,7 +4,6 @@ use bitcoin::{Address};
 use serde_json::{json, Value};
 use mutiny_core::{InvoiceHandler, MutinyWallet};
 use lightning_invoice::Bolt11Invoice;
-use lightning::util::logger::Logger;
 use std::str::FromStr;
 use mutiny_core::error::MutinyError;
 use serde::Deserialize;
