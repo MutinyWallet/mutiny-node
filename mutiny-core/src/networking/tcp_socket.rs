@@ -4,9 +4,9 @@ use crate::utils;
 use lightning::ln::peer_handler;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::{hash::Hash, io::Read};
 use std::{io::Write, net::TcpStream};
-use tokio::sync::Mutex;
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -25,31 +25,24 @@ impl TcpSocketDescriptor {
 impl ReadDescriptor for TcpSocketDescriptor {
     async fn read(&self) -> Option<Result<Vec<u8>, MutinyError>> {
         let mut buf = [0; 4096];
-        match self.conn.lock().await.read(&mut buf) {
+        match self.conn.lock().unwrap().read(&mut buf) {
             Ok(_) => Some(Ok(buf.to_vec())),
             Err(_) => Some(Err(MutinyError::ConnectionFailed)),
         }
     }
 }
 
-// TODO we're still single threaded everywhere
-// but eventually we can make this multi for tokio
-unsafe impl Send for TcpSocketDescriptor {}
-unsafe impl Sync for TcpSocketDescriptor {}
-
 impl peer_handler::SocketDescriptor for TcpSocketDescriptor {
     fn send_data(&mut self, data: &[u8], _resume_read: bool) -> usize {
         let cloned_data = Vec::from(data);
         let cloned_conn = self.conn.clone();
-        utils::spawn(async move {
-            let mut write = cloned_conn.lock().await;
-            match write.write(&cloned_data) {
-                Ok(_) => {}
-                Err(_e) => {
-                    // TODO log?
-                }
+        let mut write = cloned_conn.lock().unwrap();
+        match write.write(&cloned_data) {
+            Ok(_) => {}
+            Err(_e) => {
+                // TODO log?
             }
-        });
+        }
         data.len()
     }
 

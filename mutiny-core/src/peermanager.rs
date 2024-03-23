@@ -439,7 +439,7 @@ async fn connect_peer<P: PeerManager>(
                 let stream = stream.into_std().unwrap();
                 (
                     MutinySocketDescriptor::Native(TcpSocketDescriptor::new(Arc::new(
-                        tokio::sync::Mutex::new(stream),
+                        std::sync::Mutex::new(stream),
                     ))),
                     net_addr,
                 )
