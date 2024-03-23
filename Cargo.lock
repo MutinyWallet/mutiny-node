@@ -2253,6 +2253,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightning-net-tokio"
+version = "0.0.121"
+source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=e82635b32458a77d28a5a23b664696422eb526e4#e82635b32458a77d28a5a23b664696422eb526e4"
+dependencies = [
+ "bitcoin 0.30.2",
+ "lightning 0.0.121",
+ "tokio",
+]
+
+[[package]]
 name = "lightning-rapid-gossip-sync"
 version = "0.0.121"
 source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=e82635b32458a77d28a5a23b664696422eb526e4#e82635b32458a77d28a5a23b664696422eb526e4"
@@ -2522,6 +2532,7 @@ dependencies = [
  "lightning-background-processor",
  "lightning-invoice 0.29.0",
  "lightning-liquidity",
+ "lightning-net-tokio",
  "lightning-rapid-gossip-sync",
  "lightning-transaction-sync",
  "lnurl-rs",

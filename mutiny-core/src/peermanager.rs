@@ -1,11 +1,12 @@
+use crate::keymanager::PhantomKeysManager;
 use crate::messagehandler::MutinyMessageHandler;
+#[cfg(target_arch = "wasm32")]
 use crate::networking::socket::{schedule_descriptor_read, MutinySocketDescriptor};
 use crate::node::{NetworkGraph, OnionMessenger};
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, fees::MutinyFeeEstimator};
 use crate::{gossip, ldkstorage::PhantomChannelManager, logging::MutinyLogger};
 use crate::{gossip::read_peer_info, node::PubkeyConnectionInfo};
-use crate::{keymanager::PhantomKeysManager, node::ConnectionType};
 use bitcoin::key::{Secp256k1, Verification};
 use bitcoin::secp256k1::{PublicKey, Signing};
 use lightning::blinded_path::BlindedPath;
@@ -13,37 +14,24 @@ use lightning::events::{MessageSendEvent, MessageSendEventsProvider};
 use lightning::ln::features::{InitFeatures, NodeFeatures};
 use lightning::ln::msgs;
 use lightning::ln::msgs::{LightningError, RoutingMessageHandler};
-use lightning::ln::peer_handler::PeerHandleError;
 use lightning::ln::peer_handler::PeerManager as LdkPeerManager;
-use lightning::log_warn;
+use lightning::ln::peer_handler::{APeerManager, PeerHandleError};
 use lightning::onion_message::messenger::{Destination, MessageRouter, OnionMessagePath};
 use lightning::routing::gossip::NodeId;
 use lightning::sign::EntropySource;
 use lightning::util::logger::Logger;
-use lightning::{
-    ln::{msgs::SocketAddress, peer_handler::SocketDescriptor as LdkSocketDescriptor},
-    log_debug, log_trace,
-};
+use lightning::{ln::msgs::SocketAddress, log_warn};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::{net::SocketAddr, sync::atomic::AtomicBool};
 
 #[cfg(target_arch = "wasm32")]
 use crate::networking::ws_socket::WsTcpSocketDescriptor;
 
 #[cfg(target_arch = "wasm32")]
+use lightning::ln::peer_handler::SocketDescriptor as LdkSocketDescriptor;
+
+#[cfg(target_arch = "wasm32")]
 use crate::networking::proxy::WsProxy;
-
-#[cfg(not(target_arch = "wasm32"))]
-use tokio::time;
-
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Duration;
-
-#[cfg(not(target_arch = "wasm32"))]
-use tokio::net::TcpStream;
-
-#[cfg(not(target_arch = "wasm32"))]
-use crate::networking::tcp_socket::TcpSocketDescriptor;
 
 pub trait PeerManager: Send + Sync + 'static {
     fn get_peer_node_ids(&self) -> Vec<PublicKey>;
@@ -51,30 +39,30 @@ pub trait PeerManager: Send + Sync + 'static {
     fn new_outbound_connection(
         &self,
         their_node_id: PublicKey,
-        descriptor: MutinySocketDescriptor,
+        descriptor: AnySocketDescriptor,
         remote_network_address: Option<SocketAddress>,
     ) -> Result<Vec<u8>, PeerHandleError>;
 
     fn new_inbound_connection(
         &self,
-        descriptor: MutinySocketDescriptor,
+        descriptor: AnySocketDescriptor,
         remote_network_address: Option<SocketAddress>,
     ) -> Result<(), PeerHandleError>;
 
     fn write_buffer_space_avail(
         &self,
-        descriptor: &mut MutinySocketDescriptor,
+        descriptor: &mut AnySocketDescriptor,
     ) -> Result<(), PeerHandleError>;
 
     fn read_event(
         &self,
-        descriptor: &mut MutinySocketDescriptor,
+        descriptor: &mut AnySocketDescriptor,
         data: &[u8],
     ) -> Result<bool, PeerHandleError>;
 
     fn process_events(&self);
 
-    fn socket_disconnected(&self, descriptor: &mut MutinySocketDescriptor);
+    fn socket_disconnected(&self, descriptor: &mut AnySocketDescriptor);
 
     fn disconnect_by_node_id(&self, node_id: PublicKey);
 
@@ -90,8 +78,14 @@ pub trait PeerManager: Send + Sync + 'static {
     );
 }
 
+#[cfg(target_arch = "wasm32")]
+type AnySocketDescriptor = MutinySocketDescriptor;
+
+#[cfg(not(target_arch = "wasm32"))]
+type AnySocketDescriptor = lightning_net_tokio::SocketDescriptor;
+
 pub(crate) type PeerManagerImpl<S: MutinyStorage> = LdkPeerManager<
-    MutinySocketDescriptor,
+    AnySocketDescriptor,
     Arc<PhantomChannelManager<S>>,
     Arc<GossipMessageHandler<S>>,
     Arc<OnionMessenger<S>>,
@@ -108,7 +102,7 @@ impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
     fn new_outbound_connection(
         &self,
         their_node_id: PublicKey,
-        descriptor: MutinySocketDescriptor,
+        descriptor: AnySocketDescriptor,
         remote_network_address: Option<SocketAddress>,
     ) -> Result<Vec<u8>, PeerHandleError> {
         self.new_outbound_connection(their_node_id, descriptor, remote_network_address)
@@ -116,7 +110,7 @@ impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
 
     fn new_inbound_connection(
         &self,
-        descriptor: MutinySocketDescriptor,
+        descriptor: AnySocketDescriptor,
         remote_network_address: Option<SocketAddress>,
     ) -> Result<(), PeerHandleError> {
         self.new_inbound_connection(descriptor, remote_network_address)
@@ -124,14 +118,14 @@ impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
 
     fn write_buffer_space_avail(
         &self,
-        descriptor: &mut MutinySocketDescriptor,
+        descriptor: &mut AnySocketDescriptor,
     ) -> Result<(), PeerHandleError> {
         self.write_buffer_space_avail(descriptor)
     }
 
     fn read_event(
         &self,
-        peer_descriptor: &mut MutinySocketDescriptor,
+        peer_descriptor: &mut AnySocketDescriptor,
         data: &[u8],
     ) -> Result<bool, PeerHandleError> {
         self.read_event(peer_descriptor, data)
@@ -141,7 +135,7 @@ impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
         self.process_events()
     }
 
-    fn socket_disconnected(&self, descriptor: &mut MutinySocketDescriptor) {
+    fn socket_disconnected(&self, descriptor: &mut AnySocketDescriptor) {
         self.socket_disconnected(descriptor)
     }
 
@@ -353,7 +347,10 @@ impl MessageRouter for LspMessageRouter {
     }
 }
 
-pub(crate) async fn connect_peer_if_necessary<S: MutinyStorage, P: PeerManager>(
+pub(crate) async fn connect_peer_if_necessary<
+    S: MutinyStorage,
+    P: PeerManager + APeerManager<Descriptor = AnySocketDescriptor>,
+>(
     #[cfg(target_arch = "wasm32")] websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
     storage: &S,
@@ -390,7 +387,8 @@ pub(crate) async fn connect_peer_if_necessary<S: MutinyStorage, P: PeerManager>(
         // could occur due to UpdateFee message conflicts.
         fee_estimator.update_fee_estimates_if_necessary().await?;
 
-        connect_peer(
+        #[cfg(target_arch = "wasm32")]
+        let ret = connect_peer(
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
             peer_connection_info,
@@ -398,10 +396,60 @@ pub(crate) async fn connect_peer_if_necessary<S: MutinyStorage, P: PeerManager>(
             peer_manager,
             stop,
         )
+        .await;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let ret = match lightning_net_tokio::connect_outbound(
+            peer_manager.clone(),
+            peer_connection_info.pubkey,
+            peer_connection_info.socket_address()?,
+        )
         .await
+        {
+            None => {
+                lightning::log_error!(
+                    logger,
+                    "Connection to peer timed out: {:?}",
+                    peer_connection_info
+                );
+                Err(MutinyError::ConnectionFailed)
+            }
+            Some(connection_closed_future) => {
+                // spawn a task to wait for the connection to close
+                let mut connection_closed_future = Box::pin(connection_closed_future);
+                let pubkey = peer_connection_info.pubkey;
+                crate::utils::spawn(async move {
+                    loop {
+                        // If we are stopped, exit the loop
+                        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+
+                        tokio::select! {
+                            _ = &mut connection_closed_future => break,
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {},
+                        }
+
+                        // make sure they are still a peer
+                        if peer_manager
+                            .get_peer_node_ids()
+                            .iter()
+                            .any(|id| *id == pubkey)
+                        {
+                            break;
+                        }
+                    }
+                });
+
+                Ok(())
+            }
+        };
+
+        ret
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 async fn connect_peer<P: PeerManager>(
     #[cfg(target_arch = "wasm32")] websocket_proxy_addr: &str,
     peer_connection_info: &PubkeyConnectionInfo,
@@ -410,40 +458,18 @@ async fn connect_peer<P: PeerManager>(
     stop: Arc<AtomicBool>,
 ) -> Result<(), MutinyError> {
     let (mut descriptor, socket_addr_opt) = match peer_connection_info.connection_type {
-        ConnectionType::Tcp(ref t) => {
-            #[cfg(target_arch = "wasm32")]
-            {
-                let proxy = WsProxy::new(
-                    websocket_proxy_addr,
-                    peer_connection_info.clone(),
-                    logger.clone(),
-                )
-                .await?;
-                let (_, net_addr) = try_parse_addr_string(t);
-                (
-                    MutinySocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
-                    net_addr,
-                )
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let (socket_addr, net_addr) = try_parse_addr_string(t);
-                let socket_addr = socket_addr.ok_or(MutinyError::ConnectionFailed)?;
-
-                let stream =
-                    time::timeout(Duration::from_secs(10), TcpStream::connect(&socket_addr))
-                        .await
-                        .map_err(|_| MutinyError::ConnectionFailed)?
-                        .map_err(|_| MutinyError::ConnectionFailed)?;
-
-                let stream = stream.into_std().unwrap();
-                (
-                    MutinySocketDescriptor::Native(TcpSocketDescriptor::new(Arc::new(
-                        tokio::sync::Mutex::new(stream),
-                    ))),
-                    net_addr,
-                )
-            }
+        crate::node::ConnectionType::Tcp(ref t) => {
+            let proxy = WsProxy::new(
+                websocket_proxy_addr,
+                peer_connection_info.clone(),
+                logger.clone(),
+            )
+            .await?;
+            let (_, net_addr) = try_parse_addr_string(t);
+            (
+                AnySocketDescriptor::Tcp(WsTcpSocketDescriptor::new(Arc::new(proxy))),
+                net_addr,
+            )
         }
     };
 
@@ -454,10 +480,10 @@ async fn connect_peer<P: PeerManager>(
         socket_addr_opt,
     )?;
 
-    log_debug!(logger, "connected to peer: {:?}", peer_connection_info);
+    lightning::log_debug!(logger, "connected to peer: {:?}", peer_connection_info);
 
     let sent_bytes = descriptor.send_data(&initial_bytes, true);
-    log_trace!(
+    lightning::log_trace!(
         logger,
         "sent {sent_bytes} to node: {}",
         peer_connection_info.pubkey
@@ -474,7 +500,9 @@ async fn connect_peer<P: PeerManager>(
     Ok(())
 }
 
-fn try_parse_addr_string(addr: &str) -> (Option<SocketAddr>, Option<SocketAddress>) {
+#[cfg(target_arch = "wasm32")]
+fn try_parse_addr_string(addr: &str) -> (Option<std::net::SocketAddr>, Option<SocketAddress>) {
+    use std::net::SocketAddr;
     let socket_addr = addr.parse::<SocketAddr>().ok();
     let net_addr = socket_addr.map(|socket_addr| match socket_addr {
         SocketAddr::V4(sockaddr) => SocketAddress::TcpIpV4 {
