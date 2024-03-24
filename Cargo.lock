@@ -2583,6 +2583,7 @@ dependencies = [
  "futures-util",
  "getrandom",
  "gloo-net 0.4.0",
+ "gloo-timers 0.3.0",
  "hex-conservative",
  "itertools 0.11.0",
  "js-sys",

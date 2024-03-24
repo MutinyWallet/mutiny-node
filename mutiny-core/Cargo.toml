@@ -71,6 +71,8 @@ anyhow = "1.0"
 [dev-dependencies]
 wasm-bindgen-test = "0.3.33"
 mockall = "0.11.2"
+web-sys = { version = "0.3.65", features = ["console"] }
+js-sys = "0.3.65"
 
 [features]
 default = []
@@ -78,10 +80,9 @@ ignored_tests = []
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = { version = "0.4.38" }
-web-sys = { version = "0.3.65", features = ["console"] }
-js-sys = "0.3.65"
 gloo-net = { version = "0.4.0" }
 web-time = "1.1"
+gloo-timers = { version = "0.3.0", features = ["futures"] }
 getrandom = { version = "0.2", features = ["js"] }
 # add nip07 feature for wasm32
 nostr = { version = "0.29.0", default-features = false, features = ["nip04", "nip05", "nip07", "nip47", "nip57"] }
