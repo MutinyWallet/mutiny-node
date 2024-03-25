@@ -1,8 +1,9 @@
 #![allow(incomplete_features)]
 
 mod config;
-mod sled;
+mod extractor;
 mod routes;
+mod sled;
 
 use crate::config::Config;
 use crate::sled::SledStorage;
@@ -13,7 +14,7 @@ use bitcoin::bip32::ExtendedPrivKey;
 use clap::Parser;
 use log::{debug, info};
 use mutiny_core::storage::MutinyStorage;
-use mutiny_core::{generate_seed, MutinyWalletBuilder, MutinyWalletConfig};
+use mutiny_core::{generate_seed, MutinyWalletBuilder, MutinyWalletConfigBuilder};
 use shutdown::Shutdown;
 use std::time::Duration;
 
@@ -41,18 +42,22 @@ async fn main() -> anyhow::Result<()> {
     let seed = mnemonic.to_seed("");
     let xprivkey = ExtendedPrivKey::new_master(network, &seed).unwrap();
 
-    let wallet_config = MutinyWalletConfig::new(
-        xprivkey,
-        network,
-        config.esplora_url,
-        config.rgs_url,
-        config.lsp_url,
-    );
+    let mut config_builder = MutinyWalletConfigBuilder::new(xprivkey).with_network(network);
+    if let Some(url) = config.esplora_url {
+        config_builder.with_user_esplora_url(url);
+    }
+    if let Some(url) = config.rgs_url {
+        config_builder.with_user_rgs_url(url);
+    }
+    if let Some(url) = config.lsp_url {
+        config_builder.with_lsp_url(url);
+    }
+    let wallet_config = config_builder.build();
 
     debug!("Initializing wallet...");
-    let wallet = MutinyWalletBuilder::new(xprivkey, storage).with_config(wallet_config).build().await?;
-
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", config.bind, config.port))
+    let wallet = MutinyWalletBuilder::new(xprivkey, storage)
+        .with_config(wallet_config)
+        .build()
         .await?;
 
     debug!("Wallet initialized!");
@@ -61,17 +66,23 @@ async fn main() -> anyhow::Result<()> {
         mutiny_wallet: wallet.clone(),
     };
 
-    let server_router = Router::new()
-        .route("/newaddress", get(routes::new_address))
-        .route("/sendtoaddress", post(routes::send_to_address))
-        .route("/openchannel", post(routes::open_channel))
-        .route("/invoice", post(routes::create_invoice))
-        .route("/payinvoice", post(routes::pay_invoice))
-        .route("/balance", get(routes::get_balance))
-        .fallback(fallback)
-        .layer(Extension(state.clone()));
+    tokio::spawn(async move {
+        let server_router = Router::new()
+            .route("/newaddress", get(routes::new_address))
+            .route("/sendtoaddress", post(routes::send_to_address))
+            .route("/openchannel", post(routes::open_channel))
+            .route("/createinvoice", post(routes::create_invoice))
+            .route("/payinvoice", post(routes::pay_invoice))
+            .route("/balance", get(routes::get_balance))
+            .fallback(fallback)
+            .layer(Extension(state.clone()));
 
-    axum::serve(listener, server_router).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(format!("{}:{}", config.bind, config.port))
+            .await
+            .expect("failed to parse bind/port");
+
+        axum::serve(listener, server_router).await.unwrap();
+    });
 
     // wait for shutdown hook
     shutdown.recv().await;

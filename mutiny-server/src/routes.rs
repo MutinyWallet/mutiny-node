@@ -1,100 +1,244 @@
-use axum::{Extension, Json};
-use axum::http::StatusCode;
-use bitcoin::{Address};
-use serde_json::{json, Value};
-use mutiny_core::{InvoiceHandler, MutinyWallet};
-use lightning_invoice::Bolt11Invoice;
-use std::str::FromStr;
-use mutiny_core::error::MutinyError;
-use serde::Deserialize;
+use crate::extractor::Form;
 use crate::sled::SledStorage;
+
+use axum::http::StatusCode;
+use axum::{Extension, Json};
+use bitcoin::{secp256k1::PublicKey, Address};
+use lightning_invoice::Bolt11Invoice;
+use mutiny_core::error::MutinyError;
+use mutiny_core::{InvoiceHandler, MutinyWallet};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::str::FromStr;
 
 #[derive(Clone)]
 pub struct State {
     pub mutiny_wallet: MutinyWallet<SledStorage>,
 }
 
-pub async fn new_address(Extension(state): Extension<State>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let address = state.mutiny_wallet.node_manager.get_new_address(vec![]).map_err(|e|handle_mutiny_err(e))?;
+pub async fn new_address(
+    Extension(state): Extension<State>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let address = state
+        .mutiny_wallet
+        .node_manager
+        .get_new_address(vec![])
+        .map_err(|e| handle_mutiny_err(e))?;
     Ok(Json(json!(address)))
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SendTo {
-    amount: u64,
-    address: String
+    amount_sat: u64,
+    address: String,
+    fee_rate_sat_byte: Option<f32>,
+    label: Option<String>,
 }
 
 pub async fn send_to_address(
     Extension(state): Extension<State>,
-    Json(payload): Json<SendTo>
+    Form(request): Form<SendTo>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let address = Address::from_str(payload.address.as_str()).map_err(|_e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "invalid address"})),
-        )
-    })?;
+    let address = match Address::from_str(request.address.as_str()) {
+        Ok(address) => address,
+        Err(_) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid address"})),
+            ))
+        }
+    };
 
-    let tx_id = state.mutiny_wallet.node_manager.send_to_address(address, payload.amount, vec!["test".to_string()], None)
+    let label = match request.label {
+        Some(label) => vec![label.to_string()],
+        None => Vec::new(),
+    };
+
+    let tx_id = state
+        .mutiny_wallet
+        .node_manager
+        .send_to_address(
+            address,
+            request.amount_sat,
+            label,
+            request.fee_rate_sat_byte,
+        )
         .await
         .map_err(|e| handle_mutiny_err(e))?;
 
-    Ok(Json(json!({
-        "txid": tx_id.to_string()
-    })))
+    Ok(Json(json!(tx_id.to_string())))
 }
 
 #[derive(Deserialize)]
-pub struct Amount {
-    amount: u64,
+#[serde(rename_all = "camelCase")]
+pub struct OpenChannel {
+    amount_sat: u64,
+    fee_rate: Option<f32>,
+    node_pubkey: Option<String>,
 }
 
 pub async fn open_channel(
     Extension(state): Extension<State>,
-    Json(payload): Json<Amount>
+    Form(request): Form<OpenChannel>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let channel = state.mutiny_wallet.node_manager.open_channel(None, None, payload.amount, None, None)
+    let to_pubkey = match request.node_pubkey {
+        Some(pubkey) => {
+            let pubkey = match PublicKey::from_str(pubkey.as_str()) {
+                Ok(pk) => pk,
+                Err(_) => {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": "invalid node pubkey"})),
+                    ))
+                }
+            };
+            Some(pubkey)
+        }
+        None => None,
+    };
+
+    let channel = state
+        .mutiny_wallet
+        .node_manager
+        .open_channel(None, to_pubkey, request.amount_sat, request.fee_rate, None)
         .await
         .map_err(|e| handle_mutiny_err(e))?;
     Ok(Json(json!(channel)))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateInvoiceRequest {
+    amount_sat: u64,
+    label: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateInvoiceResponse {
+    amount_sat: u64,
+    payment_hash: String,
+    serialized: String,
+}
+
 pub async fn create_invoice(
     Extension(state): Extension<State>,
-    Json(payload): Json<Amount>
+    Form(request): Form<CreateInvoiceRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let invoice = state.mutiny_wallet.create_invoice(payload.amount, vec!["test".to_string()])
+    let label = match request.label {
+        Some(label) => vec![label.to_string()],
+        None => Vec::new(),
+    };
+
+    let invoice = state
+        .mutiny_wallet
+        .create_invoice(request.amount_sat, label)
         .await
         .map_err(|e| handle_mutiny_err(e))?;
+
+    let amount_sat = match invoice.amount_sats {
+        Some(amount) => amount,
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "unable to create invoice"})),
+            ))
+        }
+    };
+
+    let pr = match invoice.bolt11 {
+        Some(amount) => amount,
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "unable to create invoice"})),
+            ))
+        }
+    }
+    .to_string();
+
+    let invoice = CreateInvoiceResponse {
+        amount_sat,
+        payment_hash: invoice.payment_hash.to_string(),
+        serialized: pr,
+    };
+
     Ok(Json(json!(invoice)))
 }
 
 #[derive(Deserialize)]
-pub struct Invoice {
-    invoice: String,
+#[serde(rename_all = "camelCase")]
+pub struct PayInvoiceRequest {
+    amount_sat: Option<u64>,
+    invoice: Bolt11Invoice,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayInvoiceResponse {
+    recipient_amount_sat: u64,
+    routing_fee_sat: u64,
+    payment_hash: String,
+    payment_preimage: String,
 }
 
 pub async fn pay_invoice(
     Extension(state): Extension<State>,
-    Json(payload): Json<Invoice>
+    Form(request): Form<PayInvoiceRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let invoice = Bolt11Invoice::from_str(payload.invoice.as_str()).map_err(|_e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "invalid invoice provided"})),
-        )
-    })?;
-    let invoice = state.mutiny_wallet.pay_invoice(&invoice, None, vec!["test".to_string()])
+    let invoice = state
+        .mutiny_wallet
+        .pay_invoice(&request.invoice, request.amount_sat, Vec::new())
         .await
         .map_err(|e| handle_mutiny_err(e))?;
+
+    let amount_sat = match invoice.amount_sats {
+        Some(amount) => amount,
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "unable to pay invoice"})),
+            ))
+        }
+    };
+
+    let fees = match invoice.fees_paid {
+        Some(fee) => fee,
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "unable to pay invoice"})),
+            ))
+        }
+    };
+
+    let preimage = match invoice.preimage {
+        Some(preimage) => preimage,
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "unable to pay invoice"})),
+            ))
+        }
+    };
+
+    let invoice = PayInvoiceResponse {
+        recipient_amount_sat: amount_sat,
+        routing_fee_sat: fees,
+        payment_hash: invoice.payment_hash.to_string(),
+        payment_preimage: preimage,
+    };
+
     Ok(Json(json!(invoice)))
 }
 
 pub async fn get_balance(
-    Extension(state): Extension<State>
+    Extension(state): Extension<State>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let balance = state.mutiny_wallet.get_balance()
+    let balance = state
+        .mutiny_wallet
+        .get_balance()
         .await
         .map_err(|e| handle_mutiny_err(e))?;
     Ok(Json(json!(balance)))
@@ -102,8 +246,7 @@ pub async fn get_balance(
 
 fn handle_mutiny_err(err: MutinyError) -> (StatusCode, Json<Value>) {
     let err = json!({
-        "status": "ERROR",
-        "reason": format!("{err}"),
+        "error": format!("{err}"),
     });
     (StatusCode::INTERNAL_SERVER_ERROR, Json(err))
 }
