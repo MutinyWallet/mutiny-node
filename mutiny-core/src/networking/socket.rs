@@ -8,11 +8,7 @@ use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-#[cfg(target_arch = "wasm32")]
 use crate::networking::ws_socket::WsTcpSocketDescriptor;
-
-#[cfg(not(target_arch = "wasm32"))]
-use crate::networking::tcp_socket::TcpSocketDescriptor;
 
 pub trait ReadDescriptor {
     async fn read(&self) -> Option<Result<Vec<u8>, MutinyError>>;
@@ -20,19 +16,13 @@ pub trait ReadDescriptor {
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub enum MutinySocketDescriptor {
-    #[cfg(target_arch = "wasm32")]
     Tcp(WsTcpSocketDescriptor),
-    #[cfg(not(target_arch = "wasm32"))]
-    Native(TcpSocketDescriptor),
 }
 
 impl ReadDescriptor for MutinySocketDescriptor {
     async fn read(&self) -> Option<Result<Vec<u8>, MutinyError>> {
         match self {
-            #[cfg(target_arch = "wasm32")]
             MutinySocketDescriptor::Tcp(s) => s.read().await,
-            #[cfg(not(target_arch = "wasm32"))]
-            MutinySocketDescriptor::Native(s) => s.read().await,
         }
     }
 }
@@ -40,19 +30,13 @@ impl ReadDescriptor for MutinySocketDescriptor {
 impl peer_handler::SocketDescriptor for MutinySocketDescriptor {
     fn send_data(&mut self, data: &[u8], resume_read: bool) -> usize {
         match self {
-            #[cfg(target_arch = "wasm32")]
             MutinySocketDescriptor::Tcp(s) => s.send_data(data, resume_read),
-            #[cfg(not(target_arch = "wasm32"))]
-            MutinySocketDescriptor::Native(s) => s.send_data(data, resume_read),
         }
     }
 
     fn disconnect_socket(&mut self) {
         match self {
-            #[cfg(target_arch = "wasm32")]
             MutinySocketDescriptor::Tcp(s) => s.disconnect_socket(),
-            #[cfg(not(target_arch = "wasm32"))]
-            MutinySocketDescriptor::Native(s) => s.disconnect_socket(),
         }
     }
 }
@@ -75,7 +59,7 @@ pub fn schedule_descriptor_read<P: PeerManager>(
                     if let Some(msg) = msg_option {
                         match msg {
                             Ok(b) => {
-                                log_trace!(logger, "received binary data from websocket");
+                                log_trace!(logger, "received binary data from websocket: {}", b.len());
 
                                 let read_res = peer_manager.read_event(&mut descriptor, &b);
                                 match read_res {

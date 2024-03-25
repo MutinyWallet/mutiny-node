@@ -173,6 +173,15 @@ impl PubkeyConnectionInfo {
             original_connection_string: connection,
         })
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn socket_address(&self) -> Result<std::net::SocketAddr, MutinyError> {
+        match self.connection_type {
+            ConnectionType::Tcp(ref tcp) => {
+                std::net::SocketAddr::from_str(tcp).map_err(|_| MutinyError::InvalidArgumentsError)
+            }
+        }
+    }
 }
 
 pub struct NodeBuilder<S: MutinyStorage> {
