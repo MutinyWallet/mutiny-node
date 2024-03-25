@@ -730,6 +730,8 @@ impl<S: MutinyStorage> NodeManager<S> {
     pub async fn start_payjoin_session(&self) -> Result<(Enrolled, OhttpKeys), PayjoinError> {
         use crate::payjoin::{OHTTP_RELAYS, PAYJOIN_DIR};
 
+        log_info!(self.logger, "Starting payjoin session");
+
         let ohttp_keys =
             crate::payjoin::fetch_ohttp_keys(OHTTP_RELAYS[0].to_owned(), PAYJOIN_DIR.to_owned())
                 .await?;

@@ -1617,6 +1617,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures-rustls"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8d8a2499f0fecc0492eb3e47eab4e92da7875e1028ad2528f214ac3346ca04e"
+dependencies = [
+ "futures-io",
+ "rustls 0.22.3",
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "futures-sink"
 version = "0.3.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1713,6 +1724,28 @@ checksum = "8ac9e8288ae2c632fa9f8657ac70bfe38a1530f345282d7ba66a1f70b72b7dc4"
 dependencies = [
  "futures-channel",
  "futures-core",
+ "futures-sink",
+ "gloo-utils",
+ "http 0.2.12",
+ "js-sys",
+ "pin-project",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "gloo-net"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43aaa242d1239a8822c15c645f02166398da4f8b5c4bae795c1f5b44e9eee173"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "futures-io",
  "futures-sink",
  "gloo-utils",
  "http 0.2.12",
@@ -2232,7 +2265,7 @@ checksum = "b5b005c793122d03217da09af68ba9383363caa950b90d3436106df8cabce935"
 dependencies = [
  "futures-channel",
  "futures-util",
- "gloo-net",
+ "gloo-net 0.4.0",
  "http 0.2.12",
  "jsonrpsee-core",
  "pin-project",
@@ -2698,9 +2731,10 @@ dependencies = [
  "fedimint-tbs",
  "fedimint-wallet-client",
  "futures",
+ "futures-rustls",
  "futures-util",
  "getrandom",
- "gloo-net",
+ "gloo-net 0.5.0",
  "hex-conservative",
  "instant",
  "itertools 0.11.0",
@@ -2723,6 +2757,7 @@ dependencies = [
  "payjoin",
  "pbkdf2 0.11.0",
  "reqwest",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "thiserror",
@@ -2733,6 +2768,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+ "webpki-roots 0.26.1",
 ]
 
 [[package]]
@@ -3653,6 +3689,9 @@ name = "rustls-pki-types"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "868e20fada228fefaf6b652e00cc73623d54f8171e7352c18bb281571f2d92da"
+dependencies = [
+ "web-time",
+]
 
 [[package]]
 name = "rustls-webpki"
@@ -4859,6 +4898,16 @@ name = "web-sys"
 version = "0.3.68"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96565907687f7aceb35bc5fc03770a8a0471d82e479f25832f54a0e3f4b28446"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "web-time"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",

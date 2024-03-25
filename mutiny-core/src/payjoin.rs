@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::error::MutinyError;
 use crate::storage::MutinyStorage;
 use core::time::Duration;
+use gloo_net::websocket::futures::WebSocket;
 use hex_conservative::DisplayHex;
 use once_cell::sync::Lazy;
 use payjoin::receive::v2::Enrolled;
@@ -69,16 +71,70 @@ impl<S: MutinyStorage> PayjoinStorage for S {
     }
 }
 
-pub async fn fetch_ohttp_keys(_ohttp_relay: Url, directory: Url) -> Result<OhttpKeys, Error> {
-    let http_client = reqwest::Client::builder().build().unwrap();
+pub async fn fetch_ohttp_keys(ohttp_relay: Url, directory: Url) -> Result<OhttpKeys, Error> {
+    use futures_util::{AsyncReadExt, AsyncWriteExt};
 
-    let ohttp_keys_res = http_client
-        .get(format!("{}/ohttp-keys", directory.as_ref()))
-        .send()
-        .await?
-        .bytes()
-        .await?;
-    Ok(OhttpKeys::decode(ohttp_keys_res.as_ref()).map_err(|_| Error::OhttpDecodeFailed)?)
+    let tls_connector = {
+        let root_store = futures_rustls::rustls::RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+        };
+        let config = futures_rustls::rustls::ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+        futures_rustls::TlsConnector::from(Arc::new(config))
+    };
+    let directory_host = directory.host_str().ok_or(Error::BadDirectoryHost)?;
+    let domain = futures_rustls::rustls::pki_types::ServerName::try_from(directory_host)
+        .map_err(|_| Error::BadDirectoryHost)?
+        .to_owned();
+
+    let ws = WebSocket::open(&format!(
+        "wss://{}:443",
+        ohttp_relay.host_str().ok_or(Error::BadOhttpWsHost)?
+    ))
+    .map_err(|_| Error::BadOhttpWsHost)?;
+
+    let mut tls_stream = tls_connector
+        .connect(domain, ws)
+        .await
+        .map_err(|e| Error::RequestFailed(e.to_string()))?;
+    let ohttp_keys_req = format!(
+        "GET /ohttp-keys HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        directory_host
+    );
+    tls_stream
+        .write_all(ohttp_keys_req.as_bytes())
+        .await
+        .map_err(|e| Error::RequestFailed(e.to_string()))?;
+    tls_stream
+        .flush()
+        .await
+        .map_err(|e| Error::RequestFailed(e.to_string()))?;
+    let mut response_bytes = Vec::new();
+    tls_stream.read_to_end(&mut response_bytes).await.unwrap();
+    let (_headers, res_body) = separate_headers_and_body(&response_bytes)?;
+    payjoin::OhttpKeys::decode(res_body).map_err(|_| Error::OhttpDecodeFailed)
+}
+
+fn separate_headers_and_body(response_bytes: &[u8]) -> Result<(&[u8], &[u8]), Error> {
+    let separator = b"\r\n\r\n";
+
+    // Search for the separator
+    if let Some(position) = response_bytes
+        .windows(separator.len())
+        .position(|window| window == separator)
+    {
+        // The body starts immediately after the separator
+        let body_start_index = position + separator.len();
+        let headers = &response_bytes[..position];
+        let body = &response_bytes[body_start_index..];
+
+        Ok((headers, body))
+    } else {
+        Err(Error::RequestFailed(
+            "No header-body separator found in the response".to_string(),
+        ))
+    }
 }
 
 #[derive(Debug)]
@@ -90,6 +146,9 @@ pub enum Error {
     OhttpDecodeFailed,
     Shutdown,
     SessionExpired,
+    BadDirectoryHost,
+    BadOhttpWsHost,
+    RequestFailed(String),
 }
 
 impl std::error::Error for Error {}
@@ -104,6 +163,9 @@ impl std::fmt::Display for Error {
             Error::OhttpDecodeFailed => write!(f, "Failed to decode ohttp keys"),
             Error::Shutdown => write!(f, "Payjoin stopped by application shutdown"),
             Error::SessionExpired => write!(f, "Payjoin session expired. Create a new payment request and have the sender try again."),
+            Error::BadDirectoryHost => write!(f, "Bad directory host"),
+            Error::BadOhttpWsHost => write!(f, "Bad ohttp ws host"),
+            Error::RequestFailed(e) => write!(f, "Request failed: {}", e),
         }
     }
 }
