@@ -134,12 +134,16 @@ impl MutinyStorage for SledStorage {
     }
 
     fn scan_keys(&self, prefix: &str, suffix: Option<&str>) -> Result<Vec<String>, MutinyError> {
-        Ok(self.db.iter()
+        Ok(self
+            .db
+            .iter()
             .keys()
             .filter_map(|key| key.ok())
             .map(|key| ivec_to_string(key))
             .filter_map(Result::ok)
-            .filter(|key| key.starts_with(prefix) && (suffix.is_none() || key.ends_with(suffix.unwrap())))
+            .filter(|key| {
+                key.starts_with(prefix) && (suffix.is_none() || key.ends_with(suffix.unwrap()))
+            })
             .collect())
     }
 

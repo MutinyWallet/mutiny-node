@@ -10,7 +10,7 @@ mutiny-core = { path = "../mutiny-core" }
 
 anyhow = "1.0.70"
 async-trait = "0.1.68"
-axum = "0.7.4"
+axum = { version = "0.7.4" , features = ["default", "macros"]}
 bitcoin = { version = "0.30.2" }
 clap = { version = "4.1.14", features = ["derive"] }
 lightning = { version = "0.0.121", default-features = false, features = ["max_level_trace", "grind_signatures", "std"] }
