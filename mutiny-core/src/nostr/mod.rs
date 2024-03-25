@@ -234,9 +234,15 @@ impl<S: MutinyStorage> NostrManager<S> {
         let event = self.storage.get_data::<Event>(NOSTR_CONTACT_LIST)?;
 
         // listen for latest contact list events
-        let time_stamp = match event.map(|e| e.created_at) {
+        let time_stamp = match event {
             None => Timestamp::from(0),
-            Some(time) => time + 1_i64, // add one so we get only new events
+            Some(event) => {
+                if event.pubkey == self.public_key {
+                    event.created_at + 1_i64 // add one so we get only new events
+                } else {
+                    Timestamp::from(0)
+                }
+            }
         };
 
         Ok(Filter::new()
@@ -309,16 +315,35 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let builder = match event {
             Some(event) => {
+                // if event is for a different key, we need to pull down latest
+                let (mut tags, content) = if event.pubkey != self.public_key {
+                    let (opt, _) = self
+                        .primal_client
+                        .get_nostr_contacts(self.public_key)
+                        .await?;
+
+                    // if key doesn't have a contact list, create a new one
+                    match opt {
+                        None => (vec![], String::new()),
+                        Some(event) => {
+                            let tags = event.tags.clone();
+                            let content = event.content.clone();
+                            (tags, content)
+                        }
+                    }
+                } else {
+                    (event.tags.clone(), event.content.clone())
+                };
+
                 // check if we're already following
-                if event.iter_tags().any(|tag| {
+                if tags.iter().any(|tag| {
                     matches!(tag, Tag::PublicKey { public_key, uppercase: false, .. } if *public_key == npub)
                 }) {
                     return Ok(());
                 }
 
-                let mut tags = event.tags.clone();
                 tags.push(Tag::public_key(npub));
-                EventBuilder::new(Kind::ContactList, &event.content, tags)
+                EventBuilder::new(Kind::ContactList, content, tags)
             }
             None => EventBuilder::new(Kind::ContactList, "", [Tag::public_key(npub)]),
         };
@@ -346,7 +371,26 @@ impl<S: MutinyStorage> NostrManager<S> {
         match event {
             None => Ok(()), // no follow list, nothing to unfollow
             Some(event) => {
-                let mut tags = event.tags.clone();
+                // if event is for a different key, we need to pull down latest
+                let (mut tags, content) = if event.pubkey != self.public_key {
+                    let (opt, _) = self
+                        .primal_client
+                        .get_nostr_contacts(self.public_key)
+                        .await?;
+
+                    // if key doesn't have a contact list, create a new one
+                    match opt {
+                        None => (vec![], String::new()),
+                        Some(event) => {
+                            let tags = event.tags.clone();
+                            let content = event.content.clone();
+                            (tags, content)
+                        }
+                    }
+                } else {
+                    (event.tags.clone(), event.content.clone())
+                };
+
                 tags.retain(|tag| {
                     !matches!(tag, Tag::PublicKey { public_key, uppercase: false, .. } if *public_key == npub)
                 });
@@ -357,7 +401,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                     return Ok(());
                 }
 
-                let builder = EventBuilder::new(Kind::ContactList, &event.content, tags);
+                let builder = EventBuilder::new(Kind::ContactList, content, tags);
                 let event = self.primary_key.sign_event_builder(builder).await?;
                 let event_id = self.client.send_event(event.clone()).await?;
 
