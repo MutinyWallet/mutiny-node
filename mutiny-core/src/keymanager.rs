@@ -233,7 +233,7 @@ pub(crate) fn create_keys_manager<S: MutinyStorage>(
 ) -> Result<PhantomKeysManager<S>, MutinyError> {
     let context = Secp256k1::new();
 
-    let shared_key = create_root_child_key(&context, xprivkey, ChildKey::NodeChildKey)?;
+    let shared_key = create_root_child_key(&context, xprivkey, ChildKey::Node)?;
 
     let xpriv = shared_key.derive_priv(
         &context,

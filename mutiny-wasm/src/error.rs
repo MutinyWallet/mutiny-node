@@ -168,6 +168,9 @@ pub enum MutinyJsError {
     /// Token already spent.
     #[error("Token has been already spent.")]
     TokenAlreadySpent,
+    /// Federation required.
+    #[error("A federation is required")]
+    FederationRequired,
     /// Unknown error.
     #[error("Unknown Error")]
     UnknownError,
@@ -220,6 +223,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::CashuMintError => MutinyJsError::CashuMintError,
             MutinyError::EmptyMintURLError => MutinyJsError::EmptyMintURLError,
             MutinyError::TokenAlreadySpent => MutinyJsError::TokenAlreadySpent,
+            MutinyError::FederationRequired => MutinyJsError::FederationRequired,
             MutinyError::Other(e) => {
                 error!("Got unhandled error: {e}");
                 // FIXME: For some unknown reason, InsufficientBalance is being returned as `Other`

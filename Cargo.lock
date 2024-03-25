@@ -2508,6 +2508,7 @@ dependencies = [
  "fedimint-ln-client",
  "fedimint-ln-common",
  "fedimint-mint-client",
+ "fedimint-tbs",
  "fedimint-wallet-client",
  "futures",
  "futures-util",

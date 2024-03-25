@@ -709,7 +709,7 @@ fn create_federation_secret(
 ) -> Result<DerivableSecret, MutinyError> {
     let context = Secp256k1::new();
 
-    let shared_key = create_root_child_key(&context, xprivkey, ChildKey::FederationChildKey)?;
+    let shared_key = create_root_child_key(&context, xprivkey, ChildKey::Federation)?;
     let xpriv = shared_key.derive_priv(
         &context,
         &DerivationPath::from(vec![ChildNumber::from_hardened_idx(
@@ -1086,7 +1086,7 @@ fn fedimint_mnemonic_generation() {
     let root_mnemonic = Mnemonic::from_str(mnemonic_str).expect("could not generate");
     let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &root_mnemonic.to_seed("")).unwrap();
     let context = Secp256k1::new();
-    let child_key = create_root_child_key(&context, xpriv, ChildKey::FederationChildKey).unwrap();
+    let child_key = create_root_child_key(&context, xpriv, ChildKey::Federation).unwrap();
 
     let child_mnemonic = mnemonic_from_xpriv(child_key).unwrap();
     assert_ne!(mnemonic_str, child_mnemonic.to_string());
@@ -1100,8 +1100,7 @@ fn fedimint_mnemonic_generation() {
     let xpriv2 =
         ExtendedPrivKey::new_master(Network::Regtest, &root_mnemonic2.to_seed("")).unwrap();
     let context2 = Secp256k1::new();
-    let child_key2 =
-        create_root_child_key(&context2, xpriv2, ChildKey::FederationChildKey).unwrap();
+    let child_key2 = create_root_child_key(&context2, xpriv2, ChildKey::Federation).unwrap();
 
     let child_mnemonic2 = mnemonic_from_xpriv(child_key2).unwrap();
     assert_ne!(mnemonic_str2, child_mnemonic2.to_string());
