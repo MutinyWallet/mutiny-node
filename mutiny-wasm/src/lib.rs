@@ -1218,6 +1218,30 @@ impl MutinyWallet {
         Ok(self.inner.recover_federation_backups().await?)
     }
 
+    /// Creates a recommendation event for a federation
+    pub async fn recommend_federation(
+        &self,
+        invite_code: String,
+        review: Option<String>,
+    ) -> Result<String, MutinyJsError> {
+        let invite_code =
+            InviteCode::from_str(&invite_code).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        let event_id = self
+            .inner
+            .nostr
+            .recommend_federation(&invite_code, review.as_deref())
+            .await?;
+        Ok(event_id.to_hex())
+    }
+
+    /// Queries our relays for federation announcements
+    pub async fn discover_federations(
+        &self,
+    ) -> Result<JsValue /* Vec<NostrDiscoveredFedimint> */, MutinyJsError> {
+        let federations = self.inner.nostr.discover_federations().await?;
+        Ok(JsValue::from_serde(&federations)?)
+    }
+
     pub fn get_address_labels(
         &self,
     ) -> Result<JsValue /* Map<Address, Vec<String>> */, MutinyJsError> {
