@@ -268,7 +268,23 @@ impl<S: MutinyStorage> NostrManager<S> {
         lnurl: Option<LnUrl>,
         nip05: Option<String>,
     ) -> Result<Metadata, MutinyError> {
-        let current = self.get_profile()?;
+        // pull latest profile from primal
+        let current = match self.primal_client.get_user_profile(self.public_key).await {
+            Ok(Some(meta)) => meta,
+            Ok(None) => {
+                log_warn!(self.logger, "No profile found for user, creating new");
+                Metadata::default()
+            }
+            Err(e) => {
+                // if we can't get the profile from primal, fall back to local
+                // otherwise we can't create/edit profile if the primal server is down
+                log_error!(
+                    self.logger,
+                    "Failed to get user profile from primal, falling back to local: {e}"
+                );
+                self.storage.get_nostr_profile()?.unwrap_or_default()
+            }
+        };
 
         let with_name = if let Some(name) = name {
             current.name(name)
