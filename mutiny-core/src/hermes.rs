@@ -121,13 +121,11 @@ impl<S: MutinyStorage> HermesClient<S> {
         let primary_key = self.primary_key.clone();
 
         // if we haven't synced before, use now and save to storage
-        // TODO FIXME this won't be very correct
-        // I guess make a new dm sync time?
-        let last_sync_time = storage.get_dm_sync_time()?;
+        let last_sync_time = storage.get_dm_sync_time(true)?;
         let time_stamp = match last_sync_time {
             None => {
                 let now = Timestamp::now();
-                storage.set_dm_sync_time(now.as_u64())?;
+                storage.set_dm_sync_time(now.as_u64(), true)?;
                 now
             }
             Some(time) => Timestamp::from(time + 1), // add one so we get only new events
@@ -162,7 +160,7 @@ impl<S: MutinyStorage> HermesClient<S> {
                                     if event.verify().is_ok() {
                                         match event.kind {
                                             Kind::EncryptedDirectMessage => {
-                                                match decrypt_dm(primary_key.clone(), public_key, &event.content).await {
+                                                match decrypt_dm(&primary_key, public_key, &event.content) {
                                                     Ok(_) => {
                                                         // TODO we need to parse and redeem ecash
                                                     },
@@ -306,8 +304,8 @@ async fn register_name(
 }
 
 /// Decrypts a DM using the primary key
-pub async fn decrypt_dm(
-    primary_key: Keys,
+pub fn decrypt_dm(
+    primary_key: &Keys,
     pubkey: nostr::PublicKey,
     message: &str,
 ) -> Result<String, MutinyError> {

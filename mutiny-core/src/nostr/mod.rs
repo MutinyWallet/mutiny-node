@@ -206,7 +206,7 @@ impl<S: MutinyStorage> NostrManager<S> {
     /// Filters for getting DMs from our contacts
     fn get_dm_filter(&self) -> Result<Filter, MutinyError> {
         let contacts = self.storage.get_contacts()?;
-        let last_sync_time = self.storage.get_dm_sync_time()?;
+        let last_sync_time = self.storage.get_dm_sync_time(false)?;
         let npubs: HashSet<nostr::PublicKey> =
             contacts.into_values().flat_map(|c| c.npub).collect();
 
@@ -214,7 +214,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         let time_stamp = match last_sync_time {
             None => {
                 let now = Timestamp::now();
-                self.storage.set_dm_sync_time(now.as_u64())?;
+                self.storage.set_dm_sync_time(now.as_u64(), false)?;
                 now
             }
             Some(time) => Timestamp::from(time + 1), // add one so we get only new events
@@ -1204,7 +1204,8 @@ impl<S: MutinyStorage> NostrManager<S> {
         log_debug!(self.logger, "processing dm: {}", event.id);
 
         // update sync time
-        self.storage.set_dm_sync_time(event.created_at.as_u64())?;
+        self.storage
+            .set_dm_sync_time(event.created_at.as_u64(), false)?;
 
         let decrypted = self.decrypt_dm(event.pubkey, &event.content).await?;
 

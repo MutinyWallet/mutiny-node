@@ -45,6 +45,7 @@ pub const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
 pub const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
 pub(crate) const ONCHAIN_PREFIX: &str = "onchain_tx/";
 pub const LAST_DM_SYNC_TIME_KEY: &str = "last_dm_sync_time";
+pub const LAST_HERMES_SYNC_TIME_KEY: &str = "last_hermes_sync_time";
 pub const NOSTR_PROFILE_METADATA: &str = "nostr_profile_metadata";
 pub const NOSTR_CONTACT_LIST: &str = "nostr_contact_list";
 const DELAYED_WRITE_MS: i32 = 50;
@@ -549,15 +550,26 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
         self.set_data(FIRST_SYNC_KEY.to_string(), true, None)
     }
 
-    fn get_dm_sync_time(&self) -> Result<Option<u64>, MutinyError> {
-        self.get_data(LAST_DM_SYNC_TIME_KEY)
+    fn get_dm_sync_time(&self, is_hermes: bool) -> Result<Option<u64>, MutinyError> {
+        let key = if is_hermes {
+            LAST_HERMES_SYNC_TIME_KEY
+        } else {
+            LAST_DM_SYNC_TIME_KEY
+        };
+        self.get_data(key)
     }
 
-    fn set_dm_sync_time(&self, time: u64) -> Result<(), MutinyError> {
+    fn set_dm_sync_time(&self, time: u64, is_hermes: bool) -> Result<(), MutinyError> {
+        let key = if is_hermes {
+            LAST_HERMES_SYNC_TIME_KEY
+        } else {
+            LAST_DM_SYNC_TIME_KEY
+        };
+
         // only update if the time is newer
-        let current = self.get_dm_sync_time()?.unwrap_or_default();
+        let current = self.get_dm_sync_time(is_hermes)?.unwrap_or_default();
         if current < time {
-            self.set_data(LAST_DM_SYNC_TIME_KEY.to_string(), time, None)
+            self.set_data(key.to_string(), time, None)
         } else {
             Ok(())
         }
