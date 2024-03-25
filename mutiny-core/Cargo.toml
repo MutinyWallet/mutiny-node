@@ -45,7 +45,11 @@ aes = { version = "0.8" }
 jwt-compact = { version = "0.8.0-beta.1", features = ["es256k"] }
 argon2 = { version = "0.5.0", features = ["password-hash", "alloc"] }
 once_cell = "1.18.0"
+gloo-net = { version = "0.5.0", features = ["io-util"] }
 payjoin = { version = "0.15.0", features = ["v2", "send", "receive", "base64"] }
+futures-rustls = { version = "0.25.1" }
+rustls-pki-types = {  version = "1.4.0", features = ["web"] }
+webpki-roots = "0.26.1"
 bincode = "1.3.3"
 hex-conservative = "0.1.1"
 async-lock = "3.2.0"
@@ -85,6 +89,8 @@ wasm-bindgen-futures = { version = "0.4.38" }
 gloo-net = { version = "0.4.0" }
 web-time = "1.1"
 gloo-timers = { version = "0.3.0", features = ["futures"] }
+web-sys = { version = "0.3.65", features = ["console"] }
+js-sys = "0.3.65"
 getrandom = { version = "0.2", features = ["js"] }
 # add nip07 feature for wasm32
 nostr = { version = "0.29.0", default-features = false, features = ["nip04", "nip05", "nip07", "nip47", "nip57"] }

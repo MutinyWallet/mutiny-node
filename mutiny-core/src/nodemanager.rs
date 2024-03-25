@@ -683,7 +683,9 @@ impl<S: MutinyStorage> NodeManager<S> {
     ) -> Result<(Enrolled, payjoin::OhttpKeys), PayjoinError> {
         use crate::payjoin::{fetch_ohttp_keys, random_ohttp_relay, PAYJOIN_DIR};
 
-        let ohttp_keys = fetch_ohttp_keys(PAYJOIN_DIR.to_owned()).await?;
+        log_info!(self.logger, "Starting payjoin session");
+
+        let ohttp_keys = fetch_ohttp_keys().await?;
         let http_client = reqwest::Client::builder().build()?;
 
         let mut enroller = payjoin::receive::v2::Enroller::from_directory_config(

@@ -1637,6 +1637,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures-rustls"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8d8a2499f0fecc0492eb3e47eab4e92da7875e1028ad2528f214ac3346ca04e"
+dependencies = [
+ "futures-io",
+ "rustls 0.22.3",
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "futures-sink"
 version = "0.3.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1754,6 +1765,7 @@ checksum = "43aaa242d1239a8822c15c645f02166398da4f8b5c4bae795c1f5b44e9eee173"
 dependencies = [
  "futures-channel",
  "futures-core",
+ "futures-io",
  "futures-sink",
  "gloo-utils",
  "http 0.2.12",
@@ -2760,9 +2772,11 @@ dependencies = [
  "fedimint-tbs",
  "fedimint-wallet-client",
  "futures",
+ "futures-rustls",
  "futures-util",
  "getrandom",
  "gloo-net 0.4.0",
+ "gloo-net 0.5.0",
  "gloo-timers 0.3.0",
  "hex-conservative",
  "itertools 0.11.0",
@@ -2785,6 +2799,7 @@ dependencies = [
  "payjoin",
  "pbkdf2 0.11.0",
  "reqwest",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "thiserror",
@@ -2796,6 +2811,7 @@ dependencies = [
  "wasm-bindgen-test",
  "web-sys",
  "web-time",
+ "webpki-roots 0.26.1",
 ]
 
 [[package]]
@@ -3725,6 +3741,9 @@ name = "rustls-pki-types"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "868e20fada228fefaf6b652e00cc73623d54f8171e7352c18bb281571f2d92da"
+dependencies = [
+ "web-time",
+]
 
 [[package]]
 name = "rustls-webpki"
