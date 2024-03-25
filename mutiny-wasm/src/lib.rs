@@ -106,6 +106,8 @@ impl MutinyWallet {
         nsec_override: Option<String>,
         nip_07_key: Option<String>,
         primal_url: Option<String>,
+        blind_auth_url: Option<String>,
+        hermes_url: Option<String>,
     ) -> Result<MutinyWallet, MutinyJsError> {
         let start = instant::Instant::now();
         // if both are set throw an error
@@ -143,6 +145,8 @@ impl MutinyWallet {
             nsec_override,
             nip_07_key,
             primal_url,
+            blind_auth_url,
+            hermes_url,
         )
         .await
         {
@@ -184,6 +188,8 @@ impl MutinyWallet {
         nsec_override: Option<String>,
         nip_07_key: Option<String>,
         primal_url: Option<String>,
+        blind_auth_url: Option<String>,
+        hermes_url: Option<String>,
     ) -> Result<MutinyWallet, MutinyJsError> {
         let safe_mode = safe_mode.unwrap_or(false);
         let logger = Arc::new(MutinyLogger::default());
@@ -292,6 +298,12 @@ impl MutinyWallet {
         }
         if let Some(url) = primal_url {
             config_builder.with_primal_url(url);
+        }
+        if let Some(url) = blind_auth_url {
+            config_builder.with_blind_auth_url(url);
+        }
+        if let Some(url) = hermes_url {
+            config_builder.with_hermes_url(url);
         }
         if let Some(true) = skip_device_lock {
             config_builder.with_skip_device_lock();
@@ -1923,6 +1935,16 @@ impl MutinyWallet {
         Ok(self.inner.upload_profile_pic(bytes).await?)
     }
 
+    /// Checks if a given LNURL name is available
+    pub async fn check_available_lnurl_name(&self, name: String) -> Result<bool, MutinyJsError> {
+        Ok(self.inner.check_available_lnurl_name(name).await?)
+    }
+
+    /// Reserves a given LNURL name for the user
+    pub async fn reserve_lnurl_name(&self, name: String) -> Result<(), MutinyJsError> {
+        Ok(self.inner.reserve_lnurl_name(name).await?)
+    }
+
     /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.
     #[wasm_bindgen]
     pub async fn reset_router(&self) -> Result<(), MutinyJsError> {
@@ -2105,6 +2127,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -2140,6 +2164,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -2153,6 +2179,8 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
+            None,
             None,
             None,
             None,
@@ -2211,6 +2239,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -2223,6 +2253,8 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
+            None,
             None,
             None,
             None,
@@ -2288,6 +2320,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -2319,6 +2353,8 @@ mod tests {
             Some(seed.to_string()),
             None,
             Some("regtest".to_owned()),
+            None,
+            None,
             None,
             None,
             None,
@@ -2369,6 +2405,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
         .await;
 
@@ -2391,6 +2429,8 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
+            None,
             None,
             None,
             None,
@@ -2475,6 +2515,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
         .await
         .expect("mutiny wallet should initialize");
@@ -2516,6 +2558,8 @@ mod tests {
             None,
             None,
             Some("regtest".to_owned()),
+            None,
+            None,
             None,
             None,
             None,
