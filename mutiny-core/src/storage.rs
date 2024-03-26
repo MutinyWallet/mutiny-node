@@ -989,10 +989,16 @@ pub(crate) fn update_nostr_contact_list<S: MutinyStorage>(
         return Err(MutinyError::InvalidArgumentsError);
     }
 
-    // if the event is newer than the one in storage, update it
+    // if the event is for the same key and is older than the one in storage
+    // if it is a different key, always save it, that means the user has imported an nsec
     // otherwise ignore it
     match storage.get_data::<Event>(NOSTR_CONTACT_LIST) {
-        Ok(Some(event)) if event.created_at > contact_list_event.created_at => Ok(false),
+        Ok(Some(event))
+            if event.created_at > contact_list_event.created_at
+                && contact_list_event.pubkey == event.pubkey =>
+        {
+            Ok(false)
+        }
         _ => storage
             .set_data(NOSTR_CONTACT_LIST.to_string(), contact_list_event, None)
             .map(|_| true),
