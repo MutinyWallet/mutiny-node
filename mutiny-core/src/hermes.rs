@@ -209,7 +209,14 @@ impl<S: MutinyStorage> HermesClient<S> {
         let available_paid_token =
             match find_hermes_token(&available_tokens, HERMES_SERVICE_ID, HERMES_PAID_PLAN_ID) {
                 Some(t) => t,
-                None => return Err(MutinyError::NotFound),
+                None => {
+                    log_error!(
+                        self.logger,
+                        "No available paid token for Hermes, current tokens: {}",
+                        available_tokens.len()
+                    );
+                    return Err(MutinyError::NotFound);
+                }
             };
 
         // check that we have a federation added and get it's id/invite code

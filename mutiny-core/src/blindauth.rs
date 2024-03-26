@@ -31,7 +31,7 @@ const SPEND_KEY_CHILD_ID: ChildId = ChildId(0);
 /// Child ID used to derive the blinding key from a service plan's DerivableSecret
 const BLINDING_KEY_CHILD_ID: ChildId = ChildId(1);
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
 pub struct TokenStorage {
     // (service_id, plan_id): number of times used
     pub map: HashMap<ServicePlanIndex, u32>,
@@ -64,13 +64,44 @@ impl TokenStorage {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
 pub struct ServicePlanIndex {
     pub service_id: u32,
     pub plan_id: u32,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+impl Serialize for ServicePlanIndex {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let string = format!("{}-{}", self.service_id, self.plan_id);
+        serializer.serialize_str(&string)
+    }
+}
+
+impl<'a> Deserialize<'a> for ServicePlanIndex {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'a>,
+    {
+        let uri = String::deserialize(deserializer)?;
+
+        let parts: Vec<&str> = uri.split('-').collect();
+        if parts.len() != 2 {
+            return Err(serde::de::Error::custom("Invalid ServicePlanIndex"));
+        }
+
+        let service_id = parts[0].parse::<u32>().map_err(serde::de::Error::custom)?;
+        let plan_id = parts[1].parse::<u32>().map_err(serde::de::Error::custom)?;
+        Ok(ServicePlanIndex {
+            service_id,
+            plan_id,
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct UnsignedToken {
     pub counter: u32,
     pub service_id: u32,
@@ -78,7 +109,7 @@ pub struct UnsignedToken {
     pub blinded_message: BlindedMessage,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct SignedToken {
     pub counter: u32,
     pub service_id: u32,
@@ -219,7 +250,11 @@ impl<S: MutinyStorage> BlindAuthClient<S> {
         // Maybe have an "issued" tokens call so we can see if we're caught up with the server?
         self.storage
             .insert_token_storage(token_storage_guard.clone())
-            .await?;
+            .await
+            .map_err(|e| {
+                log_error!(self.logger, "could not save token storage: {e:?}");
+                e
+            })?;
 
         Ok(signed_token)
     }
@@ -369,4 +404,47 @@ fn create_blind_auth_secret(
         &xpriv.private_key.secret_bytes(),
         BLINDAUTH_CLIENT_NONCE,
     ))
+}
+
+#[cfg(test)]
+mod test {
+    use crate::blindauth::{ServicePlanIndex, SignedToken, TokenStorage};
+    use tbs::{BlindedMessage, BlindedSignature};
+
+    #[test]
+    fn test_token_storage_serialization() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            ServicePlanIndex {
+                service_id: 1,
+                plan_id: 1,
+            },
+            1,
+        );
+
+        let token = SignedToken {
+            counter: 1,
+            service_id: 1,
+            plan_id: 1,
+            blinded_message: BlindedMessage(Default::default()),
+            blind_sig: BlindedSignature(Default::default()),
+            spent: false,
+        };
+
+        let storage = TokenStorage {
+            map,
+            tokens: vec![token],
+            version: 0,
+        };
+
+        let serialized = serde_json::to_string(&storage).unwrap();
+        let deserialized: TokenStorage = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(storage, deserialized);
+
+        // test backwards compatibility
+        let string = "{\"map\":{\"1-1\":1},\"tokens\":[{\"counter\":1,\"service_id\":1,\"plan_id\":1,\"blinded_message\":\"c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\",\"blind_sig\":\"c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\",\"spent\":false}],\"version\":0}";
+        let deserialized: TokenStorage = serde_json::from_str(string).unwrap();
+        assert_eq!(storage, deserialized);
+    }
 }
