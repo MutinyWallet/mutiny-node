@@ -1246,6 +1246,20 @@ impl MutinyWallet {
         Ok(event_id.to_hex())
     }
 
+    /// Checks if we have recommended the given federation
+    pub async fn has_recommended_federation(
+        &self,
+        federation_id: String,
+    ) -> Result<bool, MutinyJsError> {
+        let federation_id = FederationId::from_str(&federation_id)
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        Ok(self
+            .inner
+            .nostr
+            .has_recommended_federation(&federation_id)
+            .await?)
+    }
+
     /// Queries our relays for federation announcements
     pub async fn discover_federations(
         &self,
