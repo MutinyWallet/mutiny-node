@@ -1156,8 +1156,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     log_warn!(logger, "Failed to clear in-active NWC profiles: {e}");
                 }
 
-                if let Err(e) = nostr.clear_expired_nwc_invoices().await {
-                    log_warn!(logger, "Failed to clear expired NWC invoices: {e}");
+                if let Err(e) = nostr.clear_invalid_nwc_invoices(&self_clone).await {
+                    log_warn!(logger, "Failed to clear invalid NWC invoices: {e}");
                 }
 
                 let client = Client::new(nostr.primary_key.clone());

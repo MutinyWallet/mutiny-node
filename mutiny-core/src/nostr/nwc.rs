@@ -1795,7 +1795,7 @@ mod wasm_test {
     }
 
     #[test]
-    async fn test_clear_expired_pending_invoices() {
+    async fn test_clear_invalid_pending_invoices() {
         let storage = MemoryStorage::default();
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
@@ -1822,9 +1822,10 @@ mod wasm_test {
             identifier: None,
         };
         // add an unexpired invoice
+        let dummy_invoice = create_dummy_invoice(Some(1_000), Network::Regtest, None).0;
         let unexpired = PendingNwcInvoice {
             index: Some(0),
-            invoice: create_dummy_invoice(Some(1_000), Network::Regtest, None).0,
+            invoice: dummy_invoice.clone(),
             event_id: EventId::all_zeros(),
             pubkey: nostr_manager.public_key,
             identifier: None,
@@ -1841,10 +1842,31 @@ mod wasm_test {
         assert_eq!(pending.len(), 2);
 
         // check that the expired invoice is cleared
-        nostr_manager.clear_expired_nwc_invoices().await.unwrap();
+        let mut node = MockInvoiceHandler::new();
+        node.expect_lookup_payment().return_const(None);
+        nostr_manager
+            .clear_invalid_nwc_invoices(&node)
+            .await
+            .unwrap();
         let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0], unexpired);
+
+        let mut node = MockInvoiceHandler::new();
+        node.expect_lookup_payment()
+            .with(eq(dummy_invoice.payment_hash().into_32()))
+            .returning(move |_| {
+                Some(MutinyInvoice {
+                    status: HTLCStatus::Succeeded,
+                    ..Default::default()
+                })
+            });
+        nostr_manager
+            .clear_invalid_nwc_invoices(&node)
+            .await
+            .unwrap();
+        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        assert!(pending.is_empty());
     }
 
     #[test]
