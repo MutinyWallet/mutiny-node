@@ -7,12 +7,16 @@ use std::{
 };
 
 use async_lock::RwLock;
+use bitcoin::hashes::hex::FromHex;
+use bitcoin::secp256k1::ThirtyTwoByteHash;
 use bitcoin::{bip32::ExtendedPrivKey, secp256k1::Secp256k1};
 use fedimint_core::config::FederationId;
 use futures::{pin_mut, select, FutureExt};
 use lightning::util::logger::Logger;
-use lightning::{log_error, log_warn};
-use nostr::{nips::nip04::decrypt, Keys};
+use lightning::{log_error, log_info, log_warn};
+use lightning_invoice::Bolt11Invoice;
+use nostr::prelude::decrypt_received_private_zap_message;
+use nostr::{nips::nip04::decrypt, Event, Keys, Tag};
 use nostr::{Filter, Kind, Timestamp};
 use nostr_sdk::{Client, RelayPoolNotification};
 use reqwest::Method;
@@ -20,6 +24,9 @@ use serde::{Deserialize, Serialize};
 use tbs::unblind_signature;
 use url::Url;
 
+use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
+use crate::labels::LabelStorage;
+use crate::storage::persist_payment_info;
 use crate::{
     blindauth::{BlindAuthClient, SignedToken},
     error::MutinyError,
@@ -27,7 +34,7 @@ use crate::{
     logging::MutinyLogger,
     nostr::{derive_nostr_key, HERMES_CHAIN_INDEX, SERVICE_ACCOUNT_INDEX},
     storage::MutinyStorage,
-    utils,
+    utils, PrivacyLevel,
 };
 
 const HERMES_SERVICE_ID: u32 = 1;
@@ -50,7 +57,7 @@ pub struct RegisterResponse {
 }
 
 pub struct HermesClient<S: MutinyStorage> {
-    pub(crate) primary_key: Keys,
+    pub(crate) dm_key: Keys,
     pub public_key: nostr::PublicKey,
     pub client: Client,
     http_client: reqwest::Client,
@@ -96,7 +103,7 @@ impl<S: MutinyStorage> HermesClient<S> {
         // TODO need to store the fact that we have a LNURL or not...
 
         Ok(Self {
-            primary_key: keys,
+            dm_key: keys,
             public_key,
             client,
             http_client: reqwest::Client::new(),
@@ -112,13 +119,14 @@ impl<S: MutinyStorage> HermesClient<S> {
     /// Starts the hermes background checker
     /// This should only error if there's an initial unrecoverable error
     /// Otherwise it will loop in the background until a stop signal
-    pub fn start(&self) -> Result<(), MutinyError> {
+    pub fn start(&self, profile_key: Option<Keys>) -> Result<(), MutinyError> {
         let logger = self.logger.clone();
         let stop = self.stop.clone();
         let client = self.client.clone();
         let public_key = self.public_key;
         let storage = self.storage.clone();
-        let primary_key = self.primary_key.clone();
+        let dm_key = self.dm_key.clone();
+        let federations = self.federations.clone();
 
         // if we haven't synced before, use now and save to storage
         let last_sync_time = storage.get_dm_sync_time(true)?;
@@ -136,6 +144,8 @@ impl<S: MutinyStorage> HermesClient<S> {
                 if stop.load(Ordering::Relaxed) {
                     break;
                 };
+
+                log_info!(logger, "Starting Hermes DM listener for key {public_key}");
 
                 let received_dm_filter = Filter::new()
                     .kind(Kind::EncryptedDirectMessage)
@@ -160,9 +170,11 @@ impl<S: MutinyStorage> HermesClient<S> {
                                     if event.verify().is_ok() {
                                         match event.kind {
                                             Kind::EncryptedDirectMessage => {
-                                                match decrypt_dm(&primary_key, public_key, &event.content) {
-                                                    Ok(_) => {
-                                                        // TODO we need to parse and redeem ecash
+                                                match decrypt_ecash_notification(&dm_key, event.pubkey, &event.content) {
+                                                    Ok(notification) => {
+                                                        if let Err(e) = handle_ecash_notification(notification, event.created_at, &federations, &storage, &dm_key, profile_key.as_ref(), &logger).await {
+                                                            log_error!(logger, "Error handling ecash notification: {e}");
+                                                        }
                                                     },
                                                     Err(e) => {
                                                         log_error!(logger, "Error decrypting DM: {e}");
@@ -304,12 +316,179 @@ async fn register_name(
 }
 
 /// Decrypts a DM using the primary key
-pub fn decrypt_dm(
-    primary_key: &Keys,
+fn decrypt_ecash_notification(
+    dm_key: &Keys,
     pubkey: nostr::PublicKey,
     message: &str,
-) -> Result<String, MutinyError> {
-    let secret = primary_key.secret_key().expect("must have");
+) -> Result<EcashNotification, MutinyError> {
+    // decrypt the dm first
+    let secret = dm_key.secret_key().expect("must have");
     let decrypted = decrypt(secret, &pubkey, message)?;
-    Ok(decrypted)
+    // parse the dm into an ecash notification
+    let notification = serde_json::from_str(&decrypted)?;
+    Ok(notification)
+}
+
+/// What the hermes client expects to receive from a DM
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct EcashNotification {
+    /// Amount of ecash received in msats
+    pub amount: u64,
+    /// Tweak we should use to claim the ecash
+    pub tweak_index: u64,
+    /// Federation id that the ecash is for
+    pub federation_id: FederationId,
+    /// The zap request that came along with this payment,
+    /// useful for tagging the payment to a contact
+    pub zap_request: Option<Event>,
+    /// The bolt11 invoice for the payment
+    pub bolt11: Bolt11Invoice,
+    /// The preimage for the bolt11 invoice
+    pub preimage: String,
+}
+
+/// Attempts to claim the ecash, if successful, saves the payment info
+async fn handle_ecash_notification<S: MutinyStorage>(
+    notification: EcashNotification,
+    created_at: Timestamp,
+    federations: &RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>,
+    storage: &S,
+    dm_key: &Keys,
+    profile_key: Option<&Keys>,
+    logger: &MutinyLogger,
+) -> anyhow::Result<()> {
+    log_info!(
+        logger,
+        "Received ecash notification for {} msats!",
+        notification.amount
+    );
+
+    if let Some(federation) = federations.read().await.get(&notification.federation_id) {
+        match federation
+            .claim_external_receive(
+                dm_key.secret_key().expect("must have"),
+                vec![notification.tweak_index],
+            )
+            .await
+        {
+            Ok(_) => {
+                log_info!(
+                    logger,
+                    "Claimed external receive for {} msats!",
+                    notification.amount
+                );
+
+                let (privacy_level, msg, npub) = match notification.zap_request {
+                    None => (PrivacyLevel::NotAvailable, None, None),
+                    Some(zap_req) => {
+                        // handle private/anon zaps
+                        let anon = zap_req.iter_tags().find_map(|tag| {
+                            if let Tag::Anon { msg } = tag {
+                                if msg.is_some() {
+                                    // an Anon tag with a message is a private zap
+                                    // try to decrypt the message and use that as the message
+                                    handle_private_zap(&zap_req, profile_key, logger)
+                                } else {
+                                    // an Anon tag with no message is an anonymous zap
+                                    // the content of the zap is the message
+                                    Some((
+                                        PrivacyLevel::Anonymous,
+                                        Some(zap_req.content.clone()),
+                                        None,
+                                    ))
+                                }
+                            } else {
+                                None
+                            }
+                        });
+
+                        // handled the anon tag, if there wasn't one, it is a public zap
+                        anon.unwrap_or((
+                            PrivacyLevel::Public,
+                            Some(zap_req.content.clone()),
+                            Some(zap_req.pubkey),
+                        ))
+                    }
+                };
+
+                // create activity item
+                let payment_hash = notification.bolt11.payment_hash().into_32();
+                let preimage = FromHex::from_hex(&notification.preimage).ok();
+                let info = PaymentInfo {
+                    preimage,
+                    secret: Some(notification.bolt11.payment_secret().0),
+                    status: HTLCStatus::Succeeded,
+                    amt_msat: MillisatAmount(Some(notification.amount)),
+                    fee_paid_msat: None,
+                    payee_pubkey: Some(notification.bolt11.recover_payee_pub_key()),
+                    bolt11: Some(notification.bolt11.clone()),
+                    privacy_level,
+                    // use the notification event's created_at as last update so we can properly sort by time
+                    last_update: created_at.as_u64(),
+                };
+                persist_payment_info(storage, &payment_hash, &info, true)?;
+
+                // tag the invoice if we can
+                let mut tags = Vec::with_capacity(2);
+
+                // try to tag by npub
+                if let Some((id, _)) = npub
+                    .map(|n| storage.get_contact_for_npub(n))
+                    .transpose()?
+                    .flatten()
+                {
+                    tags.push(id);
+                }
+
+                // add message tag if we have one
+                if let Some(msg) = msg.filter(|m| !m.is_empty()) {
+                    tags.push(msg);
+                }
+
+                // save the tags if we have any
+                if !tags.is_empty() {
+                    storage.set_invoice_labels(notification.bolt11, tags)?;
+                }
+            }
+            Err(e) => log_error!(logger, "Error claiming external receive: {e}"),
+        }
+    } else {
+        log_warn!(
+            logger,
+            "Received DM for unknown federation {}, discarding...",
+            notification.federation_id
+        );
+    }
+
+    // save the last sync time
+    storage.set_dm_sync_time(created_at.as_u64(), true)?;
+
+    Ok(())
+}
+
+fn handle_private_zap(
+    zap_req: &Event,
+    profile_key: Option<&Keys>,
+    logger: &MutinyLogger,
+) -> Option<(PrivacyLevel, Option<String>, Option<nostr::PublicKey>)> {
+    let key = match profile_key {
+        Some(k) => k.secret_key().unwrap(),
+        None => {
+            log_error!(logger, "No primary key to decrypt private zap");
+            return None;
+        }
+    };
+    // try to decrypt the message
+    match decrypt_received_private_zap_message(key, zap_req) {
+        Ok(event) => Some((
+            PrivacyLevel::Private,
+            Some(event.content.clone()),
+            Some(event.pubkey),
+        )),
+        Err(e) => {
+            // if we can't decrypt, treat it like it's an anonymous zap
+            log_error!(logger, "Error decrypting private zap: {e}");
+            Some((PrivacyLevel::Anonymous, Some(zap_req.content.clone()), None))
+        }
+    }
 }

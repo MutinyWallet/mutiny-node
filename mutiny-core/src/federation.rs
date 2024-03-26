@@ -14,7 +14,7 @@ use crate::{
 use async_lock::RwLock;
 use async_trait::async_trait;
 use bip39::Mnemonic;
-use bitcoin::secp256k1::ThirtyTwoByteHash;
+use bitcoin::secp256k1::{SecretKey, ThirtyTwoByteHash};
 use bitcoin::{
     bip32::{ChildNumber, DerivationPath, ExtendedPrivKey},
     hashes::sha256,
@@ -620,6 +620,56 @@ impl<S: MutinyStorage> FederationClient<S> {
             HTLCStatus::Pending => Err(MutinyError::PaymentTimeout),
             HTLCStatus::InFlight => Err(MutinyError::PaymentTimeout),
         }
+    }
+
+    /// Someone received a payment on our behalf, we need to claim it
+    pub async fn claim_external_receive(
+        &self,
+        secret_key: &SecretKey,
+        tweaks: Vec<u64>,
+    ) -> Result<(), MutinyError> {
+        let lightning_module = self
+            .fedimint_client
+            .get_first_module::<LightningClientModule>();
+
+        let key_pair = fedimint_ln_common::bitcoin::secp256k1::KeyPair::from_seckey_slice(
+            fedimint_ln_common::bitcoin::secp256k1::SECP256K1,
+            &secret_key.secret_bytes(),
+        )
+        .map_err(|_| MutinyError::InvalidArgumentsError)?;
+        let operation_ids = lightning_module
+            .scan_receive_for_user_tweaked(key_pair, tweaks, ())
+            .await;
+
+        if operation_ids.is_empty() {
+            log_warn!(
+                self.logger,
+                "External receive not found, maybe already claimed?"
+            );
+            return Ok(());
+        }
+
+        for operation_id in operation_ids {
+            let mut updates = lightning_module
+                .subscribe_ln_claim(operation_id)
+                .await?
+                .into_stream();
+
+            while let Some(update) = updates.next().await {
+                match update {
+                    LnReceiveState::Claimed => {
+                        log_info!(self.logger, "External receive claimed!");
+                    }
+                    LnReceiveState::Canceled { reason } => {
+                        log_error!(self.logger, "External receive canceled: {reason}");
+                        return Err(MutinyError::InvalidArgumentsError); // todo better error
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn get_mutiny_federation_identity(&self) -> FederationIdentity {
