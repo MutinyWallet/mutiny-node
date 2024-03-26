@@ -1156,8 +1156,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     log_warn!(logger, "Failed to clear in-active NWC profiles: {e}");
                 }
 
-                if let Err(e) = nostr.clear_expired_nwc_invoices().await {
-                    log_warn!(logger, "Failed to clear expired NWC invoices: {e}");
+                if let Err(e) = nostr.clear_invalid_nwc_invoices(&self_clone).await {
+                    log_warn!(logger, "Failed to clear invalid NWC invoices: {e}");
                 }
 
                 let client = Client::new(nostr.primary_key.clone());
@@ -1331,6 +1331,17 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         .await;
                     match payment_result {
                         Ok(r) => {
+                            // spawn a task to remove the pending invoice if it exists
+                            let nostr_clone = self.nostr.clone();
+                            let payment_hash = *inv.payment_hash();
+                            let logger = self.logger.clone();
+                            utils::spawn(async move {
+                                if let Err(e) =
+                                    nostr_clone.remove_pending_nwc_invoice(&payment_hash).await
+                                {
+                                    log_warn!(logger, "Failed to remove pending NWC invoice: {e}");
+                                }
+                            });
                             return Ok(r);
                         }
                         Err(e) => match e {
@@ -1368,9 +1379,22 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .sum::<u64>()
             > 0
         {
-            self.node_manager
+            let res = self
+                .node_manager
                 .pay_invoice(None, inv, amt_sats, labels)
-                .await
+                .await?;
+
+            // spawn a task to remove the pending invoice if it exists
+            let nostr_clone = self.nostr.clone();
+            let payment_hash = *inv.payment_hash();
+            let logger = self.logger.clone();
+            utils::spawn(async move {
+                if let Err(e) = nostr_clone.remove_pending_nwc_invoice(&payment_hash).await {
+                    log_warn!(logger, "Failed to remove pending NWC invoice: {e}");
+                }
+            });
+
+            Ok(res)
         } else {
             Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
         }

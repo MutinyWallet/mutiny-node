@@ -966,6 +966,35 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(event_id)
     }
 
+    /// Removes an invoice from the pending list
+    pub(crate) async fn remove_pending_nwc_invoice(
+        &self,
+        hash: &sha256::Hash,
+    ) -> Result<(), MutinyError> {
+        // get lock for writing
+        self.pending_nwc_lock.lock().await;
+
+        let mut pending: Vec<PendingNwcInvoice> = self
+            .storage
+            .get_data(PENDING_NWC_EVENTS_KEY)?
+            .unwrap_or_default();
+
+        let original_len = pending.len();
+
+        // remove from storage
+        pending.retain(|x| x.invoice.payment_hash() != hash);
+
+        // if we didn't remove anything, we don't need to save
+        if original_len == pending.len() {
+            return Ok(());
+        }
+
+        self.storage
+            .set_data(PENDING_NWC_EVENTS_KEY.to_string(), pending, None)?;
+
+        Ok(())
+    }
+
     /// Approves an invoice and sends the payment
     pub async fn approve_invoice(
         &self,
@@ -998,19 +1027,8 @@ impl<S: MutinyStorage> NostrManager<S> {
             }
         };
 
-        // get lock for writing
-        self.pending_nwc_lock.lock().await;
-
-        // get from storage again, in case it was updated
-        let mut pending: Vec<PendingNwcInvoice> = self
-            .storage
-            .get_data(PENDING_NWC_EVENTS_KEY)?
-            .unwrap_or_default();
-
-        // remove from storage
-        pending.retain(|x| x.invoice.payment_hash() != &hash);
-        self.storage
-            .set_data(PENDING_NWC_EVENTS_KEY.to_string(), pending, None)?;
+        // remove from our pending list
+        self.remove_pending_nwc_invoice(&hash).await?;
 
         Ok(event_id)
     }
@@ -1112,23 +1130,45 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(())
     }
 
-    /// Goes through all pending NWC invoices and removes the expired ones
-    pub async fn clear_expired_nwc_invoices(&self) -> Result<(), MutinyError> {
+    /// Goes through all pending NWC invoices and removes invoices that are
+    /// expired or have been paid
+    pub async fn clear_invalid_nwc_invoices(
+        &self,
+        invoice_handler: &impl InvoiceHandler,
+    ) -> Result<(), MutinyError> {
         self.pending_nwc_lock.lock().await;
-        let mut invoices: Vec<PendingNwcInvoice> = self
+        let invoices: Vec<PendingNwcInvoice> = self
             .storage
             .get_data(PENDING_NWC_EVENTS_KEY)?
             .unwrap_or_default();
 
-        // remove expired invoices
-        invoices.retain(|x| !x.is_expired());
+        let mut new_invoices = Vec::with_capacity(invoices.len());
+
+        for inv in invoices {
+            // remove expired invoices
+            if inv.is_expired() {
+                continue;
+            }
+
+            // remove paid invoices
+            if invoice_handler
+                .lookup_payment(&inv.invoice.payment_hash().into_32())
+                .await
+                .is_some_and(|p| p.status == HTLCStatus::Succeeded)
+            {
+                continue;
+            }
+
+            // keep the invoice if it is still valid
+            new_invoices.push(inv);
+        }
 
         // sort and dedup
-        invoices.sort();
-        invoices.dedup();
+        new_invoices.sort();
+        new_invoices.dedup();
 
         self.storage
-            .set_data(PENDING_NWC_EVENTS_KEY.to_string(), invoices, None)?;
+            .set_data(PENDING_NWC_EVENTS_KEY.to_string(), new_invoices, None)?;
 
         Ok(())
     }
