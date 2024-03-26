@@ -966,6 +966,35 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(event_id)
     }
 
+    /// Removes an invoice from the pending list
+    pub(crate) async fn remove_pending_nwc_invoice(
+        &self,
+        hash: &sha256::Hash,
+    ) -> Result<(), MutinyError> {
+        // get lock for writing
+        self.pending_nwc_lock.lock().await;
+
+        let mut pending: Vec<PendingNwcInvoice> = self
+            .storage
+            .get_data(PENDING_NWC_EVENTS_KEY)?
+            .unwrap_or_default();
+
+        let original_len = pending.len();
+
+        // remove from storage
+        pending.retain(|x| x.invoice.payment_hash() != hash);
+
+        // if we didn't remove anything, we don't need to save
+        if original_len == pending.len() {
+            return Ok(());
+        }
+
+        self.storage
+            .set_data(PENDING_NWC_EVENTS_KEY.to_string(), pending, None)?;
+
+        Ok(())
+    }
+
     /// Approves an invoice and sends the payment
     pub async fn approve_invoice(
         &self,
@@ -998,19 +1027,8 @@ impl<S: MutinyStorage> NostrManager<S> {
             }
         };
 
-        // get lock for writing
-        self.pending_nwc_lock.lock().await;
-
-        // get from storage again, in case it was updated
-        let mut pending: Vec<PendingNwcInvoice> = self
-            .storage
-            .get_data(PENDING_NWC_EVENTS_KEY)?
-            .unwrap_or_default();
-
-        // remove from storage
-        pending.retain(|x| x.invoice.payment_hash() != &hash);
-        self.storage
-            .set_data(PENDING_NWC_EVENTS_KEY.to_string(), pending, None)?;
+        // remove from our pending list
+        self.remove_pending_nwc_invoice(&hash).await?;
 
         Ok(event_id)
     }
