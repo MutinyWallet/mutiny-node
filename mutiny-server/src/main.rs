@@ -74,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
             .route("/createinvoice", post(routes::create_invoice))
             .route("/payinvoice", post(routes::pay_invoice))
             .route("/balance", get(routes::get_balance))
+            .route("/getinfo", get(routes::get_node_info))
             .fallback(fallback)
             .layer(Extension(state.clone()));
 
