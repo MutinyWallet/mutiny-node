@@ -6,6 +6,7 @@ use gloo_utils::format::JsValueSerdeExt;
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_trace};
 use log::error;
+use mutiny_core::blindauth::TokenStorage;
 use mutiny_core::logging::LOGGING_KEY;
 use mutiny_core::storage::*;
 use mutiny_core::vss::*;
@@ -435,6 +436,23 @@ impl IndexedDbStorage {
                         if lock.time < kv.version {
                             let obj = vss.get_object(&kv.key).await?;
                             if serde_json::from_value::<DeviceLock>(obj.value.clone()).is_ok() {
+                                return Ok(Some((kv.key, obj.value)));
+                            }
+                        }
+                    }
+                    None => {
+                        let obj = vss.get_object(&kv.key).await?;
+                        return Ok(Some((kv.key, obj.value)));
+                    }
+                }
+            }
+            SERVICE_TOKENS => {
+                // we can get version from TokenStorage, so we should compare
+                match current.get_data::<TokenStorage>(&kv.key)? {
+                    Some(token_storage) => {
+                        if token_storage.version < kv.version {
+                            let obj = vss.get_object(&kv.key).await?;
+                            if serde_json::from_value::<TokenStorage>(obj.value.clone()).is_ok() {
                                 return Ok(Some((kv.key, obj.value)));
                             }
                         }
