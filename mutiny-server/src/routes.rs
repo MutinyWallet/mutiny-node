@@ -244,6 +244,81 @@ pub async fn get_balance(
     Ok(Json(json!(balance)))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeInfoResponse {
+    node_id: String,
+    channels: Vec<Channel>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Channel {
+    state: String,
+    channel_id: String,
+    balance_sat: u64,
+    inbound_liquidity_sat: u64,
+    capacity_sat: u64,
+    funding_tx_id: Option<String>,
+}
+
+pub async fn get_node_info(
+    Extension(state): Extension<State>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let nodes = state
+        .mutiny_wallet
+        .node_manager
+        .list_nodes()
+        .await
+        .map_err(|e| handle_mutiny_err(e))?;
+    let node_pubkey: PublicKey;
+    if !nodes.is_empty() {
+        node_pubkey = nodes[0];
+    } else {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "unable to get node info"})),
+        ));
+    }
+
+    let channels = state
+        .mutiny_wallet
+        .node_manager
+        .list_channels()
+        .await
+        .map_err(|e| handle_mutiny_err(e))?;
+    let channels = channels
+        .into_iter()
+        .map(|channel| {
+            let state = match channel.is_usable {
+                true => "usable",
+                false => "unusable",
+            }
+            .to_string();
+            let funding_tx_id = match channel.outpoint {
+                Some(outpoint) => Some(outpoint.txid.to_string()),
+                None => None,
+            };
+
+            Channel {
+                state,
+                channel_id: channel.user_chan_id,
+                balance_sat: channel.balance,
+                inbound_liquidity_sat: channel.inbound,
+                capacity_sat: channel.size,
+                funding_tx_id,
+            }
+        })
+        .collect();
+
+    let node_info = NodeInfoResponse {
+        node_id: node_pubkey.to_string(),
+        channels,
+    };
+
+    Ok(Json(json!(node_info)))
+}
+
 fn handle_mutiny_err(err: MutinyError) -> (StatusCode, Json<Value>) {
     let err = json!({
         "error": format!("{err}"),

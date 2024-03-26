@@ -16,6 +16,7 @@ pub struct SledStorage {
     pub cipher: Option<Cipher>,
     db: sled::Db,
     delayed_keys: Arc<Mutex<HashMap<String, DelayedKeyValueItem>>>,
+    activity_index: Arc<RwLock<BTreeSet<IndexItem>>>,
 }
 
 impl SledStorage {
@@ -41,6 +42,7 @@ impl SledStorage {
             cipher,
             db,
             delayed_keys: Arc::new(Mutex::new(HashMap::new())),
+            activity_index: Arc::new(RwLock::new(BTreeSet::new())),
         })
     }
 }
@@ -65,7 +67,7 @@ impl MutinyStorage for SledStorage {
     }
 
     fn activity_index(&self) -> Arc<RwLock<BTreeSet<IndexItem>>> {
-        Arc::new(RwLock::new(BTreeSet::new()))
+        self.activity_index.clone()
     }
 
     fn set(&self, items: Vec<(String, impl Serialize)>) -> Result<(), MutinyError> {
