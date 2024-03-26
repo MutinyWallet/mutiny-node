@@ -443,8 +443,16 @@ impl<S: MutinyStorage> EventHandler<S> {
             Event::ProbeFailed { .. } => {
                 log_debug!(self.logger, "EVENT: ProbeFailed, ignored");
             }
-            Event::PaymentFailed { payment_hash, .. } => {
-                log_error!(self.logger, "EVENT: PaymentFailed: {}", payment_hash);
+            Event::PaymentFailed {
+                payment_hash,
+                reason,
+                ..
+            } => {
+                log_error!(
+                    self.logger,
+                    "EVENT: PaymentFailed: {} for reason {reason:?}",
+                    payment_hash
+                );
 
                 match read_payment_info(
                     &self.persister.storage,
