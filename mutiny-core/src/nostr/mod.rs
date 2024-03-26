@@ -1456,6 +1456,21 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(self.client.send_event_builder(builder).await?)
     }
 
+    /// Checks if we have recommended the given federation
+    pub async fn has_recommended_federation(
+        &self,
+        federation_id: &FederationId,
+    ) -> Result<bool, MutinyError> {
+        let filter = Filter::new()
+            .author(self.public_key)
+            .identifier(federation_id.to_string())
+            .limit(1);
+
+        let events = self.client.get_events_of(vec![filter], None).await?;
+
+        Ok(!events.is_empty())
+    }
+
     /// Queries our relays for federation announcements
     pub async fn discover_federations(&self) -> Result<Vec<NostrDiscoveredFedimint>, MutinyError> {
         // get contacts by npub
