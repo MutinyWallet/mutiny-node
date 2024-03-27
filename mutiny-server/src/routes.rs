@@ -1,12 +1,15 @@
 use crate::extractor::Form;
 use crate::sled::SledStorage;
 
+use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::{Extension, Json};
+use bitcoin::hashes::sha256::Hash;
 use bitcoin::{secp256k1::PublicKey, Address};
 use lightning_invoice::Bolt11Invoice;
 use mutiny_core::error::MutinyError;
-use mutiny_core::{InvoiceHandler, MutinyWallet};
+use mutiny_core::event::HTLCStatus;
+use mutiny_core::{InvoiceHandler, MutinyInvoice, MutinyWallet};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::str::FromStr;
@@ -105,6 +108,81 @@ pub async fn open_channel(
         .await
         .map_err(|e| handle_mutiny_err(e))?;
     Ok(Json(json!(channel)))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloseChannelRequest {
+    channel_id: String,
+    address: Option<String>,
+}
+
+pub async fn close_channel(
+    Extension(state): Extension<State>,
+    Form(request): Form<CloseChannelRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let channels = state
+        .mutiny_wallet
+        .node_manager
+        .list_channels()
+        .await
+        .map_err(|e| handle_mutiny_err(e))?;
+
+    let outpoint = match channels
+        .into_iter()
+        .find(|channel| channel.user_chan_id == request.channel_id)
+    {
+        Some(channel) => match channel.outpoint {
+            Some(outpoint) => outpoint,
+            None => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "unable to close channel"})),
+                ))
+            }
+        },
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "channel does not exist"})),
+            ))
+        }
+    };
+
+    let address = match request.address {
+        Some(address) => {
+            let address = match Address::from_str(address.as_str()) {
+                Ok(address) => address,
+                Err(_) => {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": "invalid address"})),
+                    ))
+                }
+            };
+
+            let address = match address.require_network(state.mutiny_wallet.get_network()) {
+                Ok(address) => address,
+                Err(_) => {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": "invalid address"})),
+                    ))
+                }
+            };
+
+            Some(address)
+        }
+        None => None,
+    };
+
+    let _ = state
+        .mutiny_wallet
+        .node_manager
+        .close_channel(&outpoint, address, false, false)
+        .await
+        .map_err(|e| handle_mutiny_err(e))?;
+    Ok(Json(json!("ok")))
 }
 
 #[derive(Deserialize)]
@@ -233,6 +311,95 @@ pub async fn pay_invoice(
     Ok(Json(json!(invoice)))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentResponse {
+    payment_hash: String,
+    preimage: Option<String>,
+    description: Option<String>,
+    invoice: Option<String>,
+    incoming: bool,
+    is_paid: bool,
+    amount_sats: u64,
+    fees: u64,
+}
+
+pub async fn get_incoming_payments(
+    Extension(state): Extension<State>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let invoices = state
+        .mutiny_wallet
+        .list_invoices()
+        .map_err(|e| handle_mutiny_err(e))?;
+    let invoices: Vec<MutinyInvoice> = invoices
+        .into_iter()
+        .filter(|invoice| invoice.inbound && invoice.status != HTLCStatus::Succeeded)
+        .collect();
+
+    let mut payments = Vec::with_capacity(invoices.len());
+    for invoice in invoices.into_iter() {
+        let pr = match invoice.bolt11.clone() {
+            Some(bolt_11) => Some(bolt_11.to_string()),
+            None => None,
+        };
+
+        let (is_paid, amount_sats, fees) = get_payment_info(&invoice)?;
+
+        let payment = PaymentResponse {
+            payment_hash: invoice.payment_hash.to_string(),
+            preimage: invoice.preimage,
+            description: invoice.description,
+            invoice: pr,
+            incoming: invoice.inbound,
+            is_paid,
+            amount_sats,
+            fees,
+        };
+        payments.push(payment);
+    }
+
+    Ok(Json(json!(payments)))
+}
+
+pub async fn get_payment(
+    Extension(state): Extension<State>,
+    Path(payment_hash): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let hash = match Hash::from_str(payment_hash.as_str()) {
+        Ok(hash) => hash,
+        Err(_) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid payment hash"})),
+            ))
+        }
+    };
+
+    let invoice = state
+        .mutiny_wallet
+        .get_invoice_by_hash(&hash)
+        .await
+        .map_err(|e| handle_mutiny_err(e))?;
+    let pr = match invoice.bolt11.clone() {
+        Some(bolt11) => Some(bolt11.to_string()),
+        None => None,
+    };
+    let (is_paid, amount_sats, fees) = get_payment_info(&invoice)?;
+
+    let payment = PaymentResponse {
+        payment_hash: hash.to_string(),
+        preimage: invoice.preimage,
+        description: invoice.description,
+        invoice: pr,
+        incoming: invoice.inbound,
+        is_paid,
+        amount_sats,
+        fees,
+    };
+
+    Ok(Json(json!(payment)))
+}
+
 pub async fn get_balance(
     Extension(state): Extension<State>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -324,4 +491,36 @@ fn handle_mutiny_err(err: MutinyError) -> (StatusCode, Json<Value>) {
         "error": format!("{err}"),
     });
     (StatusCode::INTERNAL_SERVER_ERROR, Json(err))
+}
+
+fn get_payment_info(
+    invoice: &MutinyInvoice,
+) -> Result<(bool, u64, u64), (StatusCode, Json<Value>)> {
+    let (is_paid, amount_sat, fees) = match invoice.status {
+        HTLCStatus::Succeeded => {
+            let amount_sat = match invoice.amount_sats {
+                Some(amount) => amount,
+                None => {
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": "unable to fetch payment"})),
+                    ))
+                }
+            };
+
+            let fees = match invoice.fees_paid {
+                Some(fee_amount) => fee_amount,
+                None => {
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": "unable to fetch payment"})),
+                    ))
+                }
+            };
+
+            (true, amount_sat, fees)
+        }
+        _ => (false, 0, 0),
+    };
+    Ok((is_paid, amount_sat, fees))
 }
