@@ -34,7 +34,10 @@ jobs:
           cargo +nightly-2023-10-24 fmt -- --check
 
       - name: Check docs
-        run: cargo +nightly-2023-10-24 doc
+        run: cargo +nightly-2023-10-24 doc --exclude mutiny-server --workspace
+
+      - name: Check docs server
+        run: cargo +nightly-2023-10-24 doc --target x86_64-unknown-linux-gnu -p mutiny-server
 
   website:
     name: Build WASM binary
