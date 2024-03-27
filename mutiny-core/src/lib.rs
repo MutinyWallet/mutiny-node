@@ -2019,10 +2019,22 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .multipart(form)
             .send()
             .await
-            .map_err(|_| MutinyError::NostrError)?
+            .map_err(|e| {
+                log_error!(
+                    self.logger,
+                    "Error sending request uploading profile picture: {e}"
+                );
+                MutinyError::NostrError
+            })?
             .json()
             .await
-            .map_err(|_| MutinyError::NostrError)?;
+            .map_err(|e| {
+                log_error!(
+                    self.logger,
+                    "Error parsing response uploading profile picture: {e}"
+                );
+                MutinyError::NostrError
+            })?;
 
         if res.status != "success" {
             log_error!(
