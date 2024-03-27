@@ -1690,8 +1690,12 @@ impl<S: MutinyStorage> NostrManager<S> {
                 }
             });
 
+            // if the network tag is missing, we assume it is on mainnet
+            let network_tag = network_tag
+                .as_deref()
+                .unwrap_or(network_to_string(Network::Bitcoin));
             // skip if the network doesn't match
-            if network_tag.is_none() || network_tag.unwrap() != network_str {
+            if network_tag != network_str {
                 continue;
             }
 
