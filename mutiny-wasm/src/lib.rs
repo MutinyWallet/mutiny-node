@@ -1241,7 +1241,7 @@ impl MutinyWallet {
         let event_id = self
             .inner
             .nostr
-            .recommend_federation(&invite_code, review.as_deref())
+            .recommend_federation(&invite_code, self.inner.get_network(), review.as_deref())
             .await?;
         Ok(event_id.to_hex())
     }
@@ -1264,7 +1264,11 @@ impl MutinyWallet {
     pub async fn discover_federations(
         &self,
     ) -> Result<JsValue /* Vec<NostrDiscoveredFedimint> */, MutinyJsError> {
-        let federations = self.inner.nostr.discover_federations().await?;
+        let federations = self
+            .inner
+            .nostr
+            .discover_federations(self.inner.get_network())
+            .await?;
         Ok(JsValue::from_serde(&federations)?)
     }
 

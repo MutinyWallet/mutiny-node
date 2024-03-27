@@ -14,7 +14,7 @@ use crate::{utils, HTLCStatus};
 use bitcoin::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{Secp256k1, Signing};
-use bitcoin::{hashes::hex::FromHex, secp256k1::ThirtyTwoByteHash};
+use bitcoin::{hashes::hex::FromHex, secp256k1::ThirtyTwoByteHash, Network};
 use fedimint_core::api::InviteCode;
 use fedimint_core::config::FederationId;
 use futures::{pin_mut, select, FutureExt};
@@ -1467,6 +1467,7 @@ impl<S: MutinyStorage> NostrManager<S> {
     pub async fn recommend_federation(
         &self,
         invite_code: &InviteCode,
+        network: Network,
         review: Option<&str>,
     ) -> Result<EventId, MutinyError> {
         let kind = Kind::from(38000);
@@ -1476,6 +1477,12 @@ impl<S: MutinyStorage> NostrManager<S> {
         let k_tag = Tag::Generic(
             TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::K)),
             vec!["38173".to_string()],
+        );
+
+        // tag the network
+        let n_tag = Tag::Generic(
+            TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::N)),
+            vec![network_to_string(network).to_string()],
         );
 
         // tag the federation invite code
@@ -1489,7 +1496,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         let builder = EventBuilder::new(
             kind,
             review.unwrap_or_default(),
-            [d_tag, k_tag, invite_code_tag],
+            [d_tag, k_tag, invite_code_tag, n_tag],
         );
 
         // send the event
@@ -1512,7 +1519,10 @@ impl<S: MutinyStorage> NostrManager<S> {
     }
 
     /// Queries our relays for federation announcements
-    pub async fn discover_federations(&self) -> Result<Vec<NostrDiscoveredFedimint>, MutinyError> {
+    pub async fn discover_federations(
+        &self,
+        network: Network,
+    ) -> Result<Vec<NostrDiscoveredFedimint>, MutinyError> {
         // get contacts by npub
         let mut npubs: HashMap<nostr::PublicKey, Contact> = self
             .storage
@@ -1552,6 +1562,8 @@ impl<S: MutinyStorage> NostrManager<S> {
             }
         }
 
+        let network_str = network_to_string(network);
+
         // filter for finding mint announcements
         let mints = Filter::new().kind(Kind::from(38173));
         // filter for finding federation recommendations from trusted people
@@ -1564,6 +1576,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             .kind(Kind::from(38000))
             .custom_tag(SingleLetterTag::lowercase(Alphabet::K), ["38173"])
             .limit(NUM_TRUSTED_USERS as usize);
+
         // fetch events
         let events = self
             .client
@@ -1578,6 +1591,24 @@ impl<S: MutinyStorage> NostrManager<S> {
             .filter_map(|event| {
                 // only process federation announcements
                 if event.kind != Kind::from(38173) {
+                    return None;
+                }
+
+                let network_tag = event.tags.iter().find_map(|tag| {
+                    if tag.kind() == TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::N))
+                    {
+                        Some(tag.as_vec().get(1).cloned().unwrap_or_default())
+                    } else {
+                        None
+                    }
+                });
+
+                // if the network tag is missing, we assume it is on mainnet
+                let network_tag = network_tag
+                    .as_deref()
+                    .unwrap_or(network_to_string(Network::Bitcoin));
+                // skip if the network doesn't match
+                if network_tag != network_str {
                     return None;
                 }
 
@@ -1599,7 +1630,16 @@ impl<S: MutinyStorage> NostrManager<S> {
                                 // remove any invite codes that point to different federation
                                 .filter(|c| c.federation_id() == federation_id)
                         } else {
-                            None
+                            // tag might have `fedimint` element, try to parse that as well
+                            let vec = tag.as_vec();
+                            if vec.len() == 3 && vec[0] == "u" && vec[2] == "fedimint" {
+                                InviteCode::from_str(&vec[1])
+                                    .ok()
+                                    // remove any invite codes that point to different federation
+                                    .filter(|c| c.federation_id() == federation_id)
+                            } else {
+                                None
+                            }
                         }
                     })
                     .collect();
@@ -1641,6 +1681,19 @@ impl<S: MutinyStorage> NostrManager<S> {
                 Some(contact) => contact.clone(),
                 None => continue,
             };
+
+            let network_tag = event.tags.iter().find_map(|tag| {
+                if tag.kind() == TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::N)) {
+                    Some(tag.as_vec().get(1).cloned().unwrap_or_default())
+                } else {
+                    None
+                }
+            });
+
+            // skip if the network doesn't match
+            if network_tag.is_none() || network_tag.unwrap() != network_str {
+                continue;
+            }
 
             let invite_codes = event
                 .tags
@@ -1831,6 +1884,16 @@ fn get_next_nwc_index(
     };
 
     Ok((name, index, child_key_index))
+}
+
+fn network_to_string(network: Network) -> &'static str {
+    match network {
+        Network::Bitcoin => "mainnet",
+        Network::Testnet => "testnet",
+        Network::Signet => "signet",
+        Network::Regtest => "regtest",
+        net => unreachable!("Unknown network {net}!"),
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
