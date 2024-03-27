@@ -1630,7 +1630,16 @@ impl<S: MutinyStorage> NostrManager<S> {
                                 // remove any invite codes that point to different federation
                                 .filter(|c| c.federation_id() == federation_id)
                         } else {
-                            None
+                            // tag might have `fedimint` element, try to parse that as well
+                            let vec = tag.as_vec();
+                            if vec.len() == 3 && vec[0] == "u" && vec[2] == "fedimint" {
+                                InviteCode::from_str(&vec[1])
+                                    .ok()
+                                    // remove any invite codes that point to different federation
+                                    .filter(|c| c.federation_id() == federation_id)
+                            } else {
+                                None
+                            }
                         }
                     })
                     .collect();
