@@ -865,9 +865,13 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         let federations = if !federation_storage.federations.is_empty() {
             let start = Instant::now();
             log_trace!(logger, "Building Federations");
-            let result =
-                create_federations(federation_storage.clone(), &config, &self.storage, &logger)
-                    .await?;
+            let result = create_federations(
+                federation_storage.clone(),
+                &config,
+                self.storage.clone(),
+                &logger,
+            )
+            .await?;
             log_debug!(
                 logger,
                 "Federations started, took: {}ms",
@@ -2863,7 +2867,7 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
 async fn create_federations<S: MutinyStorage>(
     federation_storage: FederationStorage,
     c: &MutinyWalletConfig,
-    storage: &S,
+    storage: S,
     logger: &Arc<MutinyLogger>,
 ) -> Result<Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>, MutinyError> {
     let mut federation_map = HashMap::with_capacity(federation_storage.federations.len());
@@ -2872,7 +2876,7 @@ async fn create_federations<S: MutinyStorage>(
             uuid,
             federation_index.federation_code,
             c.xprivkey,
-            storage,
+            storage.clone(),
             c.network,
             logger.clone(),
         )
@@ -2922,7 +2926,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         next_federation_uuid.clone(),
         federation_code.clone(),
         xprivkey,
-        &storage,
+        storage.clone(),
         network,
         logger.clone(),
     )
