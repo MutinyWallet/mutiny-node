@@ -3,6 +3,7 @@ resolver = "2"
 
 members = [
     "mutiny-core",
+    "mutiny-server",
     "mutiny-wasm",
 ]
 
