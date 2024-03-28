@@ -618,6 +618,8 @@ pub struct MutinyBip21RawMaterials {
     pub(crate) invoice: Option<String>,
     pub(crate) btc_amount: Option<String>,
     pub(crate) labels: Vec<String>,
+    pub(crate) pj: Option<String>,
+    pub(crate) ohttp: Option<String>,
 }
 
 #[wasm_bindgen]
@@ -646,6 +648,16 @@ impl MutinyBip21RawMaterials {
     pub fn labels(&self) -> Vec<String> {
         self.labels.clone()
     }
+
+    #[wasm_bindgen(getter)]
+    pub fn pj(&self) -> Option<String> {
+        self.pj.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn ohttp(&self) -> Option<String> {
+        self.ohttp.clone()
+    }
 }
 
 impl From<nodemanager::MutinyBip21RawMaterials> for MutinyBip21RawMaterials {
@@ -655,6 +667,8 @@ impl From<nodemanager::MutinyBip21RawMaterials> for MutinyBip21RawMaterials {
             invoice: m.invoice.map(|i| i.to_string()),
             btc_amount: m.btc_amount,
             labels: m.labels,
+            pj: m.pj,
+            ohttp: m.ohttp,
         }
     }
 }

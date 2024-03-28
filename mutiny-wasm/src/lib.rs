@@ -476,6 +476,8 @@ impl MutinyWallet {
             invoice: None,
             btc_amount: None,
             labels,
+            pj: None,
+            ohttp: None,
         })
     }
 
@@ -549,7 +551,7 @@ impl MutinyWallet {
         amount: u64, /* override the uri amount if desired */
         labels: Vec<String>,
         fee_rate: Option<f32>,
-    ) -> Result<String, MutinyJsError> {
+    ) -> Result<(), MutinyJsError> {
         // I know walia parses `pj=` and `pjos=` but payjoin::Uri parses the whole bip21 uri
         let pj_uri = payjoin::Uri::try_from(payjoin_uri.as_str())
             .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
@@ -557,8 +559,7 @@ impl MutinyWallet {
             .inner
             .node_manager
             .send_payjoin(pj_uri, amount, labels, fee_rate)
-            .await?
-            .to_string())
+            .await?)
     }
 
     /// Sweeps all the funds from the wallet to the given address.
