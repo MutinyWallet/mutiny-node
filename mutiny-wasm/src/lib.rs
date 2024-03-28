@@ -1222,14 +1222,6 @@ impl MutinyWallet {
         Ok(self.inner.get_federation_balances().await?.into())
     }
 
-    /// Scans all federations for user ecash.
-    ///
-    /// This can be useful if you think you have some federation funds missing.
-    #[wasm_bindgen]
-    pub async fn recover_federation_backups(&mut self) -> Result<(), MutinyJsError> {
-        Ok(self.inner.recover_federation_backups().await?)
-    }
-
     /// Creates a recommendation event for a federation
     pub async fn recommend_federation(
         &self,

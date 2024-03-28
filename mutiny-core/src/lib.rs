@@ -82,9 +82,9 @@ use ::nostr::nips::nip57;
 #[cfg(target_arch = "wasm32")]
 use ::nostr::prelude::rand::rngs::OsRng;
 use ::nostr::prelude::ZapRequestData;
-use ::nostr::{EventBuilder, EventId, JsonUtil, Kind};
 #[cfg(target_arch = "wasm32")]
-use ::nostr::{Keys, Tag};
+use ::nostr::Tag;
+use ::nostr::{EventBuilder, EventId, JsonUtil, Keys, Kind};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
@@ -865,9 +865,13 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         let federations = if !federation_storage.federations.is_empty() {
             let start = Instant::now();
             log_trace!(logger, "Building Federations");
-            let result =
-                create_federations(federation_storage.clone(), &config, &self.storage, &logger)
-                    .await?;
+            let result = create_federations(
+                federation_storage.clone(),
+                &config,
+                self.storage.clone(),
+                &logger,
+            )
+            .await?;
             log_debug!(
                 logger,
                 "Federations started, took: {}ms",
@@ -1066,7 +1070,13 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         mw.check_blind_tokens();
 
         // start the hermes background process
-        mw.start_hermes()?;
+        // get profile key if we have it, we need this to decrypt private zaps
+        let profile_key = match &mw.nostr.primary_key {
+            NostrSigner::Keys(keys) => Some(keys.clone()),
+            #[cfg(target_arch = "wasm32")]
+            NostrSigner::NIP07(_) => None,
+        };
+        mw.start_hermes(profile_key)?;
 
         log_info!(
             mw.logger,
@@ -2370,23 +2380,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(())
     }
 
-    pub async fn recover_federation_backups(&self) -> Result<(), MutinyError> {
-        let federation_ids = self.list_federation_ids().await?;
-
-        let federations = self.federations.read().await;
-        for fed_id in federation_ids {
-            federations
-                .get(&fed_id)
-                .ok_or(MutinyError::NotFound)?
-                .recover_backup()
-                .await?;
-
-            log_info!(self.logger, "Scanned federation backups: {}", fed_id);
-        }
-
-        Ok(())
-    }
-
     pub async fn get_total_federation_balance(&self) -> Result<u64, MutinyError> {
         let federation_ids = self.list_federation_ids().await?;
         let mut total_balance = 0;
@@ -2782,9 +2775,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Starts up the hermes client if available
-    pub fn start_hermes(&self) -> Result<(), MutinyError> {
-        if let Some(hermes_client) = self.hermes_client.clone() {
-            hermes_client.start()?
+    pub fn start_hermes(&self, profile_key: Option<Keys>) -> Result<(), MutinyError> {
+        if let Some(hermes_client) = self.hermes_client.as_ref() {
+            hermes_client.start(profile_key)?
         }
         Ok(())
     }
@@ -2863,7 +2856,7 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
 async fn create_federations<S: MutinyStorage>(
     federation_storage: FederationStorage,
     c: &MutinyWalletConfig,
-    storage: &S,
+    storage: S,
     logger: &Arc<MutinyLogger>,
 ) -> Result<Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>, MutinyError> {
     let mut federation_map = HashMap::with_capacity(federation_storage.federations.len());
@@ -2872,7 +2865,7 @@ async fn create_federations<S: MutinyStorage>(
             uuid,
             federation_index.federation_code,
             c.xprivkey,
-            storage,
+            storage.clone(),
             c.network,
             logger.clone(),
         )
@@ -2922,7 +2915,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         next_federation_uuid.clone(),
         federation_code.clone(),
         xprivkey,
-        &storage,
+        storage.clone(),
         network,
         logger.clone(),
     )
