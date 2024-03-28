@@ -318,6 +318,21 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(with_nip05)
     }
 
+    /// Sets the user's nostr profile metadata as deleted
+    pub async fn delete_profile(&self) -> Result<Metadata, MutinyError> {
+        let metadata = Metadata::default()
+            .name("Deleted")
+            .display_name("Deleted")
+            .about("Deleted")
+            .custom_field("deleted", true);
+
+        let event_id = self.client.set_metadata(&metadata).await?;
+        log_info!(self.logger, "New kind 0: {event_id}");
+        self.storage.set_nostr_profile(metadata.clone())?;
+
+        Ok(metadata)
+    }
+
     pub fn get_profile(&self) -> Result<Metadata, MutinyError> {
         Ok(self.storage.get_nostr_profile()?.unwrap_or_default())
     }
