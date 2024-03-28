@@ -1882,6 +1882,13 @@ impl MutinyWallet {
         Ok(JsValue::from_serde(&profile)?)
     }
 
+    /// Sets the user's nostr profile data to a "deleted" state
+    #[wasm_bindgen]
+    pub async fn delete_profile(&self) -> Result<JsValue, MutinyJsError> {
+        let profile = self.inner.nostr.delete_profile().await?;
+        Ok(JsValue::from_serde(&profile)?)
+    }
+
     /// Syncs all of our nostr data from the configured primal instance
     pub async fn sync_nostr(&self) -> Result<(), MutinyJsError> {
         self.inner.sync_nostr().await?;
