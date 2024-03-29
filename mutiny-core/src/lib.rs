@@ -110,7 +110,7 @@ use moksha_core::primitives::{
     PostMeltQuoteBolt11Response,
 };
 use moksha_core::token::TokenV3;
-use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
+use nostr_sdk::{NostrSigner, RelayPoolNotification};
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1135,7 +1135,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 };
 
                 // if we have no filters, then wait 10 seconds and see if we do again
-                let mut last_filters = nostr.get_filters().unwrap_or_default();
+                let mut last_filters = nostr.get_filters().await.unwrap_or_default();
                 if last_filters.is_empty() {
                     utils::sleep(10_000).await;
                     continue;
@@ -1160,7 +1160,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     log_warn!(logger, "Failed to clear invalid NWC invoices: {e}");
                 }
 
-                let client = Client::new(nostr.primary_key.clone());
+                let client = &nostr.client;
 
                 client
                     .add_relays(nostr.get_relays())
@@ -1214,6 +1214,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                                 }
                                             }
                                             Kind::ContactList => {
+                                                let event_pk = event.pubkey;
                                                 match update_nostr_contact_list(&nostr.storage, *event) {
                                                     Err(e) =>log_error!(logger, "Error handling contact list: {e}"),
                                                     Ok(true) => {
@@ -1222,7 +1223,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                                         // sync in background so we don't block processing other events
                                                         let self_clone = self_clone.clone();
                                                         utils::spawn(async move {
-                                                            match self_clone.sync_nostr_contacts(self_clone.nostr.public_key).await {
+                                                            match self_clone.sync_nostr_contacts(event_pk).await {
                                                                 Err(e) => log_error!(self_clone.logger, "Failed to sync nostr: {e}"),
                                                                 Ok(_) => log_debug!(self_clone.logger, "Successfully synced nostr contacts"),
                                                             }
@@ -1249,7 +1250,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         }
                         _ = filter_check_fut => {
                             // Check if the filters have changed
-                            if let Ok(current_filters) = nostr.get_filters() {
+                            if let Ok(current_filters) = nostr.get_filters().await {
                                 if !utils::compare_filters_vec(&current_filters, &last_filters) {
                                     log_debug!(logger, "subscribing to new nwc filters");
                                     client.subscribe(current_filters.clone(), None).await;
@@ -2059,7 +2060,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     /// Syncs all of our nostr data from the configured primal instance
     pub async fn sync_nostr(&self) -> Result<(), MutinyError> {
-        let contacts_fut = self.sync_nostr_contacts(self.nostr.public_key);
+        let npub = self.nostr.get_npub().await;
+        let contacts_fut = self.sync_nostr_contacts(npub);
         let profile_fut = self.sync_nostr_profile();
 
         // join futures and handle result
@@ -2072,12 +2074,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     /// Fetches our latest nostr profile from primal and saves to storage
     async fn sync_nostr_profile(&self) -> Result<(), MutinyError> {
-        if let Some(metadata) = self
-            .nostr
-            .primal_client
-            .get_user_profile(self.nostr.public_key)
-            .await?
-        {
+        let npub = self.nostr.get_npub().await;
+        if let Some(metadata) = self.nostr.primal_client.get_user_profile(npub).await? {
             self.storage.set_nostr_profile(metadata)?;
         }
 
@@ -2165,10 +2163,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         until: Option<u64>,
         since: Option<u64>,
     ) -> Result<Vec<DirectMessage>, MutinyError> {
+        let self_key = self.nostr.get_npub().await;
         let events = self
             .nostr
             .primal_client
-            .get_dm_conversation(npub, self.nostr.public_key, limit, until, since)
+            .get_dm_conversation(npub, self_key, limit, until, since)
             .await?;
 
         let mut messages = Vec::with_capacity(events.len());
@@ -2179,11 +2178,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
             // if decryption fails, skip this message, just a bad dm
             if let Ok(message) = self.nostr.decrypt_dm(npub, &event.content).await {
-                let to = if event.pubkey == npub {
-                    self.nostr.public_key
-                } else {
-                    npub
-                };
+                let to = if event.pubkey == npub { self_key } else { npub };
                 let dm = DirectMessage {
                     from: event.pubkey,
                     to,
@@ -2535,14 +2530,18 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         let event = match privacy_level {
                             PrivacyLevel::Public => {
                                 self.nostr
-                                    .primary_key
+                                    .nostr_keys
+                                    .read()
+                                    .await
+                                    .signer
                                     .sign_event_builder(EventBuilder::public_zap_request(data))
                                     .await?
                             }
                             PrivacyLevel::Private => {
                                 // if we have access to the keys, use those
                                 // otherwise need to implement ourselves to use with NIP-07
-                                match &self.nostr.primary_key {
+                                let signer = &self.nostr.nostr_keys.read().await.signer;
+                                match signer {
                                     NostrSigner::Keys(keys) => {
                                         nip57::private_zap_request(data, keys)?
                                     }
@@ -2567,11 +2566,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                             &data.message,
                                             tags,
                                         );
-                                        let msg = self
-                                            .nostr
-                                            .primary_key
-                                            .sign_event_builder(msg_builder)
-                                            .await?;
+                                        let msg = signer.sign_event_builder(msg_builder).await?;
                                         let created_at = msg.created_at;
                                         let msg: String = nip57::encrypt_private_zap_message(
                                             &mut OsRng,

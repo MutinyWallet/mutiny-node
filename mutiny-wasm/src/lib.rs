@@ -442,16 +442,22 @@ impl MutinyWallet {
 
     /// Returns the user's npub
     #[wasm_bindgen]
-    pub fn get_npub(&self) -> String {
-        self.inner.nostr.public_key.to_bech32().expect("bech32")
+    pub async fn get_npub(&self) -> String {
+        self.inner
+            .nostr
+            .get_npub()
+            .await
+            .to_bech32()
+            .expect("bech32")
     }
 
     /// Export the user's nostr secret key if available
     #[wasm_bindgen]
-    pub fn export_nsec(&self) -> Option<String> {
+    pub async fn export_nsec(&self) -> Option<String> {
         self.inner
             .nostr
             .export_nsec()
+            .await
             .map(|s| s.to_bech32().expect("bech32"))
     }
 

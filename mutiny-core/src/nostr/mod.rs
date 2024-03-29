@@ -92,15 +92,58 @@ pub enum NostrKeySource {
     Extension(nostr::PublicKey),
 }
 
+/// Keys we use to sign nostr events
+#[derive(Clone)]
+pub struct NostrKeys {
+    /// Signer for the primary key
+    pub signer: NostrSigner,
+    /// Public key for the signer
+    pub public_key: nostr::PublicKey,
+}
+
+impl NostrKeys {
+    pub(crate) fn from_key_source(
+        key_source: NostrKeySource,
+        xprivkey: ExtendedPrivKey,
+    ) -> Result<Self, MutinyError> {
+        // use provided nsec, otherwise generate it from seed
+        let (signer, public_key) = match key_source {
+            NostrKeySource::Derived => {
+                let keys = derive_nostr_key(
+                    &Secp256k1::new(),
+                    xprivkey,
+                    PROFILE_ACCOUNT_INDEX,
+                    None,
+                    None,
+                )?;
+                let public_key = keys.public_key();
+                let signer = NostrSigner::Keys(keys);
+                (signer, public_key)
+            }
+            NostrKeySource::Imported(keys) => {
+                let public_key = keys.public_key();
+                let signer = NostrSigner::Keys(keys);
+                (signer, public_key)
+            }
+            #[cfg(target_arch = "wasm32")]
+            NostrKeySource::Extension(public_key) => {
+                let nip07 = nostr::prelude::Nip07Signer::new()?;
+                let signer = NostrSigner::NIP07(nip07);
+                (signer, public_key)
+            }
+        };
+
+        Ok(NostrKeys { signer, public_key })
+    }
+}
+
 /// Manages Nostr keys and has different utilities for nostr specific things
 #[derive(Clone)]
 pub struct NostrManager<S: MutinyStorage> {
     /// Extended private key that is the root seed of the wallet
     xprivkey: ExtendedPrivKey,
     /// Primary key used for nostr, this will be used for signing events
-    pub(crate) primary_key: NostrSigner,
-    /// Primary key's public key
-    pub public_key: nostr::PublicKey,
+    pub(crate) nostr_keys: Arc<async_lock::RwLock<NostrKeys>>,
     /// Separate profiles for each nostr wallet connect string
     pub(crate) nwc: Arc<RwLock<Vec<NostrWalletConnect>>>,
     pub storage: S,
@@ -146,9 +189,13 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(())
     }
 
+    pub async fn get_npub(&self) -> nostr::PublicKey {
+        self.nostr_keys.read().await.public_key
+    }
+
     /// Export the primary key's secret key if available
-    pub fn export_nsec(&self) -> Option<SecretKey> {
-        match &self.primary_key {
+    pub async fn export_nsec(&self) -> Option<SecretKey> {
+        match &self.nostr_keys.read().await.signer {
             NostrSigner::Keys(keys) => keys.secret_key().ok().cloned(),
             #[cfg(target_arch = "wasm32")]
             NostrSigner::NIP07(_) => None,
@@ -204,7 +251,7 @@ impl<S: MutinyStorage> NostrManager<S> {
     }
 
     /// Filters for getting DMs from our contacts
-    fn get_dm_filter(&self) -> Result<Filter, MutinyError> {
+    async fn get_dm_filter(&self) -> Result<Filter, MutinyError> {
         let contacts = self.storage.get_contacts()?;
         let last_sync_time = self.storage.get_dm_sync_time()?;
         let npubs: HashSet<nostr::PublicKey> =
@@ -220,24 +267,27 @@ impl<S: MutinyStorage> NostrManager<S> {
             Some(time) => Timestamp::from(time + 1), // add one so we get only new events
         };
 
+        let pk = self.get_npub().await;
         let received_dm_filter = Filter::new()
             .kind(Kind::EncryptedDirectMessage)
             .authors(npubs)
-            .pubkey(self.public_key)
+            .pubkey(pk)
             .since(time_stamp);
 
         Ok(received_dm_filter)
     }
 
     /// Filter for getting updates to our nostr contacts list
-    fn get_contacts_list_filter(&self) -> Result<Filter, MutinyError> {
+    async fn get_contacts_list_filter(&self) -> Result<Filter, MutinyError> {
         let event = self.storage.get_data::<Event>(NOSTR_CONTACT_LIST)?;
+
+        let pk = self.get_npub().await;
 
         // listen for latest contact list events
         let time_stamp = match event {
             None => Timestamp::from(0),
             Some(event) => {
-                if event.pubkey == self.public_key {
+                if event.pubkey == pk {
                     event.created_at + 1_i64 // add one so we get only new events
                 } else {
                     Timestamp::from(0)
@@ -247,14 +297,14 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         Ok(Filter::new()
             .kind(Kind::ContactList)
-            .author(self.public_key)
+            .author(pk)
             .since(time_stamp))
     }
 
-    pub fn get_filters(&self) -> Result<Vec<Filter>, MutinyError> {
+    pub async fn get_filters(&self) -> Result<Vec<Filter>, MutinyError> {
         let mut nwc = self.get_nwc_filters()?;
-        let dm = self.get_dm_filter()?;
-        let contacts_list = self.get_contacts_list_filter()?;
+        let dm = self.get_dm_filter().await?;
+        let contacts_list = self.get_contacts_list_filter().await?;
         nwc.extend([dm, contacts_list]);
 
         Ok(nwc)
@@ -269,7 +319,8 @@ impl<S: MutinyStorage> NostrManager<S> {
         nip05: Option<String>,
     ) -> Result<Metadata, MutinyError> {
         // pull latest profile from primal
-        let current = match self.primal_client.get_user_profile(self.public_key).await {
+        let public_key = self.get_npub().await;
+        let current = match self.primal_client.get_user_profile(public_key).await {
             Ok(Some(meta)) => meta,
             Ok(None) => {
                 log_warn!(self.logger, "No profile found for user, creating new");
@@ -347,11 +398,9 @@ impl<S: MutinyStorage> NostrManager<S> {
         let builder = match event {
             Some(event) => {
                 // if event is for a different key, we need to pull down latest
-                let (mut tags, content) = if event.pubkey != self.public_key {
-                    let (opt, _) = self
-                        .primal_client
-                        .get_nostr_contacts(self.public_key)
-                        .await?;
+                let pk = self.get_npub().await;
+                let (mut tags, content) = if event.pubkey != pk {
+                    let (opt, _) = self.primal_client.get_nostr_contacts(pk).await?;
 
                     // if key doesn't have a contact list, create a new one
                     match opt {
@@ -379,7 +428,13 @@ impl<S: MutinyStorage> NostrManager<S> {
             None => EventBuilder::new(Kind::ContactList, "", [Tag::public_key(npub)]),
         };
 
-        let event = self.primary_key.sign_event_builder(builder).await?;
+        let event = self
+            .nostr_keys
+            .read()
+            .await
+            .signer
+            .sign_event_builder(builder)
+            .await?;
         let event_id = self.client.send_event(event.clone()).await?;
 
         update_nostr_contact_list(&self.storage, event)?;
@@ -403,11 +458,9 @@ impl<S: MutinyStorage> NostrManager<S> {
             None => Ok(()), // no follow list, nothing to unfollow
             Some(event) => {
                 // if event is for a different key, we need to pull down latest
-                let (mut tags, content) = if event.pubkey != self.public_key {
-                    let (opt, _) = self
-                        .primal_client
-                        .get_nostr_contacts(self.public_key)
-                        .await?;
+                let pk = self.get_npub().await;
+                let (mut tags, content) = if event.pubkey != pk {
+                    let (opt, _) = self.primal_client.get_nostr_contacts(pk).await?;
 
                     // if key doesn't have a contact list, create a new one
                     match opt {
@@ -433,7 +486,13 @@ impl<S: MutinyStorage> NostrManager<S> {
                 }
 
                 let builder = EventBuilder::new(Kind::ContactList, content, tags);
-                let event = self.primary_key.sign_event_builder(builder).await?;
+                let event = self
+                    .nostr_keys
+                    .read()
+                    .await
+                    .signer
+                    .sign_event_builder(builder)
+                    .await?;
                 let event_id = self.client.send_event(event.clone()).await?;
 
                 update_nostr_contact_list(&self.storage, event)?;
@@ -877,16 +936,15 @@ impl<S: MutinyStorage> NostrManager<S> {
         });
 
         if let Some(nwc) = nwc {
-            let client = Client::new(self.primary_key.clone());
-
-            let mut relays = self.get_relays();
-            relays.push(relay.to_string());
-            relays.push(profile.relay.clone());
-            client.add_relays(relays).await?;
-            client.connect().await;
+            // add the relays if needed
+            let mut needs_connect = self.client.add_relay(&relay).await?;
+            needs_connect |= self.client.add_relay(profile.relay.as_str()).await?;
+            if needs_connect {
+                self.client.connect().await;
+            }
 
             if let Some(event) = nwc.create_auth_confirmation_event(relay, secret, commands)? {
-                let id = client.send_event(event).await.map_err(|e| {
+                let id = self.client.send_event(event).await.map_err(|e| {
                     MutinyError::Other(anyhow::anyhow!(
                         "Failed to send nwa confirmation event: {e:?}"
                     ))
@@ -895,12 +953,10 @@ impl<S: MutinyStorage> NostrManager<S> {
             }
 
             let info_event = nwc.create_nwc_info_event()?;
-            let id = client.send_event(info_event).await.map_err(|e| {
+            let id = self.client.send_event(info_event).await.map_err(|e| {
                 MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}"))
             })?;
             log_info!(self.logger, "Broadcast NWC info event: {id}");
-
-            let _ = client.disconnect().await;
         } else {
             log_error!(self.logger, "Failed to create info & auth event");
             return Err(MutinyError::Other(anyhow::anyhow!(
@@ -1197,7 +1253,7 @@ impl<S: MutinyStorage> NostrManager<S> {
     ) -> anyhow::Result<()> {
         if event.kind != Kind::EncryptedDirectMessage {
             anyhow::bail!("Not a direct message");
-        } else if event.pubkey == self.public_key {
+        } else if event.pubkey == self.nostr_keys.read().await.public_key {
             return Ok(()); // don't process our own messages
         }
 
@@ -1455,7 +1511,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         message: &str,
     ) -> Result<String, MutinyError> {
         // todo we should handle NIP-44 as well
-        match &self.primary_key {
+        match &self.nostr_keys.read().await.signer {
             NostrSigner::Keys(key) => {
                 let secret = key.secret_key().expect("must have");
                 let decrypted = decrypt(secret, &pubkey, message)?;
@@ -1523,8 +1579,9 @@ impl<S: MutinyStorage> NostrManager<S> {
         &self,
         federation_id: &FederationId,
     ) -> Result<bool, MutinyError> {
+        let pk = self.get_npub().await;
         let filter = Filter::new()
-            .author(self.public_key)
+            .author(pk)
             .identifier(federation_id.to_string())
             .limit(1);
 
@@ -1804,26 +1861,7 @@ impl<S: MutinyStorage> NostrManager<S> {
     ) -> Result<Self, MutinyError> {
         let context = Secp256k1::new();
 
-        // use provided nsec, otherwise generate it from seed
-        let (primary_key, public_key) = match key_source {
-            NostrKeySource::Derived => {
-                let keys = derive_nostr_key(&context, xprivkey, PROFILE_ACCOUNT_INDEX, None, None)?;
-                let public_key = keys.public_key();
-                let signer = NostrSigner::Keys(keys);
-                (signer, public_key)
-            }
-            NostrKeySource::Imported(keys) => {
-                let public_key = keys.public_key();
-                let signer = NostrSigner::Keys(keys);
-                (signer, public_key)
-            }
-            #[cfg(target_arch = "wasm32")]
-            NostrKeySource::Extension(public_key) => {
-                let nip07 = nostr::prelude::Nip07Signer::new()?;
-                let signer = NostrSigner::NIP07(nip07);
-                (signer, public_key)
-            }
-        };
+        let nostr_keys = NostrKeys::from_key_source(key_source, xprivkey)?;
 
         // get from storage
         let profiles: Vec<Profile> = storage.get_data(NWC_STORAGE_KEY)?.unwrap_or_default();
@@ -1834,7 +1872,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             .map(|profile| NostrWalletConnect::new(&context, xprivkey, profile).unwrap())
             .collect();
 
-        let client = Client::new(primary_key.clone());
+        let client = Client::new(nostr_keys.signer.clone());
 
         let primal_client = PrimalClient::new(
             primal_url.unwrap_or("https://primal-cache.mutinywallet.com/api".to_string()),
@@ -1842,8 +1880,7 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         Ok(Self {
             xprivkey,
-            primary_key,
-            public_key,
+            nostr_keys: Arc::new(async_lock::RwLock::new(nostr_keys)),
             nwc: Arc::new(RwLock::new(nwc)),
             storage,
             pending_nwc_lock: Arc::new(Mutex::new(())),
@@ -1967,17 +2004,18 @@ mod test {
         inv_handler.expect_skip_hodl_invoices().return_const(true);
 
         #[allow(irrefutable_let_patterns)] // need this because enum with single variant
-        let nostr_keys = if let NostrSigner::Keys(ref keys) = nostr_manager.primary_key {
-            keys.clone()
-        } else {
-            panic!("unexpected keys")
-        };
+        let nostr_keys =
+            if let NostrSigner::Keys(ref keys) = nostr_manager.nostr_keys.read().await.signer {
+                keys.clone()
+            } else {
+                panic!("unexpected keys")
+            };
         let user = Keys::generate();
 
         // make sure non-invoice is not added
         let dm = EventBuilder::encrypted_direct_msg(
             &user,
-            nostr_manager.public_key,
+            nostr_keys.public_key(),
             "not an invoice",
             None,
         )
@@ -1991,7 +2029,7 @@ mod test {
         // make sure expired invoice is not added
         let dm = EventBuilder::encrypted_direct_msg(
             &user,
-            nostr_manager.public_key,
+            nostr_keys.public_key(),
             EXPIRED_INVOICE,
             None,
         )
@@ -2038,7 +2076,7 @@ mod test {
         // valid invoice dm should be added
         let dm = EventBuilder::encrypted_direct_msg(
             &user,
-            nostr_manager.public_key,
+            nostr_keys.public_key(),
             invoice.to_string(),
             None,
         )
