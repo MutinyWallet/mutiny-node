@@ -82,9 +82,9 @@ use ::nostr::nips::nip57;
 #[cfg(target_arch = "wasm32")]
 use ::nostr::prelude::rand::rngs::OsRng;
 use ::nostr::prelude::ZapRequestData;
-use ::nostr::{EventBuilder, EventId, JsonUtil, Kind};
 #[cfg(target_arch = "wasm32")]
-use ::nostr::{Keys, Tag};
+use ::nostr::Tag;
+use ::nostr::{EventBuilder, EventId, JsonUtil, Keys, Kind};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
@@ -2058,6 +2058,26 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Err(MutinyError::NostrError)
     }
 
+    /// Change our active nostr keys to the given keys
+    pub async fn change_nostr_keys(
+        &self,
+        keys: Option<Keys>,
+        #[cfg(target_arch = "wasm32")] extension_pk: Option<::nostr::PublicKey>,
+    ) -> Result<::nostr::PublicKey, MutinyError> {
+        #[cfg(target_arch = "wasm32")]
+        let source = utils::build_nostr_key_source(keys, extension_pk)?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let source = utils::build_nostr_key_source(keys)?;
+
+        let new_pk = self.nostr.change_nostr_keys(source, self.xprivkey).await?;
+
+        // re-sync nostr profile data
+        self.sync_nostr().await?;
+
+        Ok(new_pk)
+    }
+
     /// Syncs all of our nostr data from the configured primal instance
     pub async fn sync_nostr(&self) -> Result<(), MutinyError> {
         let npub = self.nostr.get_npub().await;
@@ -3153,7 +3173,7 @@ mod tests {
     use crate::labels::{Contact, LabelStorage};
     use crate::nostr::NostrKeySource;
     use crate::utils::{now, parse_npub, sleep};
-    use nostr::Keys;
+    use nostr::{Keys, Metadata};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -3435,10 +3455,6 @@ mod tests {
 
         assert_eq!(messages.len(), 5);
 
-        for x in &messages {
-            log!("{}", x.message);
-        }
-
         // get next messages
         let limit = 2;
         let util = messages.iter().min_by_key(|m| m.date).unwrap().date - 1;
@@ -3446,10 +3462,6 @@ mod tests {
             .get_dm_conversation(npub, limit, Some(util), None)
             .await
             .unwrap();
-
-        for x in next.iter() {
-            log!("{}", x.message);
-        }
 
         // check that we got different messages
         assert_eq!(next.len(), 2);
@@ -3463,6 +3475,47 @@ mod tests {
             .unwrap();
 
         assert!(future_msgs.is_empty());
+    }
+
+    #[test]
+    async fn test_change_nostr_keys() {
+        // create fresh wallet
+        let mnemonic = generate_seed(12).unwrap();
+        let network = Network::Regtest;
+        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
+        let storage = MemoryStorage::new(None, None, None);
+        let config = MutinyWalletConfigBuilder::new(xpriv)
+            .with_network(network)
+            .build();
+        let mw = MutinyWalletBuilder::new(xpriv, storage.clone())
+            .with_config(config)
+            .build()
+            .await
+            .expect("mutiny wallet should initialize");
+
+        let first_npub = mw.nostr.get_npub().await;
+        let first_profile = mw.nostr.get_profile().unwrap();
+        let first_follows = mw.nostr.get_follow_list().unwrap();
+        assert_eq!(first_profile, Metadata::default());
+        assert!(first_profile.name.is_none());
+        assert!(first_follows.is_empty());
+
+        // change signer, can just use npub for test
+        let ben =
+            parse_npub("npub1u8lnhlw5usp3t9vmpz60ejpyt649z33hu82wc2hpv6m5xdqmuxhs46turz").unwrap();
+        mw.change_nostr_keys(Some(Keys::from_public_key(ben)), None)
+            .await
+            .unwrap();
+
+        // check that we have all new data
+        let npub = mw.nostr.get_npub().await;
+        let profile = mw.nostr.get_profile().unwrap();
+        let follows = mw.nostr.get_follow_list().unwrap();
+        assert_ne!(npub, first_npub);
+        assert_ne!(profile, first_profile);
+        assert_ne!(follows, first_follows);
+        assert!(!follows.is_empty());
+        assert!(profile.name.is_some());
     }
 
     #[test]

@@ -202,6 +202,39 @@ impl<S: MutinyStorage> NostrManager<S> {
         }
     }
 
+    /// Change our active nostr keys to the given keys
+    pub(crate) async fn change_nostr_keys(
+        &self,
+        key_source: NostrKeySource,
+        xprivkey: ExtendedPrivKey,
+    ) -> Result<nostr::PublicKey, MutinyError> {
+        // see if we can build new nostr keys first
+        let new_nostr_keys = NostrKeys::from_key_source(key_source, xprivkey)?;
+        let new_pk = new_nostr_keys.public_key;
+
+        // get lock on signer
+        let mut nostr_keys = self.nostr_keys.write().await;
+
+        // change our client's signer
+        self.client
+            .set_signer(Some(new_nostr_keys.signer.clone()))
+            .await;
+
+        // change our signer
+        *nostr_keys = new_nostr_keys;
+        drop(nostr_keys);
+
+        // delete our old nostr caches in storage
+        self.storage.delete_nostr_caches()?;
+
+        // update filters
+        let dm_filter = self.get_dm_filter().await?;
+        let profile = self.get_contacts_list_filter().await?;
+        self.client.subscribe(vec![dm_filter, profile], None).await;
+
+        Ok(new_pk)
+    }
+
     pub fn get_relays(&self) -> Vec<String> {
         let mut relays: Vec<String> = self
             .nwc

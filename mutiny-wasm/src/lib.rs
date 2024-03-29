@@ -461,6 +461,30 @@ impl MutinyWallet {
             .map(|s| s.to_bech32().expect("bech32"))
     }
 
+    /// Change our active nostr keys to the given nsec
+    #[wasm_bindgen]
+    pub async fn change_nostr_keys(
+        &self,
+        nsec: Option<String>,
+        extension_pk: Option<String>,
+    ) -> Result<String, MutinyJsError> {
+        let nsec = nsec
+            .map(|n| Keys::parse(n).map_err(|_| MutinyJsError::InvalidArgumentsError))
+            .transpose()?;
+
+        let extension_pk = extension_pk.map(|p| parse_npub(&p)).transpose()?;
+
+        if nsec.is_some() && extension_pk.is_some() {
+            return Err(MutinyJsError::InvalidArgumentsError);
+        }
+
+        Ok(self
+            .inner
+            .change_nostr_keys(nsec, extension_pk)
+            .await
+            .map(|pk| pk.to_bech32().expect("bech32"))?)
+    }
+
     /// Returns the network of the wallet.
     #[wasm_bindgen]
     pub fn get_network(&self) -> String {
