@@ -5,8 +5,6 @@ use crate::{
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::Network;
 use hex_conservative::DisplayHex;
-#[cfg(target_arch = "wasm32")]
-use instant::Instant;
 use lightning::ln::msgs::NodeAnnouncement;
 use lightning::routing::gossip::NodeId;
 use lightning::util::logger::Logger;
@@ -20,6 +18,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 use crate::logging::MutinyLogger;
 use crate::node::{NetworkGraph, RapidGossipSync};

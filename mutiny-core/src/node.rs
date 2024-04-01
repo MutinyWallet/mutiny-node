@@ -39,8 +39,6 @@ use core::time::Duration;
 use esplora_client::AsyncClient;
 use futures_util::lock::Mutex;
 use hex_conservative::DisplayHex;
-#[cfg(target_arch = "wasm32")]
-use instant::Instant;
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
 use lightning::ln::channelmanager::ChannelDetails;
 use lightning::ln::PaymentSecret;
@@ -92,6 +90,8 @@ use std::{
         Arc, RwLock,
     },
 };
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 const INITIAL_RECONNECTION_DELAY: u64 = 10;
 const MAX_RECONNECTION_DELAY: u64 = 60;
