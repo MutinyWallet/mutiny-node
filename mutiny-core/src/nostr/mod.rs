@@ -1679,6 +1679,10 @@ impl<S: MutinyStorage> NostrManager<S> {
             })
             .collect();
 
+        // remove duplicates by federation id, keep the one with the newest event
+        mints.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        mints.dedup_by(|a, b| a.id == b.id);
+
         // add on contact recommendations to mints
         for event in events {
             // only process federation recommendations
