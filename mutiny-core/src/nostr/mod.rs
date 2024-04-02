@@ -134,7 +134,7 @@ pub struct NostrDiscoveredFedimint {
     /// Metadata about the fedimint
     pub metadata: Option<Metadata>,
     /// Contacts that recommend this fedimint
-    pub recommendations: HashSet<Contact>,
+    pub recommendations: Vec<Contact>,
 }
 
 impl<S: MutinyStorage> NostrManager<S> {
@@ -1539,7 +1539,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         network: Network,
     ) -> Result<Vec<NostrDiscoveredFedimint>, MutinyError> {
         // get contacts by npub
-        let mut npubs: HashMap<nostr::PublicKey, Contact> = self
+        let npubs: HashMap<nostr::PublicKey, Contact> = self
             .storage
             .get_contacts()?
             .into_iter()
@@ -1547,45 +1547,54 @@ impl<S: MutinyStorage> NostrManager<S> {
             .collect();
 
         // our contacts might not have recommendation events, so pull in trusted users as well
-        match self
+        let primal_trusted_users: HashMap<nostr::PublicKey, Contact> = match self
             .primal_client
             .get_trusted_users(NUM_TRUSTED_USERS)
             .await
         {
             Ok(trusted) => {
-                for user in trusted {
-                    // skip if we already have this contact
-                    if npubs.contains_key(&user.pubkey) {
-                        continue;
-                    }
-                    // create a dummy contact from the metadata if available
-                    let dummy_contact = match user.metadata {
-                        Some(metadata) => Contact::create_from_metadata(user.pubkey, metadata),
-                        None => Contact {
-                            npub: Some(user.pubkey),
-                            ..Default::default()
-                        },
-                    };
-                    npubs.insert(user.pubkey, dummy_contact);
-                }
+                trusted
+                    .into_iter()
+                    .flat_map(|user| {
+                        // skip if we already have this contact
+                        if npubs.contains_key(&user.pubkey) {
+                            return None;
+                        }
+                        // create a dummy contact from the metadata if available
+                        let dummy_contact = match user.metadata {
+                            Some(metadata) => Contact::create_from_metadata(user.pubkey, metadata),
+                            None => Contact {
+                                npub: Some(user.pubkey),
+                                ..Default::default()
+                            },
+                        };
+                        Some((user.pubkey, dummy_contact))
+                    })
+                    .collect()
             }
             Err(e) => {
                 // if we fail to get trusted users, log the error and continue
                 // we don't want to fail the entire function because of this
                 // we'll just have less recommendations
                 log_error!(self.logger, "Failed to get trusted users: {e}");
+                HashMap::new()
             }
-        }
+        };
 
         let network_str = network_to_string(network);
 
         // filter for finding mint announcements
         let mints = Filter::new().kind(Kind::from(38173));
+        // filter for finding federation recommendations from contacts
+        let contacts_recommendations = Filter::new()
+            .kind(Kind::from(38000))
+            .custom_tag(SingleLetterTag::lowercase(Alphabet::K), ["38173"])
+            .authors(npubs.keys().copied());
         // filter for finding federation recommendations from trusted people
         let trusted_recommendations = Filter::new()
             .kind(Kind::from(38000))
             .custom_tag(SingleLetterTag::lowercase(Alphabet::K), ["38173"])
-            .authors(npubs.keys().copied());
+            .authors(primal_trusted_users.keys().copied());
         // filter for finding federation recommendations from random people
         let recommendations = Filter::new()
             .kind(Kind::from(38000))
@@ -1596,7 +1605,12 @@ impl<S: MutinyStorage> NostrManager<S> {
         let events = self
             .client
             .get_events_of(
-                vec![mints, trusted_recommendations, recommendations],
+                vec![
+                    mints,
+                    contacts_recommendations,
+                    trusted_recommendations,
+                    recommendations,
+                ],
                 Some(Duration::from_secs(5)),
             )
             .await?;
@@ -1638,25 +1652,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                 let invite_codes: Vec<InviteCode> = event
                     .tags
                     .iter()
-                    .filter_map(|tag| {
-                        if let Tag::AbsoluteURL(code) = tag {
-                            InviteCode::from_str(&code.to_string())
-                                .ok()
-                                // remove any invite codes that point to different federation
-                                .filter(|c| c.federation_id() == federation_id)
-                        } else {
-                            // tag might have `fedimint` element, try to parse that as well
-                            let vec = tag.as_vec();
-                            if vec.len() == 3 && vec[0] == "u" && vec[2] == "fedimint" {
-                                InviteCode::from_str(&vec[1])
-                                    .ok()
-                                    // remove any invite codes that point to different federation
-                                    .filter(|c| c.federation_id() == federation_id)
-                            } else {
-                                None
-                            }
-                        }
-                    })
+                    .filter_map(|tag| parse_invite_code_from_tag(tag, &federation_id))
                     .collect();
 
                 // if we have no invite codes left, skip
@@ -1673,7 +1669,7 @@ impl<S: MutinyStorage> NostrManager<S> {
                         event_id: Some(event.id),
                         created_at: Some(event.created_at.as_u64()),
                         metadata,
-                        recommendations: HashSet::new(),
+                        recommendations: vec![], // we'll add these in the next step
                     })
                 }
             })
@@ -1687,7 +1683,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         for event in events {
             // only process federation recommendations
             if event.kind != Kind::from(38000)
-                && event.tags.iter().any(|tag| {
+                || !event.tags.iter().any(|tag| {
                     tag.kind() == TagKind::Custom("k".to_string())
                         && tag.as_vec().get(1).is_some_and(|x| x == "38173")
                 })
@@ -1695,10 +1691,17 @@ impl<S: MutinyStorage> NostrManager<S> {
                 continue;
             }
 
-            // if we don't have the contact, skip
+            // try to get the contact from our npubs, otherwise use the primal trusted users
             let contact = match npubs.get(&event.pubkey) {
                 Some(contact) => contact.clone(),
-                None => continue,
+                None => match primal_trusted_users.get(&event.pubkey).cloned() {
+                    Some(contact) => contact,
+                    None => {
+                        // if we don't have the contact, skip
+                        // this could be a spam account that we shouldn't trust
+                        continue;
+                    }
+                },
             };
 
             let network_tag = event.tags.iter().find_map(|tag| {
@@ -1718,47 +1721,45 @@ impl<S: MutinyStorage> NostrManager<S> {
                 continue;
             }
 
+            let federation_id = event.tags.iter().find_map(|tag| {
+                if let Tag::Identifier(id) = tag {
+                    FederationId::from_str(id).ok()
+                } else {
+                    None
+                }
+            });
+
+            // if we don't have the federation id, skip
+            let federation_id = match federation_id {
+                Some(id) => id,
+                None => continue,
+            };
+
             let invite_codes = event
                 .tags
                 .iter()
-                .filter_map(|tag| {
-                    // try to parse the invite code
-                    let vec = tag.as_vec();
-                    if vec.len() == 2 && vec[0] == "u" {
-                        InviteCode::from_str(&vec[1]).ok()
-                    } else {
-                        None
-                    }
-                })
+                .filter_map(|tag| parse_invite_code_from_tag(tag, &federation_id))
                 .collect::<Vec<_>>();
 
-            // group invite codes by federation id so we don't duplicate mints
-            let mut by_federation: HashMap<FederationId, Vec<InviteCode>> = HashMap::new();
-            for invite_code in invite_codes {
-                let id = invite_code.federation_id();
-                by_federation.entry(id).or_default().push(invite_code);
-            }
+            // todo read `a` tag recommendations as well
 
-            // todo read federation id recommendations too
-
-            for (id, invite_codes) in by_federation {
-                match mints.iter_mut().find(|m| m.id == id) {
-                    Some(mint) => {
-                        mint.recommendations.insert(contact.clone());
-                    }
-                    None => {
-                        // if we don't have the mint announcement
-                        // Add to list with the contact as the recommendation
-                        let mut recommendations = HashSet::new();
-                        recommendations.insert(contact.clone());
+            match mints.iter_mut().find(|m| m.id == federation_id) {
+                Some(mint) => {
+                    mint.recommendations.push(contact);
+                }
+                None => {
+                    // if we don't have the mint announcement
+                    // Add to list with the contact as the recommendation
+                    // Only if we have invite codes
+                    if !invite_codes.is_empty() {
                         let mint = NostrDiscoveredFedimint {
                             invite_codes,
-                            id,
+                            id: federation_id,
                             pubkey: None,
                             event_id: None,
                             created_at: None,
                             metadata: None,
-                            recommendations,
+                            recommendations: vec![contact],
                         };
                         mints.push(mint);
                     }
@@ -1766,7 +1767,39 @@ impl<S: MutinyStorage> NostrManager<S> {
             }
         }
 
-        // sort by most recommended
+        // sort the recommendations by whether they are contacts or not and if they have an image
+        for mint in mints.iter_mut() {
+            mint.recommendations.sort_by(|a, b| {
+                let a_is_contact = a
+                    .npub
+                    .map(|npub| npubs.contains_key(&npub))
+                    .unwrap_or(false);
+                let b_is_contact = b
+                    .npub
+                    .map(|npub| npubs.contains_key(&npub))
+                    .unwrap_or(false);
+
+                if a_is_contact && !b_is_contact {
+                    std::cmp::Ordering::Less
+                } else if !a_is_contact && b_is_contact {
+                    std::cmp::Ordering::Greater
+                } else {
+                    let a_has_image = a.image_url.is_some();
+                    let b_has_image = b.image_url.is_some();
+                    if a_has_image && !b_has_image {
+                        std::cmp::Ordering::Less
+                    } else if !a_has_image && b_has_image {
+                        std::cmp::Ordering::Greater
+                    } else {
+                        // finally sort by npub if all else is equal
+                        a.npub.cmp(&b.npub)
+                    }
+                }
+            });
+            mint.recommendations.dedup_by(|a, b| a.npub == b.npub);
+        }
+
+        // sort mints by most recommended
         mints.sort_by(|a, b| b.recommendations.len().cmp(&a.recommendations.len()));
 
         Ok(mints)
@@ -1917,6 +1950,26 @@ fn network_to_string(network: Network) -> &'static str {
         Network::Regtest => "regtest",
         net => unreachable!("Unknown network {net}!"),
     }
+}
+
+fn parse_invite_code_from_tag(
+    tag: &Tag,
+    expected_federation_id: &FederationId,
+) -> Option<InviteCode> {
+    let code = if let Tag::AbsoluteURL(code) = tag {
+        InviteCode::from_str(&code.to_string()).ok()
+    } else {
+        // tag might have `fedimint` element, try to parse that as well
+        let vec = tag.as_vec();
+        if vec.len() == 3 && vec[0] == "u" && vec[2] == "fedimint" {
+            InviteCode::from_str(&vec[1]).ok()
+        } else {
+            None
+        }
+    };
+
+    // remove any invite codes that point to different federation
+    code.filter(|c| c.federation_id() == *expected_federation_id)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
