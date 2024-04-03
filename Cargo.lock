@@ -2551,7 +2551,7 @@ dependencies = [
 
 [[package]]
 name = "mutiny-core"
-version = "0.6.1"
+version = "0.6.2-rc1"
 dependencies = [
  "aes",
  "aes-gcm",
