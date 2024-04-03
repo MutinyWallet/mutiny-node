@@ -1938,6 +1938,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             self.ensure_mutiny_nwc_profile(subscription_client, autopay)
                 .await?;
 
+            self.check_blind_tokens();
+
             Ok(())
         } else {
             Err(MutinyError::SubscriptionClientNotConfigured)
