@@ -11,6 +11,7 @@ use crate::{
     utils::sleep,
     HTLCStatus, MutinyInvoice, DEFAULT_PAYMENT_TIMEOUT,
 };
+use async_lock::RwLock;
 use async_trait::async_trait;
 use bip39::Mnemonic;
 use bitcoin::secp256k1::ThirtyTwoByteHash;
@@ -25,11 +26,11 @@ use fedimint_bip39::Bip39RootSecretStrategy;
 use fedimint_client::{
     db::ChronologicalOperationLogKey,
     derivable_secret::DerivableSecret,
-    get_config_from_db,
     oplog::{OperationLogEntry, UpdateStreamOrOutcome},
     secret::{get_default_client_secret, RootSecretStrategy},
-    ClientArc, FederationInfo,
+    ClientHandleArc,
 };
+use fedimint_core::config::ClientConfig;
 use fedimint_core::{
     api::InviteCode,
     config::FederationId,
@@ -50,8 +51,8 @@ use fedimint_ln_client::{
     InternalPayState, LightningClientInit, LightningClientModule, LightningOperationMeta,
     LightningOperationMetaVariant, LnPayState, LnReceiveState,
 };
-use fedimint_ln_common::lightning_invoice::RoutingFees;
-use fedimint_ln_common::LightningCommonInit;
+use fedimint_ln_common::lightning_invoice::{Bolt11InvoiceDescription, Description, RoutingFees};
+use fedimint_ln_common::{LightningCommonInit, LightningGateway};
 use fedimint_mint_client::MintClientInit;
 use fedimint_wallet_client::{WalletClientInit, WalletClientModule};
 use futures::future::{self};
@@ -153,7 +154,7 @@ pub struct FederationIdentity {
     pub gateway_fees: Option<GatewayFees>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default)]
 pub struct GatewayFees {
     pub base_msat: u32,
     pub proportional_millionths: u32,
@@ -180,11 +181,12 @@ pub struct FedimintBalance {
 
 pub(crate) struct FederationClient<S: MutinyStorage> {
     pub(crate) uuid: String,
-    pub(crate) fedimint_client: ClientArc,
+    pub(crate) fedimint_client: ClientHandleArc,
     invite_code: InviteCode,
     storage: S,
     #[allow(dead_code)]
     fedimint_storage: FedimintStorage<S>,
+    gateway: Arc<RwLock<Option<LightningGateway>>>,
     pub(crate) logger: Arc<MutinyLogger>,
 }
 
@@ -194,7 +196,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         uuid: String,
         federation_code: InviteCode,
         xprivkey: ExtendedPrivKey,
-        storage: &S,
+        storage: S,
         network: Network,
         logger: Arc<MutinyLogger>,
     ) -> Result<Self, MutinyError> {
@@ -202,23 +204,38 @@ impl<S: MutinyStorage> FederationClient<S> {
 
         let federation_id = federation_code.federation_id();
 
-        let mut client_builder = fedimint_client::Client::builder();
-        client_builder.with_module(WalletClientInit(None));
-        client_builder.with_module(MintClientInit);
-        client_builder.with_module(LightningClientInit);
-
         log_trace!(logger, "Building fedimint client db");
         let fedimint_storage =
             FedimintStorage::new(storage.clone(), federation_id.to_string(), logger.clone())
                 .await?;
         let db = fedimint_storage.clone().into();
 
-        if get_config_from_db(&db).await.is_none() {
-            let download = Instant::now();
-            let federation_info = FederationInfo::from_invite_code(federation_code.clone())
+        let is_initialized = fedimint_client::Client::is_initialized(&db).await;
+
+        let mut client_builder = fedimint_client::Client::builder(db);
+        client_builder.with_module(WalletClientInit(None));
+        client_builder.with_module(MintClientInit);
+        client_builder.with_module(LightningClientInit);
+
+        client_builder.with_primary_module(1);
+
+        log_trace!(logger, "Building fedimint client db");
+        let secret = create_federation_secret(xprivkey, network)?;
+
+        let fedimint_client = if is_initialized {
+            client_builder
+                .open(get_default_client_secret(&secret, &federation_id))
                 .await
                 .map_err(|e| {
-                    log_error!(logger, "Could not parse invite code: {}", e);
+                    log_error!(logger, "Could not open federation client: {e}");
+                    e
+                })?
+        } else {
+            let download = Instant::now();
+            let config = ClientConfig::download_from_invite_code(&federation_code)
+                .await
+                .map_err(|e| {
+                    log_error!(logger, "Could not download federation info: {e}");
                     e
                 })?;
             log_trace!(
@@ -227,23 +244,15 @@ impl<S: MutinyStorage> FederationClient<S> {
                 download.elapsed().as_millis()
             );
 
-            log_debug!(
-                logger,
-                "parsed federation invite code: {:?}",
-                federation_info.invite_code()
-            );
-            client_builder.with_federation_info(federation_info);
-        }
-
-        client_builder.with_database(db);
-        client_builder.with_primary_module(1);
-
-        log_trace!(logger, "Building fedimint client db");
-        let secret = create_federation_secret(xprivkey, network)?;
-
-        let fedimint_client = client_builder
-            .build(get_default_client_secret(&secret, &federation_id))
-            .await?;
+            client_builder
+                .join(get_default_client_secret(&secret, &federation_id), config)
+                .await
+                .map_err(|e| {
+                    log_error!(logger, "Could not join federation: {e}");
+                    e
+                })?
+        };
+        let fedimint_client = Arc::new(fedimint_client);
 
         log_trace!(logger, "Retrieving fedimint wallet client module");
 
@@ -265,35 +274,27 @@ impl<S: MutinyStorage> FederationClient<S> {
             return Err(MutinyError::NetworkMismatch);
         }
 
+        let gateway = Arc::new(RwLock::new(None));
+
         // Set active gateway preference in background
         let client_clone = fedimint_client.clone();
+        let gateway_clone = gateway.clone();
         let logger_clone = logger.clone();
         spawn(async move {
             let start = Instant::now();
+            // get lock immediately to block other actions until gateway is set
+            let mut gateway_lock = gateway_clone.write().await;
             let lightning_module = client_clone.get_first_module::<LightningClientModule>();
-            let gateways = lightning_module
-                .fetch_registered_gateways()
-                .await
-                .map_err(|e| {
-                    log_warn!(
-                        logger_clone,
-                        "Could not fetch gateways from federation {federation_id}: {e}",
-                    )
-                });
+            let gateways = lightning_module.list_gateways().await;
 
-            if let Ok(gateways) = gateways {
-                if let Some(a) = get_gateway_preference(gateways, federation_id) {
-                    log_info!(
-                        logger_clone,
-                        "Setting active gateway for federation {federation_id}: {a}"
-                    );
-                    let _ = lightning_module.set_active_gateway(&a).await.map_err(|e| {
-                        log_warn!(
-                            logger_clone,
-                            "Could not set gateway for federation {federation_id}: {e}",
-                        )
-                    });
-                }
+            if let Some(a) = get_gateway_preference(gateways, federation_id) {
+                log_info!(
+                    logger_clone,
+                    "Setting active gateway for federation {federation_id}: {a}"
+                );
+
+                let gateway = lightning_module.select_gateway(&a).await;
+                *gateway_lock = gateway;
             }
 
             log_trace!(
@@ -308,19 +309,16 @@ impl<S: MutinyStorage> FederationClient<S> {
             uuid,
             fedimint_client,
             fedimint_storage,
-            storage: storage.clone(),
+            storage,
             logger,
             invite_code: federation_code,
+            gateway,
         })
     }
 
     pub(crate) async fn gateway_fee(&self) -> Result<GatewayFees, MutinyError> {
-        let lightning_module = self
-            .fedimint_client
-            .get_first_module::<LightningClientModule>();
-
-        let gw = lightning_module.select_active_gateway().await?;
-        Ok(gw.fees.into())
+        let gateway = self.gateway.read().await;
+        Ok(gateway.as_ref().map(|x| x.fees.into()).unwrap_or_default())
     }
 
     pub(crate) async fn get_invoice(
@@ -333,8 +331,17 @@ impl<S: MutinyStorage> FederationClient<S> {
         let lightning_module = self
             .fedimint_client
             .get_first_module::<LightningClientModule>();
-        let (_id, invoice) = lightning_module
-            .create_bolt11_invoice(Amount::from_sats(amount), String::new(), None, ())
+
+        let desc = Description::new(String::new()).expect("empty string is valid");
+        let gateway = self.gateway.read().await;
+        let (_id, invoice, _) = lightning_module
+            .create_bolt11_invoice(
+                Amount::from_sats(amount),
+                Bolt11InvoiceDescription::Direct(&desc),
+                None,
+                (),
+                gateway.clone(),
+            )
             .await?;
         let invoice = convert_from_fedimint_invoice(&invoice);
 
@@ -343,7 +350,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         stored_payment.inbound = inbound;
         stored_payment.labels = labels;
 
-        log_trace!(self.logger, "Persiting payment");
+        log_trace!(self.logger, "Persisting payment");
         let hash = stored_payment.payment_hash.into_32();
         let payment_info = PaymentInfo::from(stored_payment);
         persist_payment_info(&self.storage, &hash, &payment_info, inbound)?;
@@ -424,6 +431,7 @@ impl<S: MutinyStorage> FederationClient<S> {
                         let hash = invoice.payment_hash().into_inner();
                         operation_map.insert(hash, (key, entry));
                     }
+                    LightningOperationMetaVariant::Claim { .. } => {}
                 }
             }
         }
@@ -552,8 +560,9 @@ impl<S: MutinyStorage> FederationClient<S> {
             .get_first_module::<LightningClientModule>();
 
         let fedimint_invoice = convert_to_fedimint_invoice(&invoice);
+        let gateway = self.gateway.read().await;
         let outgoing_payment = lightning_module
-            .pay_bolt11_invoice(fedimint_invoice, ())
+            .pay_bolt11_invoice(gateway.clone(), fedimint_invoice, ())
             .await?;
 
         // Save after payment was initiated successfully
@@ -633,17 +642,6 @@ impl<S: MutinyStorage> FederationClient<S> {
     #[allow(dead_code)]
     pub async fn delete_fedimint_storage(&self) -> Result<(), MutinyError> {
         self.fedimint_storage.delete_store().await
-    }
-
-    pub async fn recover_backup(&self) -> Result<(), MutinyError> {
-        self.fedimint_client
-            .restore_from_backup(None)
-            .await
-            .map_err(|e| {
-                log_error!(self.logger, "Could not restore from backup: {}", e);
-                e
-            })?;
-        Ok(())
     }
 }
 
@@ -781,6 +779,7 @@ async fn extract_invoice_from_entry(
                 None
             }
         }
+        LightningOperationMetaVariant::Claim { .. } => None,
     }
 }
 
@@ -1114,7 +1113,7 @@ fn fedimint_mnemonic_generation() {
 fn gateway_preference() {
     use fedimint_core::util::SafeUrl;
     use fedimint_ln_common::bitcoin::secp256k1::PublicKey;
-    use fedimint_ln_common::{LightningGateway, LightningGatewayAnnouncement};
+    use fedimint_ln_common::LightningGatewayAnnouncement;
     use std::time::Duration;
 
     use super::*;

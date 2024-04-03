@@ -98,7 +98,9 @@ impl PaymentParams {
 
     #[wasm_bindgen(getter)]
     pub fn fedimint_invite_code(&self) -> Option<String> {
-        self.params.fedimint_invite_code()
+        self.params
+            .fedimint_invite_code()
+            .map(|code| code.to_string())
     }
 
     #[wasm_bindgen(getter)]
