@@ -64,6 +64,8 @@ pub struct HermesClient<S: MutinyStorage> {
     pub(crate) federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>,
     blind_auth: Arc<BlindAuthClient<S>>,
     base_url: String,
+    // bool represents whether or not it was successfully checked
+    current_address: Arc<RwLock<(Option<String>, bool)>>,
     storage: S,
     pub logger: Arc<MutinyLogger>,
     pub stop: Arc<AtomicBool>,
@@ -100,8 +102,6 @@ impl<S: MutinyStorage> HermesClient<S> {
             .await
             .expect("Failed to add relays");
 
-        // TODO need to store the fact that we have a LNURL or not...
-
         Ok(Self {
             dm_key: keys,
             public_key,
@@ -110,6 +110,7 @@ impl<S: MutinyStorage> HermesClient<S> {
             base_url,
             federations,
             blind_auth,
+            current_address: Arc::new(RwLock::new((None, false))),
             storage: storage.clone(),
             logger,
             stop,
@@ -120,6 +121,52 @@ impl<S: MutinyStorage> HermesClient<S> {
     /// This should only error if there's an initial unrecoverable error
     /// Otherwise it will loop in the background until a stop signal
     pub fn start(&self, profile_key: Option<Keys>) -> Result<(), MutinyError> {
+        // if we haven't synced before, use now and save to storage
+        let last_sync_time = self.storage.get_dm_sync_time(true)?;
+        let time_stamp = match last_sync_time {
+            None => {
+                let now = Timestamp::now();
+                self.storage.set_dm_sync_time(now.as_u64(), true)?;
+                now
+            }
+            Some(time) => Timestamp::from(time + 1), // add one so we get only new events
+        };
+
+        // check to see if we currently have an address
+        let logger_check_clone = self.logger.clone();
+        let stop_check_clone = self.stop.clone();
+        let http_client_check_clone = self.http_client.clone();
+        let public_key_check_clone = self.public_key;
+        let base_url_check_clone = self.base_url.clone();
+        let current_address_check_clone = self.current_address.clone();
+        utils::spawn(async move {
+            loop {
+                if stop_check_clone.load(Ordering::Relaxed) {
+                    break;
+                };
+
+                match check_hermes_name_for_pubkey(
+                    &http_client_check_clone,
+                    &base_url_check_clone,
+                    public_key_check_clone,
+                )
+                .await
+                {
+                    Ok(o) => {
+                        let mut c = current_address_check_clone.write().await;
+                        log_info!(logger_check_clone, "checked lightning address: {o:?}");
+                        *c = (o, true);
+                        break;
+                    }
+                    Err(e) => {
+                        log_error!(logger_check_clone, "error checking lightning address: {e}");
+                    }
+                };
+
+                utils::sleep(1_000).await;
+            }
+        });
+
         let logger = self.logger.clone();
         let stop = self.stop.clone();
         let client = self.client.clone();
@@ -127,18 +174,6 @@ impl<S: MutinyStorage> HermesClient<S> {
         let storage = self.storage.clone();
         let dm_key = self.dm_key.clone();
         let federations = self.federations.clone();
-
-        // if we haven't synced before, use now and save to storage
-        let last_sync_time = storage.get_dm_sync_time(true)?;
-        let time_stamp = match last_sync_time {
-            None => {
-                let now = Timestamp::now();
-                storage.set_dm_sync_time(now.as_u64(), true)?;
-                now
-            }
-            Some(time) => Timestamp::from(time + 1), // add one so we get only new events
-        };
-
         utils::spawn(async move {
             loop {
                 if stop.load(Ordering::Relaxed) {
@@ -243,19 +278,39 @@ impl<S: MutinyStorage> HermesClient<S> {
 
         // send the register request
         let req = RegisterRequest {
-            name: Some(name),
+            name: Some(name.clone()),
             pubkey: self.public_key.to_string(),
             federation_invite_code: federation_identity.invite_code.to_string(),
             msg: nonce.to_message(),
             sig: unblinded_sig,
         };
         register_name(&self.http_client.clone(), &self.base_url, req).await?;
-        // TODO store the fact that this succeeded
+
+        {
+            let mut c = self.current_address.write().await;
+            log_info!(
+                self.logger,
+                "registered lightning address: {}",
+                name.clone()
+            );
+            *c = (Some(name), true);
+        }
 
         // Mark the token as spent successfully
         self.blind_auth.used_token(available_paid_token).await?;
 
         Ok(())
+    }
+
+    pub async fn check_username(&self) -> Result<Option<String>, MutinyError> {
+        match self.current_address.read().await.clone() {
+            (None, false) => Err(MutinyError::ConnectionFailed),
+            (Some(n), true) => Ok(Some(n)),
+            (None, true) => Ok(None),
+            _ => {
+                unreachable!("can't have some and false")
+            }
+        }
     }
 
     async fn get_first_federation(&self) -> Option<FederationIdentity> {
@@ -277,6 +332,24 @@ fn find_hermes_token(
     tokens
         .iter()
         .find(|token| token.service_id == service_id && token.plan_id == plan_id)
+}
+
+async fn check_hermes_name_for_pubkey(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    pubkey: nostr::PublicKey,
+) -> Result<Option<String>, MutinyError> {
+    let url = Url::parse(&format!("{}/v1/check-pubkey/{pubkey}", base_url,))
+        .map_err(|_| MutinyError::ConnectionFailed)?;
+    let request = http_client.request(Method::GET, url);
+
+    let res = utils::fetch_with_timeout(http_client, request.build().expect("should build req"))
+        .await?
+        .json::<Option<String>>()
+        .await
+        .map_err(|_| MutinyError::ConnectionFailed)?;
+
+    Ok(res)
 }
 
 async fn check_name_request(
