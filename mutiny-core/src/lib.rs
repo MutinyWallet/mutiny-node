@@ -82,9 +82,9 @@ use ::nostr::nips::nip57;
 #[cfg(target_arch = "wasm32")]
 use ::nostr::prelude::rand::rngs::OsRng;
 use ::nostr::prelude::ZapRequestData;
-use ::nostr::{EventBuilder, EventId, JsonUtil, Kind};
 #[cfg(target_arch = "wasm32")]
-use ::nostr::{Keys, Tag};
+use ::nostr::Tag;
+use ::nostr::{EventBuilder, EventId, JsonUtil, Keys, Kind};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
@@ -1070,7 +1070,13 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         mw.check_blind_tokens();
 
         // start the hermes background process
-        mw.start_hermes()?;
+        // get profile key if we have it, we need this to decrypt private zaps
+        let profile_key = match &mw.nostr.primary_key {
+            NostrSigner::Keys(keys) => Some(keys.clone()),
+            #[cfg(target_arch = "wasm32")]
+            NostrSigner::NIP07(_) => None,
+        };
+        mw.start_hermes(profile_key)?;
 
         log_info!(
             mw.logger,
@@ -2769,9 +2775,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Starts up the hermes client if available
-    pub fn start_hermes(&self) -> Result<(), MutinyError> {
-        if let Some(hermes_client) = self.hermes_client.clone() {
-            hermes_client.start()?
+    pub fn start_hermes(&self, profile_key: Option<Keys>) -> Result<(), MutinyError> {
+        if let Some(hermes_client) = self.hermes_client.as_ref() {
+            hermes_client.start(profile_key)?
         }
         Ok(())
     }
