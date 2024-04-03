@@ -2776,6 +2776,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
     }
 
+    pub async fn check_lnurl_name(&self) -> Result<Option<String>, MutinyError> {
+        if let Some(hermes_client) = self.hermes_client.as_ref() {
+            hermes_client.check_username().await
+        } else {
+            Err(MutinyError::NotFound)
+        }
+    }
+
     /// Starts up the hermes client if available
     pub fn start_hermes(&self, profile_key: Option<Keys>) -> Result<(), MutinyError> {
         if let Some(hermes_client) = self.hermes_client.as_ref() {

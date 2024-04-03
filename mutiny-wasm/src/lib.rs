@@ -1962,6 +1962,11 @@ impl MutinyWallet {
         Ok(self.inner.reserve_lnurl_name(name).await?)
     }
 
+    /// Checks the registered username for the user
+    pub async fn check_lnurl_name(&self) -> Result<Option<String>, MutinyJsError> {
+        Ok(self.inner.check_lnurl_name().await?)
+    }
+
     /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.
     #[wasm_bindgen]
     pub async fn reset_router(&self) -> Result<(), MutinyJsError> {
