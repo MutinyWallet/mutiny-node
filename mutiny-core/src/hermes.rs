@@ -16,7 +16,7 @@ use lightning::util::logger::Logger;
 use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use nostr::prelude::decrypt_received_private_zap_message;
-use nostr::{nips::nip04::decrypt, Event, JsonUtil, Keys, Tag};
+use nostr::{nips::nip04::decrypt, Event, JsonUtil, Keys, Tag, ToBech32};
 use nostr::{Filter, Kind, Timestamp};
 use nostr_sdk::{Client, RelayPoolNotification};
 use reqwest::Method;
@@ -505,13 +505,13 @@ async fn handle_ecash_notification<S: MutinyStorage>(
                 // tag the invoice if we can
                 let mut tags = Vec::with_capacity(2);
 
-                // try to tag by npub
-                if let Some((id, _)) = npub
-                    .map(|n| storage.get_contact_for_npub(n))
-                    .transpose()?
-                    .flatten()
-                {
-                    tags.push(id);
+                // try to tag by contact by npub, otherwise tag by pubkey
+                if let Some(npub) = npub {
+                    if let Some((id, _)) = storage.get_contact_for_npub(npub)? {
+                        tags.push(id);
+                    } else {
+                        tags.push(npub.to_bech32().expect("must be valid"));
+                    }
                 }
 
                 // add message tag if we have one
