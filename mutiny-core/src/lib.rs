@@ -1071,7 +1071,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
 
         // start the hermes background process
         // get profile key if we have it, we need this to decrypt private zaps
-        let profile_key = match &mw.nostr.primary_key {
+        let profile_key = match &mw.nostr.nostr_keys.read().await.signer {
             NostrSigner::Keys(keys) => Some(keys.clone()),
             #[cfg(target_arch = "wasm32")]
             NostrSigner::NIP07(_) => None,
