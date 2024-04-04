@@ -34,6 +34,7 @@ pub struct ActivityItem {
     pub(crate) labels: Vec<String>,
     pub(crate) contacts: Vec<TagItem>,
     pub last_updated: Option<u64>,
+    privacy_level: String,
 }
 
 #[wasm_bindgen]
@@ -98,6 +99,19 @@ impl From<mutiny_core::ActivityItem> for ActivityItem {
             mutiny_core::ActivityItem::ChannelClosed(_) => (false, None),
         };
 
+        let privacy_level = match kind {
+            ActivityType::OnChain => PrivacyLevel::NotAvailable,
+            ActivityType::Lightning => {
+                if let mutiny_core::ActivityItem::Lightning(ref ln) = a {
+                    ln.privacy_level
+                } else {
+                    PrivacyLevel::NotAvailable
+                }
+            }
+            ActivityType::ChannelOpen => PrivacyLevel::NotAvailable,
+            ActivityType::ChannelClose => PrivacyLevel::NotAvailable,
+        };
+
         ActivityItem {
             kind,
             id,
@@ -106,6 +120,7 @@ impl From<mutiny_core::ActivityItem> for ActivityItem {
             labels: a.labels(),
             contacts: vec![],
             last_updated: a.last_updated(),
+            privacy_level: privacy_level.to_string(),
         }
     }
 }
