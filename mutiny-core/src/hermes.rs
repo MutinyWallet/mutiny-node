@@ -16,7 +16,7 @@ use lightning::util::logger::Logger;
 use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use nostr::prelude::decrypt_received_private_zap_message;
-use nostr::{nips::nip04::decrypt, Event, Keys, Tag};
+use nostr::{nips::nip04::decrypt, Event, JsonUtil, Keys, Tag};
 use nostr::{Filter, Kind, Timestamp};
 use nostr_sdk::{Client, RelayPoolNotification};
 use reqwest::Method;
@@ -413,7 +413,7 @@ struct EcashNotification {
     pub federation_id: FederationId,
     /// The zap request that came along with this payment,
     /// useful for tagging the payment to a contact
-    pub zap_request: Option<Event>,
+    pub zap_request: Option<String>,
     /// The bolt11 invoice for the payment
     pub bolt11: Bolt11Invoice,
     /// The preimage for the bolt11 invoice
@@ -454,6 +454,7 @@ async fn handle_ecash_notification<S: MutinyStorage>(
                 let (privacy_level, msg, npub) = match notification.zap_request {
                     None => (PrivacyLevel::NotAvailable, None, None),
                     Some(zap_req) => {
+                        let zap_req = Event::from_json(zap_req)?;
                         // handle private/anon zaps
                         let anon = zap_req.iter_tags().find_map(|tag| {
                             if let Tag::Anon { msg } = tag {
