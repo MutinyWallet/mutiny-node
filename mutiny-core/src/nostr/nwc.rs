@@ -1814,11 +1814,12 @@ mod wasm_test {
         assert_eq!(pending.len(), 0);
 
         // add an expired invoice
+        let pubkey = nostr_manager.get_npub().await;
         let expired = PendingNwcInvoice {
             index: Some(0),
             invoice: Bolt11Invoice::from_str(INVOICE).unwrap(),
             event_id: EventId::all_zeros(),
-            pubkey: nostr_manager.public_key,
+            pubkey,
             identifier: None,
         };
         // add an unexpired invoice
@@ -1827,7 +1828,7 @@ mod wasm_test {
             index: Some(0),
             invoice: dummy_invoice.clone(),
             event_id: EventId::all_zeros(),
-            pubkey: nostr_manager.public_key,
+            pubkey,
             identifier: None,
         };
         storage

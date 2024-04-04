@@ -110,7 +110,7 @@ use moksha_core::primitives::{
     PostMeltQuoteBolt11Response,
 };
 use moksha_core::token::TokenV3;
-use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
+use nostr_sdk::{NostrSigner, RelayPoolNotification};
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1145,7 +1145,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 };
 
                 // if we have no filters, then wait 10 seconds and see if we do again
-                let mut last_filters = nostr.get_filters().unwrap_or_default();
+                let mut last_filters = nostr.get_filters().await.unwrap_or_default();
                 if last_filters.is_empty() {
                     utils::sleep(10_000).await;
                     continue;
@@ -1170,7 +1170,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     log_warn!(logger, "Failed to clear invalid NWC invoices: {e}");
                 }
 
-                let client = Client::new(nostr.primary_key.clone());
+                let client = &nostr.client;
 
                 client
                     .add_relays(nostr.get_relays())
@@ -1224,6 +1224,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                                 }
                                             }
                                             Kind::ContactList => {
+                                                let event_pk = event.pubkey;
                                                 match update_nostr_contact_list(&nostr.storage, *event) {
                                                     Err(e) =>log_error!(logger, "Error handling contact list: {e}"),
                                                     Ok(true) => {
@@ -1232,7 +1233,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                                         // sync in background so we don't block processing other events
                                                         let self_clone = self_clone.clone();
                                                         utils::spawn(async move {
-                                                            match self_clone.sync_nostr_contacts(self_clone.nostr.public_key).await {
+                                                            match self_clone.sync_nostr_contacts(event_pk).await {
                                                                 Err(e) => log_error!(self_clone.logger, "Failed to sync nostr: {e}"),
                                                                 Ok(_) => log_debug!(self_clone.logger, "Successfully synced nostr contacts"),
                                                             }
@@ -1259,7 +1260,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         }
                         _ = filter_check_fut => {
                             // Check if the filters have changed
-                            if let Ok(current_filters) = nostr.get_filters() {
+                            if let Ok(current_filters) = nostr.get_filters().await {
                                 if !utils::compare_filters_vec(&current_filters, &last_filters) {
                                     log_debug!(logger, "subscribing to new nwc filters");
                                     client.subscribe(current_filters.clone(), None).await;
@@ -2069,9 +2070,30 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Err(MutinyError::NostrError)
     }
 
+    /// Change our active nostr keys to the given keys
+    pub async fn change_nostr_keys(
+        &self,
+        keys: Option<Keys>,
+        #[cfg(target_arch = "wasm32")] extension_pk: Option<::nostr::PublicKey>,
+    ) -> Result<::nostr::PublicKey, MutinyError> {
+        #[cfg(target_arch = "wasm32")]
+        let source = utils::build_nostr_key_source(keys, extension_pk)?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let source = utils::build_nostr_key_source(keys)?;
+
+        let new_pk = self.nostr.change_nostr_keys(source, self.xprivkey).await?;
+
+        // re-sync nostr profile data
+        self.sync_nostr().await?;
+
+        Ok(new_pk)
+    }
+
     /// Syncs all of our nostr data from the configured primal instance
     pub async fn sync_nostr(&self) -> Result<(), MutinyError> {
-        let contacts_fut = self.sync_nostr_contacts(self.nostr.public_key);
+        let npub = self.nostr.get_npub().await;
+        let contacts_fut = self.sync_nostr_contacts(npub);
         let profile_fut = self.sync_nostr_profile();
 
         // join futures and handle result
@@ -2084,12 +2106,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     /// Fetches our latest nostr profile from primal and saves to storage
     async fn sync_nostr_profile(&self) -> Result<(), MutinyError> {
-        if let Some(metadata) = self
-            .nostr
-            .primal_client
-            .get_user_profile(self.nostr.public_key)
-            .await?
-        {
+        let npub = self.nostr.get_npub().await;
+        if let Some(metadata) = self.nostr.primal_client.get_user_profile(npub).await? {
             self.storage.set_nostr_profile(metadata)?;
         }
 
@@ -2177,10 +2195,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         until: Option<u64>,
         since: Option<u64>,
     ) -> Result<Vec<DirectMessage>, MutinyError> {
+        let self_key = self.nostr.get_npub().await;
         let events = self
             .nostr
             .primal_client
-            .get_dm_conversation(npub, self.nostr.public_key, limit, until, since)
+            .get_dm_conversation(npub, self_key, limit, until, since)
             .await?;
 
         let mut messages = Vec::with_capacity(events.len());
@@ -2191,11 +2210,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
             // if decryption fails, skip this message, just a bad dm
             if let Ok(message) = self.nostr.decrypt_dm(npub, &event.content).await {
-                let to = if event.pubkey == npub {
-                    self.nostr.public_key
-                } else {
-                    npub
-                };
+                let to = if event.pubkey == npub { self_key } else { npub };
                 let dm = DirectMessage {
                     from: event.pubkey,
                     to,
@@ -2530,14 +2545,18 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         let event = match privacy_level {
                             PrivacyLevel::Public => {
                                 self.nostr
-                                    .primary_key
+                                    .nostr_keys
+                                    .read()
+                                    .await
+                                    .signer
                                     .sign_event_builder(EventBuilder::public_zap_request(data))
                                     .await?
                             }
                             PrivacyLevel::Private => {
                                 // if we have access to the keys, use those
                                 // otherwise need to implement ourselves to use with NIP-07
-                                match &self.nostr.primary_key {
+                                let signer = &self.nostr.nostr_keys.read().await.signer;
+                                match signer {
                                     NostrSigner::Keys(keys) => {
                                         nip57::private_zap_request(data, keys)?
                                     }
@@ -2562,11 +2581,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                             &data.message,
                                             tags,
                                         );
-                                        let msg = self
-                                            .nostr
-                                            .primary_key
-                                            .sign_event_builder(msg_builder)
-                                            .await?;
+                                        let msg = signer.sign_event_builder(msg_builder).await?;
                                         let created_at = msg.created_at;
                                         let msg: String = nip57::encrypt_private_zap_message(
                                             &mut OsRng,
@@ -3161,7 +3176,7 @@ mod tests {
     use crate::labels::{Contact, LabelStorage};
     use crate::nostr::NostrKeySource;
     use crate::utils::{now, parse_npub, sleep};
-    use nostr::Keys;
+    use nostr::{Keys, Metadata};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -3443,10 +3458,6 @@ mod tests {
 
         assert_eq!(messages.len(), 5);
 
-        for x in &messages {
-            log!("{}", x.message);
-        }
-
         // get next messages
         let limit = 2;
         let util = messages.iter().min_by_key(|m| m.date).unwrap().date - 1;
@@ -3454,10 +3465,6 @@ mod tests {
             .get_dm_conversation(npub, limit, Some(util), None)
             .await
             .unwrap();
-
-        for x in next.iter() {
-            log!("{}", x.message);
-        }
 
         // check that we got different messages
         assert_eq!(next.len(), 2);
@@ -3471,6 +3478,47 @@ mod tests {
             .unwrap();
 
         assert!(future_msgs.is_empty());
+    }
+
+    #[test]
+    async fn test_change_nostr_keys() {
+        // create fresh wallet
+        let mnemonic = generate_seed(12).unwrap();
+        let network = Network::Regtest;
+        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
+        let storage = MemoryStorage::new(None, None, None);
+        let config = MutinyWalletConfigBuilder::new(xpriv)
+            .with_network(network)
+            .build();
+        let mw = MutinyWalletBuilder::new(xpriv, storage.clone())
+            .with_config(config)
+            .build()
+            .await
+            .expect("mutiny wallet should initialize");
+
+        let first_npub = mw.nostr.get_npub().await;
+        let first_profile = mw.nostr.get_profile().unwrap();
+        let first_follows = mw.nostr.get_follow_list().unwrap();
+        assert_eq!(first_profile, Metadata::default());
+        assert!(first_profile.name.is_none());
+        assert!(first_follows.is_empty());
+
+        // change signer, can just use npub for test
+        let ben =
+            parse_npub("npub1u8lnhlw5usp3t9vmpz60ejpyt649z33hu82wc2hpv6m5xdqmuxhs46turz").unwrap();
+        mw.change_nostr_keys(Some(Keys::from_public_key(ben)), None)
+            .await
+            .unwrap();
+
+        // check that we have all new data
+        let npub = mw.nostr.get_npub().await;
+        let profile = mw.nostr.get_profile().unwrap();
+        let follows = mw.nostr.get_follow_list().unwrap();
+        assert_ne!(npub, first_npub);
+        assert_ne!(profile, first_profile);
+        assert_ne!(follows, first_follows);
+        assert!(!follows.is_empty());
+        assert!(profile.name.is_some());
     }
 
     #[test]

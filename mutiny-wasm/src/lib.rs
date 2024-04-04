@@ -442,17 +442,47 @@ impl MutinyWallet {
 
     /// Returns the user's npub
     #[wasm_bindgen]
-    pub fn get_npub(&self) -> String {
-        self.inner.nostr.public_key.to_bech32().expect("bech32")
+    pub async fn get_npub(&self) -> String {
+        self.inner
+            .nostr
+            .get_npub()
+            .await
+            .to_bech32()
+            .expect("bech32")
     }
 
     /// Export the user's nostr secret key if available
     #[wasm_bindgen]
-    pub fn export_nsec(&self) -> Option<String> {
+    pub async fn export_nsec(&self) -> Option<String> {
         self.inner
             .nostr
             .export_nsec()
+            .await
             .map(|s| s.to_bech32().expect("bech32"))
+    }
+
+    /// Change our active nostr keys to the given nsec
+    #[wasm_bindgen]
+    pub async fn change_nostr_keys(
+        &self,
+        nsec: Option<String>,
+        extension_pk: Option<String>,
+    ) -> Result<String, MutinyJsError> {
+        let nsec = nsec
+            .map(|n| Keys::parse(n).map_err(|_| MutinyJsError::InvalidArgumentsError))
+            .transpose()?;
+
+        let extension_pk = extension_pk.map(|p| parse_npub(&p)).transpose()?;
+
+        if nsec.is_some() && extension_pk.is_some() {
+            return Err(MutinyJsError::InvalidArgumentsError);
+        }
+
+        Ok(self
+            .inner
+            .change_nostr_keys(nsec, extension_pk)
+            .await
+            .map(|pk| pk.to_bech32().expect("bech32"))?)
     }
 
     /// Returns the network of the wallet.

@@ -1,4 +1,5 @@
 use crate::error::MutinyError;
+use crate::nostr::NostrKeySource;
 use bitcoin::key::XOnlyPublicKey;
 use bitcoin::Network;
 use core::cell::{RefCell, RefMut};
@@ -14,7 +15,7 @@ use lightning::util::ser::Writeable;
 use lightning::util::ser::Writer;
 use lightning_invoice::Bolt11Invoice;
 use nostr::nips::nip05;
-use nostr::{Event, Filter, FromBech32, JsonUtil, Kind, Metadata};
+use nostr::{Event, Filter, FromBech32, JsonUtil, Keys, Kind, Metadata};
 use reqwest::Client;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -95,6 +96,26 @@ pub fn get_random_bip32_child_index() -> u32 {
     // Restrict to [0, 2^31 - 1]
     let max_value = 2u32.pow(31) - 1;
     random_value % (max_value + 1)
+}
+
+pub(crate) fn build_nostr_key_source(
+    keys: Option<Keys>,
+    #[cfg(target_arch = "wasm32")] extension_pk: Option<::nostr::PublicKey>,
+) -> Result<NostrKeySource, MutinyError> {
+    #[cfg(target_arch = "wasm32")]
+    if keys.is_some() && extension_pk.is_some() {
+        return Err(MutinyError::InvalidArgumentsError);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    if let Some(pk) = extension_pk {
+        return Ok(NostrKeySource::Extension(pk));
+    }
+
+    match keys {
+        None => Ok(NostrKeySource::Derived),
+        Some(keys) => Ok(NostrKeySource::Imported(keys)),
+    }
 }
 
 pub type LockResult<Guard> = Result<Guard, ()>;

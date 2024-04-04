@@ -597,6 +597,14 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
         self.set_data(NOSTR_PROFILE_METADATA.to_string(), metadata, None)
     }
 
+    fn delete_nostr_caches(&self) -> Result<(), MutinyError> {
+        self.delete(&[
+            NOSTR_PROFILE_METADATA,
+            LAST_DM_SYNC_TIME_KEY,
+            NOSTR_CONTACT_LIST,
+        ])
+    }
+
     fn get_device_id(&self) -> Result<String, MutinyError> {
         match self.get_data(DEVICE_ID_KEY)? {
             Some(id) => Ok(id),
