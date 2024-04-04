@@ -2578,7 +2578,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                         // Create final zap event
                                         let mut tags: Vec<Tag> = data.into();
                                         tags.push(Tag::Anon { msg: Some(msg) });
-                                        let private_zap_keys: Keys = Keys::generate();
                                         EventBuilder::new(Kind::ZapRequest, "", tags)
                                             .custom_created_at(created_at)
                                             .to_event(&private_zap_keys)?
