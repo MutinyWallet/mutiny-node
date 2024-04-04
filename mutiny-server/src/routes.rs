@@ -1,7 +1,5 @@
 use crate::extractor::Form;
 use crate::sled::SledStorage;
-use std::fmt;
-use std::fmt::Formatter;
 
 use axum::extract::Path;
 use axum::http::StatusCode;
@@ -28,7 +26,7 @@ pub async fn new_address(
         .mutiny_wallet
         .node_manager
         .get_new_address(vec![])
-        .map_err(|e| handle_mutiny_err(e))?;
+        .map_err(handle_mutiny_err)?;
     Ok(Json(json!(address)))
 }
 
@@ -67,7 +65,7 @@ pub async fn send_to_address(
             request.fee_rate_sat_byte,
         )
         .await
-        .map_err(|e| handle_mutiny_err(e))?;
+        .map_err(handle_mutiny_err)?;
 
     Ok(Json(json!(tx_id.to_string())))
 }
@@ -102,7 +100,7 @@ pub async fn open_channel(
         .node_manager
         .open_channel(None, to_pubkey, request.amount_sat, request.fee_rate, None)
         .await
-        .map_err(|e| handle_mutiny_err(e))?;
+        .map_err(handle_mutiny_err)?;
     Ok(Json(json!(channel)))
 }
 
@@ -122,7 +120,7 @@ pub async fn close_channel(
         .node_manager
         .list_channels()
         .await
-        .map_err(|e| handle_mutiny_err(e))?;
+        .map_err(handle_mutiny_err)?;
 
     let outpoint = match channels
         .into_iter()
@@ -167,12 +165,12 @@ pub async fn close_channel(
         None => None,
     };
 
-    let _ = state
+    state
         .mutiny_wallet
         .node_manager
         .close_channel(&outpoint, address, false, false)
         .await
-        .map_err(|e| handle_mutiny_err(e))?;
+        .map_err(handle_mutiny_err)?;
 
     Ok(Json(json!("ok")))
 }
@@ -205,7 +203,7 @@ pub async fn create_invoice(
         .mutiny_wallet
         .create_invoice(request.amount_sat, label)
         .await
-        .map_err(|e| handle_mutiny_err(e))?;
+        .map_err(handle_mutiny_err)?;
 
     let amount_sat = invoice.amount_sats.ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -250,7 +248,7 @@ pub async fn pay_invoice(
         .mutiny_wallet
         .pay_invoice(&request.invoice, request.amount_sat, Vec::new())
         .await
-        .map_err(|e| handle_mutiny_err(e))?;
+        .map_err(handle_mutiny_err)?;
 
     let amount_sat = invoice.amount_sats.ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -296,7 +294,7 @@ pub async fn get_incoming_payments(
     let invoices = state
         .mutiny_wallet
         .list_invoices()
-        .map_err(|e| handle_mutiny_err(e))?;
+        .map_err(handle_mutiny_err)?;
 
     let invoices: Vec<MutinyInvoice> = invoices
         .into_iter()
@@ -305,11 +303,7 @@ pub async fn get_incoming_payments(
 
     let mut payments = Vec::with_capacity(invoices.len());
     for invoice in invoices.into_iter() {
-        let pr = match invoice.bolt11.clone() {
-            Some(bolt_11) => Some(bolt_11.to_string()),
-            None => None,
-        };
-
+        let pr = invoice.bolt11.as_ref().map(|bolt11| bolt11.to_string());
         let (is_paid, amount_sats, fees) = get_payment_info(&invoice)?;
 
         let payment = PaymentResponse {
@@ -343,12 +337,9 @@ pub async fn get_payment(
         .mutiny_wallet
         .get_invoice_by_hash(&hash)
         .await
-        .map_err(|e| handle_mutiny_err(e))?;
+        .map_err(handle_mutiny_err)?;
 
-    let pr = match invoice.bolt11.clone() {
-        Some(bolt11) => Some(bolt11.to_string()),
-        None => None,
-    };
+    let pr = invoice.bolt11.as_ref().map(|bolt11| bolt11.to_string());
     let (is_paid, amount_sats, fees) = get_payment_info(&invoice)?;
 
     let payment = PaymentResponse {
@@ -372,7 +363,7 @@ pub async fn get_balance(
         .mutiny_wallet
         .get_balance()
         .await
-        .map_err(|e| handle_mutiny_err(e))?;
+        .map_err(handle_mutiny_err)?;
     Ok(Json(json!(balance)))
 }
 
@@ -386,7 +377,7 @@ pub struct NodeInfoResponse {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Channel {
-    state: String,
+    state: ChannelState,
     channel_id: String,
     balance_sat: u64,
     inbound_liquidity_sat: u64,
@@ -394,18 +385,11 @@ struct Channel {
     funding_tx_id: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
 enum ChannelState {
     Usable,
     Unusable,
-}
-
-impl fmt::Display for ChannelState {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            ChannelState::Usable => write!(f, "usable"),
-            ChannelState::Unusable => write!(f, "unusable"),
-        }
-    }
 }
 
 pub async fn get_node_info(
@@ -416,24 +400,23 @@ pub async fn get_node_info(
         .node_manager
         .list_nodes()
         .await
-        .map_err(|e| handle_mutiny_err(e))?;
+        .map_err(handle_mutiny_err)?;
 
-    let node_pubkey: PublicKey;
-    if !nodes.is_empty() {
-        node_pubkey = nodes[0];
+    let node_pubkey: PublicKey = if !nodes.is_empty() {
+        nodes[0]
     } else {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": "unable to get node info"})),
         ));
-    }
+    };
 
     let channels = state
         .mutiny_wallet
         .node_manager
         .list_channels()
         .await
-        .map_err(|e| handle_mutiny_err(e))?;
+        .map_err(handle_mutiny_err)?;
 
     let channels = channels
         .into_iter()
@@ -443,13 +426,10 @@ pub async fn get_node_info(
                 false => ChannelState::Unusable,
             };
 
-            let funding_tx_id = match channel.outpoint {
-                Some(outpoint) => Some(outpoint.txid.to_string()),
-                None => None,
-            };
+            let funding_tx_id = channel.outpoint.map(|outpoint| outpoint.txid.to_string());
 
             Channel {
-                state: state.to_string(),
+                state,
                 channel_id: channel.user_chan_id,
                 balance_sat: channel.balance,
                 inbound_liquidity_sat: channel.inbound,

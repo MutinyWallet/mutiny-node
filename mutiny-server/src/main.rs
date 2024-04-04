@@ -25,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
     let config: Config = Config::parse();
 
     let network = config.network();
-    let storage = SledStorage::new(&config.db_file, config.clone().password)?;
+    let storage = SledStorage::new(&config.db_file, config.password.clone())?;
 
     let mnemonic = match storage.get_mnemonic() {
         Ok(Some(mnemonic)) => mnemonic,

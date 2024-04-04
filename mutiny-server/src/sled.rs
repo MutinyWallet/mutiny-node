@@ -141,7 +141,7 @@ impl MutinyStorage for SledStorage {
             .iter()
             .keys()
             .filter_map(|key| key.ok())
-            .map(|key| ivec_to_string(key))
+            .map(ivec_to_string)
             .filter_map(Result::ok)
             .filter(|key| {
                 key.starts_with(prefix) && (suffix.is_none() || key.ends_with(suffix.unwrap()))

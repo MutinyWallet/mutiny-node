@@ -1,6 +1,6 @@
 [package]
 name = "mutiny-server"
-version = "0.3.7"
+version = "0.6.4"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -24,3 +24,6 @@ sled = "0.34.7"
 tokio = { version = "1.36.0", features = ["full"] }
 reqwest = { version = "0.11", features = ["json"] }
 serde = { version = "1.0.196", features = ["derive"] }
+
+[patch.crates-io]
+lightning = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "e82635b32458a77d28a5a23b664696422eb526e4" }

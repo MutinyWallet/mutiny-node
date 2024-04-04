@@ -34,10 +34,7 @@ jobs:
           cargo +nightly-2023-10-24 fmt -- --check
 
       - name: Check docs
-        run: cargo +nightly-2023-10-24 doc --exclude mutiny-server --workspace
-
-      - name: Check docs server
-        run: cargo +nightly-2023-10-24 doc --target x86_64-unknown-linux-gnu -p mutiny-server
+        run: cargo +nightly-2023-10-24 doc
 
   website:
     name: Build WASM binary
@@ -288,3 +285,38 @@ jobs:
 
       - name: Run cargo build
         run: cargo build --all-features --package mutiny-core --target=${{ matrix.target }}
+
+  check_formatting-server:
+    name: Check Formatting mutiny-server
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-formatting-v2-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-formatting-v2-
+            cargo-${{ runner.os }}-
+
+      - name: Install nightly toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly-2023-10-24
+          components: rustfmt
+          profile: minimal
+
+      - name: Check formatting
+        run: |
+          cd mutiny-server && cargo +nightly-2023-10-24 fmt -- --check
+
+      - name: Check docs
+        run: cd mutiny-server && cargo +nightly-2023-10-24 doc --target x86_64-unknown-linux-gnu
+
+      - name: Run cargo clippy
+        run: cd mutiny-server && cargo clippy --all-features --tests --target=x86_64-unknown-linux-gnu -- -D warnings
