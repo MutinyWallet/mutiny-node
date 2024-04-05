@@ -1287,7 +1287,16 @@ impl<S: MutinyStorage> NostrManager<S> {
         if event.kind != Kind::EncryptedDirectMessage {
             anyhow::bail!("Not a direct message");
         } else if event.pubkey == self.nostr_keys.read().await.public_key {
-            return Ok(()); // don't process our own messages
+            // don't process our own messages but we should update the last used time
+            if let Some((id, mut contact)) = self.storage.get_contact_for_npub(event.pubkey)? {
+                let created_at = event.created_at.as_u64();
+                if contact.last_used < created_at {
+                    contact.last_used = created_at;
+                    self.storage.edit_contact(id, contact)?;
+                }
+            }
+
+            return Ok(());
         }
 
         log_debug!(self.logger, "processing dm: {}", event.id);
@@ -1297,6 +1306,15 @@ impl<S: MutinyStorage> NostrManager<S> {
             .set_dm_sync_time(event.created_at.as_u64(), false)?;
 
         let decrypted = self.decrypt_dm(event.pubkey, &event.content).await?;
+
+        // update contact's last_updated
+        if let Some((id, mut contact)) = self.storage.get_contact_for_npub(event.pubkey)? {
+            let created_at = event.created_at.as_u64();
+            if contact.last_used < created_at {
+                contact.last_used = created_at;
+                self.storage.edit_contact(id, contact)?;
+            }
+        }
 
         // handle it like a pay invoice NWC request, to see if it is valid
         let params = PayInvoiceRequestParams {
