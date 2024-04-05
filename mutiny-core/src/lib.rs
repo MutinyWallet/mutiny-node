@@ -1851,7 +1851,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
                 if payment_hashes.contains(&hash) {
                     if let Some(mutiny_invoice) =
-                        self.get_invoice_internal(&item.key, true, &labels_map)?
+                        self.get_invoice_internal(&item.key, false, &labels_map)?
                     {
                         activities.push(ActivityItem::Lightning(Box::new(mutiny_invoice)));
                     }
