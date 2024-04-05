@@ -1180,7 +1180,7 @@ impl MutinyWallet {
         label: String,
     ) -> Result<JsValue /* Vec<ActivityItem> */, MutinyJsError> {
         // get activity from the node manager
-        let activity = self.inner.node_manager.get_label_activity(&label).await?;
+        let activity = self.inner.get_label_activity(&label).await?;
         let mut activity: Vec<ActivityItem> = activity.into_iter().map(|a| a.into()).collect();
 
         // add contact to the activity item it has one, otherwise return the activity list

@@ -1,10 +1,8 @@
 use crate::auth::MutinyAuthClient;
-use crate::event::HTLCStatus;
 use crate::labels::LabelStorage;
 use crate::ldkstorage::CHANNEL_CLOSURE_PREFIX;
 use crate::logging::LOGGING_KEY;
 use crate::utils::{sleep, spawn};
-use crate::ActivityItem;
 use crate::MutinyInvoice;
 use crate::MutinyWalletConfig;
 use crate::{
@@ -964,47 +962,6 @@ impl<S: MutinyStorage> NodeManager<S> {
         }
 
         Ok(details_opt.map(|(d, _)| d))
-    }
-
-    /// Returns all the on-chain and lightning activity for a given label
-    pub async fn get_label_activity(
-        &self,
-        label: &String,
-    ) -> Result<Vec<ActivityItem>, MutinyError> {
-        let Some(label_item) = self.get_label(label)? else {
-            return Ok(Vec::new());
-        };
-
-        let mut activity = vec![];
-        for inv in label_item.invoices.iter() {
-            if let Ok(ln) = self.get_invoice_by_hash(inv.payment_hash()).await {
-                // Only show paid and in-flight invoices
-                match ln.status {
-                    HTLCStatus::Succeeded | HTLCStatus::InFlight => {
-                        activity.push(ActivityItem::Lightning(Box::new(ln)));
-                    }
-                    HTLCStatus::Pending | HTLCStatus::Failed => {}
-                }
-            }
-        }
-        let onchain = self
-            .list_onchain()
-            .map_err(|e| {
-                log_warn!(self.logger, "Failed to get bdk history: {e}");
-                e
-            })
-            .unwrap_or_default();
-
-        for on in onchain {
-            if on.labels.contains(label) {
-                activity.push(ActivityItem::OnChain(on));
-            }
-        }
-
-        // Newest first
-        activity.sort_by(|a, b| b.cmp(a));
-
-        Ok(activity)
     }
 
     /// Adds labels to the TransactionDetails based on the address labels.
@@ -2113,10 +2070,8 @@ pub fn create_lsp_config(
 mod tests {
     use crate::{
         encrypt::encryption_key_from_pass,
-        nodemanager::{
-            ActivityItem, ChannelClosure, MutinyInvoice, NodeManager, TransactionDetails,
-        },
-        MutinyWalletConfigBuilder, PrivacyLevel,
+        nodemanager::{ChannelClosure, MutinyInvoice, NodeManager, TransactionDetails},
+        ActivityItem, MutinyWalletConfigBuilder, PrivacyLevel,
     };
     use crate::{keymanager::generate_seed, nodemanager::NodeManagerBuilder};
     use bdk::chain::ConfirmationTime;

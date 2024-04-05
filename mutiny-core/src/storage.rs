@@ -986,10 +986,7 @@ pub(crate) fn list_payment_info<S: MutinyStorage>(
     Ok(map
         .into_iter()
         .map(|(key, value)| {
-            let payment_hash_str = key
-                .trim_start_matches(prefix)
-                .splitn(2, '_') // To support the old format that had `_{node_id}` at the end
-                .collect::<Vec<&str>>()[0];
+            let payment_hash_str = get_payment_hash_from_key(key.as_str(), prefix);
             let hash: [u8; 32] =
                 FromHex::from_hex(payment_hash_str).expect("key should be a sha256 hash");
             (PaymentHash(hash), value)
@@ -1055,6 +1052,12 @@ where
     fn load_from_persistence(&mut self) -> Result<Option<K>, Self::LoadError> {
         self.0.get_data(KEYCHAIN_STORE_KEY)
     }
+}
+
+pub(crate) fn get_payment_hash_from_key<'a>(key: &'a str, prefix: &str) -> &'a str {
+    key.trim_start_matches(prefix)
+        .splitn(2, '_') // To support the old format that had `_{node_id}` at the end
+        .collect::<Vec<&str>>()[0]
 }
 
 #[cfg(test)]

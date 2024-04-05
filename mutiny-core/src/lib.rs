@@ -47,9 +47,10 @@ pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 use crate::storage::{
-    list_payment_info, persist_payment_info, update_nostr_contact_list, IndexItem, MutinyStorage,
-    DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX,
-    PAYMENT_INBOUND_PREFIX_KEY, PAYMENT_OUTBOUND_PREFIX_KEY, SUBSCRIPTION_TIMESTAMP,
+    get_payment_hash_from_key, list_payment_info, persist_payment_info, update_nostr_contact_list,
+    IndexItem, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY,
+    ONCHAIN_PREFIX, PAYMENT_INBOUND_PREFIX_KEY, PAYMENT_OUTBOUND_PREFIX_KEY,
+    SUBSCRIPTION_TIMESTAMP,
 };
 use crate::{auth::MutinyAuthClient, hermes::HermesClient, logging::MutinyLogger};
 use crate::{blindauth::BlindAuthClient, cashu::CashuHttpClient};
@@ -114,6 +115,7 @@ use nostr_sdk::{NostrSigner, RelayPoolNotification};
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -1720,10 +1722,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 true => PAYMENT_INBOUND_PREFIX_KEY,
                 false => PAYMENT_OUTBOUND_PREFIX_KEY,
             };
-            let payment_hash_str = key
-                .trim_start_matches(prefix)
-                .splitn(2, '_') // To support the old format that had `_{node_id}` at the end
-                .collect::<Vec<&str>>()[0];
+            let payment_hash_str = get_payment_hash_from_key(key, prefix);
             let hash: [u8; 32] = FromHex::from_hex(payment_hash_str)?;
 
             return MutinyInvoice::from(info, PaymentHash(hash), inbound, labels).map(Some);
@@ -1802,6 +1801,59 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     // make sure it is a relevant transaction
                     if tx_details.sent != 0 || tx_details.received != 0 {
                         activities.push(ActivityItem::OnChain(tx_details));
+                    }
+                }
+            }
+        }
+
+        Ok(activities)
+    }
+
+    /// Returns all the lightning activity for a given label
+    pub async fn get_label_activity(
+        &self,
+        label: &String,
+    ) -> Result<Vec<ActivityItem>, MutinyError> {
+        let Some(label_item) = self.node_manager.get_label(label)? else {
+            return Ok(Vec::new());
+        };
+
+        // get all the payment hashes for this label
+        let payment_hashes: HashSet<sha256::Hash> = label_item
+            .invoices
+            .into_iter()
+            .map(|i| *i.payment_hash())
+            .collect();
+
+        let index = self.storage.activity_index();
+        let index = index.try_read()?.clone().into_iter().collect_vec();
+
+        let labels_map = self.storage.get_invoice_labels()?;
+
+        let mut activities = Vec::with_capacity(index.len());
+        for item in index {
+            if item.key.starts_with(PAYMENT_INBOUND_PREFIX_KEY) {
+                let payment_hash_str =
+                    get_payment_hash_from_key(&item.key, PAYMENT_INBOUND_PREFIX_KEY);
+                let hash = sha256::Hash::from_str(payment_hash_str)?;
+
+                if payment_hashes.contains(&hash) {
+                    if let Some(mutiny_invoice) =
+                        self.get_invoice_internal(&item.key, true, &labels_map)?
+                    {
+                        activities.push(ActivityItem::Lightning(Box::new(mutiny_invoice)));
+                    }
+                }
+            } else if item.key.starts_with(PAYMENT_OUTBOUND_PREFIX_KEY) {
+                let payment_hash_str =
+                    get_payment_hash_from_key(&item.key, PAYMENT_OUTBOUND_PREFIX_KEY);
+                let hash = sha256::Hash::from_str(payment_hash_str)?;
+
+                if payment_hashes.contains(&hash) {
+                    if let Some(mutiny_invoice) =
+                        self.get_invoice_internal(&item.key, true, &labels_map)?
+                    {
+                        activities.push(ActivityItem::Lightning(Box::new(mutiny_invoice)));
                     }
                 }
             }
