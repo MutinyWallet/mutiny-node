@@ -287,7 +287,9 @@ impl<S: MutinyStorage> RoutingMessageHandler for GossipMessageHandler<S> {
     }
 
     fn provided_init_features(&self, _their_node_id: &PublicKey) -> InitFeatures {
-        InitFeatures::empty()
+        let mut features = InitFeatures::empty();
+        features.set_gossip_queries_optional();
+        features
     }
 }
 
