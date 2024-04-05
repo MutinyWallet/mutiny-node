@@ -22,7 +22,7 @@ pub struct LabelItem {
     /// List of addresses that have this label
     pub addresses: HashSet<String>,
     /// List of invoices that have this label
-    pub invoices: Vec<Bolt11Invoice>,
+    pub invoices: HashSet<Bolt11Invoice>,
     /// Epoch time in seconds when this label was last used
     pub last_used_time: u64,
 }
@@ -234,7 +234,7 @@ impl<S: MutinyStorage> LabelStorage for S {
                     // Create a new label item
                     let label_item = LabelItem {
                         addresses,
-                        invoices: vec![],
+                        invoices: HashSet::new(),
                         last_used_time: now,
                     };
                     self.set_data(key, label_item, None)?;
@@ -263,9 +263,7 @@ impl<S: MutinyStorage> LabelStorage for S {
                 Some(mut label_item) => {
                     // Add the invoice to the label item
                     // and sort so we can dedup the invoices
-                    label_item.invoices.push(invoice.clone());
-                    label_item.invoices.sort();
-                    label_item.invoices.dedup();
+                    label_item.invoices.insert(invoice.clone());
 
                     // Update the last used timestamp
                     label_item.last_used_time = now;
@@ -281,9 +279,10 @@ impl<S: MutinyStorage> LabelStorage for S {
                 }
                 None => {
                     // Create a new label item
+                    let invoices = HashSet::from_iter(vec![invoice.clone()]);
                     let label_item = LabelItem {
                         addresses: HashSet::new(),
-                        invoices: vec![invoice.clone()],
+                        invoices,
                         last_used_time: now,
                     };
                     self.set_data(key, label_item, None)?;
@@ -574,7 +573,7 @@ mod tests {
             "test2".to_string(),
             LabelItem {
                 addresses: HashSet::from_iter(vec!["1BitcoinEaterAddressDontSendf59kuE".to_string()]),
-                invoices: vec![Bolt11Invoice::from_str("lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm").unwrap()],
+                invoices: HashSet::from_iter(vec![Bolt11Invoice::from_str("lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm").unwrap()]),
                 ..Default::default()
             },
         );
@@ -888,7 +887,15 @@ mod tests {
 
         let label_item = storage.get_label(&new_label).unwrap();
         assert!(label_item.is_some());
-        assert_eq!(label_item.clone().unwrap().invoices, vec![invoice]);
+        assert_eq!(
+            label_item
+                .clone()
+                .unwrap()
+                .invoices
+                .into_iter()
+                .collect_vec(),
+            vec![invoice]
+        );
         assert_eq!(
             label_item.unwrap().addresses.into_iter().collect_vec(),
             vec![address.to_string()]
