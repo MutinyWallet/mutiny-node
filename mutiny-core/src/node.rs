@@ -2725,6 +2725,7 @@ mod wasm_test {
     use crate::test_utils::create_node;
     use crate::{error::MutinyError, storage::persist_payment_info};
     use crate::{HTLCStatus, PrivacyLevel};
+    use itertools::Itertools;
     use lightning::ln::channelmanager::PaymentId;
     use lightning::ln::PaymentHash;
     use lightning_invoice::Bolt11InvoiceDescription;
@@ -2789,7 +2790,7 @@ mod wasm_test {
 
         assert!(label_item.last_used_time >= now);
         assert!(label_item.addresses.is_empty());
-        assert_eq!(label_item.invoices, vec![invoice]);
+        assert_eq!(label_item.invoices.into_iter().collect_vec(), vec![invoice]);
     }
 
     #[test]
