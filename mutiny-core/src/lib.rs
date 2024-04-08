@@ -1244,7 +1244,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                                     Ok(false) => log_debug!(logger, "Got older contact list, ignoring..."),
                                                 }
                                             }
-                                            kind => log_warn!(logger, "Received unexpected note of kind {kind}")
+                                            kind => {
+                                                // ignore federation announcement events
+                                                if kind.as_u64() != 38000 && kind.as_u64() != 38173 {
+                                                    log_warn!(logger, "Received unexpected note of kind {kind}");
+                                                }
+                                            }
                                         }
                                     }
                                 },
