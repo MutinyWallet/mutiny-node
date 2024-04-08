@@ -1591,12 +1591,12 @@ impl<S: MutinyStorage> NostrManager<S> {
     }
 
     /// Creates a recommendation event for a federation
-    pub async fn recommend_federation(
+    pub(crate) async fn create_recommend_federation_event(
         &self,
         invite_code: &InviteCode,
         network: Network,
         review: Option<&str>,
-    ) -> Result<EventId, MutinyError> {
+    ) -> Result<Event, MutinyError> {
         let kind = Kind::from(38000);
 
         // properly tag the event as a federation with the federation id
@@ -1626,8 +1626,21 @@ impl<S: MutinyStorage> NostrManager<S> {
             [d_tag, k_tag, invite_code_tag, n_tag],
         );
 
-        // send the event
-        Ok(self.client.send_event_builder(builder).await?)
+        Ok(self.client.sign_event_builder(builder).await?)
+    }
+
+    /// Creates a recommendation event for a federation
+    pub async fn recommend_federation(
+        &self,
+        invite_code: &InviteCode,
+        network: Network,
+        review: Option<&str>,
+    ) -> Result<EventId, MutinyError> {
+        let event = self
+            .create_recommend_federation_event(invite_code, network, review)
+            .await?;
+        let event_id = self.client.send_event(event).await?;
+        Ok(event_id)
     }
 
     /// Checks if we have recommended the given federation
@@ -1795,12 +1808,8 @@ impl<S: MutinyStorage> NostrManager<S> {
         // add on contact recommendations to mints
         for event in events {
             // only process federation recommendations
-            if event.kind != Kind::from(38000)
-                || !event.tags.iter().any(|tag| {
-                    tag.kind() == TagKind::Custom("k".to_string())
-                        && tag.as_vec().get(1).is_some_and(|x| x == "38173")
-                })
-            {
+            if !is_federation_recommendation_event(&event) {
+                log_warn!(self.logger, "Skipping event: {}", event.id);
                 continue;
             }
 
@@ -2063,6 +2072,14 @@ fn parse_invite_code_from_tag(
 
     // remove any invite codes that point to different federation
     code.filter(|c| c.federation_id() == *expected_federation_id)
+}
+
+fn is_federation_recommendation_event(event: &Event) -> bool {
+    event.kind == Kind::from(38000)
+        && event.tags.iter().any(|tag| {
+            tag.kind() == TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::K))
+                && tag.as_vec().get(1).is_some_and(|x| x == "38173")
+        })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2614,5 +2631,43 @@ mod test {
         ];
 
         assert_eq!(vec, expected);
+    }
+
+    #[tokio::test]
+    async fn test_is_federation_recommendation_event() {
+        let keys = Keys::generate();
+
+        // kind 0 is not a recommendation event
+        let kind0 = EventBuilder::metadata(&Default::default())
+            .to_event(&keys)
+            .unwrap();
+        assert!(!is_federation_recommendation_event(&kind0));
+
+        // kind 38000 without k tag is a recommendation event for something else
+        let no_k = EventBuilder::new(Kind::Custom(38000), "", [])
+            .to_event(&keys)
+            .unwrap();
+        assert!(!is_federation_recommendation_event(&no_k));
+
+        // kind 38000 with correct k tag is a recommendation event
+        let k_tag = Tag::Generic(
+            TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::K)),
+            vec!["38173".to_string()],
+        );
+        let with_k = EventBuilder::new(Kind::Custom(38000), "", [k_tag])
+            .to_event(&keys)
+            .unwrap();
+        assert!(is_federation_recommendation_event(&with_k));
+
+        // test nostr manager creates a valid one
+
+        let nostr_manager = create_nostr_manager();
+        let invite_code = InviteCode::from_str("fed11qgqzc2nhwden5te0vejkg6tdd9h8gepwvejkg6tdd9h8garhduhx6at5d9h8jmn9wshxxmmd9uqqzgxg6s3evnr6m9zdxr6hxkdkukexpcs3mn7mj3g5pc5dfh63l4tj6g9zk4er").unwrap();
+        let event = nostr_manager
+            .create_recommend_federation_event(&invite_code, Network::Signet, None)
+            .await
+            .unwrap();
+
+        assert!(is_federation_recommendation_event(&event));
     }
 }
