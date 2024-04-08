@@ -8,6 +8,7 @@ use std::{
 
 use async_lock::RwLock;
 use bitcoin::hashes::hex::FromHex;
+use bitcoin::key::Parity;
 use bitcoin::secp256k1::ThirtyTwoByteHash;
 use bitcoin::{bip32::ExtendedPrivKey, secp256k1::Secp256k1};
 use fedimint_core::config::FederationId;
@@ -16,6 +17,7 @@ use lightning::util::logger::Logger;
 use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use nostr::prelude::decrypt_received_private_zap_message;
+use nostr::secp256k1::SecretKey;
 use nostr::{nips::nip04::decrypt, Event, JsonUtil, Keys, Tag, ToBech32};
 use nostr::{Filter, Kind, Timestamp};
 use nostr_sdk::{Client, RelayPoolNotification};
@@ -58,6 +60,7 @@ pub struct RegisterResponse {
 
 pub struct HermesClient<S: MutinyStorage> {
     pub(crate) dm_key: Keys,
+    claim_key: SecretKey,
     pub public_key: nostr::PublicKey,
     pub client: Client,
     http_client: reqwest::Client,
@@ -102,8 +105,17 @@ impl<S: MutinyStorage> HermesClient<S> {
             .await
             .expect("Failed to add relays");
 
+        // we use even parity on hermes side, need to check if we need to negate
+        let sec = keys.secret_key().expect("must have");
+        let claim_key = if sec.x_only_public_key(&Secp256k1::new()).1 == Parity::Even {
+            sec.clone()
+        } else {
+            sec.negate().into()
+        };
+
         Ok(Self {
             dm_key: keys,
+            claim_key: *claim_key,
             public_key,
             client,
             http_client: reqwest::Client::new(),
@@ -123,14 +135,19 @@ impl<S: MutinyStorage> HermesClient<S> {
     pub fn start(&self, profile_key: Option<Keys>) -> Result<(), MutinyError> {
         // if we haven't synced before, use now and save to storage
         let last_sync_time = self.storage.get_dm_sync_time(true)?;
-        let time_stamp = match last_sync_time {
+        let mut time_stamp = match last_sync_time {
             None => {
-                let now = Timestamp::now();
+                let now = Timestamp::from(0);
                 self.storage.set_dm_sync_time(now.as_u64(), true)?;
                 now
             }
             Some(time) => Timestamp::from(time + 1), // add one so we get only new events
         };
+
+        // if we have a time stamp before the bug, reset to 0
+        if time_stamp.as_u64() < 1712862315 {
+            time_stamp = Timestamp::from(0);
+        }
 
         // check to see if we currently have an address
         let logger_check_clone = self.logger.clone();
@@ -171,6 +188,7 @@ impl<S: MutinyStorage> HermesClient<S> {
         let stop = self.stop.clone();
         let client = self.client.clone();
         let public_key = self.public_key;
+        let claim_key = self.claim_key;
         let storage = self.storage.clone();
         let dm_key = self.dm_key.clone();
         let federations = self.federations.clone();
@@ -207,7 +225,7 @@ impl<S: MutinyStorage> HermesClient<S> {
                                             Kind::EncryptedDirectMessage => {
                                                 match decrypt_ecash_notification(&dm_key, event.pubkey, &event.content) {
                                                     Ok(notification) => {
-                                                        if let Err(e) = handle_ecash_notification(notification, event.created_at, &federations, &storage, &dm_key, profile_key.as_ref(), &logger).await {
+                                                        if let Err(e) = handle_ecash_notification(notification, event.created_at, &federations, &storage, &claim_key, profile_key.as_ref(), &logger).await {
                                                             log_error!(logger, "Error handling ecash notification: {e}");
                                                         }
                                                     },
@@ -426,7 +444,7 @@ async fn handle_ecash_notification<S: MutinyStorage>(
     created_at: Timestamp,
     federations: &RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>,
     storage: &S,
-    dm_key: &Keys,
+    claim_key: &SecretKey,
     profile_key: Option<&Keys>,
     logger: &MutinyLogger,
 ) -> anyhow::Result<()> {
@@ -438,10 +456,7 @@ async fn handle_ecash_notification<S: MutinyStorage>(
 
     if let Some(federation) = federations.read().await.get(&notification.federation_id) {
         match federation
-            .claim_external_receive(
-                dm_key.secret_key().expect("must have"),
-                vec![notification.tweak_index],
-            )
+            .claim_external_receive(claim_key, vec![notification.tweak_index])
             .await
         {
             Ok(_) => {
@@ -546,7 +561,7 @@ fn handle_private_zap(
     logger: &MutinyLogger,
 ) -> Option<(PrivacyLevel, Option<String>, Option<nostr::PublicKey>)> {
     let key = match profile_key {
-        Some(k) => k.secret_key().unwrap(),
+        Some(k) => k.secret_key().ok()?,
         None => {
             log_error!(logger, "No primary key to decrypt private zap");
             return None;

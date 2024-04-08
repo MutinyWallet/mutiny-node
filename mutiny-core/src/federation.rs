@@ -646,7 +646,7 @@ impl<S: MutinyStorage> FederationClient<S> {
                 self.logger,
                 "External receive not found, maybe already claimed?"
             );
-            return Ok(());
+            return Err(MutinyError::NotFound);
         }
 
         for operation_id in operation_ids {
