@@ -137,7 +137,7 @@ impl<S: MutinyStorage> HermesClient<S> {
         let last_sync_time = self.storage.get_dm_sync_time(true)?;
         let mut time_stamp = match last_sync_time {
             None => {
-                let now = Timestamp::now();
+                let now = Timestamp::from(0);
                 self.storage.set_dm_sync_time(now.as_u64(), true)?;
                 now
             }
