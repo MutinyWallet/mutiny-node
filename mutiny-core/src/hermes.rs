@@ -561,7 +561,7 @@ fn handle_private_zap(
     logger: &MutinyLogger,
 ) -> Option<(PrivacyLevel, Option<String>, Option<nostr::PublicKey>)> {
     let key = match profile_key {
-        Some(k) => k.secret_key().unwrap(),
+        Some(k) => k.secret_key().ok()?,
         None => {
             log_error!(logger, "No primary key to decrypt private zap");
             return None;
