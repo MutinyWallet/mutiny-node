@@ -175,6 +175,9 @@ pub enum MutinyError {
     /// Federation required.
     #[error("A federation is required")]
     FederationRequired,
+    /// Failed to connect to a federation.
+    #[error("Failed to connect to a federation.")]
+    FederationConnectionFailed,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -257,6 +260,8 @@ impl PartialEq for MutinyError {
             (Self::CashuMintError, Self::CashuMintError) => true,
             (Self::EmptyMintURLError, Self::EmptyMintURLError) => true,
             (Self::TokenAlreadySpent, Self::TokenAlreadySpent) => true,
+            (Self::FederationRequired, Self::FederationRequired) => true,
+            (Self::FederationConnectionFailed, Self::FederationConnectionFailed) => true,
             (Self::Other(e), Self::Other(e2)) => e.to_string() == e2.to_string(),
             _ => false,
         }

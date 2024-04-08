@@ -228,7 +228,7 @@ impl<S: MutinyStorage> FederationClient<S> {
                 .await
                 .map_err(|e| {
                     log_error!(logger, "Could not open federation client: {e}");
-                    e
+                    MutinyError::FederationConnectionFailed
                 })?
         } else {
             let download = Instant::now();
@@ -249,7 +249,7 @@ impl<S: MutinyStorage> FederationClient<S> {
                 .await
                 .map_err(|e| {
                     log_error!(logger, "Could not join federation: {e}");
-                    e
+                    MutinyError::FederationConnectionFailed
                 })?
         };
         let fedimint_client = Arc::new(fedimint_client);
