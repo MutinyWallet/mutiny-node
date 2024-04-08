@@ -162,7 +162,7 @@ pub struct NostrManager<S: MutinyStorage> {
 }
 
 /// A fedimint we discovered on nostr
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NostrDiscoveredFedimint {
     /// Invite Code to join the federation
     pub invite_codes: Vec<InviteCode>,
@@ -178,6 +178,28 @@ pub struct NostrDiscoveredFedimint {
     pub metadata: Option<Metadata>,
     /// Contacts that recommend this fedimint
     pub recommendations: Vec<Contact>,
+}
+
+impl PartialOrd for NostrDiscoveredFedimint {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NostrDiscoveredFedimint {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // sort mints by most recommended then by oldest
+        other
+            .recommendations
+            .len()
+            .cmp(&self.recommendations.len())
+            .then_with(|| {
+                // use .unwrap_or(u64::MAX) to make sure we sort by oldest if created_at is None
+                self.created_at
+                    .unwrap_or(u64::MAX)
+                    .cmp(&other.created_at.unwrap_or(u64::MAX))
+            })
+    }
 }
 
 impl<S: MutinyStorage> NostrManager<S> {
@@ -1890,8 +1912,8 @@ impl<S: MutinyStorage> NostrManager<S> {
             mint.recommendations.dedup_by(|a, b| a.npub == b.npub);
         }
 
-        // sort mints by most recommended
-        mints.sort_by(|a, b| b.recommendations.len().cmp(&a.recommendations.len()));
+        // sort mints by most recommended then by oldest
+        mints.sort();
 
         Ok(mints)
     }
@@ -2057,6 +2079,8 @@ mod test {
     use lightning::ln::PaymentSecret;
     use lightning_invoice::{Bolt11Invoice, Currency, InvoiceBuilder};
     use mockall::predicate::eq;
+    use nostr::prelude::rand;
+    use nostr::prelude::rand::prelude::SliceRandom;
     use std::str::FromStr;
 
     const EXPIRED_INVOICE: &str = "lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm";
@@ -2504,5 +2528,91 @@ mod test {
 
         let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
         assert_eq!(pending.len(), 0);
+    }
+
+    #[test]
+    fn test_sort_discovered_federations() {
+        let most_recommendations_newer = NostrDiscoveredFedimint {
+            invite_codes: vec![],
+            id: FederationId::dummy(),
+            pubkey: None,
+            event_id: None,
+            created_at: Some(200),
+            metadata: None,
+            recommendations: vec![Contact::default(), Contact::default()],
+        };
+
+        let most_recommendations = NostrDiscoveredFedimint {
+            invite_codes: vec![],
+            id: FederationId::dummy(),
+            pubkey: None,
+            event_id: None,
+            created_at: Some(100),
+            metadata: None,
+            recommendations: vec![Contact::default(), Contact::default()],
+        };
+
+        let one_recommendation = NostrDiscoveredFedimint {
+            invite_codes: vec![],
+            id: FederationId::dummy(),
+            pubkey: None,
+            event_id: None,
+            created_at: Some(100),
+            metadata: None,
+            recommendations: vec![Contact::default()],
+        };
+
+        let one_recommendation_no_time = NostrDiscoveredFedimint {
+            invite_codes: vec![],
+            id: FederationId::dummy(),
+            pubkey: None,
+            event_id: None,
+            created_at: None,
+            metadata: None,
+            recommendations: vec![Contact::default()],
+        };
+
+        let no_recommendations = NostrDiscoveredFedimint {
+            invite_codes: vec![],
+            id: FederationId::dummy(),
+            pubkey: None,
+            event_id: None,
+            created_at: Some(100),
+            metadata: None,
+            recommendations: vec![],
+        };
+
+        let no_recommendations_or_time = NostrDiscoveredFedimint {
+            invite_codes: vec![],
+            id: FederationId::dummy(),
+            pubkey: None,
+            event_id: None,
+            created_at: None,
+            metadata: None,
+            recommendations: vec![],
+        };
+
+        let mut vec = vec![
+            most_recommendations_newer.clone(),
+            most_recommendations.clone(),
+            one_recommendation.clone(),
+            one_recommendation_no_time.clone(),
+            no_recommendations.clone(),
+            no_recommendations_or_time.clone(),
+        ];
+        // randomize then sort
+        vec.shuffle(&mut rand::thread_rng());
+        vec.sort();
+
+        let expected = vec![
+            most_recommendations,
+            most_recommendations_newer,
+            one_recommendation,
+            one_recommendation_no_time,
+            no_recommendations,
+            no_recommendations_or_time,
+        ];
+
+        assert_eq!(vec, expected);
     }
 }
