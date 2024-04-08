@@ -717,7 +717,7 @@ fn get_gateway_preference(
     let mainnet_federation_id =
         FederationId::from_str(MAINNET_FEDERATION).expect("should be a valid federation id");
 
-    for g in gateways {
+    for g in gateways.iter() {
         let g_id = g.info.gateway_id;
 
         // if the gateway node ID matches what we expect for our signet/mainnet
@@ -742,6 +742,11 @@ fn get_gateway_preference(
                 continue;
             }
         }
+    }
+
+    // fallback to any gateway if none fit our criteria
+    if active_choice.is_none() {
+        active_choice = gateways.first().map(|g| g.info.gateway_id);
     }
 
     active_choice
@@ -1321,14 +1326,17 @@ fn gateway_preference() {
         Some(vetted_gateway_pubkey)
     );
 
-    // Test that the method returns None when given a non-matching federation ID and gateway ID,
+    // Test that the method returns the first when given a non-matching federation ID and gateway ID,
     // and no unvetted gateways with a high enough fee
     let gateways = vec![
-        signet_gateway,
+        signet_gateway.clone(),
         mainnet_gateway,
-        unvetted_gateway_low_fee.clone(),
+        unvetted_gateway_low_fee,
     ];
-    assert_eq!(get_gateway_preference(gateways, random_federation_id), None);
+    assert_eq!(
+        get_gateway_preference(gateways, random_federation_id),
+        Some(signet_gateway.info.gateway_id)
+    );
 }
 
 #[cfg(test)]
