@@ -64,6 +64,14 @@ pub enum ReservedProfile {
 
 pub(crate) const MUTINY_PLUS_SUBSCRIPTION_LABEL: &str = "Mutiny+ Subscription";
 
+/// Default relays to use for nostr
+pub(crate) const RELAYS: [&str; 4] = [
+    "wss://relay.primal.net",
+    "wss://relay.damus.io",
+    "wss://nostr.mutinywallet.com",
+    "wss://relay.mutinywallet.com",
+];
+
 impl ReservedProfile {
     pub fn info(&self) -> (&'static str, u32) {
         let (n, i) = match self {
@@ -265,15 +273,8 @@ impl<S: MutinyStorage> NostrManager<S> {
             .iter()
             .filter(|x| x.profile.active())
             .map(|x| x.profile.relay.clone())
+            .chain(RELAYS.iter().map(|x| x.to_string()))
             .collect();
-
-        // add relays to pull DMs from
-        relays.push("wss://relay.primal.net".to_string());
-        relays.push("wss://relay.damus.io".to_string());
-
-        // add relays for default sending
-        relays.push("wss://nostr.mutinywallet.com".to_string()); // blastr
-        relays.push("wss://relay.mutinywallet.com".to_string()); // strfry
 
         // remove duplicates
         relays.sort();

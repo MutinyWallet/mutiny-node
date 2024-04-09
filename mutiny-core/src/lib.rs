@@ -124,7 +124,7 @@ use std::{str::FromStr, sync::atomic::Ordering};
 use uuid::Uuid;
 
 use crate::labels::LabelItem;
-use crate::nostr::NostrKeySource;
+use crate::nostr::{NostrKeySource, RELAYS};
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 
@@ -2588,10 +2588,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     Some(zap_npub) => {
                         let data = ZapRequestData {
                             public_key: zap_npub,
-                            relays: vec![
-                                "wss://relay.mutinywallet.com".into(),
-                                "wss://relay.primal.net".into(),
-                            ],
+                            relays: RELAYS.iter().map(|r| (*r).into()).collect(),
                             message: comment.unwrap_or_default(),
                             amount: Some(msats),
                             lnurl: Some(lnurl.encode()),
