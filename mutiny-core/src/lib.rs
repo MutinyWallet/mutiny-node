@@ -2165,7 +2165,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     async fn sync_nostr_profile(&self) -> Result<(), MutinyError> {
         let npub = self.nostr.get_npub().await;
         if let Some(metadata) = self.nostr.primal_client.get_user_profile(npub).await? {
-            self.storage.set_nostr_profile(metadata)?;
+            self.storage.set_nostr_profile(&metadata)?;
         }
 
         Ok(())

@@ -1873,6 +1873,37 @@ impl MutinyWallet {
         Ok(JsValue::from_serde(&profile)?)
     }
 
+    /// This should only be called when the user is setting up a new profile
+    /// never for an existing profile
+    pub async fn setup_new_profile(
+        &self,
+        name: Option<String>,
+        img_url: Option<String>,
+        lnurl: Option<String>,
+        nip05: Option<String>,
+    ) -> Result<JsValue, MutinyJsError> {
+        let img_url = img_url
+            .map(|i| nostr::Url::from_str(&i))
+            .transpose()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+
+        let lnurl = lnurl
+            .map(|l| {
+                LightningAddress::from_str(&l)
+                    .map(|a| a.lnurl())
+                    .or(LnUrl::from_str(&l))
+            })
+            .transpose()
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+
+        let profile = self
+            .inner
+            .nostr
+            .setup_new_profile(name, img_url, lnurl, nip05)
+            .await?;
+        Ok(JsValue::from_serde(&profile)?)
+    }
+
     /// Sets the user's nostr profile data
     #[wasm_bindgen]
     pub async fn edit_nostr_profile(
