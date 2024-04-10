@@ -2920,4 +2920,42 @@ mod test {
         assert!(ben.image_url.is_some());
         assert!(!ben.name.is_empty());
     }
+
+    #[tokio::test]
+    async fn test_create_recommendation_event() {
+        let mut nostr_manager = create_nostr_manager().await;
+        nostr_manager
+            .client
+            .expect_sign_event_builder()
+            .once()
+            .returning(|b| Ok(b.to_event(&Keys::generate()).unwrap()));
+
+        let invite_code = InviteCode::from_str(INVITE_CODE).unwrap();
+        let event = nostr_manager
+            .create_recommend_federation_event(&invite_code, Network::Signet, None)
+            .await
+            .unwrap();
+
+        assert!(event.verify().is_ok());
+        assert_eq!(event.kind, Kind::from(38000));
+        assert_eq!(event.tags.len(), 4);
+
+        // find the correct tags
+        assert!(event
+            .tags
+            .iter()
+            .any(|t| t.as_vec() == vec!["k".to_string(), "38173".to_string()]));
+        assert!(event
+            .tags
+            .iter()
+            .any(|t| t.as_vec() == vec!["d".to_string(), invite_code.federation_id().to_string()]));
+        assert!(event
+            .tags
+            .iter()
+            .any(|t| t.as_vec() == vec!["n".to_string(), "signet".to_string()]));
+        assert!(event
+            .tags
+            .iter()
+            .any(|t| t.as_vec() == vec!["u".to_string(), INVITE_CODE.to_string()]));
+    }
 }
