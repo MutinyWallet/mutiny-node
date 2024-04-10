@@ -625,7 +625,8 @@ impl NostrWalletConnect {
     ) -> anyhow::Result<Option<Event>> {
         let invoice = match params.payment_hash {
             Some(payment_hash) => {
-                let hash: [u8; 32] = FromHex::from_hex(&payment_hash).expect("invalid hash");
+                let hash: [u8; 32] = FromHex::from_hex(&payment_hash)
+                    .map_err(|e| anyhow!("Failed to parse payment_hash {payment_hash}: {e}"))?;
                 node.lookup_payment(&hash).await
             }
             None => match params.bolt11 {
@@ -2386,5 +2387,31 @@ mod wasm_test {
         assert_eq!(result.transaction_type, Some(TransactionType::Incoming));
         assert_eq!(result.preimage, None);
         assert_ne!(result.created_at, 0); // make sure we properly set this
+
+        // test invalid invoice
+        let event = sign_nwc_request(
+            &uri,
+            Request::lookup_invoice(LookupInvoiceRequestParams {
+                payment_hash: None,
+                bolt11: Some("invalid invoice".to_string()),
+            }),
+        );
+        let result = nwc
+            .handle_nwc_request(event.clone(), &node, &nostr_manager)
+            .await;
+        assert!(result.is_err());
+
+        // test invalid payment_hash
+        let event = sign_nwc_request(
+            &uri,
+            Request::lookup_invoice(LookupInvoiceRequestParams {
+                payment_hash: Some("invalid payment_hash".to_string()),
+                bolt11: None,
+            }),
+        );
+        let result = nwc
+            .handle_nwc_request(event.clone(), &node, &nostr_manager)
+            .await;
+        assert!(result.is_err());
     }
 }
