@@ -135,7 +135,7 @@ impl<S: MutinyStorage> HermesClient<S> {
     pub fn start(&self, profile_key: Option<Keys>) -> Result<(), MutinyError> {
         // if we haven't synced before, use now and save to storage
         let last_sync_time = self.storage.get_dm_sync_time(true)?;
-        let mut time_stamp = match last_sync_time {
+        let time_stamp = match last_sync_time {
             None => {
                 let now = Timestamp::from(0);
                 self.storage.set_dm_sync_time(now.as_u64(), true)?;
@@ -143,11 +143,6 @@ impl<S: MutinyStorage> HermesClient<S> {
             }
             Some(time) => Timestamp::from(time + 1), // add one so we get only new events
         };
-
-        // if we have a time stamp before the bug, reset to 0
-        if time_stamp.as_u64() < 1712862315 {
-            time_stamp = Timestamp::from(0);
-        }
 
         // check to see if we currently have an address
         let logger_check_clone = self.logger.clone();
