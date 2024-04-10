@@ -2243,7 +2243,7 @@ fn is_federation_recommendation_event(event: &Event) -> bool {
 mod test {
     use super::*;
     use crate::nostr::client::MockNostrClient;
-    use crate::nostr::primal::MockPrimalApi;
+    use crate::nostr::primal::{MockPrimalApi, TrustedUser};
     use crate::storage::MemoryStorage;
     use crate::utils::now;
     use crate::MockInvoiceHandler;
@@ -2259,6 +2259,7 @@ mod test {
     use std::str::FromStr;
 
     const EXPIRED_INVOICE: &str = "lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm";
+    const INVITE_CODE: &str = "fed11qgqzc2nhwden5te0vejkg6tdd9h8gepwvejkg6tdd9h8garhduhx6at5d9h8jmn9wshxxmmd9uqqzgxg6s3evnr6m9zdxr6hxkdkukexpcs3mn7mj3g5pc5dfh63l4tj6g9zk4er";
 
     async fn create_nostr_manager() -> NostrManager<MemoryStorage, MockPrimalApi, MockNostrClient> {
         let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
@@ -2826,7 +2827,7 @@ mod test {
         // test nostr manager creates a valid one
         #[allow(unused_mut)] // need this because of mockall
         let mut nostr_manager = create_nostr_manager().await;
-        let invite_code = InviteCode::from_str("fed11qgqzc2nhwden5te0vejkg6tdd9h8gepwvejkg6tdd9h8garhduhx6at5d9h8jmn9wshxxmmd9uqqzgxg6s3evnr6m9zdxr6hxkdkukexpcs3mn7mj3g5pc5dfh63l4tj6g9zk4er").unwrap();
+        let invite_code = InviteCode::from_str(INVITE_CODE).unwrap();
 
         nostr_manager
             .client
@@ -2840,5 +2841,83 @@ mod test {
             .unwrap();
 
         assert!(is_federation_recommendation_event(&event));
+    }
+
+    #[tokio::test]
+    async fn test_discover_federations() {
+        let npub = nostr::PublicKey::from_hex(
+            "e1ff3bfdd4e40315959b08b4fcc8245eaa514637e1d4ec2ae166b743341be1af",
+        )
+        .unwrap();
+
+        // manually make NostrManager so we can use a real nostr client to get real events
+        let mut nostr_manager = NostrManager::from_mnemonic(
+            ExtendedPrivKey::new_master(Network::Bitcoin, &[]).unwrap(),
+            NostrKeySource::Derived,
+            MemoryStorage::new(None, None, None),
+            MockPrimalApi::new(),
+            Client::default(),
+            Arc::new(MutinyLogger::default()),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap();
+
+        nostr_manager
+            .primal_client
+            .expect_get_trusted_users()
+            .return_once(move |_| {
+                Ok(vec![TrustedUser {
+                    pubkey: npub,
+                    trust_rating: 1.0,
+                    metadata: Some(
+                        Metadata::default()
+                            .name("Ben")
+                            .picture(Url::from_str("https://example.com").unwrap()),
+                    ),
+                }])
+            });
+        // need to connect to relays
+        nostr_manager.connect().await.unwrap();
+
+        let federations = nostr_manager
+            .discover_federations(Network::Signet)
+            .await
+            .unwrap();
+
+        let mutinynet = federations
+            .iter()
+            .find(|f| {
+                f.id == FederationId::from_str(
+                    "c8d423964c7ad944d30f57359b6e5b260e211dcfdb945140e28d4df51fd572d2",
+                )
+                .unwrap()
+            })
+            .unwrap();
+
+        // has the invite code
+        assert_eq!(mutinynet.invite_codes.len(), 1);
+        assert_eq!(
+            mutinynet.invite_codes.first(),
+            Some(&InviteCode::from_str(INVITE_CODE).unwrap())
+        );
+        // check we found the actual federation announcement
+        assert!(mutinynet.created_at.is_some());
+        assert!(mutinynet.pubkey.is_some());
+        assert!(mutinynet.event_id.is_some());
+        assert!(mutinynet.metadata.is_some());
+
+        // verify we find some recommendations
+        assert!(!mutinynet.recommendations.is_empty());
+        // find ben's recommendation
+        let ben = mutinynet
+            .recommendations
+            .iter()
+            .find(|c| c.npub.is_some_and(|n| n == npub))
+            .unwrap();
+
+        // make sure it fills out the contact
+        assert!(ben.image_url.is_some());
+        assert!(!ben.name.is_empty());
     }
 }
