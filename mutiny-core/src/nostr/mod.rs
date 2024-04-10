@@ -2251,6 +2251,7 @@ mod test {
     use bitcoin::bip32::ExtendedPrivKey;
     use bitcoin::Network;
     use futures::executor::block_on;
+    use futures::try_join;
     use lightning::ln::PaymentSecret;
     use lightning_invoice::{Bolt11Invoice, Currency, InvoiceBuilder};
     use mockall::predicate::eq;
@@ -2957,5 +2958,91 @@ mod test {
             .tags
             .iter()
             .any(|t| t.as_vec() == vec!["u".to_string(), INVITE_CODE.to_string()]));
+    }
+
+    #[tokio::test]
+    async fn test_follow_unfollow() {
+        let mut nostr_manager = create_nostr_manager().await;
+        nostr_manager
+            .client
+            .expect_send_event()
+            .returning(|e| Ok(e.id));
+
+        let ben = nostr::PublicKey::from_str(
+            "npub1u8lnhlw5usp3t9vmpz60ejpyt649z33hu82wc2hpv6m5xdqmuxhs46turz",
+        )
+        .unwrap();
+        let tony = nostr::PublicKey::from_str(
+            "npub1t0nyg64g5vwprva52wlcmt7fkdr07v5dr7s35raq9g0xgc0k4xcsedjgqv",
+        )
+        .unwrap();
+
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert!(list.is_empty());
+
+        nostr_manager.follow_npub(ben).await.unwrap();
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 2); // follows ourselves too
+
+        // test follow twice
+        nostr_manager.follow_npub(ben).await.unwrap();
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 2);
+
+        nostr_manager.follow_npub(tony).await.unwrap();
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 3);
+
+        nostr_manager.unfollow_npub(ben).await.unwrap();
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 2);
+
+        nostr_manager.unfollow_npub(tony).await.unwrap();
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 1);
+
+        // test unfollow twice
+        nostr_manager.unfollow_npub(tony).await.unwrap();
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_follow_concurrency() {
+        let mut nostr_manager = create_nostr_manager().await;
+        nostr_manager
+            .client
+            .expect_send_event()
+            .returning(|e| Ok(e.id));
+
+        let ben = nostr::PublicKey::from_str(
+            "npub1u8lnhlw5usp3t9vmpz60ejpyt649z33hu82wc2hpv6m5xdqmuxhs46turz",
+        )
+        .unwrap();
+        let tony = nostr::PublicKey::from_str(
+            "npub1t0nyg64g5vwprva52wlcmt7fkdr07v5dr7s35raq9g0xgc0k4xcsedjgqv",
+        )
+        .unwrap();
+
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert!(list.is_empty());
+
+        try_join!(
+            nostr_manager.follow_npub(ben),
+            nostr_manager.follow_npub(tony)
+        )
+        .unwrap();
+
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 3); // follows ourselves too
+
+        try_join!(
+            nostr_manager.unfollow_npub(ben),
+            nostr_manager.unfollow_npub(tony)
+        )
+        .unwrap();
+
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 1);
     }
 }
