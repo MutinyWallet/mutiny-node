@@ -2257,6 +2257,7 @@ mod test {
     use mockall::predicate::eq;
     use nostr::prelude::rand;
     use nostr::prelude::rand::prelude::SliceRandom;
+    use nostr::SubscriptionId;
     use std::str::FromStr;
 
     const EXPIRED_INVOICE: &str = "lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm";
@@ -2276,7 +2277,7 @@ mod test {
 
         #[allow(unused_mut)] // need this because of mockall
         let mut client = MockNostrClient::new();
-        client.expect_set_signer().return_const(());
+        client.expect_set_signer().once().return_const(());
 
         NostrManager::from_mnemonic(
             xprivkey,
@@ -3044,5 +3045,67 @@ mod test {
 
         let list = nostr_manager.get_follow_list().unwrap();
         assert_eq!(list.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_change_nostr_keys() {
+        let mut nostr_manager = create_nostr_manager().await;
+        nostr_manager
+            .client
+            .expect_send_event()
+            .returning(|e| Ok(e.id));
+        nostr_manager
+            .client
+            .expect_send_event_builder()
+            .returning(|e| Ok(e.to_event(&Keys::generate()).unwrap().id));
+        // create follow list
+        nostr_manager
+            .follow_npub(Keys::generate().public_key())
+            .await
+            .unwrap();
+        // create a profile
+        nostr_manager
+            .primal_client
+            .expect_get_user_profile()
+            .return_once(|_| Ok(None));
+        nostr_manager
+            .edit_profile(Some("test profile".to_string()), None, None, None)
+            .await
+            .unwrap();
+
+        let new_keys = Keys::generate();
+
+        let xprivkey = ExtendedPrivKey::new_master(Network::Bitcoin, &[0; 32]).unwrap();
+        let source = NostrKeySource::Imported(new_keys.clone());
+
+        nostr_manager
+            .client
+            .expect_set_signer()
+            .once()
+            .return_once(|_| ());
+
+        nostr_manager
+            .client
+            .expect_subscribe()
+            .once()
+            .withf(|filters, opt| filters.len() == 2 && opt.is_none())
+            .return_once(|_, _| SubscriptionId::generate());
+
+        let new_pk = nostr_manager
+            .change_nostr_keys(source, xprivkey)
+            .await
+            .unwrap();
+
+        // easy tests
+        assert_eq!(new_pk, new_keys.public_key());
+        let npub = nostr_manager.get_npub().await;
+        assert_eq!(npub, new_keys.public_key());
+
+        // make sure we get a different follow list and profile
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert!(list.is_empty());
+        let profile = nostr_manager.get_profile().unwrap();
+        assert_ne!(profile.name, Some("test profile".to_string()));
+        assert_eq!(profile, Metadata::default());
     }
 }
