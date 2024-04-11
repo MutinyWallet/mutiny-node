@@ -50,8 +50,8 @@ pub async fn sleep(millis: i32) {
 }
 pub fn now() -> Duration {
     #[cfg(target_arch = "wasm32")]
-    return instant::SystemTime::now()
-        .duration_since(instant::SystemTime::UNIX_EPOCH)
+    return web_time::SystemTime::now()
+        .duration_since(web_time::SystemTime::UNIX_EPOCH)
         .unwrap();
 
     #[cfg(not(target_arch = "wasm32"))]

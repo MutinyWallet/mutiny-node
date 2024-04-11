@@ -58,8 +58,6 @@ use fedimint_wallet_client::{WalletClientInit, WalletClientModule};
 use futures::future::{self};
 use futures_util::{pin_mut, StreamExt};
 use hex_conservative::{DisplayHex, FromHex};
-#[cfg(target_arch = "wasm32")]
-use instant::Instant;
 use lightning::{
     ln::PaymentHash, log_debug, log_error, log_info, log_trace, log_warn, util::logger::Logger,
 };
@@ -72,6 +70,8 @@ use std::{
     str::FromStr,
     sync::atomic::{AtomicU32, Ordering},
 };
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 // The amount of time in milliseconds to wait for
 // checking the status of a fedimint payment. This

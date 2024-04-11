@@ -39,8 +39,6 @@ use core::time::Duration;
 use esplora_client::{AsyncClient, Builder};
 use futures::{future::join_all, lock::Mutex};
 use hex_conservative::DisplayHex;
-#[cfg(target_arch = "wasm32")]
-use instant::Instant;
 use lightning::chain::Confirm;
 use lightning::events::ClosureReason;
 use lightning::ln::channelmanager::{ChannelDetails, PhantomRouteHints};
@@ -63,6 +61,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 use std::{collections::HashMap, ops::Deref, sync::Arc};
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 pub const DEVICE_LOCK_INTERVAL_SECS: u64 = 30;

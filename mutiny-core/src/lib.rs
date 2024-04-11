@@ -97,8 +97,6 @@ use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::{pin_mut, select, FutureExt};
 use futures_util::join;
 use hex_conservative::{DisplayHex, FromHex};
-#[cfg(target_arch = "wasm32")]
-use instant::Instant;
 use itertools::Itertools;
 use lightning::chain::BestBlock;
 use lightning::ln::PaymentHash;
@@ -122,6 +120,8 @@ use std::time::Instant;
 use std::{collections::HashMap, sync::atomic::AtomicBool};
 use std::{str::FromStr, sync::atomic::Ordering};
 use uuid::Uuid;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 use crate::labels::LabelItem;
 use crate::nostr::{NostrKeySource, RELAYS};
