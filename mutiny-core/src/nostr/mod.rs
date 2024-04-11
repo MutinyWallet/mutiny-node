@@ -29,7 +29,7 @@ use nostr::prelude::{Coordinate, EventIdOrCoordinate};
 use nostr::{
     nips::nip04::{decrypt, encrypt},
     Alphabet, Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Metadata, SecretKey,
-    SingleLetterTag, Tag, TagKind, Timestamp, UncheckedUrl,
+    SingleLetterTag, Tag, TagKind, Timestamp,
 };
 use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
 use serde::{Deserialize, Serialize};
@@ -476,7 +476,17 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
                 })
                 .collect();
             let builder = EventBuilder::new(Kind::ContactList, json!(content).to_string(), tags);
-            self.client.send_event_builder(builder).await?;
+            let event = self
+                .nostr_keys
+                .read()
+                .await
+                .signer
+                .sign_event_builder(builder)
+                .await?;
+
+            self.client.send_event(event.clone()).await?;
+
+            update_nostr_contact_list(&self.storage, event)?;
         }
 
         // create real relay list
@@ -484,7 +494,7 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
             let builder = EventBuilder::relay_list(
                 RELAYS
                     .iter()
-                    .map(|x| (UncheckedUrl::from(x.to_string()), None)),
+                    .map(|x| (nostr::UncheckedUrl::from(x.to_string()), None)),
             );
             self.client.send_event_builder(builder).await?;
         }
@@ -3107,5 +3117,94 @@ mod test {
         let profile = nostr_manager.get_profile().unwrap();
         assert_ne!(profile.name, Some("test profile".to_string()));
         assert_eq!(profile, Metadata::default());
+    }
+
+    #[tokio::test]
+    async fn test_profile_changes() {
+        let mut nostr_manager = create_nostr_manager().await;
+        let npub = nostr_manager.get_npub().await;
+        nostr_manager
+            .client
+            .expect_send_event()
+            .returning(|e| Ok(e.id));
+        nostr_manager
+            .client
+            .expect_send_event_builder()
+            .returning(|e| Ok(e.to_event(&Keys::generate()).unwrap().id));
+        // setup profile
+        nostr_manager
+            .primal_client
+            .expect_get_user_profile()
+            .with(eq(npub))
+            .times(1)
+            .returning(|_| Ok(None));
+        let setup = nostr_manager
+            .setup_new_profile(Some("test profile".to_string()), None, None, None)
+            .await
+            .unwrap();
+
+        let npub = nostr_manager.get_npub().await;
+
+        // check our follow list
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(list.contains(&npub));
+
+        // check our profile
+        let profile = nostr_manager.get_profile().unwrap();
+        assert_eq!(profile, setup);
+        assert_eq!(profile.name, Some("test profile".to_string()));
+        assert_eq!(profile.display_name, Some("test profile".to_string()));
+        assert_eq!(profile.lud06, None);
+        assert_eq!(profile.lud16, None);
+        assert_eq!(profile.picture, None);
+        assert_eq!(profile.about, None);
+        assert!(profile.custom.is_empty());
+
+        let pfp = "https://pfp.nostr.build/11670ef3e4b85e22e85a6558a7e7ea6eda960fc72f1a211042173609dce4be4e.jpg";
+        let lnurl = "lnurl1dp68gurn8ghj7mrww4exctnxd9shg6npvchxxmmd9akxuatjdskkx6rpdehx2mplwdjhxumfdahr6err8ycnzef3xyunxenrvenxydf3xq6xgvekxgmrqc3cx33n2erxvc6kzce38ycnqdf5vdjr2vpevv6kvc3sv4jryenx8yuxgefex4ssq7l4mq";
+
+        // edit profile
+        nostr_manager
+            .primal_client
+            .expect_get_user_profile()
+            .with(eq(npub))
+            .times(1)
+            .return_once(|_| Ok(Some(profile)));
+        let edited = nostr_manager
+            .edit_profile(
+                None,
+                Some(Url::from_str(pfp).unwrap()),
+                Some(LnUrl::from_str(lnurl).unwrap()),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // check our profile
+        let profile = nostr_manager.get_profile().unwrap();
+        assert_eq!(profile, edited);
+        assert_eq!(profile.name, Some("test profile".to_string()));
+        assert_eq!(profile.display_name, Some("test profile".to_string()));
+        assert_eq!(profile.lud06, Some(lnurl.to_string()));
+        assert_eq!(profile.lud16, None);
+        assert_eq!(profile.picture, Some(pfp.to_string()));
+        assert_eq!(profile.about, None);
+        assert!(profile.custom.is_empty());
+
+        // delete profile
+        let deleted = nostr_manager.delete_profile().await.unwrap();
+
+        // verify it was properly deleted
+        let profile = nostr_manager.get_profile().unwrap();
+        assert_eq!(profile, deleted);
+        assert_eq!(profile.name, Some("Deleted".to_string()));
+        assert_eq!(profile.display_name, Some("Deleted".to_string()));
+        assert_eq!(profile.lud06, None);
+        assert_eq!(profile.lud16, None);
+        assert_eq!(profile.picture, None);
+        assert_eq!(profile.about, Some("Deleted".to_string()));
+        assert_eq!(profile.custom.len(), 1);
+        assert_eq!(profile.custom.get("deleted").unwrap().as_bool(), Some(true));
     }
 }
