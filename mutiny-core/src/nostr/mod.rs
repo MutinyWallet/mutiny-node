@@ -27,10 +27,11 @@ use nostr::nips::nip47::*;
 use nostr::{
     nips::nip04::{decrypt, encrypt},
     Alphabet, Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Metadata, SecretKey,
-    SingleLetterTag, Tag, TagKind, Timestamp,
+    SingleLetterTag, Tag, TagKind, Timestamp, UncheckedUrl,
 };
 use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::{atomic::Ordering, Arc, RwLock};
 use std::time::Duration;
@@ -63,6 +64,14 @@ pub enum ReservedProfile {
 }
 
 pub(crate) const MUTINY_PLUS_SUBSCRIPTION_LABEL: &str = "Mutiny+ Subscription";
+
+/// Default relays to use for nostr
+pub(crate) const RELAYS: [&str; 4] = [
+    "wss://relay.primal.net",
+    "wss://relay.damus.io",
+    "wss://nostr.mutinywallet.com",
+    "wss://relay.mutinywallet.com",
+];
 
 impl ReservedProfile {
     pub fn info(&self) -> (&'static str, u32) {
@@ -265,15 +274,8 @@ impl<S: MutinyStorage> NostrManager<S> {
             .iter()
             .filter(|x| x.profile.active())
             .map(|x| x.profile.relay.clone())
+            .chain(RELAYS.iter().map(|x| x.to_string()))
             .collect();
-
-        // add relays to pull DMs from
-        relays.push("wss://relay.primal.net".to_string());
-        relays.push("wss://relay.damus.io".to_string());
-
-        // add relays for default sending
-        relays.push("wss://nostr.mutinywallet.com".to_string()); // blastr
-        relays.push("wss://relay.mutinywallet.com".to_string()); // strfry
 
         // remove duplicates
         relays.sort();
@@ -393,7 +395,7 @@ impl<S: MutinyStorage> NostrManager<S> {
         };
 
         let with_name = if let Some(name) = name {
-            current.name(name)
+            current.name(name.clone()).display_name(name)
         } else {
             current
         };
@@ -419,9 +421,96 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let event_id = self.client.set_metadata(&with_nip05).await?;
         log_info!(self.logger, "New kind 0: {event_id}");
-        self.storage.set_nostr_profile(with_nip05.clone())?;
+        self.storage.set_nostr_profile(&with_nip05)?;
 
         Ok(with_nip05)
+    }
+
+    /// This should only be called when the user is setting up a new profile
+    /// never for an existing profile
+    pub async fn setup_new_profile(
+        &self,
+        name: Option<String>,
+        img_url: Option<Url>,
+        lnurl: Option<LnUrl>,
+        nip05: Option<String>,
+    ) -> Result<Metadata, MutinyError> {
+        // pull latest profile from primal
+        let npub = self.get_npub().await;
+        match self.primal_client.get_user_profile(npub).await {
+            Ok(Some(_)) => {
+                log_error!(
+                    self.logger,
+                    "User already has a profile, can't setup new profile"
+                );
+                return Err(MutinyError::InvalidArgumentsError);
+            }
+            Ok(None) => (),
+            Err(e) => {
+                // if we can't get the profile from primal, fall back to local
+                // otherwise we can't create profile if the primal server is down
+                log_error!(
+                    self.logger,
+                    "Failed to get user profile from primal, falling back to local: {e}"
+                );
+                if self.storage.get_nostr_profile()?.is_some() {
+                    return Err(MutinyError::InvalidArgumentsError);
+                }
+            }
+        };
+
+        // create follow/relays list
+        {
+            // make sure we follow ourselves as well, makes other nostr feeds better
+            let tags = [Tag::public_key(npub)];
+            // set relay list in the content properly
+            let content: HashMap<String, Value> = RELAYS
+                .iter()
+                .map(|relay| {
+                    let value = json!({"read":true,"write":true});
+                    (relay.to_string(), value)
+                })
+                .collect();
+            let builder = EventBuilder::new(Kind::ContactList, json!(content).to_string(), tags);
+            self.client.send_event_builder(builder).await?;
+        }
+
+        // create real relay list
+        {
+            let builder = EventBuilder::relay_list(
+                RELAYS
+                    .iter()
+                    .map(|x| (UncheckedUrl::from(x.to_string()), None)),
+            );
+            self.client.send_event_builder(builder).await?;
+        }
+
+        // create metadata
+        let metadata = {
+            let name = name.unwrap_or_else(|| "Anon".to_string());
+            let mut m = Metadata::default().name(name.clone()).display_name(name);
+
+            if let Some(img_url) = img_url {
+                m = m.picture(img_url)
+            };
+            if let Some(lnurl) = lnurl {
+                if let Some(ln_addr) = lnurl.lightning_address() {
+                    m = m.lud16(ln_addr.to_string())
+                } else {
+                    m = m.lud06(lnurl.to_string())
+                }
+            };
+            if let Some(nip05) = nip05 {
+                m = m.nip05(nip05)
+            };
+            m
+        };
+
+        let event_id = self.client.set_metadata(&metadata).await?;
+        log_info!(self.logger, "New kind 0: {event_id}");
+        self.storage.set_nostr_profile(&metadata)?;
+
+        Ok(metadata)
     }
 
     /// Sets the user's nostr profile metadata as deleted
@@ -434,7 +523,7 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let event_id = self.client.set_metadata(&metadata).await?;
         log_info!(self.logger, "New kind 0: {event_id}");
-        self.storage.set_nostr_profile(metadata.clone())?;
+        self.storage.set_nostr_profile(&metadata)?;
 
         Ok(metadata)
     }
@@ -480,7 +569,22 @@ impl<S: MutinyStorage> NostrManager<S> {
                 tags.push(Tag::public_key(npub));
                 EventBuilder::new(Kind::ContactList, content, tags)
             }
-            None => EventBuilder::new(Kind::ContactList, "", [Tag::public_key(npub)]),
+            None => {
+                // make sure we follow ourselves as well, makes other nostr feeds better
+                let tags = [
+                    Tag::public_key(npub),
+                    Tag::public_key(self.get_npub().await),
+                ];
+                // set relay list in the content properly
+                let content: HashMap<String, Value> = RELAYS
+                    .iter()
+                    .map(|relay| {
+                        let value = json!({"read":true,"write":true});
+                        (relay.to_string(), value)
+                    })
+                    .collect();
+                EventBuilder::new(Kind::ContactList, json!(content).to_string(), tags)
+            }
         };
 
         let event = self

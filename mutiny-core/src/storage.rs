@@ -593,7 +593,7 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
         self.get_data(NOSTR_PROFILE_METADATA)
     }
 
-    fn set_nostr_profile(&self, metadata: Metadata) -> Result<(), MutinyError> {
+    fn set_nostr_profile(&self, metadata: &Metadata) -> Result<(), MutinyError> {
         self.set_data(NOSTR_PROFILE_METADATA.to_string(), metadata, None)
     }
 

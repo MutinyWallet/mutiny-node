@@ -28,6 +28,7 @@ use url::Url;
 
 use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
 use crate::labels::LabelStorage;
+use crate::nostr::RELAYS;
 use crate::storage::persist_payment_info;
 use crate::{
     blindauth::{BlindAuthClient, SignedToken},
@@ -94,14 +95,8 @@ impl<S: MutinyStorage> HermesClient<S> {
         let public_key = keys.public_key();
         let client = Client::new(&keys);
 
-        let relays: Vec<String> = vec![
-            "wss://relay.primal.net".to_string(),
-            "wss://relay.damus.io".to_string(),
-            "wss://nostr.mutinywallet.com".to_string(),
-            "wss://relay.mutinywallet.com".to_string(),
-        ];
         client
-            .add_relays(relays)
+            .add_relays(RELAYS)
             .await
             .expect("Failed to add relays");
 
