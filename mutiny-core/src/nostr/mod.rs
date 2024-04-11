@@ -24,6 +24,7 @@ use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lnurl::LnUrl;
 use nostr::nips::nip47::*;
+use nostr::prelude::{Coordinate, EventIdOrCoordinate};
 use nostr::{
     nips::nip04::{decrypt, encrypt},
     Alphabet, Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Metadata, SecretKey,
@@ -1765,20 +1766,51 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(event_id)
     }
 
+    /// Gets the recommendation events for a federation created by our npub
+    async fn get_my_recommendation_events(
+        &self,
+        federation_id: &FederationId,
+    ) -> Result<Vec<Event>, MutinyError> {
+        let pk = self.get_npub().await;
+        let filter = Filter::new()
+            .author(pk)
+            .kind(Kind::from(38000))
+            .identifier(federation_id.to_string())
+            .limit(1);
+
+        let events = self.client.get_events_of(vec![filter], None).await?;
+        Ok(events)
+    }
+
     /// Checks if we have recommended the given federation
     pub async fn has_recommended_federation(
         &self,
         federation_id: &FederationId,
     ) -> Result<bool, MutinyError> {
+        self.get_my_recommendation_events(federation_id)
+            .await
+            .map(|events| !events.is_empty())
+    }
+
+    /// Creates a delete event for a federation recommendation
+    pub async fn delete_federation_recommendation(
+        &self,
+        federation_id: &FederationId,
+    ) -> Result<(), MutinyError> {
         let pk = self.get_npub().await;
-        let filter = Filter::new()
-            .author(pk)
-            .identifier(federation_id.to_string())
-            .limit(1);
+        // create coordinate to delete the events
+        let coord = Coordinate::new(Kind::from(38000), pk).identifier(federation_id.to_string());
+        // also refer to event id of the recommendation event for better guarantee
+        let events = self.get_my_recommendation_events(federation_id).await?;
 
-        let events = self.client.get_events_of(vec![filter], None).await?;
+        let mut event_ids: Vec<EventIdOrCoordinate> =
+            events.into_iter().map(|e| e.id.into()).collect();
+        event_ids.push(coord.into());
+        let builder = EventBuilder::delete(event_ids);
 
-        Ok(!events.is_empty())
+        self.client.send_event_builder(builder).await?;
+
+        Ok(())
     }
 
     /// Queries our relays for federation announcements

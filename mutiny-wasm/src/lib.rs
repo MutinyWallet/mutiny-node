@@ -1282,6 +1282,20 @@ impl MutinyWallet {
             .await?)
     }
 
+    /// Creates a delete event for a federation recommendation
+    pub async fn delete_federation_recommendation(
+        &self,
+        federation_id: String,
+    ) -> Result<(), MutinyJsError> {
+        let federation_id = FederationId::from_str(&federation_id)
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        Ok(self
+            .inner
+            .nostr
+            .delete_federation_recommendation(&federation_id)
+            .await?)
+    }
+
     /// Queries our relays for federation announcements
     pub async fn discover_federations(
         &self,
