@@ -1066,7 +1066,7 @@ impl<S: MutinyStorage> Node<S> {
                 let min_amount_sat = if has_inbound_capacity {
                     1
                 } else {
-                    utils::min_lightning_amount(self.network)
+                    utils::min_lightning_amount(self.network, lsp.is_lsps())
                 };
 
                 if amount_sat < min_amount_sat {
@@ -1117,7 +1117,7 @@ impl<S: MutinyStorage> Node<S> {
                 let min_amount_sat = if has_inbound_capacity {
                     1
                 } else {
-                    utils::min_lightning_amount(self.network)
+                    utils::min_lightning_amount(self.network, lsp.is_lsps())
                 };
 
                 if amount_sat < min_amount_sat {
