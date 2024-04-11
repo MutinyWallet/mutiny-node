@@ -14,6 +14,7 @@ use lightning_liquidity::events::Event;
 use lightning_liquidity::lsps0::ser::RequestId;
 use lightning_liquidity::lsps2::event::LSPS2ClientEvent;
 use lightning_liquidity::lsps2::msgs::OpeningFeeParams;
+use lightning_liquidity::lsps2::utils::compute_opening_fee;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -307,24 +308,6 @@ impl<S: MutinyStorage> LspsClient<S> {
             utils::sleep(1000).await;
         }
     }
-}
-
-/// TODO: import from lightning-liquidity once it's exposed
-/// Computes the opening fee given a payment size and the fee parameters.
-///
-/// Returns [`Option::None`] when the computation overflows.
-///
-/// See the [`specification`](https://github.com/BitcoinAndLightningLayerSpecs/lsp/tree/main/LSPS2#computing-the-opening_fee) for more details.
-pub fn compute_opening_fee(
-    payment_size_msat: u64,
-    opening_fee_min_fee_msat: u64,
-    opening_fee_proportional: u64,
-) -> Option<u64> {
-    payment_size_msat
-        .checked_mul(opening_fee_proportional)
-        .and_then(|f| f.checked_add(999999))
-        .and_then(|f| f.checked_div(1000000))
-        .map(|f| std::cmp::max(f, opening_fee_min_fee_msat))
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]

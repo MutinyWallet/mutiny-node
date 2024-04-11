@@ -377,22 +377,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                             None
                         };
 
-                        // todo bdk is making an easy function for this
-                        // calculate fee if possible
-                        let inputs = tx
-                            .tx_node
-                            .tx
-                            .input
-                            .iter()
-                            .map(|txin| {
-                                wallet
-                                    .spk_index()
-                                    .txout(txin.previous_output)
-                                    .map(|(_, _, txout)| txout.value)
-                            })
-                            .sum::<Option<u64>>();
-                        let outputs = tx.tx_node.tx.output.iter().map(|txout| txout.value).sum();
-                        let fee = inputs.map(|inputs| inputs.saturating_sub(outputs));
+                        let fee = wallet.calculate_fee(tx.tx_node.tx).ok();
 
                         Some(TransactionDetails {
                             transaction,
