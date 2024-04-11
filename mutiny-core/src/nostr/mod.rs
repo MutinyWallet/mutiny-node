@@ -1,5 +1,6 @@
 use crate::labels::Contact;
 use crate::logging::MutinyLogger;
+use crate::nostr::client::NostrClient;
 use crate::nostr::nip49::{NIP49BudgetPeriod, NIP49URI};
 use crate::nostr::nwc::{
     check_valid_nwc_invoice, BudgetPeriod, BudgetedSpendingConditions, NostrWalletConnect,
@@ -39,6 +40,7 @@ use std::time::Duration;
 use std::{str::FromStr, sync::atomic::AtomicBool};
 use url::Url;
 
+mod client;
 pub mod nip49;
 pub mod nwc;
 pub(crate) mod primal;
@@ -149,7 +151,7 @@ impl NostrKeys {
 
 /// Manages Nostr keys and has different utilities for nostr specific things
 #[derive(Clone)]
-pub struct NostrManager<S: MutinyStorage, P: PrimalApi> {
+pub struct NostrManager<S: MutinyStorage, P: PrimalApi, C: NostrClient> {
     /// Extended private key that is the root seed of the wallet
     xprivkey: ExtendedPrivKey,
     /// Primary key used for nostr, this will be used for signing events
@@ -166,7 +168,7 @@ pub struct NostrManager<S: MutinyStorage, P: PrimalApi> {
     /// Atomic stop signal
     pub stop: Arc<AtomicBool>,
     /// Nostr client
-    pub client: Client,
+    pub client: C,
     /// Primal client
     pub primal_client: P,
 }
@@ -212,7 +214,7 @@ impl Ord for NostrDiscoveredFedimint {
     }
 }
 
-impl<S: MutinyStorage, P: PrimalApi> NostrManager<S, P> {
+impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
     /// Connect to the nostr relays
     pub async fn connect(&self) -> Result<(), MutinyError> {
         self.client.add_relays(self.get_relays()).await?;
@@ -420,7 +422,8 @@ impl<S: MutinyStorage, P: PrimalApi> NostrManager<S, P> {
             with_lnurl
         };
 
-        let event_id = self.client.set_metadata(&with_nip05).await?;
+        let builder = EventBuilder::metadata(&with_nip05);
+        let event_id = self.client.send_event_builder(builder).await?;
         log_info!(self.logger, "New kind 0: {event_id}");
         self.storage.set_nostr_profile(&with_nip05)?;
 
@@ -507,7 +510,8 @@ impl<S: MutinyStorage, P: PrimalApi> NostrManager<S, P> {
             m
         };
 
-        let event_id = self.client.set_metadata(&metadata).await?;
+        let builder = EventBuilder::metadata(&metadata);
+        let event_id = self.client.send_event_builder(builder).await?;
         log_info!(self.logger, "New kind 0: {event_id}");
         self.storage.set_nostr_profile(&metadata)?;
 
@@ -522,7 +526,8 @@ impl<S: MutinyStorage, P: PrimalApi> NostrManager<S, P> {
             .about("Deleted")
             .custom_field("deleted", true);
 
-        let event_id = self.client.set_metadata(&metadata).await?;
+        let builder = EventBuilder::metadata(&metadata);
+        let event_id = self.client.send_event_builder(builder).await?;
         log_info!(self.logger, "New kind 0: {event_id}");
         self.storage.set_nostr_profile(&metadata)?;
 
@@ -1039,7 +1044,7 @@ impl<S: MutinyStorage, P: PrimalApi> NostrManager<S, P> {
 
         if let Some(info_event) = info_event {
             self.client
-                .send_event_to([profile.relay.as_str()], info_event)
+                .send_event_to(vec![profile.relay.to_string()], info_event)
                 .await
                 .map_err(|e| {
                     MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}"))
@@ -1097,7 +1102,7 @@ impl<S: MutinyStorage, P: PrimalApi> NostrManager<S, P> {
 
         if let Some(nwc) = nwc {
             // add the relays if needed
-            let mut needs_connect = self.client.add_relay(&relay).await?;
+            let mut needs_connect = self.client.add_relay(relay.as_str()).await?;
             needs_connect |= self.client.add_relay(profile.relay.as_str()).await?;
             if needs_connect {
                 self.client.connect().await;
@@ -1190,7 +1195,7 @@ impl<S: MutinyStorage, P: PrimalApi> NostrManager<S, P> {
 
         let event_id = self
             .client
-            .send_event_to([nwc.profile.relay.as_str()], response)
+            .send_event_to(vec![nwc.profile.relay.clone()], response)
             .await
             .map_err(|e| MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}")))?;
 
@@ -2082,11 +2087,12 @@ impl<S: MutinyStorage, P: PrimalApi> NostrManager<S, P> {
     }
 
     /// Creates a new NostrManager
-    pub fn from_mnemonic(
+    pub async fn from_mnemonic(
         xprivkey: ExtendedPrivKey,
         key_source: NostrKeySource,
         storage: S,
         primal_api: P,
+        client: C,
         logger: Arc<MutinyLogger>,
         stop: Arc<AtomicBool>,
     ) -> Result<Self, MutinyError> {
@@ -2103,7 +2109,7 @@ impl<S: MutinyStorage, P: PrimalApi> NostrManager<S, P> {
             .map(|profile| NostrWalletConnect::new(&context, xprivkey, profile).unwrap())
             .collect();
 
-        let client = Client::new(nostr_keys.signer.clone());
+        client.set_signer(Some(nostr_keys.signer.clone())).await;
 
         Ok(Self {
             xprivkey,
@@ -2236,6 +2242,7 @@ fn is_federation_recommendation_event(event: &Event) -> bool {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::nostr::client::MockNostrClient;
     use crate::nostr::primal::MockPrimalApi;
     use crate::storage::MemoryStorage;
     use crate::utils::now;
@@ -2253,7 +2260,7 @@ mod test {
 
     const EXPIRED_INVOICE: &str = "lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm";
 
-    fn create_nostr_manager() -> NostrManager<MemoryStorage, MockPrimalApi> {
+    async fn create_nostr_manager() -> NostrManager<MemoryStorage, MockPrimalApi, MockNostrClient> {
         let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
 
         let xprivkey =
@@ -2265,20 +2272,26 @@ mod test {
 
         let stop = Arc::new(AtomicBool::new(false));
 
+        #[allow(unused_mut)] // need this because of mockall
+        let mut client = MockNostrClient::new();
+        client.expect_set_signer().return_const(());
+
         NostrManager::from_mnemonic(
             xprivkey,
             NostrKeySource::Derived,
             storage,
             MockPrimalApi::new(),
+            client,
             logger,
             stop,
         )
+        .await
         .unwrap()
     }
 
     #[tokio::test]
     async fn test_process_dm() {
-        let nostr_manager = create_nostr_manager();
+        let nostr_manager = create_nostr_manager().await;
 
         let mut inv_handler = MockInvoiceHandler::new();
         inv_handler
@@ -2373,7 +2386,7 @@ mod test {
 
     #[tokio::test]
     async fn test_create_profile() {
-        let nostr_manager = create_nostr_manager();
+        let nostr_manager = create_nostr_manager().await;
 
         let name = "test".to_string();
 
@@ -2417,7 +2430,7 @@ mod test {
 
     #[tokio::test]
     async fn test_create_reserve_profile() {
-        let nostr_manager = create_nostr_manager();
+        let nostr_manager = create_nostr_manager().await;
 
         let name = MUTINY_PLUS_SUBSCRIPTION_LABEL.to_string();
 
@@ -2533,7 +2546,7 @@ mod test {
 
     #[tokio::test]
     async fn test_create_nwa_profile() {
-        let nostr_manager = create_nostr_manager();
+        let nostr_manager = create_nostr_manager().await;
 
         let name = "test nwa".to_string();
 
@@ -2586,7 +2599,7 @@ mod test {
 
     #[tokio::test]
     async fn test_edit_profile() {
-        let nostr_manager = create_nostr_manager();
+        let nostr_manager = create_nostr_manager().await;
 
         let name = "test".to_string();
 
@@ -2628,7 +2641,7 @@ mod test {
 
     #[tokio::test]
     async fn test_delete_profile() {
-        let nostr_manager = create_nostr_manager();
+        let nostr_manager = create_nostr_manager().await;
 
         let name = "test".to_string();
 
@@ -2661,7 +2674,7 @@ mod test {
 
     #[tokio::test]
     async fn test_deny_invoice() {
-        let nostr_manager = create_nostr_manager();
+        let nostr_manager = create_nostr_manager().await;
 
         let name = "test".to_string();
 
@@ -2811,9 +2824,16 @@ mod test {
         assert!(is_federation_recommendation_event(&with_k));
 
         // test nostr manager creates a valid one
-
-        let nostr_manager = create_nostr_manager();
+        #[allow(unused_mut)] // need this because of mockall
+        let mut nostr_manager = create_nostr_manager().await;
         let invite_code = InviteCode::from_str("fed11qgqzc2nhwden5te0vejkg6tdd9h8gepwvejkg6tdd9h8garhduhx6at5d9h8jmn9wshxxmmd9uqqzgxg6s3evnr6m9zdxr6hxkdkukexpcs3mn7mj3g5pc5dfh63l4tj6g9zk4er").unwrap();
+
+        nostr_manager
+            .client
+            .expect_sign_event_builder()
+            .once()
+            .returning(|builder| Ok(builder.to_event(&Keys::generate()).unwrap()));
+
         let event = nostr_manager
             .create_recommend_federation_event(&invite_code, Network::Signet, None)
             .await

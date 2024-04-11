@@ -1,5 +1,6 @@
 use crate::error::MutinyError;
 use crate::event::HTLCStatus;
+use crate::nostr::client::NostrClient;
 use crate::nostr::nip49::NIP49Confirmation;
 use crate::nostr::primal::PrimalApi;
 use crate::nostr::{derive_nwc_keys, NostrManager};
@@ -360,9 +361,9 @@ impl NostrWalletConnect {
         }
     }
 
-    async fn save_pending_nwc_invoice<S: MutinyStorage, P: PrimalApi>(
+    async fn save_pending_nwc_invoice<S: MutinyStorage, P: PrimalApi, C: NostrClient>(
         &self,
-        nostr_manager: &NostrManager<S, P>,
+        nostr_manager: &NostrManager<S, P, C>,
         event_id: EventId,
         event_pk: nostr::PublicKey,
         invoice: Bolt11Invoice,
@@ -410,11 +411,11 @@ impl NostrWalletConnect {
     /// Handle a Nostr Wallet Connect request
     ///
     /// Returns a response event if one is needed
-    pub async fn handle_nwc_request<S: MutinyStorage, P: PrimalApi>(
+    pub async fn handle_nwc_request<S: MutinyStorage, P: PrimalApi, C: NostrClient>(
         &mut self,
         event: Event,
         node: &impl InvoiceHandler,
-        nostr_manager: &NostrManager<S, P>,
+        nostr_manager: &NostrManager<S, P, C>,
     ) -> anyhow::Result<Option<Event>> {
         let client_pubkey = self.client_key.public_key();
         let mut needs_save = false;
@@ -722,11 +723,11 @@ impl NostrWalletConnect {
         Ok(Some(response))
     }
 
-    async fn handle_pay_invoice_request<S: MutinyStorage, P: PrimalApi>(
+    async fn handle_pay_invoice_request<S: MutinyStorage, P: PrimalApi, C: NostrClient>(
         &mut self,
         event: Event,
         node: &impl InvoiceHandler,
-        nostr_manager: &NostrManager<S, P>,
+        nostr_manager: &NostrManager<S, P, C>,
         params: PayInvoiceRequestParams,
         needs_delete: &mut bool,
         needs_save: &mut bool,
@@ -1487,6 +1488,7 @@ mod test {
 mod wasm_test {
     use super::*;
     use crate::logging::MutinyLogger;
+    use crate::nostr::client::MockNostrClient;
     use crate::nostr::primal::MockPrimalApi;
     use crate::nostr::{NostrKeySource, ProfileType};
     use crate::storage::MemoryStorage;
@@ -1515,6 +1517,12 @@ mod wasm_test {
         assert_eq!(pending.len(), 0);
     }
 
+    fn get_mock_nostr_client() -> MockNostrClient {
+        let mut nostr_client = MockNostrClient::new();
+        nostr_client.expect_set_signer().return_const(());
+        nostr_client
+    }
+
     fn check_nwc_error_response(event: Event, sk: &SecretKey, expected: NIP47Error) {
         assert_eq!(event.kind, Kind::WalletConnectResponse);
         let decrypted = decrypt(sk, &event.pubkey, &event.content).unwrap();
@@ -1541,9 +1549,11 @@ mod wasm_test {
             NostrKeySource::Derived,
             storage.clone(),
             MockPrimalApi::new(),
+            get_mock_nostr_client(),
             mw.logger.clone(),
             stop,
         )
+        .await
         .unwrap();
 
         let profile = nostr_manager
@@ -1600,9 +1610,11 @@ mod wasm_test {
             NostrKeySource::Derived,
             storage.clone(),
             MockPrimalApi::new(),
+            get_mock_nostr_client(),
             logger.clone(),
             stop,
         )
+        .await
         .unwrap();
 
         let profile = nostr_manager
@@ -1807,9 +1819,11 @@ mod wasm_test {
             NostrKeySource::Derived,
             storage.clone(),
             MockPrimalApi::new(),
+            get_mock_nostr_client(),
             Arc::new(MutinyLogger::default()),
             stop,
         )
+        .await
         .unwrap();
 
         // check we start with no pending invoices
@@ -1885,9 +1899,11 @@ mod wasm_test {
             NostrKeySource::Derived,
             storage.clone(),
             MockPrimalApi::new(),
+            get_mock_nostr_client(),
             mw.logger.clone(),
             stop,
         )
+        .await
         .unwrap();
 
         let budget = 10_000;
@@ -1974,9 +1990,11 @@ mod wasm_test {
             NostrKeySource::Derived,
             storage.clone(),
             MockPrimalApi::new(),
+            get_mock_nostr_client(),
             logger,
             stop,
         )
+        .await
         .unwrap();
 
         let budget = 10_000;
@@ -2045,9 +2063,11 @@ mod wasm_test {
             NostrKeySource::Derived,
             storage.clone(),
             MockPrimalApi::new(),
+            get_mock_nostr_client(),
             mw.logger.clone(),
             stop,
         )
+        .await
         .unwrap();
 
         let profile = nostr_manager
@@ -2090,9 +2110,11 @@ mod wasm_test {
             NostrKeySource::Derived,
             storage.clone(),
             MockPrimalApi::new(),
+            get_mock_nostr_client(),
             mw.logger.clone(),
             stop,
         )
+        .await
         .unwrap();
 
         let budget = 10_000;
@@ -2142,9 +2164,11 @@ mod wasm_test {
             NostrKeySource::Derived,
             storage.clone(),
             MockPrimalApi::new(),
+            get_mock_nostr_client(),
             mw.logger.clone(),
             stop,
         )
+        .await
         .unwrap();
 
         let budget = 10_000;
@@ -2191,9 +2215,11 @@ mod wasm_test {
             NostrKeySource::Derived,
             storage.clone(),
             MockPrimalApi::new(),
+            get_mock_nostr_client(),
             Arc::new(MutinyLogger::default()),
             stop,
         )
+        .await
         .unwrap();
 
         let best_block = BestBlock::new(
@@ -2254,9 +2280,11 @@ mod wasm_test {
             NostrKeySource::Derived,
             storage.clone(),
             MockPrimalApi::new(),
+            get_mock_nostr_client(),
             Arc::new(MutinyLogger::default()),
             stop,
         )
+        .await
         .unwrap();
 
         let amount = 69696969;
@@ -2319,9 +2347,11 @@ mod wasm_test {
             NostrKeySource::Derived,
             storage.clone(),
             MockPrimalApi::new(),
+            get_mock_nostr_client(),
             Arc::new(MutinyLogger::default()),
             stop,
         )
+        .await
         .unwrap();
 
         let mut node = MockInvoiceHandler::new();
