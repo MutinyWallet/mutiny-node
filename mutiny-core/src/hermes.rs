@@ -46,6 +46,7 @@ const HERMES_PAID_PLAN_ID: u32 = 2;
 
 const REGISTRATION_CHECK_EVENT_KIND: Kind = Kind::Custom(93_186);
 const NEW_FEDERATION_EVENT_KIND: Kind = Kind::Custom(93_187);
+const DISABLE_ZAPS_EVENT_KIND: Kind = Kind::Custom(93_188);
 
 #[derive(Deserialize, Serialize)]
 pub struct RegisterRequest {
@@ -179,43 +180,58 @@ impl<S: MutinyStorage> HermesClient<S> {
                             *c = (o.name.clone(), true);
                         }
 
-                        // check that federation is still the same if the user has a name
-                        if o.name.is_some() {
-                            if let Some(f) = first_federation {
-                                // if a registered federation exists and is what we have
-                                // then there is no reason to update
-                                if o.federation_id.is_some()
-                                    && f.federation_id == o.federation_id.unwrap()
-                                {
-                                    break;
-                                }
+                        // check that federation is still the same
+                        if let Some(f) = first_federation {
+                            // if a registered federation exists and is what we have
+                            // then there is no reason to update
+                            if o.federation_id.is_some()
+                                && f.federation_id == o.federation_id.unwrap()
+                            {
+                                break;
+                            }
 
-                                // user has a federation registered but is different than current
-                                // so we should update it
-                                match change_federation_info(
+                            // user has a federation registered but is different than current
+                            // so we should update it
+                            match change_federation_info(
+                                &http_client_check_clone,
+                                &base_url_check_clone,
+                                nostr_client_check_clone,
+                                current_address_check_clone,
+                                f,
+                                &logger_check_clone,
+                            )
+                            .await
+                            {
+                                Ok(_) => (),
+                                Err(e) => {
+                                    log_error!(
+                                        logger_check_clone,
+                                        "could not change the federation: {e}"
+                                    );
+                                }
+                            }
+                        } else {
+                            // handle the case where the user no longer has a federation
+                            // if user is already disabled, no need to call again
+                            if !o.disabled_zaps {
+                                match disable_zaps(
                                     &http_client_check_clone,
                                     &base_url_check_clone,
                                     nostr_client_check_clone,
-                                    f,
+                                    current_address_check_clone,
+                                    &logger_check_clone,
                                 )
                                 .await
                                 {
-                                    Ok(_) => {
-                                        log_info!(
-                                            logger_check_clone,
-                                            "changed federation info to current federation"
-                                        );
-                                    }
+                                    Ok(_) => (),
                                     Err(e) => {
                                         log_error!(
                                             logger_check_clone,
-                                            "could not change the federation: {e}"
+                                            "could not disable zaps: {e}"
                                         );
                                     }
                                 }
                             }
-
-                            // TODO handle the case where the user no longer has a federation
                         }
 
                         break;
@@ -315,7 +331,20 @@ impl<S: MutinyStorage> HermesClient<S> {
             &self.http_client,
             &self.base_url,
             self.client.clone(),
+            self.current_address.clone(),
             federation,
+            &self.logger,
+        )
+        .await
+    }
+
+    pub async fn disable_zaps(&self) -> Result<(), MutinyError> {
+        disable_zaps(
+            &self.http_client,
+            &self.base_url,
+            self.client.clone(),
+            self.current_address.clone(),
+            &self.logger,
         )
         .await
     }
@@ -408,8 +437,15 @@ async fn change_federation_info(
     http_client: &reqwest::Client,
     base_url: &str,
     nostr_client: Client,
+    current_address: Arc<RwLock<(Option<String>, bool)>>,
     federation: FederationIdentity,
+    logger: &MutinyLogger,
 ) -> Result<(), MutinyError> {
+    // make sure name is registered already
+    if current_address.read().await.0.is_none() {
+        return Ok(());
+    }
+
     // create nostr event
     let signer = nostr_client.signer().await?;
     let event_builder = EventBuilder::new(
@@ -426,6 +462,38 @@ async fn change_federation_info(
     let _ = utils::fetch_with_timeout(http_client, request.build().expect("should build req"))
         .await
         .map_err(|_| MutinyError::ConnectionFailed)?;
+
+    log_info!(logger, "changed federation info to current federation");
+
+    Ok(())
+}
+
+async fn disable_zaps(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    nostr_client: Client,
+    current_address: Arc<RwLock<(Option<String>, bool)>>,
+    logger: &MutinyLogger,
+) -> Result<(), MutinyError> {
+    // make sure name is registered already
+    if current_address.read().await.0.is_none() {
+        return Ok(());
+    }
+
+    // create nostr event
+    let signer = nostr_client.signer().await?;
+    let event_builder = EventBuilder::new(DISABLE_ZAPS_EVENT_KIND, "", []);
+    let event = signer.sign_event_builder(event_builder).await?;
+
+    // send request
+    let url = Url::parse(&format!("{}/v1/disable-zaps", base_url))
+        .map_err(|_| MutinyError::ConnectionFailed)?;
+    let request = http_client.request(Method::POST, url).json(&event);
+    let _ = utils::fetch_with_timeout(http_client, request.build().expect("should build req"))
+        .await
+        .map_err(|_| MutinyError::ConnectionFailed)?;
+
+    log_info!(logger, "disabled zaps for the user");
 
     Ok(())
 }
@@ -444,6 +512,7 @@ fn find_hermes_token(
 pub struct RegistrationInfo {
     pub name: Option<String>,
     pub federation_id: Option<FederationId>,
+    pub disabled_zaps: bool,
 }
 
 async fn check_hermes_registration_info(

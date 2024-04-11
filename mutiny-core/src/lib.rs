@@ -2452,7 +2452,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             return Err(MutinyError::NotFound);
         }
 
-        // TODO remove the federation from hermes
+        // remove the federation from hermes
+        if let Some(h) = self.hermes_client.as_ref() {
+            match h.disable_zaps().await {
+                Ok(_) => (),
+                Err(e) => {
+                    log_error!(self.logger, "could not disable hermes zaps: {e}")
+                }
+            }
+        }
 
         Ok(())
     }
