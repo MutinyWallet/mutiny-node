@@ -6,7 +6,7 @@ use crate::nostr::nwc::{
     NwcProfile, NwcProfileTag, PendingNwcInvoice, Profile, SingleUseSpendingConditions,
     SpendingConditions, PENDING_NWC_EVENTS_KEY,
 };
-use crate::nostr::primal::PrimalClient;
+use crate::nostr::primal::PrimalApi;
 use crate::storage::{update_nostr_contact_list, MutinyStorage, NOSTR_CONTACT_LIST};
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
 use crate::{labels::LabelStorage, InvoiceHandler};
@@ -41,7 +41,7 @@ use url::Url;
 
 pub mod nip49;
 pub mod nwc;
-mod primal;
+pub(crate) mod primal;
 
 const PROFILE_ACCOUNT_INDEX: u32 = 0;
 const NWC_ACCOUNT_INDEX: u32 = 1;
@@ -149,7 +149,7 @@ impl NostrKeys {
 
 /// Manages Nostr keys and has different utilities for nostr specific things
 #[derive(Clone)]
-pub struct NostrManager<S: MutinyStorage> {
+pub struct NostrManager<S: MutinyStorage, P: PrimalApi> {
     /// Extended private key that is the root seed of the wallet
     xprivkey: ExtendedPrivKey,
     /// Primary key used for nostr, this will be used for signing events
@@ -168,7 +168,7 @@ pub struct NostrManager<S: MutinyStorage> {
     /// Nostr client
     pub client: Client,
     /// Primal client
-    pub primal_client: PrimalClient,
+    pub primal_client: P,
 }
 
 /// A fedimint we discovered on nostr
@@ -212,7 +212,7 @@ impl Ord for NostrDiscoveredFedimint {
     }
 }
 
-impl<S: MutinyStorage> NostrManager<S> {
+impl<S: MutinyStorage, P: PrimalApi> NostrManager<S, P> {
     /// Connect to the nostr relays
     pub async fn connect(&self) -> Result<(), MutinyError> {
         self.client.add_relays(self.get_relays()).await?;
@@ -2081,37 +2081,12 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(mints)
     }
 
-    /// Derives the client and server keys for Nostr Wallet Connect given a profile index
-    /// The left key is the client key and the right key is the server key
-    pub(crate) fn derive_nwc_keys<C: Signing>(
-        context: &Secp256k1<C>,
-        xprivkey: ExtendedPrivKey,
-        profile_index: u32,
-    ) -> Result<(Keys, Keys), MutinyError> {
-        let client_key = derive_nostr_key(
-            context,
-            xprivkey,
-            NWC_ACCOUNT_INDEX,
-            Some(profile_index),
-            Some(0),
-        )?;
-        let server_key = derive_nostr_key(
-            context,
-            xprivkey,
-            NWC_ACCOUNT_INDEX,
-            Some(profile_index),
-            Some(1),
-        )?;
-
-        Ok((client_key, server_key))
-    }
-
     /// Creates a new NostrManager
     pub fn from_mnemonic(
         xprivkey: ExtendedPrivKey,
         key_source: NostrKeySource,
         storage: S,
-        primal_url: Option<String>,
+        primal_api: P,
         logger: Arc<MutinyLogger>,
         stop: Arc<AtomicBool>,
     ) -> Result<Self, MutinyError> {
@@ -2130,10 +2105,6 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let client = Client::new(nostr_keys.signer.clone());
 
-        let primal_client = PrimalClient::new(
-            primal_url.unwrap_or("https://primal-cache.mutinywallet.com/api".to_string()),
-        );
-
         Ok(Self {
             xprivkey,
             nostr_keys: Arc::new(async_lock::RwLock::new(nostr_keys)),
@@ -2141,12 +2112,37 @@ impl<S: MutinyStorage> NostrManager<S> {
             storage,
             pending_nwc_lock: Arc::new(Mutex::new(())),
             follow_lock: Arc::new(Mutex::new(())),
-            primal_client,
+            primal_client: primal_api,
             logger,
             stop,
             client,
         })
     }
+}
+
+/// Derives the client and server keys for Nostr Wallet Connect given a profile index
+/// The left key is the client key and the right key is the server key
+pub(crate) fn derive_nwc_keys<C: Signing>(
+    context: &Secp256k1<C>,
+    xprivkey: ExtendedPrivKey,
+    profile_index: u32,
+) -> Result<(Keys, Keys), MutinyError> {
+    let client_key = derive_nostr_key(
+        context,
+        xprivkey,
+        NWC_ACCOUNT_INDEX,
+        Some(profile_index),
+        Some(0),
+    )?;
+    let server_key = derive_nostr_key(
+        context,
+        xprivkey,
+        NWC_ACCOUNT_INDEX,
+        Some(profile_index),
+        Some(1),
+    )?;
+
+    Ok((client_key, server_key))
 }
 
 pub fn derive_nostr_key<C: Signing>(
@@ -2240,6 +2236,7 @@ fn is_federation_recommendation_event(event: &Event) -> bool {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::nostr::primal::MockPrimalApi;
     use crate::storage::MemoryStorage;
     use crate::utils::now;
     use crate::MockInvoiceHandler;
@@ -2256,7 +2253,7 @@ mod test {
 
     const EXPIRED_INVOICE: &str = "lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm";
 
-    fn create_nostr_manager() -> NostrManager<MemoryStorage> {
+    fn create_nostr_manager() -> NostrManager<MemoryStorage, MockPrimalApi> {
         let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
 
         let xprivkey =
@@ -2272,7 +2269,7 @@ mod test {
             xprivkey,
             NostrKeySource::Derived,
             storage,
-            None,
+            MockPrimalApi::new(),
             logger,
             stop,
         )

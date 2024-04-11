@@ -5,6 +5,31 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
+#[cfg_attr(test, mockall::automock)]
+pub trait PrimalApi {
+    async fn get_user_profile(
+        &self,
+        npub: nostr::PublicKey,
+    ) -> Result<Option<Metadata>, MutinyError>;
+    async fn get_user_profiles(
+        &self,
+        npubs: Vec<nostr::PublicKey>,
+    ) -> Result<HashMap<nostr::PublicKey, Metadata>, MutinyError>;
+    async fn get_nostr_contacts(
+        &self,
+        npub: nostr::PublicKey,
+    ) -> Result<(Option<Event>, HashMap<nostr::PublicKey, Metadata>), MutinyError>;
+    async fn get_dm_conversation(
+        &self,
+        npub1: nostr::PublicKey,
+        npub2: nostr::PublicKey,
+        limit: u64,
+        until: Option<u64>,
+        since: Option<u64>,
+    ) -> Result<Vec<Event>, MutinyError>;
+    async fn get_trusted_users(&self, limit: u32) -> Result<Vec<TrustedUser>, MutinyError>;
+}
+
 #[derive(Debug, Clone)]
 pub struct PrimalClient {
     api_url: String,
@@ -32,8 +57,10 @@ impl PrimalClient {
             .await
             .map_err(|_| MutinyError::NostrError)
     }
+}
 
-    pub async fn get_user_profile(
+impl PrimalApi for PrimalClient {
+    async fn get_user_profile(
         &self,
         npub: nostr::PublicKey,
     ) -> Result<Option<Metadata>, MutinyError> {
@@ -57,7 +84,7 @@ impl PrimalClient {
         Ok(None)
     }
 
-    pub async fn get_user_profiles(
+    async fn get_user_profiles(
         &self,
         npubs: Vec<nostr::PublicKey>,
     ) -> Result<HashMap<nostr::PublicKey, Metadata>, MutinyError> {
@@ -66,7 +93,7 @@ impl PrimalClient {
         Ok(parse_profile_metadata(data))
     }
 
-    pub async fn get_nostr_contacts(
+    async fn get_nostr_contacts(
         &self,
         npub: nostr::PublicKey,
     ) -> Result<(Option<Event>, HashMap<nostr::PublicKey, Metadata>), MutinyError> {
@@ -84,7 +111,7 @@ impl PrimalClient {
         Ok((contact_list, parse_profile_metadata(data)))
     }
 
-    pub async fn get_dm_conversation(
+    async fn get_dm_conversation(
         &self,
         npub1: nostr::PublicKey,
         npub2: nostr::PublicKey,
@@ -125,7 +152,7 @@ impl PrimalClient {
     }
 
     /// Returns a list of trusted users from primal with their trust rating
-    pub async fn get_trusted_users(&self, limit: u32) -> Result<Vec<TrustedUser>, MutinyError> {
+    async fn get_trusted_users(&self, limit: u32) -> Result<Vec<TrustedUser>, MutinyError> {
         let body = json!(["trusted_users", {"limit": limit }]);
         let data: Vec<Value> = self.primal_request(body).await?;
 

@@ -46,6 +46,7 @@ mod test_utils;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
+use crate::nostr::primal::{PrimalApi, PrimalClient};
 use crate::storage::{
     get_payment_hash_from_key, list_payment_info, persist_payment_info, update_nostr_contact_list,
     IndexItem, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY,
@@ -848,12 +849,19 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         // start syncing node manager
         NodeManager::start_sync(node_manager.clone());
 
+        let primal_client = PrimalClient::new(
+            config
+                .primal_url
+                .clone()
+                .unwrap_or("https://primal-cache.mutinywallet.com/api".to_string()),
+        );
+
         // create nostr manager
         let nostr = Arc::new(NostrManager::from_mnemonic(
             self.xprivkey,
             self.nostr_key_source,
             self.storage.clone(),
-            config.primal_url.clone(),
+            primal_client,
             logger.clone(),
             stop.clone(),
         )?);
@@ -1099,7 +1107,7 @@ pub struct MutinyWallet<S: MutinyStorage> {
     config: MutinyWalletConfig,
     pub(crate) storage: S,
     pub node_manager: Arc<NodeManager<S>>,
-    pub nostr: Arc<NostrManager<S>>,
+    pub nostr: Arc<NostrManager<S, PrimalClient>>,
     pub federation_storage: Arc<RwLock<FederationStorage>>,
     pub(crate) federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>,
     lnurl_client: Arc<LnUrlClient>,
