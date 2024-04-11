@@ -16,9 +16,9 @@ use futures::{pin_mut, select, FutureExt};
 use lightning::util::logger::Logger;
 use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
-use nostr::prelude::decrypt_received_private_zap_message;
 use nostr::secp256k1::SecretKey;
 use nostr::{nips::nip04::decrypt, Event, JsonUtil, Keys, Tag, ToBech32};
+use nostr::{prelude::decrypt_received_private_zap_message, EventBuilder};
 use nostr::{Filter, Kind, Timestamp};
 use nostr_sdk::{Client, RelayPoolNotification};
 use reqwest::Method;
@@ -43,6 +43,9 @@ const HERMES_SERVICE_ID: u32 = 1;
 #[allow(dead_code)]
 const HERMES_FREE_PLAN_ID: u32 = 1;
 const HERMES_PAID_PLAN_ID: u32 = 2;
+
+const REGISTRATION_CHECK_EVENT_KIND: Kind = Kind::Custom(93_186);
+const NEW_FEDERATION_EVENT_KIND: Kind = Kind::Custom(93_187);
 
 #[derive(Deserialize, Serialize)]
 pub struct RegisterRequest {
@@ -132,7 +135,7 @@ impl<S: MutinyStorage> HermesClient<S> {
     /// Starts the hermes background checker
     /// This should only error if there's an initial unrecoverable error
     /// Otherwise it will loop in the background until a stop signal
-    pub fn start(&self, profile_key: Option<Keys>) -> Result<(), MutinyError> {
+    pub async fn start(&self, profile_key: Option<Keys>) -> Result<(), MutinyError> {
         // if we haven't synced before, use now and save to storage
         let last_sync_time = self.storage.get_dm_sync_time(true)?;
         let time_stamp = match last_sync_time {
@@ -148,26 +151,73 @@ impl<S: MutinyStorage> HermesClient<S> {
         let logger_check_clone = self.logger.clone();
         let stop_check_clone = self.stop.clone();
         let http_client_check_clone = self.http_client.clone();
-        let public_key_check_clone = self.public_key;
+        let nostr_client_check_clone = self.client.clone();
         let base_url_check_clone = self.base_url.clone();
         let current_address_check_clone = self.current_address.clone();
+        let first_federation = self.get_first_federation().await.clone();
         utils::spawn(async move {
             loop {
                 if stop_check_clone.load(Ordering::Relaxed) {
                     break;
                 };
 
-                match check_hermes_name_for_pubkey(
+                match check_hermes_registration_info(
                     &http_client_check_clone,
                     &base_url_check_clone,
-                    public_key_check_clone,
+                    nostr_client_check_clone.clone(),
                 )
                 .await
                 {
                     Ok(o) => {
-                        let mut c = current_address_check_clone.write().await;
-                        log_info!(logger_check_clone, "checked lightning address: {o:?}");
-                        *c = (o, true);
+                        {
+                            let mut c = current_address_check_clone.write().await;
+                            log_info!(
+                                logger_check_clone,
+                                "checked lightning address: {:?}",
+                                o.name
+                            );
+                            *c = (o.name.clone(), true);
+                        }
+
+                        // check that federation is still the same if the user has a name
+                        if o.name.is_some() {
+                            if let Some(f) = first_federation {
+                                // if a registered federation exists and is what we have
+                                // then there is no reason to update
+                                if o.federation_id.is_some()
+                                    && f.federation_id == o.federation_id.unwrap()
+                                {
+                                    break;
+                                }
+
+                                // user has a federation registered but is different than current
+                                // so we should update it
+                                match change_federation_info(
+                                    &http_client_check_clone,
+                                    &base_url_check_clone,
+                                    nostr_client_check_clone,
+                                    f,
+                                )
+                                .await
+                                {
+                                    Ok(_) => {
+                                        log_info!(
+                                            logger_check_clone,
+                                            "changed federation info to current federation"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        log_error!(
+                                            logger_check_clone,
+                                            "could not change the federation: {e}"
+                                        );
+                                    }
+                                }
+                            }
+
+                            // TODO handle the case where the user no longer has a federation
+                        }
+
                         break;
                     }
                     Err(e) => {
@@ -257,6 +307,19 @@ impl<S: MutinyStorage> HermesClient<S> {
         Ok(())
     }
 
+    pub async fn change_federation_info(
+        &self,
+        federation: FederationIdentity,
+    ) -> Result<(), MutinyError> {
+        change_federation_info(
+            &self.http_client,
+            &self.base_url,
+            self.client.clone(),
+            federation,
+        )
+        .await
+    }
+
     pub async fn check_available_name(&self, name: String) -> Result<bool, MutinyError> {
         check_name_request(&self.http_client, &self.base_url, name).await
     }
@@ -333,8 +396,38 @@ impl<S: MutinyStorage> HermesClient<S> {
             None => None,
         }
     }
+}
 
-    // TODO need a way to change the federation if the user's federation changes
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ChangeFederationRequest {
+    pub name: Option<String>,
+    pub federation_id: Option<FederationId>,
+}
+
+async fn change_federation_info(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    nostr_client: Client,
+    federation: FederationIdentity,
+) -> Result<(), MutinyError> {
+    // create nostr event
+    let signer = nostr_client.signer().await?;
+    let event_builder = EventBuilder::new(
+        NEW_FEDERATION_EVENT_KIND,
+        federation.invite_code.to_string(),
+        [],
+    );
+    let event = signer.sign_event_builder(event_builder).await?;
+
+    // send request
+    let url = Url::parse(&format!("{}/v1/change-federation", base_url))
+        .map_err(|_| MutinyError::ConnectionFailed)?;
+    let request = http_client.request(Method::POST, url).json(&event);
+    let _ = utils::fetch_with_timeout(http_client, request.build().expect("should build req"))
+        .await
+        .map_err(|_| MutinyError::ConnectionFailed)?;
+
+    Ok(())
 }
 
 fn find_hermes_token(
@@ -347,18 +440,29 @@ fn find_hermes_token(
         .find(|token| token.service_id == service_id && token.plan_id == plan_id)
 }
 
-async fn check_hermes_name_for_pubkey(
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RegistrationInfo {
+    pub name: Option<String>,
+    pub federation_id: Option<FederationId>,
+}
+
+async fn check_hermes_registration_info(
     http_client: &reqwest::Client,
     base_url: &str,
-    pubkey: nostr::PublicKey,
-) -> Result<Option<String>, MutinyError> {
-    let url = Url::parse(&format!("{}/v1/check-pubkey/{pubkey}", base_url,))
-        .map_err(|_| MutinyError::ConnectionFailed)?;
-    let request = http_client.request(Method::GET, url);
+    nostr_client: Client,
+) -> Result<RegistrationInfo, MutinyError> {
+    // create nostr event
+    let signer = nostr_client.signer().await?;
+    let event_builder = EventBuilder::new(REGISTRATION_CHECK_EVENT_KIND, "", []);
+    let event = signer.sign_event_builder(event_builder).await?;
 
+    // send request
+    let url = Url::parse(&format!("{}/v1/check-registration", base_url))
+        .map_err(|_| MutinyError::ConnectionFailed)?;
+    let request = http_client.request(Method::POST, url).json(&event);
     let res = utils::fetch_with_timeout(http_client, request.build().expect("should build req"))
         .await?
-        .json::<Option<String>>()
+        .json::<RegistrationInfo>()
         .await
         .map_err(|_| MutinyError::ConnectionFailed)?;
 
