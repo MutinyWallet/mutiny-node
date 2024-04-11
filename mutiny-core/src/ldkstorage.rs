@@ -176,6 +176,12 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
                             // if there are no claimable balances, we don't need to watch the channel
                             if !channel_monitor.get_claimable_balances().is_empty() {
                                 accum.push((blockhash, channel_monitor));
+                            } else {
+                                log_debug!(
+                                    self.logger,
+                                    "Channel monitor {} has no claimable balances, not watching",
+                                    channel_monitor.get_funding_txo().0
+                                );
                             }
                             Ok(accum)
                         }
