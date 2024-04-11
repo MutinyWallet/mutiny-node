@@ -163,6 +163,10 @@ impl<S: MutinyStorage> AnyLsp<S> {
             AnyLsp::Lsps(_) => true,
         }
     }
+
+    pub fn is_lsps(&self) -> bool {
+        matches!(self, AnyLsp::Lsps(_))
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]

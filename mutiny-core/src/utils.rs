@@ -23,7 +23,10 @@ use std::str::FromStr;
 
 pub const FETCH_TIMEOUT: i32 = 30_000;
 
-pub(crate) fn min_lightning_amount(network: Network) -> u64 {
+pub(crate) fn min_lightning_amount(network: Network, is_lsps: bool) -> u64 {
+    if is_lsps {
+        return 1;
+    }
     match network {
         Network::Bitcoin => 100_000,
         Network::Testnet | Network::Signet | Network::Regtest => 10_000,
