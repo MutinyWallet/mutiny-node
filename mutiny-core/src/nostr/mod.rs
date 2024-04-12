@@ -1404,8 +1404,8 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(())
     }
 
-    /// Handles an encrypted direct message. If it is an invoice we add it to our pending
-    /// invoice storage.
+    /// Handles an encrypted direct message. If it finds an invoice in the dm, we add it
+    /// to our pending invoice storage.
     pub async fn handle_direct_message(
         &self,
         event: Event,
@@ -1443,23 +1443,39 @@ impl<S: MutinyStorage> NostrManager<S> {
             }
         }
 
-        // handle it like a pay invoice NWC request, to see if it is valid
-        let params = PayInvoiceRequestParams {
-            id: None,
-            invoice: decrypted,
-            amount: None,
-        };
-        let invoice: Bolt11Invoice = match check_valid_nwc_invoice(&params, invoice_handler).await {
-            Ok(Some(invoice)) => invoice,
-            Ok(None) => return Ok(()),
-            Err(msg) => {
-                log_debug!(self.logger, "Not adding DM'd invoice: {msg}");
+        // loop through dm to check for invoice
+        for word in decrypted.split_whitespace() {
+            // ignore word if too short
+            if word.len() > 15 {
+                let invoice_request_param = match bitcoin_waila::PaymentParams::from_str(word) {
+                    // if not an invoice, go to next word in dm
+                    Ok(param) => match param.invoice() {
+                        Some(invoice) => PayInvoiceRequestParams {
+                            id: None,
+                            invoice: invoice.to_string(),
+                            amount: None,
+                        },
+                        None => continue,
+                    },
+                    Err(_) => continue,
+                };
+
+                // handle it like a pay invoice NWC request, to see if it is valid
+                let invoice: Bolt11Invoice =
+                    match check_valid_nwc_invoice(&invoice_request_param, invoice_handler).await {
+                        Ok(Some(invoice)) => invoice,
+                        Ok(None) => return Ok(()),
+                        Err(msg) => {
+                            log_debug!(self.logger, "Not adding DM'd invoice: {msg}");
+                            return Ok(());
+                        }
+                    };
+                self.save_pending_nwc_invoice(None, event.id, event.pubkey, invoice, None)
+                    .await?;
+
                 return Ok(());
             }
-        };
-
-        self.save_pending_nwc_invoice(None, event.id, event.pubkey, invoice, None)
-            .await?;
+        }
 
         Ok(())
     }
@@ -2322,9 +2338,9 @@ mod test {
         .unwrap()
         .to_event(&user)
         .unwrap();
+        block_on(nostr_manager.handle_direct_message(dm, &inv_handler)).unwrap();
         let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
         assert!(pending.is_empty());
-        block_on(nostr_manager.handle_direct_message(dm, &inv_handler)).unwrap();
 
         // create invoice
         let secp = Secp256k1::new();
@@ -2364,6 +2380,20 @@ mod test {
             &user,
             nostr_keys.public_key(),
             invoice.to_string(),
+            None,
+        )
+        .unwrap()
+        .to_event(&user)
+        .unwrap();
+        block_on(nostr_manager.handle_direct_message(dm, &inv_handler)).unwrap();
+        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        assert!(!pending.is_empty());
+
+        // valid invoice in dm along with message should be added
+        let dm = EventBuilder::encrypted_direct_msg(
+            &user,
+            nostr_keys.public_key(),
+            format!("invoice for you to pay {}", invoice),
             None,
         )
         .unwrap()
