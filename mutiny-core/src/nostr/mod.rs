@@ -1,12 +1,13 @@
 use crate::labels::Contact;
 use crate::logging::MutinyLogger;
+use crate::nostr::client::NostrClient;
 use crate::nostr::nip49::{NIP49BudgetPeriod, NIP49URI};
 use crate::nostr::nwc::{
     check_valid_nwc_invoice, BudgetPeriod, BudgetedSpendingConditions, NostrWalletConnect,
     NwcProfile, NwcProfileTag, PendingNwcInvoice, Profile, SingleUseSpendingConditions,
     SpendingConditions, PENDING_NWC_EVENTS_KEY,
 };
-use crate::nostr::primal::PrimalClient;
+use crate::nostr::primal::PrimalApi;
 use crate::storage::{update_nostr_contact_list, MutinyStorage, NOSTR_CONTACT_LIST};
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
 use crate::{labels::LabelStorage, InvoiceHandler};
@@ -28,7 +29,7 @@ use nostr::prelude::{Coordinate, EventIdOrCoordinate};
 use nostr::{
     nips::nip04::{decrypt, encrypt},
     Alphabet, Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Metadata, SecretKey,
-    SingleLetterTag, Tag, TagKind, Timestamp, UncheckedUrl,
+    SingleLetterTag, Tag, TagKind, Timestamp,
 };
 use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
 use serde::{Deserialize, Serialize};
@@ -39,9 +40,10 @@ use std::time::Duration;
 use std::{str::FromStr, sync::atomic::AtomicBool};
 use url::Url;
 
+mod client;
 pub mod nip49;
 pub mod nwc;
-mod primal;
+pub(crate) mod primal;
 
 const PROFILE_ACCOUNT_INDEX: u32 = 0;
 const NWC_ACCOUNT_INDEX: u32 = 1;
@@ -149,7 +151,7 @@ impl NostrKeys {
 
 /// Manages Nostr keys and has different utilities for nostr specific things
 #[derive(Clone)]
-pub struct NostrManager<S: MutinyStorage> {
+pub struct NostrManager<S: MutinyStorage, P: PrimalApi, C: NostrClient> {
     /// Extended private key that is the root seed of the wallet
     xprivkey: ExtendedPrivKey,
     /// Primary key used for nostr, this will be used for signing events
@@ -166,9 +168,9 @@ pub struct NostrManager<S: MutinyStorage> {
     /// Atomic stop signal
     pub stop: Arc<AtomicBool>,
     /// Nostr client
-    pub client: Client,
+    pub client: C,
     /// Primal client
-    pub primal_client: PrimalClient,
+    pub primal_client: P,
 }
 
 /// A fedimint we discovered on nostr
@@ -212,7 +214,7 @@ impl Ord for NostrDiscoveredFedimint {
     }
 }
 
-impl<S: MutinyStorage> NostrManager<S> {
+impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
     /// Connect to the nostr relays
     pub async fn connect(&self) -> Result<(), MutinyError> {
         self.client.add_relays(self.get_relays()).await?;
@@ -420,7 +422,8 @@ impl<S: MutinyStorage> NostrManager<S> {
             with_lnurl
         };
 
-        let event_id = self.client.set_metadata(&with_nip05).await?;
+        let builder = EventBuilder::metadata(&with_nip05);
+        let event_id = self.client.send_event_builder(builder).await?;
         log_info!(self.logger, "New kind 0: {event_id}");
         self.storage.set_nostr_profile(&with_nip05)?;
 
@@ -473,7 +476,17 @@ impl<S: MutinyStorage> NostrManager<S> {
                 })
                 .collect();
             let builder = EventBuilder::new(Kind::ContactList, json!(content).to_string(), tags);
-            self.client.send_event_builder(builder).await?;
+            let event = self
+                .nostr_keys
+                .read()
+                .await
+                .signer
+                .sign_event_builder(builder)
+                .await?;
+
+            self.client.send_event(event.clone()).await?;
+
+            update_nostr_contact_list(&self.storage, event)?;
         }
 
         // create real relay list
@@ -481,7 +494,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             let builder = EventBuilder::relay_list(
                 RELAYS
                     .iter()
-                    .map(|x| (UncheckedUrl::from(x.to_string()), None)),
+                    .map(|x| (nostr::UncheckedUrl::from(x.to_string()), None)),
             );
             self.client.send_event_builder(builder).await?;
         }
@@ -507,7 +520,8 @@ impl<S: MutinyStorage> NostrManager<S> {
             m
         };
 
-        let event_id = self.client.set_metadata(&metadata).await?;
+        let builder = EventBuilder::metadata(&metadata);
+        let event_id = self.client.send_event_builder(builder).await?;
         log_info!(self.logger, "New kind 0: {event_id}");
         self.storage.set_nostr_profile(&metadata)?;
 
@@ -522,7 +536,8 @@ impl<S: MutinyStorage> NostrManager<S> {
             .about("Deleted")
             .custom_field("deleted", true);
 
-        let event_id = self.client.set_metadata(&metadata).await?;
+        let builder = EventBuilder::metadata(&metadata);
+        let event_id = self.client.send_event_builder(builder).await?;
         log_info!(self.logger, "New kind 0: {event_id}");
         self.storage.set_nostr_profile(&metadata)?;
 
@@ -1039,7 +1054,7 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         if let Some(info_event) = info_event {
             self.client
-                .send_event_to([profile.relay.as_str()], info_event)
+                .send_event_to(vec![profile.relay.to_string()], info_event)
                 .await
                 .map_err(|e| {
                     MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}"))
@@ -1097,7 +1112,7 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         if let Some(nwc) = nwc {
             // add the relays if needed
-            let mut needs_connect = self.client.add_relay(&relay).await?;
+            let mut needs_connect = self.client.add_relay(relay.as_str()).await?;
             needs_connect |= self.client.add_relay(profile.relay.as_str()).await?;
             if needs_connect {
                 self.client.connect().await;
@@ -1190,7 +1205,7 @@ impl<S: MutinyStorage> NostrManager<S> {
 
         let event_id = self
             .client
-            .send_event_to([nwc.profile.relay.as_str()], response)
+            .send_event_to(vec![nwc.profile.relay.clone()], response)
             .await
             .map_err(|e| MutinyError::Other(anyhow::anyhow!("Failed to send info event: {e:?}")))?;
 
@@ -2097,37 +2112,13 @@ impl<S: MutinyStorage> NostrManager<S> {
         Ok(mints)
     }
 
-    /// Derives the client and server keys for Nostr Wallet Connect given a profile index
-    /// The left key is the client key and the right key is the server key
-    pub(crate) fn derive_nwc_keys<C: Signing>(
-        context: &Secp256k1<C>,
-        xprivkey: ExtendedPrivKey,
-        profile_index: u32,
-    ) -> Result<(Keys, Keys), MutinyError> {
-        let client_key = derive_nostr_key(
-            context,
-            xprivkey,
-            NWC_ACCOUNT_INDEX,
-            Some(profile_index),
-            Some(0),
-        )?;
-        let server_key = derive_nostr_key(
-            context,
-            xprivkey,
-            NWC_ACCOUNT_INDEX,
-            Some(profile_index),
-            Some(1),
-        )?;
-
-        Ok((client_key, server_key))
-    }
-
     /// Creates a new NostrManager
-    pub fn from_mnemonic(
+    pub async fn from_mnemonic(
         xprivkey: ExtendedPrivKey,
         key_source: NostrKeySource,
         storage: S,
-        primal_url: Option<String>,
+        primal_api: P,
+        client: C,
         logger: Arc<MutinyLogger>,
         stop: Arc<AtomicBool>,
     ) -> Result<Self, MutinyError> {
@@ -2144,11 +2135,7 @@ impl<S: MutinyStorage> NostrManager<S> {
             .map(|profile| NostrWalletConnect::new(&context, xprivkey, profile).unwrap())
             .collect();
 
-        let client = Client::new(nostr_keys.signer.clone());
-
-        let primal_client = PrimalClient::new(
-            primal_url.unwrap_or("https://primal-cache.mutinywallet.com/api".to_string()),
-        );
+        client.set_signer(Some(nostr_keys.signer.clone())).await;
 
         Ok(Self {
             xprivkey,
@@ -2157,12 +2144,37 @@ impl<S: MutinyStorage> NostrManager<S> {
             storage,
             pending_nwc_lock: Arc::new(Mutex::new(())),
             follow_lock: Arc::new(Mutex::new(())),
-            primal_client,
+            primal_client: primal_api,
             logger,
             stop,
             client,
         })
     }
+}
+
+/// Derives the client and server keys for Nostr Wallet Connect given a profile index
+/// The left key is the client key and the right key is the server key
+pub(crate) fn derive_nwc_keys<C: Signing>(
+    context: &Secp256k1<C>,
+    xprivkey: ExtendedPrivKey,
+    profile_index: u32,
+) -> Result<(Keys, Keys), MutinyError> {
+    let client_key = derive_nostr_key(
+        context,
+        xprivkey,
+        NWC_ACCOUNT_INDEX,
+        Some(profile_index),
+        Some(0),
+    )?;
+    let server_key = derive_nostr_key(
+        context,
+        xprivkey,
+        NWC_ACCOUNT_INDEX,
+        Some(profile_index),
+        Some(1),
+    )?;
+
+    Ok((client_key, server_key))
 }
 
 pub fn derive_nostr_key<C: Signing>(
@@ -2256,6 +2268,8 @@ fn is_federation_recommendation_event(event: &Event) -> bool {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::nostr::client::MockNostrClient;
+    use crate::nostr::primal::{MockPrimalApi, TrustedUser};
     use crate::storage::MemoryStorage;
     use crate::utils::now;
     use crate::MockInvoiceHandler;
@@ -2263,16 +2277,19 @@ mod test {
     use bitcoin::bip32::ExtendedPrivKey;
     use bitcoin::Network;
     use futures::executor::block_on;
+    use futures::try_join;
     use lightning::ln::PaymentSecret;
     use lightning_invoice::{Bolt11Invoice, Currency, InvoiceBuilder};
     use mockall::predicate::eq;
     use nostr::prelude::rand;
     use nostr::prelude::rand::prelude::SliceRandom;
+    use nostr::SubscriptionId;
     use std::str::FromStr;
 
     const EXPIRED_INVOICE: &str = "lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm";
+    const INVITE_CODE: &str = "fed11qgqzc2nhwden5te0vejkg6tdd9h8gepwvejkg6tdd9h8garhduhx6at5d9h8jmn9wshxxmmd9uqqzgxg6s3evnr6m9zdxr6hxkdkukexpcs3mn7mj3g5pc5dfh63l4tj6g9zk4er";
 
-    fn create_nostr_manager() -> NostrManager<MemoryStorage> {
+    async fn create_nostr_manager() -> NostrManager<MemoryStorage, MockPrimalApi, MockNostrClient> {
         let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
 
         let xprivkey =
@@ -2284,20 +2301,26 @@ mod test {
 
         let stop = Arc::new(AtomicBool::new(false));
 
+        #[allow(unused_mut)] // need this because of mockall
+        let mut client = MockNostrClient::new();
+        client.expect_set_signer().once().return_const(());
+
         NostrManager::from_mnemonic(
             xprivkey,
             NostrKeySource::Derived,
             storage,
-            None,
+            MockPrimalApi::new(),
+            client,
             logger,
             stop,
         )
+        .await
         .unwrap()
     }
 
     #[tokio::test]
     async fn test_process_dm() {
-        let nostr_manager = create_nostr_manager();
+        let nostr_manager = create_nostr_manager().await;
 
         let mut inv_handler = MockInvoiceHandler::new();
         inv_handler
@@ -2406,7 +2429,7 @@ mod test {
 
     #[tokio::test]
     async fn test_create_profile() {
-        let nostr_manager = create_nostr_manager();
+        let nostr_manager = create_nostr_manager().await;
 
         let name = "test".to_string();
 
@@ -2450,7 +2473,7 @@ mod test {
 
     #[tokio::test]
     async fn test_create_reserve_profile() {
-        let nostr_manager = create_nostr_manager();
+        let nostr_manager = create_nostr_manager().await;
 
         let name = MUTINY_PLUS_SUBSCRIPTION_LABEL.to_string();
 
@@ -2566,7 +2589,7 @@ mod test {
 
     #[tokio::test]
     async fn test_create_nwa_profile() {
-        let nostr_manager = create_nostr_manager();
+        let nostr_manager = create_nostr_manager().await;
 
         let name = "test nwa".to_string();
 
@@ -2619,7 +2642,7 @@ mod test {
 
     #[tokio::test]
     async fn test_edit_profile() {
-        let nostr_manager = create_nostr_manager();
+        let nostr_manager = create_nostr_manager().await;
 
         let name = "test".to_string();
 
@@ -2661,7 +2684,7 @@ mod test {
 
     #[tokio::test]
     async fn test_delete_profile() {
-        let nostr_manager = create_nostr_manager();
+        let nostr_manager = create_nostr_manager().await;
 
         let name = "test".to_string();
 
@@ -2694,7 +2717,7 @@ mod test {
 
     #[tokio::test]
     async fn test_deny_invoice() {
-        let nostr_manager = create_nostr_manager();
+        let nostr_manager = create_nostr_manager().await;
 
         let name = "test".to_string();
 
@@ -2844,14 +2867,374 @@ mod test {
         assert!(is_federation_recommendation_event(&with_k));
 
         // test nostr manager creates a valid one
+        #[allow(unused_mut)] // need this because of mockall
+        let mut nostr_manager = create_nostr_manager().await;
+        let invite_code = InviteCode::from_str(INVITE_CODE).unwrap();
 
-        let nostr_manager = create_nostr_manager();
-        let invite_code = InviteCode::from_str("fed11qgqzc2nhwden5te0vejkg6tdd9h8gepwvejkg6tdd9h8garhduhx6at5d9h8jmn9wshxxmmd9uqqzgxg6s3evnr6m9zdxr6hxkdkukexpcs3mn7mj3g5pc5dfh63l4tj6g9zk4er").unwrap();
+        nostr_manager
+            .client
+            .expect_sign_event_builder()
+            .once()
+            .returning(|builder| Ok(builder.to_event(&Keys::generate()).unwrap()));
+
         let event = nostr_manager
             .create_recommend_federation_event(&invite_code, Network::Signet, None)
             .await
             .unwrap();
 
         assert!(is_federation_recommendation_event(&event));
+    }
+
+    #[tokio::test]
+    async fn test_discover_federations() {
+        let npub = nostr::PublicKey::from_hex(
+            "e1ff3bfdd4e40315959b08b4fcc8245eaa514637e1d4ec2ae166b743341be1af",
+        )
+        .unwrap();
+
+        // manually make NostrManager so we can use a real nostr client to get real events
+        let mut nostr_manager = NostrManager::from_mnemonic(
+            ExtendedPrivKey::new_master(Network::Bitcoin, &[]).unwrap(),
+            NostrKeySource::Derived,
+            MemoryStorage::new(None, None, None),
+            MockPrimalApi::new(),
+            Client::default(),
+            Arc::new(MutinyLogger::default()),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap();
+
+        nostr_manager
+            .primal_client
+            .expect_get_trusted_users()
+            .return_once(move |_| {
+                Ok(vec![TrustedUser {
+                    pubkey: npub,
+                    trust_rating: 1.0,
+                    metadata: Some(
+                        Metadata::default()
+                            .name("Ben")
+                            .picture(Url::from_str("https://example.com").unwrap()),
+                    ),
+                }])
+            });
+        // need to connect to relays
+        nostr_manager.connect().await.unwrap();
+
+        let federations = nostr_manager
+            .discover_federations(Network::Signet)
+            .await
+            .unwrap();
+
+        let mutinynet = federations
+            .iter()
+            .find(|f| {
+                f.id == FederationId::from_str(
+                    "c8d423964c7ad944d30f57359b6e5b260e211dcfdb945140e28d4df51fd572d2",
+                )
+                .unwrap()
+            })
+            .unwrap();
+
+        // has the invite code
+        assert_eq!(mutinynet.invite_codes.len(), 1);
+        assert_eq!(
+            mutinynet.invite_codes.first(),
+            Some(&InviteCode::from_str(INVITE_CODE).unwrap())
+        );
+        // check we found the actual federation announcement
+        assert!(mutinynet.created_at.is_some());
+        assert!(mutinynet.pubkey.is_some());
+        assert!(mutinynet.event_id.is_some());
+        assert!(mutinynet.metadata.is_some());
+
+        // verify we find some recommendations
+        assert!(!mutinynet.recommendations.is_empty());
+        // find ben's recommendation
+        let ben = mutinynet
+            .recommendations
+            .iter()
+            .find(|c| c.npub.is_some_and(|n| n == npub))
+            .unwrap();
+
+        // make sure it fills out the contact
+        assert!(ben.image_url.is_some());
+        assert!(!ben.name.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_recommendation_event() {
+        let mut nostr_manager = create_nostr_manager().await;
+        nostr_manager
+            .client
+            .expect_sign_event_builder()
+            .once()
+            .returning(|b| Ok(b.to_event(&Keys::generate()).unwrap()));
+
+        let invite_code = InviteCode::from_str(INVITE_CODE).unwrap();
+        let event = nostr_manager
+            .create_recommend_federation_event(&invite_code, Network::Signet, None)
+            .await
+            .unwrap();
+
+        assert!(event.verify().is_ok());
+        assert_eq!(event.kind, Kind::from(38000));
+        assert_eq!(event.tags.len(), 4);
+
+        // find the correct tags
+        assert!(event
+            .tags
+            .iter()
+            .any(|t| t.as_vec() == vec!["k".to_string(), "38173".to_string()]));
+        assert!(event
+            .tags
+            .iter()
+            .any(|t| t.as_vec() == vec!["d".to_string(), invite_code.federation_id().to_string()]));
+        assert!(event
+            .tags
+            .iter()
+            .any(|t| t.as_vec() == vec!["n".to_string(), "signet".to_string()]));
+        assert!(event
+            .tags
+            .iter()
+            .any(|t| t.as_vec() == vec!["u".to_string(), INVITE_CODE.to_string()]));
+    }
+
+    #[tokio::test]
+    async fn test_follow_unfollow() {
+        let mut nostr_manager = create_nostr_manager().await;
+        nostr_manager
+            .client
+            .expect_send_event()
+            .returning(|e| Ok(e.id));
+
+        let ben = nostr::PublicKey::from_str(
+            "npub1u8lnhlw5usp3t9vmpz60ejpyt649z33hu82wc2hpv6m5xdqmuxhs46turz",
+        )
+        .unwrap();
+        let tony = nostr::PublicKey::from_str(
+            "npub1t0nyg64g5vwprva52wlcmt7fkdr07v5dr7s35raq9g0xgc0k4xcsedjgqv",
+        )
+        .unwrap();
+
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert!(list.is_empty());
+
+        nostr_manager.follow_npub(ben).await.unwrap();
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 2); // follows ourselves too
+
+        // test follow twice
+        nostr_manager.follow_npub(ben).await.unwrap();
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 2);
+
+        nostr_manager.follow_npub(tony).await.unwrap();
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 3);
+
+        nostr_manager.unfollow_npub(ben).await.unwrap();
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 2);
+
+        nostr_manager.unfollow_npub(tony).await.unwrap();
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 1);
+
+        // test unfollow twice
+        nostr_manager.unfollow_npub(tony).await.unwrap();
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_follow_concurrency() {
+        let mut nostr_manager = create_nostr_manager().await;
+        nostr_manager
+            .client
+            .expect_send_event()
+            .returning(|e| Ok(e.id));
+
+        let ben = nostr::PublicKey::from_str(
+            "npub1u8lnhlw5usp3t9vmpz60ejpyt649z33hu82wc2hpv6m5xdqmuxhs46turz",
+        )
+        .unwrap();
+        let tony = nostr::PublicKey::from_str(
+            "npub1t0nyg64g5vwprva52wlcmt7fkdr07v5dr7s35raq9g0xgc0k4xcsedjgqv",
+        )
+        .unwrap();
+
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert!(list.is_empty());
+
+        try_join!(
+            nostr_manager.follow_npub(ben),
+            nostr_manager.follow_npub(tony)
+        )
+        .unwrap();
+
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 3); // follows ourselves too
+
+        try_join!(
+            nostr_manager.unfollow_npub(ben),
+            nostr_manager.unfollow_npub(tony)
+        )
+        .unwrap();
+
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_change_nostr_keys() {
+        let mut nostr_manager = create_nostr_manager().await;
+        nostr_manager
+            .client
+            .expect_send_event()
+            .returning(|e| Ok(e.id));
+        nostr_manager
+            .client
+            .expect_send_event_builder()
+            .returning(|e| Ok(e.to_event(&Keys::generate()).unwrap().id));
+        // create follow list
+        nostr_manager
+            .follow_npub(Keys::generate().public_key())
+            .await
+            .unwrap();
+        // create a profile
+        nostr_manager
+            .primal_client
+            .expect_get_user_profile()
+            .return_once(|_| Ok(None));
+        nostr_manager
+            .edit_profile(Some("test profile".to_string()), None, None, None)
+            .await
+            .unwrap();
+
+        let new_keys = Keys::generate();
+
+        let xprivkey = ExtendedPrivKey::new_master(Network::Bitcoin, &[0; 32]).unwrap();
+        let source = NostrKeySource::Imported(new_keys.clone());
+
+        nostr_manager
+            .client
+            .expect_set_signer()
+            .once()
+            .return_once(|_| ());
+
+        nostr_manager
+            .client
+            .expect_subscribe()
+            .once()
+            .withf(|filters, opt| filters.len() == 2 && opt.is_none())
+            .return_once(|_, _| SubscriptionId::generate());
+
+        let new_pk = nostr_manager
+            .change_nostr_keys(source, xprivkey)
+            .await
+            .unwrap();
+
+        // easy tests
+        assert_eq!(new_pk, new_keys.public_key());
+        let npub = nostr_manager.get_npub().await;
+        assert_eq!(npub, new_keys.public_key());
+
+        // make sure we get a different follow list and profile
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert!(list.is_empty());
+        let profile = nostr_manager.get_profile().unwrap();
+        assert_ne!(profile.name, Some("test profile".to_string()));
+        assert_eq!(profile, Metadata::default());
+    }
+
+    #[tokio::test]
+    async fn test_profile_changes() {
+        let mut nostr_manager = create_nostr_manager().await;
+        let npub = nostr_manager.get_npub().await;
+        nostr_manager
+            .client
+            .expect_send_event()
+            .returning(|e| Ok(e.id));
+        nostr_manager
+            .client
+            .expect_send_event_builder()
+            .returning(|e| Ok(e.to_event(&Keys::generate()).unwrap().id));
+        // setup profile
+        nostr_manager
+            .primal_client
+            .expect_get_user_profile()
+            .with(eq(npub))
+            .times(1)
+            .returning(|_| Ok(None));
+        let setup = nostr_manager
+            .setup_new_profile(Some("test profile".to_string()), None, None, None)
+            .await
+            .unwrap();
+
+        let npub = nostr_manager.get_npub().await;
+
+        // check our follow list
+        let list = nostr_manager.get_follow_list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(list.contains(&npub));
+
+        // check our profile
+        let profile = nostr_manager.get_profile().unwrap();
+        assert_eq!(profile, setup);
+        assert_eq!(profile.name, Some("test profile".to_string()));
+        assert_eq!(profile.display_name, Some("test profile".to_string()));
+        assert_eq!(profile.lud06, None);
+        assert_eq!(profile.lud16, None);
+        assert_eq!(profile.picture, None);
+        assert_eq!(profile.about, None);
+        assert!(profile.custom.is_empty());
+
+        let pfp = "https://pfp.nostr.build/11670ef3e4b85e22e85a6558a7e7ea6eda960fc72f1a211042173609dce4be4e.jpg";
+        let lnurl = "lnurl1dp68gurn8ghj7mrww4exctnxd9shg6npvchxxmmd9akxuatjdskkx6rpdehx2mplwdjhxumfdahr6err8ycnzef3xyunxenrvenxydf3xq6xgvekxgmrqc3cx33n2erxvc6kzce38ycnqdf5vdjr2vpevv6kvc3sv4jryenx8yuxgefex4ssq7l4mq";
+
+        // edit profile
+        nostr_manager
+            .primal_client
+            .expect_get_user_profile()
+            .with(eq(npub))
+            .times(1)
+            .return_once(|_| Ok(Some(profile)));
+        let edited = nostr_manager
+            .edit_profile(
+                None,
+                Some(Url::from_str(pfp).unwrap()),
+                Some(LnUrl::from_str(lnurl).unwrap()),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // check our profile
+        let profile = nostr_manager.get_profile().unwrap();
+        assert_eq!(profile, edited);
+        assert_eq!(profile.name, Some("test profile".to_string()));
+        assert_eq!(profile.display_name, Some("test profile".to_string()));
+        assert_eq!(profile.lud06, Some(lnurl.to_string()));
+        assert_eq!(profile.lud16, None);
+        assert_eq!(profile.picture, Some(pfp.to_string()));
+        assert_eq!(profile.about, None);
+        assert!(profile.custom.is_empty());
+
+        // delete profile
+        let deleted = nostr_manager.delete_profile().await.unwrap();
+
+        // verify it was properly deleted
+        let profile = nostr_manager.get_profile().unwrap();
+        assert_eq!(profile, deleted);
+        assert_eq!(profile.name, Some("Deleted".to_string()));
+        assert_eq!(profile.display_name, Some("Deleted".to_string()));
+        assert_eq!(profile.lud06, None);
+        assert_eq!(profile.lud16, None);
+        assert_eq!(profile.picture, None);
+        assert_eq!(profile.about, Some("Deleted".to_string()));
+        assert_eq!(profile.custom.len(), 1);
+        assert_eq!(profile.custom.get("deleted").unwrap().as_bool(), Some(true));
     }
 }

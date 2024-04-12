@@ -46,6 +46,7 @@ mod test_utils;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
+use crate::nostr::primal::{PrimalApi, PrimalClient};
 use crate::storage::{
     get_payment_hash_from_key, list_payment_info, persist_payment_info, update_nostr_contact_list,
     IndexItem, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY,
@@ -109,7 +110,7 @@ use moksha_core::primitives::{
     PostMeltQuoteBolt11Response,
 };
 use moksha_core::token::TokenV3;
-use nostr_sdk::{NostrSigner, RelayPoolNotification};
+use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -848,15 +849,28 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         // start syncing node manager
         NodeManager::start_sync(node_manager.clone());
 
+        let primal_client = PrimalClient::new(
+            config
+                .primal_url
+                .clone()
+                .unwrap_or("https://primal-cache.mutinywallet.com/api".to_string()),
+        );
+
+        let client = Client::default();
+
         // create nostr manager
-        let nostr = Arc::new(NostrManager::from_mnemonic(
-            self.xprivkey,
-            self.nostr_key_source,
-            self.storage.clone(),
-            config.primal_url.clone(),
-            logger.clone(),
-            stop.clone(),
-        )?);
+        let nostr = Arc::new(
+            NostrManager::from_mnemonic(
+                self.xprivkey,
+                self.nostr_key_source,
+                self.storage.clone(),
+                primal_client,
+                client,
+                logger.clone(),
+                stop.clone(),
+            )
+            .await?,
+        );
 
         // connect to relays when not in tests
         #[cfg(not(test))]
@@ -1099,7 +1113,7 @@ pub struct MutinyWallet<S: MutinyStorage> {
     config: MutinyWalletConfig,
     pub(crate) storage: S,
     pub node_manager: Arc<NodeManager<S>>,
-    pub nostr: Arc<NostrManager<S>>,
+    pub nostr: Arc<NostrManager<S, PrimalClient, nostr_sdk::Client>>,
     pub federation_storage: Arc<RwLock<FederationStorage>>,
     pub(crate) federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>,
     lnurl_client: Arc<LnUrlClient>,
@@ -1172,7 +1186,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     log_warn!(logger, "Failed to clear invalid NWC invoices: {e}");
                 }
 
-                let client = &nostr.client;
+                let client = nostr_sdk::Client::default();
 
                 client
                     .add_relays(nostr.get_relays())
