@@ -1,6 +1,6 @@
 use crate::extractor::Form;
-use crate::sled::SledStorage;
 
+use crate::rocksdb::RocksDB;
 use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::{Extension, Json};
@@ -16,7 +16,7 @@ use std::str::FromStr;
 
 #[derive(Clone)]
 pub struct State {
-    pub mutiny_wallet: MutinyWallet<SledStorage>,
+    pub mutiny_wallet: MutinyWallet<RocksDB>,
 }
 
 pub async fn new_address(

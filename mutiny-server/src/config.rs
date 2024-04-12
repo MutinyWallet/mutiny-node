@@ -6,7 +6,7 @@ use std::str::FromStr;
 #[command(version, author, about)]
 /// Mutiny Wallet
 pub struct Config {
-    #[clap(default_value_t = String::from("sled.db"), long)]
+    #[clap(default_value_t = String::from("rocksdb"), long)]
     /// Location of database file
     pub db_file: String,
     #[clap(long)]

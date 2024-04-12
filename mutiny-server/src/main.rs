@@ -2,11 +2,11 @@
 
 mod config;
 mod extractor;
+mod rocksdb;
 mod routes;
-mod sled;
 
 use crate::config::Config;
-use crate::sled::SledStorage;
+use crate::rocksdb::RocksDB;
 use axum::http::{StatusCode, Uri};
 use axum::routing::{get, post};
 use axum::{Extension, Router};
@@ -25,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
     let config: Config = Config::parse();
 
     let network = config.network();
-    let storage = SledStorage::new(&config.db_file, config.password.clone())?;
+    let storage = RocksDB::new(&config.db_file, config.password.clone())?;
 
     let mnemonic = match storage.get_mnemonic() {
         Ok(Some(mnemonic)) => mnemonic,

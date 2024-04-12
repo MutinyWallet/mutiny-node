@@ -38,14 +38,25 @@ clippy:
     cargo clippy --all-features --tests --package mutiny-core --target=wasm32-unknown-unknown -- -D warnings
     cargo clippy --all-features --tests --package mutiny-core --target=aarch64-apple-darwin -- -D warnings
     cargo clippy --all-features --tests --package mutiny-wasm -- -D warnings
+    cd mutiny-server && cargo clippy --all-features --tests --target=aarch64-apple-darwin -- -D warnings
 
 [linux]
 clippy:
     cargo clippy --all-features --tests --package mutiny-core --target=wasm32-unknown-unknown -- -D warnings
     cargo clippy --all-features --tests --package mutiny-core --target=x86_64-unknown-linux-gnu -- -D warnings
     cargo clippy --all-features --tests --package mutiny-wasm -- -D warnings
+    cd mutiny-server && cargo clippy --all-features --tests --target=x86_64-unknown-linux-gnu -- -D warnings
 
 clippy-nix:
     cargo clippy --all-features --tests --package mutiny-core --target=wasm32-unknown-unknown -- -D warnings
     cargo clippy --all-features --tests --package mutiny-core --target=aarch64-unknown-linux-gnu -- -D warnings
     cargo clippy --all-features --tests --package mutiny-wasm -- -D warnings
+    cd mutiny-server && cargo clippy --all-features --tests --target=aarch64-unknown-linux-gnu -- -D warnings
+
+[macos]
+run-signet:
+    cd mutiny-server &&  RUST_LOG=info cargo run --target aarch64-apple-darwin -- --lsp-url "https://signet-lsp.mutinywallet.com"
+
+[linux]
+run-signet:
+    cd mutiny-server &&  RUST_LOG=info cargo run --target x86_64-unknown-linux-gnu -- --lsp-url "https://signet-lsp.mutinywallet.com"

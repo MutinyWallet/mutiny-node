@@ -1,2 +1,2 @@
 # default database file
-sled.db
+rocksdb

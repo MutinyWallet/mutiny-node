@@ -1,35 +1,27 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bitcoin::hashes::serde::{Deserialize, Serialize};
 use futures_util::lock::Mutex;
 use mutiny_core::encrypt::{encryption_key_from_pass, Cipher};
 use mutiny_core::error::MutinyError;
 use mutiny_core::storage::{DelayedKeyValueItem, DeviceLock, IndexItem, MutinyStorage};
 use mutiny_core::vss::MutinyVssClient;
-use sled::IVec;
+use rocksdb::{IteratorMode, WriteBatchWithTransaction, DB};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 
 #[derive(Clone)]
-pub struct SledStorage {
+pub struct RocksDB {
     pub(crate) password: Option<String>,
     pub cipher: Option<Cipher>,
-    db: sled::Db,
+    db: Arc<DB>,
     delayed_keys: Arc<Mutex<HashMap<String, DelayedKeyValueItem>>>,
     activity_index: Arc<RwLock<BTreeSet<IndexItem>>>,
 }
 
-impl SledStorage {
+impl RocksDB {
     pub fn new(db_file: &str, password: Option<String>) -> anyhow::Result<Self> {
-        let db = {
-            match sled::open(db_file) {
-                Ok(db) => db,
-                Err(_) => {
-                    std::fs::create_dir_all(db_file)?;
-                    sled::open(db_file)?
-                }
-            }
-        };
+        let db = DB::open_default(db_file)?;
 
         let cipher = password
             .as_ref()
@@ -40,20 +32,15 @@ impl SledStorage {
         Ok(Self {
             password,
             cipher,
-            db,
+            db: Arc::new(db),
             delayed_keys: Arc::new(Mutex::new(HashMap::new())),
             activity_index: Arc::new(RwLock::new(BTreeSet::new())),
         })
     }
 }
 
-fn ivec_to_string(vec: IVec) -> Result<String, MutinyError> {
-    String::from_utf8(vec.to_vec())
-        .map_err(|e| MutinyError::Other(anyhow!("Failed to decode value to string: {e}")))
-}
-
 #[async_trait]
-impl MutinyStorage for SledStorage {
+impl MutinyStorage for RocksDB {
     fn password(&self) -> Option<&str> {
         self.password.as_deref()
     }
@@ -71,16 +58,16 @@ impl MutinyStorage for SledStorage {
     }
 
     fn set(&self, items: Vec<(String, impl Serialize)>) -> Result<(), MutinyError> {
-        let mut batch = sled::Batch::default();
+        let mut batch = WriteBatchWithTransaction::<false>::default();
         for (key, value) in items {
             let json = serde_json::to_string(&value).map_err(|e| {
                 MutinyError::Other(anyhow!("Error serializing value: {e} for key: {key}"))
             })?;
-            batch.insert(key.as_str(), json.as_bytes());
+            batch.put(key.as_bytes(), json.as_bytes());
         }
         self.db
-            .apply_batch(batch)
-            .map_err(|e| MutinyError::Other(anyhow!("Error inserting keys: into sled: {e}")))?;
+            .write(batch)
+            .map_err(|e| MutinyError::Other(anyhow!("Error inserting keys to db: {e}")))?;
 
         Ok(())
     }
@@ -95,13 +82,12 @@ impl MutinyStorage for SledStorage {
     {
         let key = key.as_ref();
 
-        if let Some(value) = self.db.get(key).map_err(|e| {
-            MutinyError::Other(anyhow!("Failed to read value ({key}) from sled db: {e}"))
-        })? {
-            // convert from bytes to deserialized value
-            let str = ivec_to_string(value)?;
-            let json: T = serde_json::from_str(&str)?;
-
+        if let Some(value) = self
+            .db
+            .get(key)
+            .map_err(|e| MutinyError::Other(anyhow!("Failed to read value ({key}) from db: {e}")))?
+        {
+            let json: T = serde_json::from_slice(value.as_ref())?;
             return Ok(Some(json));
         }
 
@@ -110,15 +96,15 @@ impl MutinyStorage for SledStorage {
 
     fn delete(&self, keys: &[impl AsRef<str>]) -> Result<(), MutinyError> {
         // start batch operation
-        let mut batch = sled::Batch::default();
+        let mut batch = WriteBatchWithTransaction::<false>::default();
         for key in keys {
-            let key = key.as_ref();
-            batch.remove(key);
+            batch.delete(key.as_ref())
         }
+
         // apply batch to delete all keys
         self.db
-            .apply_batch(batch)
-            .map_err(|e| MutinyError::Other(anyhow!("Error removing keys: from sled: {e}")))?;
+            .write(batch)
+            .map_err(|e| MutinyError::Other(anyhow!("Error removing keys from db: {e}")))?;
 
         Ok(())
     }
@@ -127,26 +113,25 @@ impl MutinyStorage for SledStorage {
         Ok(())
     }
 
-    // TODO
     fn stop(&self) {}
 
-    // TODO
     fn connected(&self) -> Result<bool, MutinyError> {
         Ok(true)
     }
 
     fn scan_keys(&self, prefix: &str, suffix: Option<&str>) -> Result<Vec<String>, MutinyError> {
-        Ok(self
-            .db
-            .iter()
-            .keys()
-            .filter_map(|key| key.ok())
-            .map(ivec_to_string)
-            .filter_map(Result::ok)
-            .filter(|key| {
-                key.starts_with(prefix) && (suffix.is_none() || key.ends_with(suffix.unwrap()))
-            })
-            .collect())
+        let iter = self.db.iterator(IteratorMode::Start);
+
+        let mut keys: Vec<String> = vec![];
+        for item in iter {
+            let (key, _) =
+                item.map_err(|e| MutinyError::Other(anyhow!("Error reading keys from db: {e}")))?;
+            let key = String::from_utf8(key.into_vec())?;
+            if key.starts_with(prefix) && (suffix.is_none() || key.ends_with(suffix.unwrap())) {
+                keys.push(key);
+            }
+        }
+        Ok(keys)
     }
 
     fn change_password(
