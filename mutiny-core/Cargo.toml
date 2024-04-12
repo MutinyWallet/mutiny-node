@@ -48,7 +48,7 @@ payjoin = { version = "0.13.0", features = ["send", "base64"] }
 bincode = "1.3.3"
 hex-conservative = "0.1.1"
 async-lock = "3.2.0"
-bitcoin-waila = { git = "https://github.com/mutinywallet/bitcoin-waila", rev = "a99b4c8d949661e775593354f8afbefa80aeb44a" }
+bitcoin-waila = "0.5.0"
 
 fedimint-client = "0.3.0"
 fedimint-core = "0.3.0"

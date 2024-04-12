@@ -443,8 +443,9 @@ checksum = "73290177011694f38ec25e165d0387ab7ea749a4b81cd4c80dae5988229f7a57"
 
 [[package]]
 name = "bitcoin-waila"
-version = "0.4.1"
-source = "git+https://github.com/mutinywallet/bitcoin-waila?rev=a99b4c8d949661e775593354f8afbefa80aeb44a#a99b4c8d949661e775593354f8afbefa80aeb44a"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0360146aaf278fbef5f34b7c83ff889cb5b43742af261bf0ee75b653ad1e495d"
 dependencies = [
  "bip21",
  "bitcoin 0.30.2",

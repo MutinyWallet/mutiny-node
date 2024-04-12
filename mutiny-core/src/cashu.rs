@@ -26,11 +26,8 @@ impl CashuHttpClient {
         url: &Url,
         melt_quote_request: PostMeltQuoteBolt11Request,
     ) -> Result<PostMeltQuoteBolt11Response, MutinyError> {
-        self.mint_post(
-            &url.join("/v1/melt/quote/bolt11")?,
-            json!(melt_quote_request),
-        )
-        .await
+        let url = format!("{url}/v1/melt/quote/bolt11");
+        self.mint_post(url, json!(melt_quote_request)).await
     }
 
     pub async fn post_melt_bolt11(
@@ -38,18 +35,18 @@ impl CashuHttpClient {
         url: &Url,
         melt_request: PostMeltBolt11Request,
     ) -> Result<PostMeltBolt11Response, MutinyError> {
-        self.mint_post(&url.join("/v1/melt/bolt11")?, json!(melt_request))
-            .await
+        let url = format!("{url}/v1/melt/bolt11");
+        self.mint_post(url, json!(melt_request)).await
     }
 
     async fn mint_post<T: serde::de::DeserializeOwned>(
         &self,
-        url: &Url,
+        url: String,
         body: Value,
     ) -> Result<T, MutinyError> {
         let res = self
             .client
-            .post(url.clone())
+            .post(url)
             .header("Content-Type", "application/json")
             .body(body.to_string())
             .send()

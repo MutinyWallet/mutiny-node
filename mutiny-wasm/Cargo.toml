@@ -47,7 +47,7 @@ payjoin = { version = "0.13.0", features = ["send", "base64"] }
 fedimint-core = "0.3.0"
 moksha-core = "0.2.1"
 
-bitcoin-waila = { git = "https://github.com/mutinywallet/bitcoin-waila", rev = "a99b4c8d949661e775593354f8afbefa80aeb44a" }
+bitcoin-waila = "0.5.0"
 
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires
