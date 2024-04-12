@@ -1078,7 +1078,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             #[cfg(target_arch = "wasm32")]
             NostrSigner::NIP07(_) => None,
         };
-        mw.start_hermes(profile_key)?;
+        mw.start_hermes(profile_key).await?;
 
         log_info!(
             mw.logger,
@@ -2399,6 +2399,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             self.logger.clone(),
             self.federation_storage.clone(),
             self.federations.clone(),
+            self.hermes_client.clone(),
             federation_code,
         )
         .await
@@ -2449,6 +2450,16 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             }
         } else {
             return Err(MutinyError::NotFound);
+        }
+
+        // remove the federation from hermes
+        if let Some(h) = self.hermes_client.as_ref() {
+            match h.disable_zaps().await {
+                Ok(_) => (),
+                Err(e) => {
+                    log_error!(self.logger, "could not disable hermes zaps: {e}")
+                }
+            }
         }
 
         Ok(())
@@ -2853,9 +2864,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Starts up the hermes client if available
-    pub fn start_hermes(&self, profile_key: Option<Keys>) -> Result<(), MutinyError> {
+    pub async fn start_hermes(&self, profile_key: Option<Keys>) -> Result<(), MutinyError> {
         if let Some(hermes_client) = self.hermes_client.as_ref() {
-            hermes_client.start(profile_key)?
+            hermes_client.start(profile_key).await?
         }
         Ok(())
     }
@@ -2966,6 +2977,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     logger: Arc<MutinyLogger>,
     federation_storage: Arc<RwLock<FederationStorage>>,
     federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>,
+    hermes_client: Option<Arc<HermesClient<S>>>,
     federation_code: InviteCode,
 ) -> Result<FederationIdentity, MutinyError> {
     // Begin with a mutex lock so that nothing else can
@@ -3018,7 +3030,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         .await
         .insert(federation_id, Arc::new(new_federation));
 
-    Ok(FederationIdentity {
+    let new_federation_identity = FederationIdentity {
         uuid: next_federation_uuid.clone(),
         federation_id,
         invite_code: federation_code,
@@ -3026,7 +3038,22 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         federation_expiry_timestamp,
         welcome_message,
         gateway_fees,
-    })
+    };
+
+    // change the federation with hermes, if available
+    if let Some(h) = hermes_client {
+        match h
+            .change_federation_info(new_federation_identity.clone())
+            .await
+        {
+            Ok(_) => (),
+            Err(e) => {
+                log_error!(logger, "could not change hermes federation: {e}")
+            }
+        }
+    }
+
+    Ok(new_federation_identity)
 }
 
 #[derive(Deserialize)]
