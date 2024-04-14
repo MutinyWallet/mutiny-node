@@ -1617,6 +1617,7 @@ impl<S: MutinyStorage> Node<S> {
         message: Option<String>,
         labels: Vec<String>,
         payment_id: PaymentId,
+        preimage: Option<[u8; 32]>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let amt_msats = amt_sats * 1_000;
 
@@ -1655,9 +1656,15 @@ impl<S: MutinyStorage> Node<S> {
         getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
         let payment_secret = PaymentSecret(entropy);
 
-        let mut entropy = [0u8; 32];
-        getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
-        let preimage = PaymentPreimage(entropy);
+        let preimage = match preimage {
+            Some(value) => PaymentPreimage(value),
+            None => {
+                let mut entropy = [0u8; 32];
+                getrandom::getrandom(&mut entropy)
+                    .map_err(|_| MutinyError::SeedGenerationFailed)?;
+                PaymentPreimage(entropy)
+            }
+        };
 
         let payment_params = PaymentParameters::for_keysend(to_node, 40, false);
         let route_params: RouteParameters = RouteParameters {
@@ -1735,6 +1742,7 @@ impl<S: MutinyStorage> Node<S> {
         message: Option<String>,
         labels: Vec<String>,
         timeout_secs: Option<u64>,
+        preimage: Option<[u8; 32]>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let mut entropy = [0u8; 32];
         getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
@@ -1742,7 +1750,14 @@ impl<S: MutinyStorage> Node<S> {
 
         // initiate payment
         let pay = self
-            .init_keysend_payment(to_node, amt_sats, message, labels.clone(), payment_id)
+            .init_keysend_payment(
+                to_node,
+                amt_sats,
+                message,
+                labels.clone(),
+                payment_id,
+                preimage,
+            )
             .await?;
 
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);

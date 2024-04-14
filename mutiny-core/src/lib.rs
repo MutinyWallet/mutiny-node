@@ -156,6 +156,15 @@ pub trait InvoiceHandler {
         amount: u64,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError>;
+
+    async fn keysend(
+        &self,
+        to_node: PublicKey,
+        amt_sats: u64,
+        message: Option<String>,
+        labels: Vec<String>,
+        preimage: Option<[u8; 32]>,
+    ) -> Result<MutinyInvoice, MutinyError>;
 }
 
 pub struct LnUrlParams {
@@ -1264,16 +1273,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                     if event.verify().is_ok() {
                                         match event.kind {
                                             Kind::WalletConnectRequest => {
-                                                match nostr.handle_nwc_request(*event, &self_clone).await {
-                                                    Ok(Some(event)) => {
-                                                        if let Err(e) = client.send_event(event).await {
-                                                            log_warn!(logger, "Error sending NWC event: {e}");
-                                                        }
-                                                    }
-                                                    Ok(None) => {} // no response
-                                                    Err(e) => {
-                                                        log_error!(logger, "Error handling NWC request: {e}");
-                                                    }
+                                                if let Err(e) = nostr.handle_nwc_request(*event, &self_clone).await {
+                                                    log_error!(logger, "Error handling NWC request: {e}")
                                                 }
                                             }
                                             Kind::EncryptedDirectMessage => {
@@ -3118,6 +3119,19 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
         self.create_lightning_invoice(amount, labels).await
+    }
+
+    async fn keysend(
+        &self,
+        to_node: PublicKey,
+        amt_sats: u64,
+        message: Option<String>,
+        labels: Vec<String>,
+        preimage: Option<[u8; 32]>,
+    ) -> Result<MutinyInvoice, MutinyError> {
+        self.node_manager
+            .keysend(None, to_node, amt_sats, message, labels, preimage)
+            .await
     }
 }
 

@@ -1531,7 +1531,7 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
         &self,
         event: Event,
         invoice_handler: &impl InvoiceHandler,
-    ) -> anyhow::Result<Option<Event>> {
+    ) -> anyhow::Result<()> {
         let nwc = {
             let vec = self.nwc.read().unwrap();
             vec.iter()
@@ -1541,12 +1541,11 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
 
         self.storage.set_nwc_sync_time(event.created_at.as_u64())?;
 
+        // TODO: handle nwc response here
         if let Some(mut nwc) = nwc {
-            let event = nwc.handle_nwc_request(event, invoice_handler, self).await?;
-            Ok(event)
-        } else {
-            Ok(None)
+            nwc.handle_nwc_request(event, invoice_handler, self).await?;
         }
+        Ok(())
     }
 
     pub(crate) fn save_nwc_profile(&self, nwc: NostrWalletConnect) -> Result<(), MutinyError> {

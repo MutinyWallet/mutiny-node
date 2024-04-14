@@ -857,7 +857,7 @@ impl MutinyWallet {
         Ok(self
             .inner
             .node_manager
-            .keysend(None, to_node, amt_sats, message, labels)
+            .keysend(None, to_node, amt_sats, message, labels, None)
             .await?
             .into())
     }
@@ -1556,10 +1556,14 @@ impl MutinyWallet {
         let commands = match commands {
             None => vec![
                 Method::PayInvoice,
+                Method::MultiPayInvoice,
                 Method::GetInfo,
                 Method::GetBalance,
                 Method::LookupInvoice,
                 Method::MakeInvoice,
+                Method::ListTransactions,
+                Method::PayKeysend,
+                Method::MultiPayKeysend,
             ],
             Some(strs) => strs
                 .into_iter()
@@ -1593,10 +1597,14 @@ impl MutinyWallet {
         let commands = match commands {
             None => vec![
                 Method::PayInvoice,
+                Method::MultiPayInvoice,
                 Method::GetInfo,
                 Method::GetBalance,
                 Method::LookupInvoice,
                 Method::MakeInvoice,
+                Method::ListTransactions,
+                Method::PayKeysend,
+                Method::MultiPayKeysend,
             ],
             Some(strs) => strs
                 .into_iter()

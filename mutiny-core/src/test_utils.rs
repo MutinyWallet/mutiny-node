@@ -50,6 +50,49 @@ pub fn create_nwc_request(nwc: &NostrWalletConnectURI, invoice: String) -> Event
     sign_nwc_request(nwc, req)
 }
 
+pub fn create_multi_invoice_nwc_request(
+    nwc: &NostrWalletConnectURI,
+    invoices: Vec<String>,
+) -> Event {
+    let mut invoices_param = Vec::with_capacity(invoices.len());
+    for invoice in invoices {
+        let invoice_param = PayInvoiceRequestParams {
+            id: Some(invoice.clone()),
+            invoice,
+            amount: None,
+        };
+        invoices_param.push(invoice_param);
+    }
+
+    let req = Request {
+        method: Method::MultiPayInvoice,
+        params: RequestParams::MultiPayInvoice(MultiPayInvoiceRequestParams {
+            invoices: invoices_param,
+        }),
+    };
+
+    sign_nwc_request(nwc, req)
+}
+
+pub fn create_pay_keysend_nwc_request(
+    nwc: &NostrWalletConnectURI,
+    amount_msat: u64,
+    pubkey: String,
+) -> Event {
+    let req = Request {
+        method: Method::PayKeysend,
+        params: RequestParams::PayKeysend(PayKeysendRequestParams {
+            id: None,
+            amount: amount_msat,
+            pubkey,
+            preimage: None,
+            tlv_records: vec![],
+        }),
+    };
+
+    sign_nwc_request(nwc, req)
+}
+
 pub fn sign_nwc_request(nwc: &NostrWalletConnectURI, req: Request) -> Event {
     let encrypted = encrypt(&nwc.secret, &nwc.public_key, req.as_json()).unwrap();
     let p_tag = Tag::PublicKey {

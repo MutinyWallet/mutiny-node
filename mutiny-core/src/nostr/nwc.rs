@@ -10,14 +10,17 @@ use crate::InvoiceHandler;
 use anyhow::anyhow;
 use bitcoin::bip32::ExtendedPrivKey;
 use bitcoin::hashes::hex::FromHex;
-use bitcoin::secp256k1::{Secp256k1, Signing, ThirtyTwoByteHash};
+use bitcoin::hashes::sha256::Hash as Sha256;
+use bitcoin::hashes::Hash;
+use bitcoin::secp256k1::{PublicKey, Secp256k1, Signing, ThirtyTwoByteHash};
 use bitcoin::Network;
 use chrono::{DateTime, Datelike, Duration, NaiveDateTime, Utc};
 use core::fmt;
 use hex_conservative::DisplayHex;
 use itertools::Itertools;
+use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::util::logger::Logger;
-use lightning::{log_error, log_warn};
+use lightning::{log_error, log_info, log_warn};
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use nostr::nips::nip04::{decrypt, encrypt};
 use nostr::nips::nip47::*;
@@ -73,20 +76,14 @@ pub struct BudgetedSpendingConditions {
 }
 
 impl BudgetedSpendingConditions {
-    pub fn add_payment(&mut self, invoice: &Bolt11Invoice) {
+    pub fn add_payment(&mut self, payment: &mut TrackedPayment) {
         let time = utils::now().as_secs();
-        let payment = TrackedPayment {
-            time,
-            amt: invoice.amount_milli_satoshis().unwrap_or_default() / 1_000,
-            hash: invoice.payment_hash().into_32().to_lower_hex_string(),
-        };
-
-        self.payments.push(payment);
+        payment.time = time;
+        self.payments.push(payment.clone());
     }
 
-    pub fn remove_payment(&mut self, invoice: &Bolt11Invoice) {
-        let hex = invoice.payment_hash().into_32().to_lower_hex_string();
-        self.payments.retain(|p| p.hash != hex);
+    pub fn remove_payment(&mut self, payment: &TrackedPayment) {
+        self.payments.retain(|p| p.hash != payment.hash);
     }
 
     fn clean_old_payments(&mut self, now: DateTime<Utc>) {
@@ -141,6 +138,12 @@ impl Default for SpendingConditions {
     fn default() -> Self {
         Self::RequireApproval
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NwcResponse {
+    SingleEvent(Event),
+    MultiEvent(Vec<Event>),
 }
 
 /// Type of Nostr Wallet Connect profile
@@ -408,6 +411,32 @@ impl NostrWalletConnect {
         Ok(response)
     }
 
+    fn build_nwc_response_event(
+        &self,
+        event: Event,
+        content: Response,
+        id: Option<String>,
+    ) -> anyhow::Result<Event> {
+        let encrypted = encrypt(
+            self.server_key.secret_key()?,
+            &self.client_key.public_key(),
+            content.as_json(),
+        )?;
+
+        let p_tag = Tag::public_key(event.pubkey);
+        let e_tag = Tag::event(event.id);
+
+        let tags = match id {
+            Some(id) => vec![p_tag, e_tag, Tag::Identifier(id)],
+            None => vec![p_tag, e_tag],
+        };
+
+        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, tags)
+            .to_event(&self.server_key)?;
+
+        Ok(response)
+    }
+
     /// Handle a Nostr Wallet Connect request
     ///
     /// Returns a response event if one is needed
@@ -416,7 +445,7 @@ impl NostrWalletConnect {
         event: Event,
         node: &impl InvoiceHandler,
         nostr_manager: &NostrManager<S, P, C>,
-    ) -> anyhow::Result<Option<Event>> {
+    ) -> anyhow::Result<Option<NwcResponse>> {
         let client_pubkey = self.client_key.public_key();
         let mut needs_save = false;
         let mut needs_delete = false;
@@ -432,39 +461,46 @@ impl NostrWalletConnect {
                         nostr_manager.logger,
                         "Failed to parse request: {e}, skipping..."
                     );
-                    return self
-                        .get_skipped_error_event(
-                            &event,
-                            Method::PayInvoice, // most likely it's a pay invoice request
-                            ErrorCode::NotImplemented,
-                            "Failed to parse request.".to_string(),
-                        )
-                        .map(Some);
+                    let error_event = self.get_skipped_error_event(
+                        &event,
+                        Method::PayInvoice, // most likely it's a pay invoice request
+                        ErrorCode::NotImplemented,
+                        "Failed to parse request.".to_string(),
+                    )?;
+                    if let Err(e) = nostr_manager.client.send_event(error_event.clone()).await {
+                        return Err(anyhow!("Error sending NWC event: {}", e));
+                    }
+                    return Ok(Some(NwcResponse::SingleEvent(error_event)));
                 }
             };
 
             // only respond to commands sent to active profiles
             if !self.profile.active() {
-                return self
+                let error_event = self
                     .get_skipped_error_event(
                         &event,
                         req.method,
                         ErrorCode::Other,
                         "Nostr profile inactive".to_string(),
-                    )
-                    .map(Some);
+                    )?;
+                if let Err(e) = nostr_manager.client.send_event(error_event.clone()).await {
+                    return Err(anyhow!("Error sending NWC event: {}", e));
+                }
+                return Ok(Some(NwcResponse::SingleEvent(error_event)));
             }
 
             // only respond to commands that are allowed by the profile
             if !self.profile.available_commands().contains(&req.method) {
-                return self
-                    .get_skipped_error_event(
-                        &event,
-                        req.method,
-                        ErrorCode::NotImplemented,
-                        "Command is not supported.".to_string(),
-                    )
-                    .map(Some);
+                let error_event = self.get_skipped_error_event(
+                    &event,
+                    req.method,
+                    ErrorCode::NotImplemented,
+                    "Command is not supported.".to_string(),
+                )?;
+                if let Err(e) = nostr_manager.client.send_event(error_event.clone()).await {
+                    return Err(anyhow!("Error sending NWC event: {}", e));
+                }
+                return Ok(Some(NwcResponse::SingleEvent(error_event)));
             }
 
             result = match req.params {
@@ -480,15 +516,41 @@ impl NostrWalletConnect {
                     .await?
                 }
                 RequestParams::MakeInvoice(params) => {
-                    self.handle_make_invoice_request(event, node, params)
+                    self.handle_make_invoice_request(event, node, nostr_manager, params)
                         .await?
                 }
                 RequestParams::LookupInvoice(params) => {
-                    self.handle_lookup_invoice_request(event, node, params)
+                    self.handle_lookup_invoice_request(event, node, nostr_manager, params)
                         .await?
                 }
-                RequestParams::GetBalance => self.handle_get_balance_request(event).await?,
-                RequestParams::GetInfo => self.handle_get_info_request(event, node).await?,
+                RequestParams::GetBalance => {
+                    self.handle_get_balance_request(event, nostr_manager)
+                        .await?
+                }
+                RequestParams::GetInfo => {
+                    self.handle_get_info_request(event, node, nostr_manager)
+                        .await?
+                }
+                RequestParams::MultiPayInvoice(params) => {
+                    self.handle_multi_pay_invoice_request(
+                        event,
+                        node,
+                        nostr_manager,
+                        params,
+                        &mut needs_delete,
+                        &mut needs_save,
+                    )
+                    .await?
+                }
+                RequestParams::PayKeysend(params) => {
+                    self.handle_pay_keysend_request(event, node, nostr_manager, params)
+                        .await?
+                }
+                RequestParams::MultiPayKeysend(params) => {
+                    self.handle_multi_pay_keysend_request(event, node, nostr_manager, params)
+                        .await?
+                }
+                // TODO: list_transactions
                 _ => return Err(anyhow!("Invalid request params for {}", req.method)),
             };
         }
@@ -502,11 +564,12 @@ impl NostrWalletConnect {
         Ok(result)
     }
 
-    async fn handle_get_info_request(
+    async fn handle_get_info_request<S: MutinyStorage, P: PrimalApi, C: NostrClient>(
         &self,
         event: Event,
         node: &impl InvoiceHandler,
-    ) -> anyhow::Result<Option<Event>> {
+        nostr_manager: &NostrManager<S, P, C>,
+    ) -> anyhow::Result<Option<NwcResponse>> {
         let network = match node.get_network() {
             Network::Bitcoin => "mainnet",
             Network::Testnet => "testnet",
@@ -538,21 +601,22 @@ impl NostrWalletConnect {
             })),
         };
 
-        let encrypted = encrypt(
-            self.server_key.secret_key()?,
-            &self.client_key.public_key(),
-            content.as_json(),
-        )?;
-
-        let p_tag = Tag::public_key(event.pubkey);
-        let e_tag = Tag::event(event.id);
-        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
-            .to_event(&self.server_key)?;
-
-        Ok(Some(response))
+        let response_event = self.build_nwc_response_event(event, content, None)?;
+        if let Err(e) = nostr_manager
+            .client
+            .send_event(response_event.clone())
+            .await
+        {
+            return Err(anyhow!("Error sending NWC event: {}", e));
+        }
+        Ok(Some(NwcResponse::SingleEvent(response_event)))
     }
 
-    async fn handle_get_balance_request(&self, event: Event) -> anyhow::Result<Option<Event>> {
+    async fn handle_get_balance_request<S: MutinyStorage, P: PrimalApi, C: NostrClient>(
+        &mut self,
+        event: Event,
+        nostr_manager: &NostrManager<S, P, C>,
+    ) -> anyhow::Result<Option<NwcResponse>> {
         // Just return our current budget amount, don't leak our actual wallet balance
         let balance_sats = match &self.profile.spending_conditions {
             SpendingConditions::SingleUse(single_use) => {
@@ -574,26 +638,24 @@ impl NostrWalletConnect {
             })),
         };
 
-        let encrypted = encrypt(
-            self.server_key.secret_key()?,
-            &self.client_key.public_key(),
-            content.as_json(),
-        )?;
-
-        let p_tag = Tag::public_key(event.pubkey);
-        let e_tag = Tag::event(event.id);
-        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
-            .to_event(&self.server_key)?;
-
-        Ok(Some(response))
+        let response_event = self.build_nwc_response_event(event, content, None)?;
+        if let Err(e) = nostr_manager
+            .client
+            .send_event(response_event.clone())
+            .await
+        {
+            return Err(anyhow!("Error sending NWC event: {}", e));
+        }
+        Ok(Some(NwcResponse::SingleEvent(response_event)))
     }
 
-    async fn handle_make_invoice_request(
+    async fn handle_make_invoice_request<S: MutinyStorage, P: PrimalApi, C: NostrClient>(
         &mut self,
         event: Event,
         node: &impl InvoiceHandler,
+        nostr_manager: &NostrManager<S, P, C>,
         params: MakeInvoiceRequestParams,
-    ) -> anyhow::Result<Option<Event>> {
+    ) -> anyhow::Result<Option<NwcResponse>> {
         // FIXME currently we are ignoring the description and expiry params
         let amount_sats = params.amount / 1_000;
 
@@ -603,7 +665,7 @@ impl NostrWalletConnect {
             .clone()
             .unwrap_or(self.profile.name.clone());
 
-        let response = match node.create_invoice(amount_sats, vec![label]).await {
+        let response_event = match node.create_invoice(amount_sats, vec![label]).await {
             Err(e) => self.get_skipped_error_event(
                 &event,
                 Method::MakeInvoice,
@@ -622,28 +684,27 @@ impl NostrWalletConnect {
                     })),
                 };
 
-                let encrypted = encrypt(
-                    self.server_key.secret_key()?,
-                    &self.client_key.public_key(),
-                    content.as_json(),
-                )?;
-
-                let p_tag = Tag::public_key(event.pubkey);
-                let e_tag = Tag::event(event.id);
-                EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
-                    .to_event(&self.server_key)?
+                self.build_nwc_response_event(event, content, None)?
             }
         };
 
-        Ok(Some(response))
+        if let Err(e) = nostr_manager
+            .client
+            .send_event(response_event.clone())
+            .await
+        {
+            return Err(anyhow!("Error sending NWC event: {}", e));
+        }
+        Ok(Some(NwcResponse::SingleEvent(response_event)))
     }
 
-    async fn handle_lookup_invoice_request(
+    async fn handle_lookup_invoice_request<S: MutinyStorage, P: PrimalApi, C: NostrClient>(
         &mut self,
         event: Event,
         node: &impl InvoiceHandler,
+        nostr_manager: &NostrManager<S, P, C>,
         params: LookupInvoiceRequestParams,
-    ) -> anyhow::Result<Option<Event>> {
+    ) -> anyhow::Result<Option<NwcResponse>> {
         let invoice = match params.payment_hash {
             Some(payment_hash) => {
                 let hash: [u8; 32] = FromHex::from_hex(&payment_hash)
@@ -728,21 +789,72 @@ impl NostrWalletConnect {
             }
         };
 
-        let encrypted = encrypt(
-            self.server_key.secret_key()?,
-            &self.client_key.public_key(),
-            content.as_json(),
-        )?;
-
-        let p_tag = Tag::public_key(event.pubkey);
-        let e_tag = Tag::event(event.id);
-        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
-            .to_event(&self.server_key)?;
-
-        Ok(Some(response))
+        let response_event = self.build_nwc_response_event(event, content, None)?;
+        if let Err(e) = nostr_manager
+            .client
+            .send_event(response_event.clone())
+            .await
+        {
+            return Err(anyhow!("Error sending NWC event: {}", e));
+        }
+        Ok(Some(NwcResponse::SingleEvent(response_event)))
     }
 
-    async fn handle_pay_invoice_request<S: MutinyStorage, P: PrimalApi, C: NostrClient>(
+    async fn check_payment_within_budget(
+        &mut self,
+        node: &impl InvoiceHandler,
+        budget: &mut BudgetedSpendingConditions,
+        payment_amount_sats: u64,
+    ) -> Result<(), String> {
+        if budget
+            .single_max
+            .is_some_and(|max| payment_amount_sats > max)
+        {
+            Err("Payment amount too high".to_string())
+        } else if budget.sum_payments() + payment_amount_sats > budget.budget {
+            // budget might not actually be exceeded, we should verify that the payments
+            // all went through, and if not, remove them from the budget
+            let mut indices_to_remove = Vec::new();
+            for (index, p) in budget.payments.iter().enumerate() {
+                let hash: [u8; 32] = match FromHex::from_hex(&p.hash) {
+                    Ok(hash) => hash,
+                    Err(e) => return Err(format!("invalid hash: {}", e)),
+                };
+                indices_to_remove.push((index, hash));
+            }
+
+            let futures: Vec<_> = indices_to_remove
+                .iter()
+                .map(|(index, hash)| async move {
+                    match node.lookup_payment(hash).await.map(|i| i.status) {
+                        Some(HTLCStatus::Failed) => Some(*index),
+                        _ => None,
+                    }
+                })
+                .collect();
+
+            let results = futures::future::join_all(futures).await;
+
+            // Remove failed payments
+            for index in results.into_iter().flatten().rev() {
+                budget.payments.remove(index);
+            }
+
+            // update budget with removed payments
+            self.profile.spending_conditions = SpendingConditions::Budget(budget.clone());
+
+            // try again with cleaned budget
+            if budget.sum_payments() + payment_amount_sats > budget.budget {
+                Err("Budget exceeded.".to_string())
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn handle_nwc_invoice_payment<S: MutinyStorage, P: PrimalApi, C: NostrClient>(
         &mut self,
         event: Event,
         node: &impl InvoiceHandler,
@@ -750,23 +862,24 @@ impl NostrWalletConnect {
         params: PayInvoiceRequestParams,
         needs_delete: &mut bool,
         needs_save: &mut bool,
+        is_multi_pay: bool,
     ) -> anyhow::Result<Option<Event>> {
+        let method = if is_multi_pay {
+            Method::MultiPayInvoice
+        } else {
+            Method::PayInvoice
+        };
+
         let invoice: Bolt11Invoice = match check_valid_nwc_invoice(&params, node).await {
             Ok(Some(invoice)) => invoice,
             Ok(None) => return Ok(None),
             Err(err_string) => {
                 return self
-                    .get_skipped_error_event(
-                        &event,
-                        Method::PayInvoice,
-                        ErrorCode::Other,
-                        err_string,
-                    )
+                    .get_skipped_error_event(&event, method, ErrorCode::Other, err_string)
                     .map(Some);
             }
         };
 
-        // if we need approval, just save in the db for later
         match self.profile.spending_conditions.clone() {
             SpendingConditions::SingleUse(mut single_use) => {
                 let msats = invoice.amount_milli_satoshis().unwrap();
@@ -786,7 +899,7 @@ impl NostrWalletConnect {
                     Some(HTLCStatus::Succeeded) => {
                         *needs_delete = true;
                         Response {
-                            result_type: Method::PayInvoice,
+                            result_type: method,
                             error: Some(NIP47Error {
                                 code: ErrorCode::QuotaExceeded,
                                 message: "Already Claimed".to_string(),
@@ -833,7 +946,7 @@ impl NostrWalletConnect {
                                         .await?
                                     }
                                     Response {
-                                        result_type: Method::PayInvoice,
+                                        result_type: method,
                                         error: Some(NIP47Error {
                                             code,
                                             message: format!("Failed to pay invoice: {e}"),
@@ -849,7 +962,7 @@ impl NostrWalletConnect {
                             );
 
                             Response {
-                                result_type: Method::PayInvoice,
+                                result_type: method,
                                 error: Some(NIP47Error {
                                     code: ErrorCode::QuotaExceeded,
                                     message: format!("Invoice amount too high: {msats} msats"),
@@ -865,7 +978,7 @@ impl NostrWalletConnect {
                         );
 
                         Response {
-                            result_type: Method::PayInvoice,
+                            result_type: method,
                             error: Some(NIP47Error {
                                 code: ErrorCode::RateLimited,
                                 message: "Previous payment still in flight, cannot pay".to_string(),
@@ -875,30 +988,16 @@ impl NostrWalletConnect {
                     }
                 };
 
-                let encrypted = encrypt(
-                    self.server_key.secret_key()?,
-                    &self.client_key.public_key(),
-                    content.as_json(),
-                )?;
-
-                let p_tag = Tag::public_key(event.pubkey);
-                let e_tag = Tag::event(event.id);
-                let tags = match params.id {
-                    Some(id) => vec![p_tag, e_tag, Tag::Identifier(id)],
-                    None => vec![p_tag, e_tag],
-                };
-
-                let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, tags)
-                    .to_event(&self.server_key)?;
-
                 if *needs_delete {
                     nostr_manager.delete_nwc_profile(self.profile.index)?;
                 } else if *needs_save {
                     nostr_manager.save_nwc_profile(self.clone())?;
                 }
 
-                Ok(Some(response))
+                let response_event = self.build_nwc_response_event(event, content, params.id)?;
+                Ok(Some(response_event))
             }
+            // if we need approval, just save in the db for later
             SpendingConditions::RequireApproval => {
                 self.save_pending_nwc_invoice(
                     nostr_manager,
@@ -912,55 +1011,16 @@ impl NostrWalletConnect {
                 if *needs_save {
                     nostr_manager.save_nwc_profile(self.clone())?;
                 }
-
                 Ok(None)
             }
             SpendingConditions::Budget(mut budget) => {
                 let sats = invoice.amount_milli_satoshis().unwrap() / 1_000;
 
-                let budget_err = if budget.single_max.is_some_and(|max| sats > max) {
-                    Some("Invoice amount too high.")
-                } else if budget.sum_payments() + sats > budget.budget {
-                    // budget might not actually be exceeded, we should verify that the payments
-                    // all went through, and if not, remove them from the budget
-                    let mut indices_to_remove = Vec::new();
-                    for (index, p) in budget.payments.iter().enumerate() {
-                        let hash: [u8; 32] = FromHex::from_hex(&p.hash)?;
-                        indices_to_remove.push((index, hash));
-                    }
-
-                    let futures: Vec<_> = indices_to_remove
-                        .iter()
-                        .map(|(index, hash)| async move {
-                            match node.lookup_payment(hash).await.map(|i| i.status) {
-                                Some(HTLCStatus::Failed) => Some(*index),
-                                _ => None,
-                            }
-                        })
-                        .collect();
-
-                    let results = futures::future::join_all(futures).await;
-
-                    // Remove failed payments
-                    for index in results.into_iter().flatten().rev() {
-                        budget.payments.remove(index);
-                    }
-
-                    // update budget with removed payments
-                    self.profile.spending_conditions = SpendingConditions::Budget(budget.clone());
-
-                    // try again with cleaned budget
-                    if budget.sum_payments() + sats > budget.budget {
-                        Some("Budget exceeded.")
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                let content = match budget_err {
-                    Some(err) => {
+                let content = match self
+                    .check_payment_within_budget(node, &mut budget, sats)
+                    .await
+                {
+                    Err(err) => {
                         log_warn!(nostr_manager.logger, "Attempted to exceed budget: {err}");
                         // add to manual approval list
                         self.save_pending_nwc_invoice(
@@ -972,17 +1032,22 @@ impl NostrWalletConnect {
                         )
                         .await?;
                         Response {
-                            result_type: Method::PayInvoice,
+                            result_type: method,
                             error: Some(NIP47Error {
                                 code: ErrorCode::QuotaExceeded,
-                                message: err.to_string(),
+                                message: err,
                             }),
                             result: None,
                         }
                     }
-                    None => {
+                    Ok(_) => {
+                        let mut payment = TrackedPayment {
+                            time: utils::now().as_secs(),
+                            amt: sats,
+                            hash: invoice.payment_hash().to_string(),
+                        };
                         // add payment to budget
-                        budget.add_payment(&invoice);
+                        budget.add_payment(&mut payment);
                         self.profile.spending_conditions =
                             SpendingConditions::Budget(budget.clone());
                         // persist budget before payment to protect against it not saving after
@@ -1005,7 +1070,7 @@ impl NostrWalletConnect {
                                             nostr_manager.logger,
                                             "Already paid invoice, removing payment from budget"
                                         );
-                                        budget.remove_payment(&invoice);
+                                        budget.remove_payment(&payment);
                                         self.profile.spending_conditions =
                                             SpendingConditions::Budget(budget);
 
@@ -1020,7 +1085,7 @@ impl NostrWalletConnect {
                                                 "Failed to pay invoice: {e}, removing payment from budget, adding to manual approval list"
                                             );
 
-                                        budget.remove_payment(&invoice);
+                                        budget.remove_payment(&payment);
                                         self.profile.spending_conditions =
                                             SpendingConditions::Budget(budget.clone());
 
@@ -1039,7 +1104,7 @@ impl NostrWalletConnect {
                                 }
 
                                 Response {
-                                    result_type: Method::PayInvoice,
+                                    result_type: method,
                                     error: Some(NIP47Error {
                                         code: ErrorCode::InsufficientBalance,
                                         message: format!("Failed to pay invoice: {e}"),
@@ -1051,25 +1116,310 @@ impl NostrWalletConnect {
                     }
                 };
 
-                let encrypted = encrypt(
-                    self.server_key.secret_key()?,
-                    &self.client_key.public_key(),
-                    content.as_json(),
-                )?;
+                let response_event = self.build_nwc_response_event(event, content, params.id)?;
+                Ok(Some(response_event))
+            }
+        }
+    }
 
-                let p_tag = Tag::public_key(event.pubkey);
-                let e_tag = Tag::event(event.id);
+    async fn handle_pay_invoice_request<S: MutinyStorage, P: PrimalApi, C: NostrClient>(
+        &mut self,
+        event: Event,
+        node: &impl InvoiceHandler,
+        nostr_manager: &NostrManager<S, P, C>,
+        params: PayInvoiceRequestParams,
+        needs_delete: &mut bool,
+        needs_save: &mut bool,
+    ) -> anyhow::Result<Option<NwcResponse>> {
+        match self
+            .handle_nwc_invoice_payment(
+                event.clone(),
+                node,
+                nostr_manager,
+                params.clone(),
+                needs_delete,
+                needs_save,
+                false,
+            )
+            .await
+        {
+            Ok(Some(response_event)) => {
+                if let Err(e) = nostr_manager
+                    .client
+                    .send_event(response_event.clone())
+                    .await
+                {
+                    return Err(anyhow!("Error sending NWC event: {}", e));
+                }
+                Ok(Some(NwcResponse::SingleEvent(response_event)))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(anyhow!("error handling pay_invoice_request: {}", e)),
+        }
+    }
 
-                let tags = match params.id {
-                    Some(id) => vec![p_tag, e_tag, Tag::Identifier(id)],
-                    None => vec![p_tag, e_tag],
+    async fn handle_multi_pay_invoice_request<S: MutinyStorage, P: PrimalApi, C: NostrClient>(
+        &mut self,
+        event: Event,
+        node: &impl InvoiceHandler,
+        nostr_manager: &NostrManager<S, P, C>,
+        params: MultiPayInvoiceRequestParams,
+        needs_delete: &mut bool,
+        needs_save: &mut bool,
+    ) -> anyhow::Result<Option<NwcResponse>> {
+        let mut response_events: Vec<Event> = Vec::with_capacity(params.invoices.len());
+
+        for param in params.invoices {
+            match self
+                .handle_nwc_invoice_payment(
+                    event.clone(),
+                    node,
+                    nostr_manager,
+                    param.clone(),
+                    needs_delete,
+                    needs_save,
+                    true,
+                )
+                .await
+            {
+                Ok(Some(response_event)) => {
+                    if let Err(e) = nostr_manager
+                        .client
+                        .send_event(response_event.clone())
+                        .await
+                    {
+                        log_error!(
+                            nostr_manager.logger,
+                            "Error sending multi_pay_invoice nwc response event: {}",
+                            e
+                        )
+                    } else {
+                        response_events.push(response_event);
+                    }
+                }
+                Ok(None) => continue,
+                Err(e) => {
+                    log_error!(
+                        nostr_manager.logger,
+                        "Error handling multi_pay_invoice request: {}",
+                        e
+                    )
+                }
+            }
+        }
+
+        if response_events.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(NwcResponse::MultiEvent(response_events)))
+        }
+    }
+
+    async fn handle_nwc_keysend_payment<S: MutinyStorage, P: PrimalApi, C: NostrClient>(
+        &mut self,
+        event: Event,
+        node: &impl InvoiceHandler,
+        nostr_manager: &NostrManager<S, P, C>,
+        params: PayKeysendRequestParams,
+        is_multi_keysend: bool,
+    ) -> anyhow::Result<Option<Event>> {
+        let method = if is_multi_keysend {
+            Method::MultiPayKeysend
+        } else {
+            Method::PayKeysend
+        };
+
+        match self.profile.spending_conditions.clone() {
+            SpendingConditions::SingleUse(_) => {
+                // ignore this case since keysend payment requests are not generated from mutiny gifts
+                Ok(None)
+            }
+            SpendingConditions::RequireApproval => {
+                // respond with payment failed error
+                // only do keysend payments for budgeted profiles
+                let content = Response {
+                    result_type: method,
+                    error: Some(NIP47Error {
+                        code: ErrorCode::PaymentFailed,
+                        message: String::from("not enough balance to make payment"),
+                    }),
+                    result: None,
                 };
 
-                let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, tags)
-                    .to_event(&self.server_key)?;
-
-                Ok(Some(response))
+                let response_event = self.build_nwc_response_event(event, content, params.id)?;
+                Ok(Some(response_event))
             }
+            SpendingConditions::Budget(mut budget) => {
+                // generate deterministic preimage for keysend payment from event info
+                let input = match params.id.clone() {
+                    Some(mut id) => {
+                        id.push_str(event.id.to_hex().as_str());
+                        id
+                    }
+                    None => event.id.to_string(),
+                };
+                let preimage = PaymentPreimage(Sha256::hash(input.as_bytes()).into_32());
+                let payment_hash = PaymentHash(Sha256::hash(&preimage.0).into_32());
+
+                // skip if keysend payment has already been done or in-flight
+                if let Some(payment) = node.lookup_payment(&payment_hash.0).await {
+                    if payment.status == HTLCStatus::Succeeded
+                        || payment.status == HTLCStatus::InFlight
+                    {
+                        log_warn!(nostr_manager.logger, "keysend payment already made");
+                        return Ok(None);
+                    }
+                }
+
+                let sats = params.amount / 1000;
+
+                // now only try keysend payment if within budget
+                // if it falls out of budget return, send error
+                let content = match self
+                    .check_payment_within_budget(node, &mut budget, sats)
+                    .await
+                {
+                    Err(err) => {
+                        log_warn!(nostr_manager.logger, "Attempted to exceed budget: {err}");
+                        Response {
+                            result_type: method,
+                            error: Some(NIP47Error {
+                                code: ErrorCode::QuotaExceeded,
+                                message: err,
+                            }),
+                            result: None,
+                        }
+                    }
+                    Ok(_) => {
+                        let mut payment = TrackedPayment {
+                            time: utils::now().as_secs(),
+                            amt: sats,
+                            hash: payment_hash.to_string(),
+                        };
+                        // add payment to budget
+                        budget.add_payment(&mut payment);
+                        self.profile.spending_conditions =
+                            SpendingConditions::Budget(budget.clone());
+                        // persist budget before payment to protect against it not saving after
+                        nostr_manager.save_nwc_profile(self.clone())?;
+
+                        let to_node_pubkey = PublicKey::from_str(params.pubkey.as_str())?;
+
+                        let label = self
+                            .profile
+                            .label
+                            .clone()
+                            .unwrap_or(self.profile.name.clone());
+                        // attempt keysend payment now
+                        match node
+                            .keysend(to_node_pubkey, sats, None, vec![label], Some(preimage.0))
+                            .await
+                        {
+                            Ok(_) => Response {
+                                result_type: method,
+                                error: None,
+                                result: Some(ResponseResult::PayKeysend(
+                                    PayKeysendResponseResult {
+                                        preimage: preimage.to_string(),
+                                    },
+                                )),
+                            },
+                            Err(e) => {
+                                log_warn!(nostr_manager.logger, "Failed send keysend payment: {e}. Removing from payment budget");
+                                budget.remove_payment(&payment);
+                                self.profile.spending_conditions =
+                                    SpendingConditions::Budget(budget.clone());
+                                nostr_manager.save_nwc_profile(self.clone())?;
+
+                                Response {
+                                    result_type: method,
+                                    error: Some(NIP47Error {
+                                        code: ErrorCode::PaymentFailed,
+                                        message: String::from("failed to send keysend payment"),
+                                    }),
+                                    result: None,
+                                }
+                            }
+                        }
+                    }
+                };
+
+                let response_event = self.build_nwc_response_event(event, content, params.id)?;
+                Ok(Some(response_event))
+            }
+        }
+    }
+
+    async fn handle_pay_keysend_request<S: MutinyStorage, P: PrimalApi, C: NostrClient>(
+        &mut self,
+        event: Event,
+        node: &impl InvoiceHandler,
+        nostr_manager: &NostrManager<S, P, C>,
+        params: PayKeysendRequestParams,
+    ) -> anyhow::Result<Option<NwcResponse>> {
+        match self
+            .handle_nwc_keysend_payment(event.clone(), node, nostr_manager, params.clone(), false)
+            .await
+        {
+            Ok(Some(response_event)) => {
+                if let Err(e) = nostr_manager
+                    .client
+                    .send_event(response_event.clone())
+                    .await
+                {
+                    return Err(anyhow!("Error sending NWC event: {}", e));
+                }
+                Ok(Some(NwcResponse::SingleEvent(response_event)))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(anyhow!("error handling pay_keysend request: {}", e)),
+        }
+    }
+
+    async fn handle_multi_pay_keysend_request<S: MutinyStorage, P: PrimalApi, C: NostrClient>(
+        &mut self,
+        event: Event,
+        node: &impl InvoiceHandler,
+        nostr_manager: &NostrManager<S, P, C>,
+        params: MultiPayKeysendRequestParams,
+    ) -> anyhow::Result<Option<NwcResponse>> {
+        let mut response_events: Vec<Event> = Vec::with_capacity(params.keysends.len());
+
+        for param in params.keysends {
+            match self
+                .handle_nwc_keysend_payment(event.clone(), node, nostr_manager, param.clone(), true)
+                .await
+            {
+                Ok(Some(response_event)) => {
+                    if let Err(e) = nostr_manager
+                        .client
+                        .send_event(response_event.clone())
+                        .await
+                    {
+                        log_error!(
+                            nostr_manager.logger,
+                            "error sending multi_pay_keysend nwc response event: {}",
+                            e
+                        )
+                    } else {
+                        response_events.push(response_event);
+                    }
+                }
+                Ok(None) => continue,
+                Err(e) => {
+                    log_error!(
+                        nostr_manager.logger,
+                        "Error handling multi_pay_keysend request: {}",
+                        e
+                    )
+                }
+            }
+        }
+
+        if response_events.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(NwcResponse::MultiEvent(response_events)))
         }
     }
 
@@ -1225,6 +1575,7 @@ pub(crate) async fn check_valid_nwc_invoice(
         .map(|i| i.status)
         .is_some_and(|status| matches!(status, HTLCStatus::Succeeded | HTLCStatus::InFlight))
     {
+        log_info!(invoice_handler.logger(), "invoice already paid");
         return Ok(None);
     }
 
@@ -1512,7 +1863,8 @@ mod wasm_test {
     use crate::nostr::{NostrKeySource, ProfileType};
     use crate::storage::MemoryStorage;
     use crate::test_utils::{
-        create_dummy_invoice, create_mutiny_wallet, create_nwc_request, sign_nwc_request,
+        create_dummy_invoice, create_multi_invoice_nwc_request, create_mutiny_wallet,
+        create_nwc_request, create_pay_keysend_nwc_request, sign_nwc_request,
     };
     use crate::MockInvoiceHandler;
     use crate::MutinyInvoice;
@@ -1624,7 +1976,7 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager = NostrManager::from_mnemonic(
+        let mut nostr_manager = NostrManager::from_mnemonic(
             xprivkey,
             NostrKeySource::Derived,
             storage.clone(),
@@ -1643,7 +1995,7 @@ mod wasm_test {
                 },
                 SpendingConditions::RequireApproval,
                 NwcProfileTag::General,
-                vec![Method::PayInvoice],
+                vec![Method::PayInvoice, Method::PayKeysend],
             )
             .unwrap();
 
@@ -1676,15 +2028,24 @@ mod wasm_test {
                 .to_event(&Keys::new(uri.secret.clone()))
                 .unwrap()
         };
+
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
-        check_nwc_error_response(
-            result.unwrap().unwrap(),
-            &uri.secret,
-            NIP47Error {
-                code: ErrorCode::NotImplemented,
-                message: "Failed to parse request.".to_string(),
-            },
-        );
+        if let NwcResponse::SingleEvent(event) = result.unwrap().unwrap() {
+            check_nwc_error_response(
+                event,
+                &uri.secret,
+                NIP47Error {
+                    code: ErrorCode::NotImplemented,
+                    message: "Failed to parse request.".to_string(),
+                },
+            );
+        }
         check_no_pending_invoices(&storage);
 
         // test unexpected command
@@ -1705,55 +2066,88 @@ mod wasm_test {
                 .to_event(&Keys::new(uri.secret.clone()))
                 .unwrap()
         };
+
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
-        check_nwc_error_response(
-            result.unwrap().unwrap(),
-            &uri.secret,
-            NIP47Error {
-                code: ErrorCode::NotImplemented,
-                message: "Command is not supported.".to_string(),
-            },
-        );
+        if let NwcResponse::SingleEvent(event) = result.unwrap().unwrap() {
+            check_nwc_error_response(
+                event,
+                &uri.secret,
+                NIP47Error {
+                    code: ErrorCode::NotImplemented,
+                    message: "Command is not supported.".to_string(),
+                },
+            );
+        }
         check_no_pending_invoices(&storage);
 
         // test invalid invoice
         let event = create_nwc_request(&uri, "invalid invoice".to_string());
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
-        check_nwc_error_response(
-            result.unwrap().unwrap(),
-            &uri.secret,
-            NIP47Error {
-                code: ErrorCode::Other,
-                message: "Invalid invoice".to_string(),
-            },
-        );
+        if let NwcResponse::SingleEvent(event) = result.unwrap().unwrap() {
+            check_nwc_error_response(
+                event,
+                &uri.secret,
+                NIP47Error {
+                    code: ErrorCode::Other,
+                    message: "Invalid invoice".to_string(),
+                },
+            );
+        }
         check_no_pending_invoices(&storage);
 
         // test expired invoice
         let event = create_nwc_request(&uri, INVOICE.to_string());
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
-        check_nwc_error_response(
-            result.unwrap().unwrap(),
-            &uri.secret,
-            NIP47Error {
-                code: ErrorCode::Other,
-                message: "Invoice expired".to_string(),
-            },
-        );
+        if let NwcResponse::SingleEvent(event) = result.unwrap().unwrap() {
+            check_nwc_error_response(
+                event,
+                &uri.secret,
+                NIP47Error {
+                    code: ErrorCode::Other,
+                    message: "Invoice expired".to_string(),
+                },
+            );
+        }
         check_no_pending_invoices(&storage);
 
         // test amount-less invoice
         let (invoice, _) = create_dummy_invoice(None, Network::Regtest, None);
         let event = create_nwc_request(&uri, invoice.to_string());
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
-        check_nwc_error_response(
-            result.unwrap().unwrap(),
-            &uri.secret,
-            NIP47Error {
-                code: ErrorCode::Other,
-                message: "Invoice amount not set".to_string(),
-            },
-        );
+        if let NwcResponse::SingleEvent(event) = result.unwrap().unwrap() {
+            check_nwc_error_response(
+                event,
+                &uri.secret,
+                NIP47Error {
+                    code: ErrorCode::Other,
+                    message: "Invoice amount not set".to_string(),
+                },
+            );
+        }
         check_no_pending_invoices(&storage);
 
         // test hodl invoice
@@ -1765,15 +2159,23 @@ mod wasm_test {
             .0
             .to_string();
         let event = create_nwc_request(&uri, invoice);
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
-        check_nwc_error_response(
-            result.unwrap().unwrap(),
-            &uri.secret,
-            NIP47Error {
-                code: ErrorCode::Other,
-                message: "Paying hodl invoices disabled".to_string(),
-            },
-        );
+        if let NwcResponse::SingleEvent(event) = result.unwrap().unwrap() {
+            check_nwc_error_response(
+                event,
+                &uri.secret,
+                NIP47Error {
+                    code: ErrorCode::Other,
+                    message: "Paying hodl invoices disabled".to_string(),
+                },
+            );
+        }
         check_no_pending_invoices(&storage);
 
         // test in-flight payment
@@ -1826,6 +2228,26 @@ mod wasm_test {
         assert_eq!(pending[0].event_id, event.id);
         assert_eq!(pending[0].index, Some(nwc.profile.index));
         assert_eq!(pending[0].pubkey, event.pubkey);
+
+        // test keysend payment - require approval
+        let event = create_pay_keysend_nwc_request(&uri, 1_000, "dummy".to_string());
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
+        let result = nwc.handle_nwc_request(event, &node, &nostr_manager).await;
+        if let NwcResponse::SingleEvent(event) = result.unwrap().unwrap() {
+            check_nwc_error_response(
+                event,
+                &uri.secret,
+                NIP47Error {
+                    code: ErrorCode::PaymentFailed,
+                    message: "not enough balance to make payment".to_string(),
+                },
+            );
+        }
     }
 
     #[test]
@@ -1913,7 +2335,7 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager = NostrManager::from_mnemonic(
+        let mut nostr_manager = NostrManager::from_mnemonic(
             xprivkey,
             NostrKeySource::Derived,
             storage.clone(),
@@ -1938,7 +2360,11 @@ mod wasm_test {
                     period: BudgetPeriod::Seconds(10),
                 }),
                 NwcProfileTag::General,
-                vec![Method::PayInvoice],
+                vec![
+                    Method::PayInvoice,
+                    Method::MultiPayInvoice,
+                    Method::PayKeysend,
+                ],
             )
             .unwrap();
 
@@ -1949,6 +2375,12 @@ mod wasm_test {
         // test failed payment goes to pending, we have no channels so it will fail
         let (invoice, _) = create_dummy_invoice(Some(10), Network::Regtest, None);
         let event = create_nwc_request(&uri, invoice.to_string());
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc
             .handle_nwc_request(event.clone(), &mw, &nostr_manager)
             .await;
@@ -1966,6 +2398,12 @@ mod wasm_test {
         // test over budget payment goes to pending
         let (invoice, _) = create_dummy_invoice(Some(budget + 1), Network::Regtest, None);
         let event = create_nwc_request(&uri, invoice.to_string());
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc
             .handle_nwc_request(event.clone(), &mw, &nostr_manager)
             .await;
@@ -1976,6 +2414,78 @@ mod wasm_test {
         assert_eq!(pending[0].event_id, event.id);
         assert_eq!(pending[0].index, Some(nwc.profile.index));
         assert_eq!(pending[0].pubkey, event.pubkey);
+
+        // clear pending
+        nostr_manager.deny_all_pending_nwc().await.unwrap();
+
+        let mut node = MockInvoiceHandler::new();
+        node.expect_skip_hodl_invoices().times(2).returning(|| true);
+        node.expect_lookup_payment().return_const(None);
+
+        let secp = Secp256k1::new();
+        let mut nwc = NostrWalletConnect::new(&secp, xprivkey, profile.profile()).unwrap();
+        let uri = nwc.get_nwc_uri().unwrap().unwrap();
+
+        // test multi invoice over budget after 1st invoice. 2nd goes to pending
+        let (invoice_1, preimage_1) = create_dummy_invoice(Some(8000_000), Network::Regtest, None);
+        let (invoice_2, _) = create_dummy_invoice(Some(4000_000), Network::Regtest, None);
+        let invoices = vec![invoice_1.to_string(), invoice_2.to_string()];
+        node.expect_pay_invoice()
+            .once()
+            .returning(move |inv, _, _| {
+                let mut mutiny_invoice: MutinyInvoice = inv.clone().into();
+                mutiny_invoice.preimage = Some(preimage_1.to_lower_hex_string());
+                mutiny_invoice.status = HTLCStatus::Succeeded;
+                mutiny_invoice.last_updated = utils::now().as_secs();
+                mutiny_invoice.fees_paid = Some(0);
+                Ok(mutiny_invoice)
+            });
+
+        let event = create_multi_invoice_nwc_request(&uri, invoices);
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .times(2)
+            .returning(move |_| Ok(event_id));
+        let result = nwc
+            .handle_nwc_request(event.clone(), &node, &nostr_manager)
+            .await;
+        assert!(result.unwrap().is_some());
+        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].invoice, invoice_2);
+        assert_eq!(pending[0].event_id, event.id);
+        assert_eq!(pending[0].index, Some(nwc.profile.index));
+        assert_eq!(pending[0].pubkey, event.pubkey);
+
+        // test keysend over budget responds quota exceeded
+        let pk_bytes = &mut [0u8; 32];
+        getrandom::getrandom(pk_bytes).unwrap();
+        let pk_bytes = bitcoin::secp256k1::SecretKey::from_slice(pk_bytes).unwrap();
+        let secp = Secp256k1::new();
+        let pubkey = pk_bytes.public_key(&secp);
+
+        let event = create_pay_keysend_nwc_request(&uri, budget * 1000 + 1_000, pubkey.to_string());
+        let mut node = MockInvoiceHandler::new();
+        node.expect_lookup_payment().return_const(None);
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
+        let result = nwc.handle_nwc_request(event, &mw, &nostr_manager).await;
+        if let NwcResponse::SingleEvent(event) = result.unwrap().unwrap() {
+            check_nwc_error_response(
+                event,
+                &uri.secret,
+                NIP47Error {
+                    code: ErrorCode::QuotaExceeded,
+                    message: "Budget exceeded.".to_string(),
+                },
+            );
+        }
     }
 
     #[test]
@@ -1985,7 +2495,6 @@ mod wasm_test {
         let mut node = MockInvoiceHandler::new();
 
         let amount_msats = 5_000;
-
         let (invoice, preimage) = create_dummy_invoice(Some(amount_msats), Network::Regtest, None);
 
         node.expect_skip_hodl_invoices().once().returning(|| true);
@@ -2004,7 +2513,7 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager = NostrManager::from_mnemonic(
+        let mut nostr_manager = NostrManager::from_mnemonic(
             xprivkey,
             NostrKeySource::Derived,
             storage.clone(),
@@ -2029,7 +2538,7 @@ mod wasm_test {
                     period: BudgetPeriod::Seconds(10),
                 }),
                 NwcProfileTag::General,
-                vec![Method::PayInvoice],
+                vec![Method::PayInvoice, Method::PayKeysend],
             )
             .unwrap();
 
@@ -2039,10 +2548,22 @@ mod wasm_test {
 
         // test successful payment
         let event = create_nwc_request(&uri, invoice.to_string());
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc
             .handle_nwc_request(event.clone(), &node, &nostr_manager)
             .await;
-        let event = result.unwrap().unwrap();
+
+        let event = if let NwcResponse::SingleEvent(nwc_event) = result.unwrap().unwrap() {
+            nwc_event
+        } else {
+            panic!("invalid nwc response")
+        };
+
         let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
         let response: Response = Response::from_json(content).unwrap();
         let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
@@ -2057,7 +2578,7 @@ mod wasm_test {
             _ => panic!("wrong response"),
         }
 
-        match nwc.profile.spending_conditions {
+        match nwc.profile.spending_conditions.clone() {
             SpendingConditions::Budget(budget) => {
                 assert_eq!(budget.payments.len(), 1);
                 assert_eq!(budget.payments[0].amt, amount_msats / 1_000);
@@ -2065,6 +2586,77 @@ mod wasm_test {
                     budget.payments[0].hash,
                     invoice.payment_hash().into_32().to_lower_hex_string()
                 );
+            }
+            _ => panic!("wrong spending conditions"),
+        }
+
+        // test successful keysend payment
+        let pk_bytes = &mut [0u8; 32];
+        getrandom::getrandom(pk_bytes).unwrap();
+        let pk_bytes = bitcoin::secp256k1::SecretKey::from_slice(pk_bytes).unwrap();
+        let secp = Secp256k1::new();
+        let pubkey = pk_bytes.public_key(&secp);
+
+        node.expect_keysend()
+            .once()
+            .returning(move |_, _, _, _, preimage| {
+                let payment_preimage = PaymentPreimage(preimage.unwrap());
+                let payment_hash = Sha256::hash(&payment_preimage.0);
+                let payment_preimage = payment_preimage.to_string();
+
+                let mutiny_invoice = MutinyInvoice {
+                    bolt11: None,
+                    description: None,
+                    payment_hash,
+                    preimage: Some(payment_preimage),
+                    payee_pubkey: Some(pubkey.clone()),
+                    amount_sats: None,
+                    expire: 0,
+                    status: HTLCStatus::Succeeded,
+                    privacy_level: Default::default(),
+                    fees_paid: None,
+                    inbound: false,
+                    labels: vec![],
+                    last_updated: 0,
+                };
+                Ok(mutiny_invoice)
+            });
+
+        let keysend_amount_msat = 5_000;
+        let event = create_pay_keysend_nwc_request(&uri, keysend_amount_msat, pubkey.to_string());
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
+        let result = nwc
+            .handle_nwc_request(event.clone(), &node, &nostr_manager)
+            .await;
+
+        let preimage = PaymentPreimage(Sha256::hash(event.id.to_string().as_bytes()).into_32());
+
+        let event = if let NwcResponse::SingleEvent(nwc_event) = result.unwrap().unwrap() {
+            nwc_event
+        } else {
+            panic!("invalid nwc response")
+        };
+
+        let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
+        let response: Response = Response::from_json(content).unwrap();
+        assert_eq!(response.result_type, Method::PayKeysend);
+        assert!(response.error.is_none());
+
+        match response.result {
+            Some(ResponseResult::PayKeysend(PayKeysendResponseResult { preimage: pre })) => {
+                assert_eq!(pre, preimage.0.to_lower_hex_string());
+            }
+            _ => panic!("wrong response"),
+        }
+
+        match nwc.profile.spending_conditions {
+            SpendingConditions::Budget(budget) => {
+                assert_eq!(budget.payments.len(), 2);
+                assert_eq!(budget.payments[1].amt, keysend_amount_msat / 1_000);
             }
             _ => panic!("wrong spending conditions"),
         }
@@ -2077,7 +2669,7 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager = NostrManager::from_mnemonic(
+        let mut nostr_manager = NostrManager::from_mnemonic(
             xprivkey,
             NostrKeySource::Derived,
             storage.clone(),
@@ -2107,10 +2699,21 @@ mod wasm_test {
         // test get_balance
 
         let event = sign_nwc_request(&uri, Request::get_balance());
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc
             .handle_nwc_request(event.clone(), &mw, &nostr_manager)
             .await;
-        let event = result.unwrap().unwrap();
+
+        let event = if let NwcResponse::SingleEvent(nwc_event) = result.unwrap().unwrap() {
+            nwc_event
+        } else {
+            panic!("invalid nwc response")
+        };
         let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
         let response: Response = Response::from_json(content).unwrap();
         let balance = response.to_get_balance().unwrap();
@@ -2124,7 +2727,7 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager = NostrManager::from_mnemonic(
+        let mut nostr_manager = NostrManager::from_mnemonic(
             xprivkey,
             NostrKeySource::Derived,
             storage.clone(),
@@ -2161,10 +2764,21 @@ mod wasm_test {
         // test get_balance
 
         let event = sign_nwc_request(&uri, Request::get_balance());
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc
             .handle_nwc_request(event.clone(), &mw, &nostr_manager)
             .await;
-        let event = result.unwrap().unwrap();
+
+        let event = if let NwcResponse::SingleEvent(nwc_event) = result.unwrap().unwrap() {
+            nwc_event
+        } else {
+            panic!("invalid nwc response")
+        };
         let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
         let response: Response = Response::from_json(content).unwrap();
         let balance = response.to_get_balance().unwrap();
@@ -2178,7 +2792,7 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager = NostrManager::from_mnemonic(
+        let mut nostr_manager = NostrManager::from_mnemonic(
             xprivkey,
             NostrKeySource::Derived,
             storage.clone(),
@@ -2213,10 +2827,21 @@ mod wasm_test {
         // test get_balance
 
         let event = sign_nwc_request(&uri, Request::get_balance());
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc
             .handle_nwc_request(event.clone(), &mw, &nostr_manager)
             .await;
-        let event = result.unwrap().unwrap();
+
+        let event = if let NwcResponse::SingleEvent(nwc_event) = result.unwrap().unwrap() {
+            nwc_event
+        } else {
+            panic!("invalid nwc response")
+        };
         let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
         let response: Response = Response::from_json(content).unwrap();
         let balance = response.to_get_balance().unwrap();
@@ -2229,7 +2854,7 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager = NostrManager::from_mnemonic(
+        let mut nostr_manager = NostrManager::from_mnemonic(
             xprivkey,
             NostrKeySource::Derived,
             storage.clone(),
@@ -2271,10 +2896,21 @@ mod wasm_test {
         // test get_info
 
         let event = sign_nwc_request(&uri, Request::get_info());
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc
             .handle_nwc_request(event.clone(), &node, &nostr_manager)
             .await;
-        let event = result.unwrap().unwrap();
+
+        let event = if let NwcResponse::SingleEvent(nwc_event) = result.unwrap().unwrap() {
+            nwc_event
+        } else {
+            panic!("invalid nwc response")
+        };
         let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
         let response: Response = Response::from_json(content).unwrap();
         let info = response.to_get_info().unwrap();
@@ -2294,7 +2930,7 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager = NostrManager::from_mnemonic(
+        let mut nostr_manager = NostrManager::from_mnemonic(
             xprivkey,
             NostrKeySource::Derived,
             storage.clone(),
@@ -2340,10 +2976,21 @@ mod wasm_test {
                 expiry: None,
             }),
         );
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc
             .handle_nwc_request(event.clone(), &node, &nostr_manager)
             .await;
-        let event = result.unwrap().unwrap();
+
+        let event = if let NwcResponse::SingleEvent(nwc_event) = result.unwrap().unwrap() {
+            nwc_event
+        } else {
+            panic!("invalid nwc response")
+        };
         let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
         let response: Response = Response::from_json(content).unwrap();
         let result = response.to_make_invoice().unwrap();
@@ -2361,7 +3008,7 @@ mod wasm_test {
 
         let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &[0; 64]).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let nostr_manager = NostrManager::from_mnemonic(
+        let mut nostr_manager = NostrManager::from_mnemonic(
             xprivkey,
             NostrKeySource::Derived,
             storage.clone(),
@@ -2401,10 +3048,21 @@ mod wasm_test {
 				bolt11: Some("lntbs1m1pjrmuu3pp52hk0j956d7s8azaps87amadshnrcvqtkvk06y2nue2w69g6e5vasdqqcqzpgxqyz5vqsp5wu3py6257pa3yzarw0et2200c08r5fu6k3u94yfwmlnc8skdkc9s9qyyssqc783940p82c64qq9pu3xczt4tdxzex9wpjn54486y866aayft2cxxusl9eags4cs3kcmuqdrvhvs0gudpj5r2a6awu4wcq29crpesjcqhdju55".to_string()),
 			}),
 		);
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc
             .handle_nwc_request(event.clone(), &node, &nostr_manager)
             .await;
-        let event = result.unwrap().unwrap();
+
+        let event = if let NwcResponse::SingleEvent(nwc_event) = result.unwrap().unwrap() {
+            nwc_event
+        } else {
+            panic!("invalid nwc response")
+        };
         let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
         let response: Response = Response::from_json(content).unwrap();
         let error = response.error.unwrap();
@@ -2426,10 +3084,21 @@ mod wasm_test {
                 bolt11: Some(invoice.to_string()),
             }),
         );
+        let event_id = EventId::all_zeros();
+        nostr_manager
+            .client
+            .expect_send_event()
+            .once()
+            .returning(move |_| Ok(event_id));
         let result = nwc
             .handle_nwc_request(event.clone(), &node, &nostr_manager)
             .await;
-        let event = result.unwrap().unwrap();
+
+        let event = if let NwcResponse::SingleEvent(nwc_event) = result.unwrap().unwrap() {
+            nwc_event
+        } else {
+            panic!("invalid nwc response")
+        };
         let content = decrypt(&uri.secret, &event.pubkey, &event.content).unwrap();
         let response: Response = Response::from_json(content).unwrap();
         let result = response.to_lookup_invoice().unwrap();

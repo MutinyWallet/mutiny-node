@@ -1408,10 +1408,11 @@ impl<S: MutinyStorage> NodeManager<S> {
         amt_sats: u64,
         message: Option<String>,
         labels: Vec<String>,
+        preimage: Option<[u8; 32]>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
         log_debug!(self.logger, "Keysending to {to_node}");
-        node.keysend_with_timeout(to_node, amt_sats, message, labels, None)
+        node.keysend_with_timeout(to_node, amt_sats, message, labels, None, preimage)
             .await
     }
 
