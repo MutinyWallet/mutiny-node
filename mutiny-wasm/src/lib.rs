@@ -18,11 +18,10 @@ use crate::indexed_db::IndexedDbStorage;
 use crate::models::*;
 use bip39::Mnemonic;
 use bitcoin::bip32::ExtendedPrivKey;
-use bitcoin::consensus::deserialize;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
+use bitcoin::{Address, Network, OutPoint, Txid};
 use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
@@ -423,17 +422,6 @@ impl MutinyWallet {
         Ok(self.inner.node_manager.stop().await?)
     }
 
-    /// Broadcast a transaction to the network.
-    /// The transaction is broadcast through the configured esplora server.
-    #[wasm_bindgen]
-    pub async fn broadcast_transaction(&self, str: String) -> Result<(), MutinyJsError> {
-        let tx_bytes =
-            Vec::from_hex(str.as_str()).map_err(|_| MutinyJsError::WalletOperationFailed)?;
-        let tx: Transaction =
-            deserialize(&tx_bytes).map_err(|_| MutinyJsError::WalletOperationFailed)?;
-        Ok(self.inner.node_manager.broadcast_transaction(tx).await?)
-    }
-
     /// Returns the mnemonic seed phrase for the wallet.
     #[wasm_bindgen]
     pub fn show_seed(&self) -> String {
@@ -507,12 +495,6 @@ impl MutinyWallet {
             btc_amount: None,
             labels,
         })
-    }
-
-    /// Gets the current balance of the on-chain wallet.
-    #[wasm_bindgen]
-    pub fn get_wallet_balance(&self) -> Result<u64, MutinyJsError> {
-        Ok(self.inner.node_manager.get_wallet_balance()?)
     }
 
     /// Creates a BIP 21 invoice. This creates a new address and a lightning invoice.
@@ -708,15 +690,6 @@ impl MutinyWallet {
         let address = Address::from_str(&address)?;
         Ok(JsValue::from_serde(
             &self.inner.node_manager.check_address(address).await?,
-        )?)
-    }
-
-    /// Lists all the on-chain transactions in the wallet.
-    /// These are sorted by confirmation time.
-    #[wasm_bindgen]
-    pub fn list_onchain(&self) -> Result<JsValue /* Vec<TransactionDetails> */, MutinyJsError> {
-        Ok(JsValue::from_serde(
-            &self.inner.node_manager.list_onchain()?,
         )?)
     }
 
