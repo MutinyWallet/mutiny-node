@@ -1169,7 +1169,6 @@ fn gateway_preference() {
     use fedimint_core::util::SafeUrl;
     use fedimint_ln_common::bitcoin::secp256k1::PublicKey;
     use fedimint_ln_common::LightningGatewayAnnouncement;
-    use std::time::Duration;
 
     use super::*;
 
