@@ -45,9 +45,9 @@ once_cell = "1.18.0"
 hex-conservative = "0.1.1"
 payjoin = { version = "0.13.0", features = ["send", "base64"] }
 fedimint-core = "0.3.0"
-moksha-core = { git = "https://github.com/ngutech21/moksha", rev = "18d99977965662d46ccec29fecdb0ce493745917" }
+moksha-core = "0.2.1"
 
-bitcoin-waila = { git = "https://github.com/mutinywallet/bitcoin-waila", rev = "1d6c416fc0abaa2efa78e3dcf28450975d8f7bfe" }
+bitcoin-waila = "0.5.0"
 
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires

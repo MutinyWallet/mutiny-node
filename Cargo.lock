@@ -443,8 +443,9 @@ checksum = "73290177011694f38ec25e165d0387ab7ea749a4b81cd4c80dae5988229f7a57"
 
 [[package]]
 name = "bitcoin-waila"
-version = "0.4.1"
-source = "git+https://github.com/mutinywallet/bitcoin-waila?rev=1d6c416fc0abaa2efa78e3dcf28450975d8f7bfe#1d6c416fc0abaa2efa78e3dcf28450975d8f7bfe"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0360146aaf278fbef5f34b7c83ff889cb5b43742af261bf0ee75b653ad1e495d"
 dependencies = [
  "bip21",
  "bitcoin 0.30.2",
@@ -2521,8 +2522,9 @@ dependencies = [
 
 [[package]]
 name = "moksha-core"
-version = "0.2.0-beta"
-source = "git+https://github.com/ngutech21/moksha?rev=18d99977965662d46ccec29fecdb0ce493745917#18d99977965662d46ccec29fecdb0ce493745917"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4923b0e31fd02fe8ebc2f58ed0909c8e1d90f0b5153948d3940e634421240c30"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
