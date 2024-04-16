@@ -285,8 +285,20 @@ impl<S: MutinyStorage> FederationClient<S> {
             // get lock immediately to block other actions until gateway is set
             let mut gateway_lock = gateway_clone.write().await;
             let lightning_module = client_clone.get_first_module::<LightningClientModule>();
-            let gateways = lightning_module.list_gateways().await;
 
+            match lightning_module.update_gateway_cache(true).await {
+                Ok(_) => {
+                    log_trace!(logger_clone, "Updated lightning gateway cache");
+                }
+                Err(e) => {
+                    log_error!(
+                        logger_clone,
+                        "Could not update lightning gateway cache: {e}"
+                    );
+                }
+            }
+
+            let gateways = lightning_module.list_gateways().await;
             if let Some(a) = get_gateway_preference(gateways, federation_id) {
                 log_info!(
                     logger_clone,
