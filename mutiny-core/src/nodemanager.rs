@@ -26,7 +26,6 @@ use crate::{
 };
 use anyhow::anyhow;
 use async_lock::RwLock;
-use bdk::chain::{BlockId, ConfirmationTime};
 use bdk::{wallet::AddressIndex, FeeRate, LocalOutput};
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::bip32::ExtendedPrivKey;
@@ -72,6 +71,12 @@ pub struct NodeStorage {
     pub version: u32,
 }
 
+impl NodeStorage {
+    pub fn is_empty(&self) -> bool {
+        self.nodes.iter().all(|(_, n)| n.is_archived())
+    }
+}
+
 // This is the NodeIndex reference that is saved to the DB
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default)]
 pub struct NodeIndex {
@@ -87,8 +92,9 @@ impl NodeIndex {
     }
 }
 
-// This is the NodeIdentity that refer to a specific node
-// Used for public facing identification.
+/// This is the NodeIdentity that refer to a specific node
+/// Used for public facing identification.
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct NodeIdentity {
     pub uuid: String,
     pub pubkey: PublicKey,
@@ -232,11 +238,19 @@ impl Ord for ChannelClosure {
     }
 }
 
+#[derive(Debug, Copy, Clone, Default)]
 pub struct NodeBalance {
     pub confirmed: u64,
     pub unconfirmed: u64,
     pub lightning: u64,
     pub force_close: u64,
+}
+
+impl NodeBalance {
+    /// All balances are zero
+    pub fn is_zero(&self) -> bool {
+        self.confirmed == 0 && self.unconfirmed == 0 && self.lightning == 0 && self.force_close == 0
+    }
 }
 
 pub struct NodeManagerBuilder<S: MutinyStorage> {
@@ -447,6 +461,11 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             let storage = self.storage.clone();
             let logger_clone = logger.clone();
             spawn(async move {
+                // skip if there are no nodes
+                if updated_nodes.is_empty() {
+                    return;
+                }
+
                 let start = Instant::now();
                 if let Err(e) = storage
                     .insert_nodes(&NodeStorage {
@@ -533,7 +552,7 @@ pub struct NodeManager<S: MutinyStorage> {
 impl<S: MutinyStorage> NodeManager<S> {
     /// Returns if there is a saved wallet in storage.
     /// This is checked by seeing if a mnemonic seed exists in storage.
-    pub fn has_node_manager(storage: S) -> bool {
+    pub fn is_wallet_present(storage: S) -> bool {
         storage.get_mnemonic().is_ok_and(|x| x.is_some())
     }
 
@@ -582,62 +601,74 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Creates a background process that will sync the wallet with the blockchain.
     /// This will also update the fee estimates every 10 minutes.
-    pub fn start_sync(nm: Arc<NodeManager<S>>) {
-        log_trace!(nm.logger, "calling start_sync");
+    pub fn start_sync(
+        nm: Arc<RwLock<Option<NodeManager<S>>>>,
+        network: Network,
+        stop: Arc<AtomicBool>,
+        logger: Arc<MutinyLogger>,
+    ) {
+        log_trace!(logger, "calling start_sync");
 
         // sync every second on regtest, this makes testing easier
-        let sync_interval_secs = match nm.network {
+        let sync_interval_secs = match network {
             Network::Bitcoin | Network::Testnet | Network::Signet => 60,
             Network::Regtest => 1,
             net => unreachable!("Unknown network: {net}"),
         };
+
         utils::spawn(async move {
             let mut synced = false;
             loop {
                 // If we are stopped, don't sync
-                if nm.stop.load(Ordering::Relaxed) {
+                if stop.load(Ordering::Relaxed) {
                     return;
                 }
 
-                if !synced {
-                    if let Err(e) = nm.sync_rgs().await {
-                        log_error!(nm.logger, "Failed to sync RGS: {e}");
-                    } else {
-                        log_info!(nm.logger, "RGS Synced!");
-                    }
-
-                    if let Err(e) = nm.sync_scorer().await {
-                        log_error!(nm.logger, "Failed to sync scorer: {e}");
-                    } else {
-                        log_info!(nm.logger, "Scorer Synced!");
-                    }
-                }
-
-                // we don't need to re-sync fees every time
-                // just do it every 10 minutes
-                if let Err(e) = nm.fee_estimator.update_fee_estimates_if_necessary().await {
-                    log_error!(nm.logger, "Failed to update fee estimates: {e}");
-                } else {
-                    log_info!(nm.logger, "Updated fee estimates!");
-                }
-
-                if let Err(e) = nm.sync().await {
-                    log_error!(nm.logger, "Failed to sync: {e}");
-                } else if !synced {
-                    // if this is the first sync, set the done_first_sync flag
-                    let _ = nm.storage.set_done_first_sync();
-                    synced = true;
+                if let Some(nm) = nm.read().await.as_ref() {
+                    nm.do_sync_round(&mut synced).await;
                 }
 
                 // wait for next sync round, checking graceful shutdown check each second.
                 for _ in 0..sync_interval_secs {
-                    if nm.stop.load(Ordering::Relaxed) {
+                    if stop.load(Ordering::Relaxed) {
                         return;
                     }
                     sleep(1_000).await;
                 }
             }
         });
+    }
+
+    pub(crate) async fn do_sync_round(&self, synced: &mut bool) {
+        if !*synced {
+            if let Err(e) = self.sync_rgs().await {
+                log_error!(self.logger, "Failed to sync RGS: {e}");
+            } else {
+                log_info!(self.logger, "RGS Synced!");
+            }
+
+            if let Err(e) = self.sync_scorer().await {
+                log_error!(self.logger, "Failed to sync scorer: {e}");
+            } else {
+                log_info!(self.logger, "Scorer Synced!");
+            }
+        }
+
+        // we don't need to re-sync fees every time
+        // just do it every 10 minutes
+        if let Err(e) = self.fee_estimator.update_fee_estimates_if_necessary().await {
+            log_error!(self.logger, "Failed to update fee estimates: {e}");
+        } else {
+            log_info!(self.logger, "Updated fee estimates!");
+        }
+
+        if let Err(e) = self.sync().await {
+            log_error!(self.logger, "Failed to sync: {e}");
+        } else if !*synced {
+            // if this is the first sync, set the done_first_sync flag
+            let _ = self.storage.set_done_first_sync();
+            *synced = true;
+        }
     }
 
     /// Broadcast a transaction to the network.
@@ -662,7 +693,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         if let Ok(mut wallet) = self.wallet.wallet.try_write() {
             let address = wallet.try_get_address(AddressIndex::LastUnused)?.address;
-            self.set_address_labels(address.clone(), labels)?;
+            self.storage.set_address_labels(address.clone(), labels)?;
             log_trace!(self.logger, "finished calling get_new_address");
 
             return Ok(address);
@@ -891,86 +922,6 @@ impl<S: MutinyStorage> NodeManager<S> {
         res
     }
 
-    /// Checks if the given address has any transactions.
-    /// If it does, it returns the details of the first transaction.
-    ///
-    /// This should be used to check if a payment has been made to an address.
-    pub async fn check_address(
-        &self,
-        address: Address<NetworkUnchecked>,
-    ) -> Result<Option<TransactionDetails>, MutinyError> {
-        log_trace!(self.logger, "calling check_address");
-
-        let address = address.require_network(self.network)?;
-
-        let script = address.payload.script_pubkey();
-        let txs = self.esplora.scripthash_txs(&script, None).await?;
-
-        let details_opt = txs.first().map(|tx| {
-            let received: u64 = tx
-                .vout
-                .iter()
-                .filter(|v| v.scriptpubkey == script)
-                .map(|v| v.value)
-                .sum();
-
-            let confirmation_time = tx
-                .confirmation_time()
-                .map(|c| ConfirmationTime::Confirmed {
-                    height: c.height,
-                    time: c.timestamp,
-                })
-                .unwrap_or(ConfirmationTime::Unconfirmed {
-                    last_seen: utils::now().as_secs(),
-                });
-
-            let address_labels = self.get_address_labels().unwrap_or_default();
-            let labels = address_labels
-                .get(&address.to_string())
-                .cloned()
-                .unwrap_or_default();
-
-            let details = TransactionDetails {
-                transaction: Some(tx.to_tx()),
-                txid: Some(tx.txid),
-                internal_id: tx.txid,
-                received,
-                sent: 0,
-                fee: None,
-                confirmation_time,
-                labels,
-            };
-
-            let block_id = match tx.status.block_hash {
-                Some(hash) => {
-                    let height = tx
-                        .status
-                        .block_height
-                        .expect("block height must be present");
-                    Some(BlockId { hash, height })
-                }
-                None => None,
-            };
-
-            (details, block_id)
-        });
-
-        // if we found a tx we should try to import it into the wallet
-        if let Some((details, block_id)) = details_opt.clone() {
-            let wallet = self.wallet.clone();
-            utils::spawn(async move {
-                let tx = details.transaction.expect("tx must be present");
-                wallet
-                    .insert_tx(tx, details.confirmation_time, block_id)
-                    .await
-                    .expect("failed to insert tx");
-            });
-        }
-
-        log_trace!(self.logger, "finished calling check_address");
-        Ok(details_opt.map(|(d, _)| d))
-    }
-
     /// Adds labels to the TransactionDetails based on the address labels.
     /// This will panic if the TransactionDetails does not have a transaction.
     /// Make sure you flag `include_raw` when calling `list_transactions` to
@@ -1006,7 +957,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let mut txs = self.wallet.list_transactions(true)?;
         txs.sort();
-        let address_labels = self.get_address_labels()?;
+        let address_labels = self.storage.get_address_labels()?;
         let txs = txs
             .into_iter()
             .map(|tx| self.add_onchain_labels(&address_labels, tx))
@@ -1022,7 +973,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         let res = match self.wallet.get_transaction(txid)? {
             Some(tx) => {
-                let address_labels = self.get_address_labels()?;
+                let address_labels = self.storage.get_address_labels()?;
                 let tx_details = self.add_onchain_labels(&address_labels, tx);
                 Ok(Some(tx_details))
             }
@@ -1295,7 +1246,6 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Archives a node so it will not be started up next time the node manager is created.
     ///
     /// If the node has any active channels it will fail to archive
-    #[allow(dead_code)]
     pub(crate) async fn archive_node(&self, pubkey: PublicKey) -> Result<(), MutinyError> {
         if let Some(node) = self.nodes.read().await.get(&pubkey) {
             // disallow archiving nodes with active channels or
@@ -1315,7 +1265,6 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Archives a node so it will not be started up next time the node manager is created.
     ///
     /// If the node has any active channels it will fail to archive
-    #[allow(dead_code)]
     pub(crate) async fn archive_node_by_uuid(&self, node_uuid: String) -> Result<(), MutinyError> {
         let mut node_storage = self.node_storage.write().await;
 
@@ -1331,6 +1280,104 @@ impl<S: MutinyStorage> NodeManager<S> {
                 Ok(())
             }
         }
+    }
+
+    /// Unarchives the first node in the node manager if we have one.
+    pub(crate) async fn unarchive_first_node(&self) -> Result<NodeIdentity, MutinyError> {
+        // get locks
+        let mut node_storage = self.node_storage.write().await;
+        let mut nodes_map = self.nodes.write().await;
+
+        let node = match node_storage.nodes.iter_mut().next() {
+            None => return Err(MutinyError::NotFound),
+            Some((uuid, node)) => {
+                // if isn't archived, just return the node
+                if !node.is_archived() {
+                    let (_, node) = nodes_map
+                        .iter()
+                        .find(|(_, n)| &n.uuid == uuid)
+                        .ok_or(MutinyError::NotFound)?;
+                    return Ok(NodeIdentity {
+                        uuid: node.uuid.clone(),
+                        pubkey: node.pubkey,
+                    });
+                }
+
+                node.archived = None;
+
+                let mut node_builder = NodeBuilder::new(self.xprivkey, self.storage.clone())
+                    .with_uuid(uuid.clone())
+                    .with_node_index(node.clone())
+                    .with_gossip_sync(self.gossip_sync.clone())
+                    .with_scorer(self.scorer.clone())
+                    .with_chain(self.chain.clone())
+                    .with_fee_estimator(self.fee_estimator.clone())
+                    .with_wallet(self.wallet.clone())
+                    .with_esplora(self.esplora.clone())
+                    .with_network(self.network);
+                node_builder.with_logger(self.logger.clone());
+
+                #[cfg(target_arch = "wasm32")]
+                node_builder.with_websocket_proxy_addr(self.websocket_proxy_addr.clone());
+
+                if let Some(l) = self.lsp_config.clone() {
+                    node_builder.with_lsp_config(l);
+                }
+                if self.do_not_connect_peers {
+                    node_builder.do_not_connect_peers();
+                }
+
+                node_builder.build().await?
+            }
+        };
+
+        let pubkey = node
+            .keys_manager
+            .get_node_id(Recipient::Node)
+            .expect("Failed to get node id");
+
+        let uuid = node.uuid.clone();
+        nodes_map.insert(pubkey, Arc::new(node));
+
+        node_storage.version += 1;
+        self.storage.insert_nodes(&node_storage).await?;
+
+        Ok(NodeIdentity { uuid, pubkey })
+    }
+
+    /// Creates the first node for the NodeManager. This will handle if we need to create a new node
+    /// or unarchive the first node.
+    pub async fn create_first_node(&self) -> Result<NodeIdentity, MutinyError> {
+        let needs_new_node = {
+            let node_storage = self.node_storage.read().await;
+            node_storage.nodes.is_empty()
+        };
+
+        // if we've never created a node, we need to create one
+        // otherwise we need to unarchive the first node
+        if needs_new_node {
+            self.new_node().await
+        } else {
+            self.unarchive_first_node().await
+        }
+    }
+
+    /// Checks if the node manager is unused. This is used to determine if we are safe to remove the node manager
+    pub async fn is_unused(&self) -> Result<bool, MutinyError> {
+        // if we have any balances, we are not unused
+        if !self.get_balance().await?.is_zero() {
+            return Ok(false);
+        }
+
+        // if we have any monitors, we are not unused
+        let nodes = self.nodes.read().await;
+        for (_, n) in nodes.iter() {
+            if !n.chain_monitor.get_claimable_balances(&[]).is_empty() {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
     }
 
     /// Lists the pubkeys of the lightning node in the manager.
@@ -2045,9 +2092,12 @@ pub(crate) async fn create_new_node_from_node_manager<S: MutinyStorage>(
     let next_node_uuid = new_node.uuid.clone();
 
     existing_nodes.version += 1;
-    existing_nodes
+    let old = existing_nodes
         .nodes
         .insert(next_node_uuid.clone(), next_node);
+
+    debug_assert!(old.is_none(), "Node index should not exist in storage");
+
     node_manager.storage.insert_nodes(&existing_nodes).await?;
     node_mutex.nodes = existing_nodes.nodes.clone();
 
@@ -2136,7 +2186,7 @@ mod tests {
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
 
-        assert!(!NodeManager::has_node_manager(storage.clone()));
+        assert!(!NodeManager::is_wallet_present(storage.clone()));
         let c = MutinyWalletConfigBuilder::new(xpriv)
             .with_network(network)
             .build();
@@ -2146,7 +2196,7 @@ mod tests {
             .await
             .expect("node manager should initialize");
         storage.insert_mnemonic(seed).unwrap();
-        assert!(NodeManager::has_node_manager(storage));
+        assert!(NodeManager::is_wallet_present(storage));
     }
 
     #[test]

@@ -179,6 +179,9 @@ pub enum MutinyError {
     /// Failed to connect to a federation.
     #[error("Failed to connect to a federation.")]
     FederationConnectionFailed,
+    /// A node manager has not been created yet.
+    #[error("A node manager has not been created yet.")]
+    NodeManagerRequired,
     #[error(transparent)]
     Other(anyhow::Error),
 }
@@ -263,6 +266,7 @@ impl PartialEq for MutinyError {
             (Self::TokenAlreadySpent, Self::TokenAlreadySpent) => true,
             (Self::FederationRequired, Self::FederationRequired) => true,
             (Self::FederationConnectionFailed, Self::FederationConnectionFailed) => true,
+            (Self::NodeManagerRequired, Self::NodeManagerRequired) => true,
             (Self::Other(e), Self::Other(e2)) => e.to_string() == e2.to_string(),
             _ => false,
         }
