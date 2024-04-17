@@ -132,6 +132,7 @@ use crate::nostr::{NostrKeySource, RELAYS};
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 
+pub const DEVICE_LOCK_INTERVAL_SECS: u64 = 30;
 const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 const MAX_FEDERATION_INVOICE_AMT: u64 = 200_000;
@@ -835,6 +836,37 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             self.storage.clone(),
             self.session_id,
         ));
+
+        // Need to prevent other devices from running at the same time
+        if !config.skip_device_lock {
+            let start = Instant::now();
+            log_trace!(logger, "Checking device lock");
+            if let Some(lock) = self.storage.get_device_lock()? {
+                log_info!(logger, "Current device lock: {lock:?}");
+            }
+            self.storage.set_device_lock().await?;
+            log_trace!(
+                logger,
+                "Device lock set: took {}ms",
+                start.elapsed().as_millis()
+            );
+        }
+
+        // spawn thread to claim device lock
+        let storage_clone = self.storage.clone();
+        let logger_clone = logger.clone();
+        let stop_clone = stop.clone();
+        spawn(async move {
+            loop {
+                if stop_clone.load(Ordering::Relaxed) {
+                    break;
+                }
+                sleep((DEVICE_LOCK_INTERVAL_SECS * 1_000) as i32).await;
+                if let Err(e) = storage_clone.set_device_lock().await {
+                    log_error!(logger_clone, "Error setting device lock: {e}");
+                }
+            }
+        });
 
         let start = Instant::now();
 
