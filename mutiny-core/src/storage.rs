@@ -1,11 +1,12 @@
 use crate::event::HTLCStatus;
-use crate::nodemanager::{ChannelClosure, NodeStorage, DEVICE_LOCK_INTERVAL_SECS};
+use crate::nodemanager::{ChannelClosure, NodeStorage};
 use crate::utils::{now, spawn};
 use crate::vss::{MutinyVssClient, VssKeyValueItem};
 use crate::{blindauth::TokenStorage, logging::MutinyLogger};
 use crate::{
     encrypt::{decrypt_with_password, encrypt, encryption_key_from_pass, Cipher},
     federation::FederationStorage,
+    DEVICE_LOCK_INTERVAL_SECS,
 };
 use crate::{
     error::{MutinyError, MutinyStorageError},

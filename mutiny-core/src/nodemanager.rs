@@ -63,8 +63,6 @@ use std::{collections::HashMap, ops::Deref, sync::Arc};
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
-pub const DEVICE_LOCK_INTERVAL_SECS: u64 = 30;
-
 // This is the NodeStorage object saved to the DB
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
 pub struct NodeStorage {
@@ -328,36 +326,6 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
         let websocket_proxy_addr = c
             .websocket_proxy_addr
             .unwrap_or_else(|| String::from("wss://p.mutinywallet.com"));
-
-        // Need to prevent other devices from running at the same time
-        if !c.skip_device_lock {
-            let start = Instant::now();
-            log_trace!(logger, "Checking device lock");
-            if let Some(lock) = self.storage.get_device_lock()? {
-                log_info!(logger, "Current device lock: {lock:?}");
-            }
-            self.storage.set_device_lock().await?;
-            log_trace!(
-                logger,
-                "Device lock set: took {}ms",
-                start.elapsed().as_millis()
-            );
-        }
-
-        let storage_clone = self.storage.clone();
-        let logger_clone = logger.clone();
-        let stop_clone = stop.clone();
-        utils::spawn(async move {
-            loop {
-                if stop_clone.load(Ordering::Relaxed) {
-                    break;
-                }
-                sleep((DEVICE_LOCK_INTERVAL_SECS * 1_000) as i32).await;
-                if let Err(e) = storage_clone.set_device_lock().await {
-                    log_error!(logger_clone, "Error setting device lock: {e}");
-                }
-            }
-        });
 
         let start = Instant::now();
         log_info!(logger, "Building node manager components");
