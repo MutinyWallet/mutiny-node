@@ -603,13 +603,6 @@ impl<S: MutinyStorage> NodeManager<S> {
         nodes.clear();
         log_debug!(self.logger, "stopped all nodes");
 
-        // stop the indexeddb object to close db connection
-        if self.storage.connected().unwrap_or(false) {
-            log_debug!(self.logger, "stopping storage");
-            self.storage.stop();
-            log_debug!(self.logger, "stopped storage");
-        }
-
         Ok(())
     }
 
