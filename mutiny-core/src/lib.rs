@@ -872,7 +872,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
 
         let mut nm_builder = NodeManagerBuilder::new(self.xprivkey, self.storage.clone())
             .with_config(config.clone());
-        nm_builder.with_stop(stop.clone());
         nm_builder.with_logger(logger.clone());
         let node_manager = Arc::new(nm_builder.build().await?);
 
@@ -1182,7 +1181,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         let mut nm_builder = NodeManagerBuilder::new(self.xprivkey, self.storage.clone())
             .with_config(self.config.clone());
-        nm_builder.with_stop(self.stop.clone());
         nm_builder.with_logger(self.logger.clone());
 
         // when we restart, gen a new session id
@@ -2347,7 +2345,18 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Stops all of the nodes and background processes.
     /// Returns after node has been stopped.
     pub async fn stop(&self) -> Result<(), MutinyError> {
-        self.node_manager.stop().await
+        self.stop.store(true, Ordering::Relaxed);
+
+        self.node_manager.stop().await?;
+
+        // stop the indexeddb object to close db connection
+        if self.storage.connected().unwrap_or(false) {
+            log_debug!(self.logger, "stopping storage");
+            self.storage.stop();
+            log_debug!(self.logger, "stopped storage");
+        }
+
+        Ok(())
     }
 
     pub async fn change_password(
