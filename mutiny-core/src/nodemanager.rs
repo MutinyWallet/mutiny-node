@@ -377,6 +377,8 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             start.elapsed().as_millis()
         );
 
+        let has_done_initial_ldk_sync = Arc::new(AtomicBool::new(false));
+
         let nodes = if c.safe_mode {
             // If safe mode is enabled, we don't start any nodes
             log_warn!(logger, "Safe mode enabled, not starting any nodes");
@@ -404,6 +406,7 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
                     .with_fee_estimator(fee_estimator.clone())
                     .with_wallet(wallet.clone())
                     .with_esplora(esplora.clone())
+                    .with_initial_sync(has_done_initial_ldk_sync.clone())
                     .with_network(c.network);
                 node_builder.with_logger(logger.clone());
 
@@ -491,7 +494,7 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             logger,
             do_not_connect_peers: c.do_not_connect_peers,
             safe_mode: c.safe_mode,
-            has_done_initial_ldk_sync: Arc::new(AtomicBool::new(false)),
+            has_done_initial_ldk_sync,
         };
 
         Ok(nm)
