@@ -1671,7 +1671,7 @@ impl<S: MutinyStorage> Node<S> {
                     MutinyError::InvoiceCreationFailed
                 })?
         } else {
-            RecipientOnionFields::secret_only(payment_secret)
+            RecipientOnionFields::spontaneous_empty()
         };
 
         let pay_result = self.channel_manager.send_spontaneous_payment_with_retry(
