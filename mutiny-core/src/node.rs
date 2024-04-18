@@ -1446,11 +1446,15 @@ impl<S: MutinyStorage> Node<S> {
             if self.stop.load(Ordering::Relaxed) {
                 return Err(MutinyError::NotRunning);
             }
-            if !self.channel_manager.list_usable_channels().is_empty()
-                && self.has_done_initial_sync.load(Ordering::SeqCst)
-            {
+            let has_usable = !self.channel_manager.list_usable_channels().is_empty();
+            let init = self.has_done_initial_sync.load(Ordering::Relaxed);
+            if has_usable && init {
                 break;
             }
+            log_trace!(
+                self.logger,
+                "waiting for channel to be usable, has usable channels: {has_usable} finished init sync:{init}"
+            );
             sleep(1_000).await;
         }
 
