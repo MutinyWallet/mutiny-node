@@ -429,7 +429,7 @@ pub(crate) async fn connect_peer_if_necessary<
 
                         tokio::select! {
                             _ = &mut connection_closed_future => break,
-                            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {},
+                            _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {},
                         }
 
                         // make sure they are still a peer
