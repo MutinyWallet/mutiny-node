@@ -51,36 +51,25 @@ pub fn schedule_descriptor_read<P: PeerManager>(
     let descriptor_clone = descriptor.clone();
     utils::spawn(async move {
         loop {
-            let mut read_fut = Box::pin(descriptor_clone.read()).fuse();
-            let delay_fut = Box::pin(utils::sleep(1_000)).fuse();
-            pin_mut!(delay_fut);
-            select! {
-                msg_option = read_fut => {
-                    if let Some(msg) = msg_option {
-                        match msg {
-                            Ok(b) => {
-                                log_trace!(logger, "received binary data from websocket: {}", b.len());
+            let read_fut = Box::pin(descriptor_clone.read()).fuse();
+            if let Some(msg) = read_fut.await {
+                match msg {
+                    Ok(b) => {
+                        log_trace!(logger, "received binary data from websocket: {}", b.len());
 
-                                let read_res = peer_manager.read_event(&mut descriptor, &b);
-                                match read_res {
-                                    Ok(_read_bool) => {
-                                        peer_manager.process_events();
-                                    }
-                                    Err(e) => log_error!(logger, "got an error reading event: {}", e),
-                                }
-                            }
-                            Err(e) => {
-                                log_error!(logger, "got an error reading msg: {}", e);
-                                descriptor.disconnect_socket();
-                                peer_manager.socket_disconnected(&mut descriptor);
+                        let read_res = peer_manager.read_event(&mut descriptor, &b);
+                        match read_res {
+                            Ok(_read_bool) => {
                                 peer_manager.process_events();
-                                break;
                             }
+                            Err(e) => log_error!(logger, "got an error reading event: {}", e),
                         }
                     }
-                }
-                _ = delay_fut => {
-                    if stop.load(Ordering::Relaxed) {
+                    Err(e) => {
+                        log_error!(logger, "got an error reading msg: {}", e);
+                        descriptor.disconnect_socket();
+                        peer_manager.socket_disconnected(&mut descriptor);
+                        peer_manager.process_events();
                         break;
                     }
                 }
