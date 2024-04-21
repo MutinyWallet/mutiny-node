@@ -1541,7 +1541,6 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
 
         self.storage.set_nwc_sync_time(event.created_at.as_u64())?;
 
-        // TODO: handle nwc response here
         if let Some(mut nwc) = nwc {
             nwc.handle_nwc_request(event, invoice_handler, self).await?;
         }

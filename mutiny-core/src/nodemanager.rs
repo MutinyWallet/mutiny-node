@@ -3,7 +3,6 @@ use crate::labels::LabelStorage;
 use crate::ldkstorage::CHANNEL_CLOSURE_PREFIX;
 use crate::logging::LOGGING_KEY;
 use crate::utils::{sleep, spawn};
-use crate::MutinyInvoice;
 use crate::MutinyWalletConfig;
 use crate::{
     chain::MutinyChain,
@@ -23,6 +22,7 @@ use crate::{
     node::NodeBuilder,
     storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY},
 };
+use crate::{CustomTLV, MutinyInvoice};
 use anyhow::anyhow;
 use async_lock::RwLock;
 use bdk::chain::{BlockId, ConfirmationTime};
@@ -1406,13 +1406,13 @@ impl<S: MutinyStorage> NodeManager<S> {
         self_node_pubkey: Option<&PublicKey>,
         to_node: PublicKey,
         amt_sats: u64,
-        message: Option<String>,
+        custom_tlvs: Vec<CustomTLV>,
         labels: Vec<String>,
         preimage: Option<[u8; 32]>,
     ) -> Result<MutinyInvoice, MutinyError> {
         let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
         log_debug!(self.logger, "Keysending to {to_node}");
-        node.keysend_with_timeout(to_node, amt_sats, message, labels, None, preimage)
+        node.keysend_with_timeout(to_node, amt_sats, custom_tlvs, labels, None, preimage)
             .await
     }
 

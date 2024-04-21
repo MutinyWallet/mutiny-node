@@ -850,14 +850,22 @@ impl MutinyWallet {
         &self,
         to_node: String,
         amt_sats: u64,
-        message: Option<String>,
+        custom_tlvs: Vec<CustomTLV>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let to_node = PublicKey::from_str(&to_node)?;
+        let custom_tlvs = custom_tlvs
+            .into_iter()
+            .map(|tlv| mutiny_core::CustomTLV {
+                tlv_type: tlv.tlv_type,
+                value: tlv.value,
+            })
+            .collect();
+
         Ok(self
             .inner
             .node_manager
-            .keysend(None, to_node, amt_sats, message, labels, None)
+            .keysend(None, to_node, amt_sats, custom_tlvs, labels, None)
             .await?
             .into())
     }

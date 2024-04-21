@@ -1197,3 +1197,10 @@ impl From<mutiny_core::DirectMessage> for DirectMessage {
         }
     }
 }
+
+#[wasm_bindgen]
+pub struct CustomTLV {
+    pub tlv_type: u64,
+    #[wasm_bindgen(skip)]
+    pub value: String,
+}

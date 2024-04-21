@@ -19,7 +19,7 @@ use crate::{
     onchain::OnChainWallet,
     peermanager::{GossipMessageHandler, PeerManagerImpl},
     utils::{self, sleep},
-    MutinyInvoice, PrivacyLevel,
+    CustomTLV, MutinyInvoice, PrivacyLevel,
 };
 use crate::{fees::P2WSH_OUTPUT_SIZE, peermanager::connect_peer_if_necessary};
 use crate::{keymanager::PhantomKeysManager, scorer::HubPreferentialScorer};
@@ -41,7 +41,6 @@ use futures_util::lock::Mutex;
 use hex_conservative::DisplayHex;
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
 use lightning::ln::channelmanager::ChannelDetails;
-use lightning::ln::PaymentSecret;
 use lightning::onion_message::messenger::OnionMessenger as LdkOnionMessenger;
 use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
 use lightning::sign::{EntropySource, InMemorySigner, NodeSigner, Recipient};
@@ -1614,7 +1613,7 @@ impl<S: MutinyStorage> Node<S> {
         &self,
         to_node: PublicKey,
         amt_sats: u64,
-        message: Option<String>,
+        custom_tlvs: Vec<CustomTLV>,
         labels: Vec<String>,
         payment_id: PaymentId,
         preimage: Option<[u8; 32]>,
@@ -1652,10 +1651,6 @@ impl<S: MutinyStorage> Node<S> {
             sleep(1_000).await;
         }
 
-        let mut entropy = [0u8; 32];
-        getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
-        let payment_secret = PaymentSecret(entropy);
-
         let preimage = match preimage {
             Some(value) => PaymentPreimage(value),
             None => {
@@ -1673,13 +1668,17 @@ impl<S: MutinyStorage> Node<S> {
             max_total_routing_fee_msat: None,
         };
 
-        let recipient_onion = if let Some(msg) = message {
-            // keysend messages are encoded as TLV type 34349334
-            RecipientOnionFields::secret_only(payment_secret)
-                .with_custom_tlvs(vec![(34349334, msg.encode())])
+        let recipient_onion = if !custom_tlvs.is_empty() {
+            let custom_tlvs: Vec<(u64, Vec<u8>)> = custom_tlvs
+                .into_iter()
+                .map(|tlv| (tlv.tlv_type, tlv.value.encode()))
+                .collect();
+
+            RecipientOnionFields::spontaneous_empty()
+                .with_custom_tlvs(custom_tlvs)
                 .map_err(|_| {
                     log_error!(self.logger, "could not encode keysend message");
-                    MutinyError::InvoiceCreationFailed
+                    MutinyError::InvalidArgumentsError
                 })?
         } else {
             RecipientOnionFields::spontaneous_empty()
@@ -1739,7 +1738,7 @@ impl<S: MutinyStorage> Node<S> {
         &self,
         to_node: PublicKey,
         amt_sats: u64,
-        message: Option<String>,
+        custom_tlvs: Vec<CustomTLV>,
         labels: Vec<String>,
         timeout_secs: Option<u64>,
         preimage: Option<[u8; 32]>,
@@ -1753,7 +1752,7 @@ impl<S: MutinyStorage> Node<S> {
             .init_keysend_payment(
                 to_node,
                 amt_sats,
-                message,
+                custom_tlvs,
                 labels.clone(),
                 payment_id,
                 preimage,

@@ -84,7 +84,7 @@ use ::nostr::nips::nip47::Method;
 use ::nostr::nips::nip57;
 #[cfg(target_arch = "wasm32")]
 use ::nostr::prelude::rand::rngs::OsRng;
-use ::nostr::prelude::ZapRequestData;
+use ::nostr::prelude::{LookupInvoiceResponseResult, TransactionType, ZapRequestData};
 #[cfg(target_arch = "wasm32")]
 use ::nostr::Tag;
 use ::nostr::{EventBuilder, EventId, JsonUtil, Keys, Kind};
@@ -145,6 +145,7 @@ pub trait InvoiceHandler {
     fn get_network(&self) -> Network;
     async fn get_best_block(&self) -> Result<BestBlock, MutinyError>;
     async fn lookup_payment(&self, payment_hash: &[u8; 32]) -> Option<MutinyInvoice>;
+    async fn get_payments_by_label(&self, label: &str) -> Result<Vec<MutinyInvoice>, MutinyError>;
     async fn pay_invoice(
         &self,
         invoice: &Bolt11Invoice,
@@ -161,7 +162,7 @@ pub trait InvoiceHandler {
         &self,
         to_node: PublicKey,
         amt_sats: u64,
-        message: Option<String>,
+        custom_tlvs: Vec<CustomTLV>,
         labels: Vec<String>,
         preimage: Option<[u8; 32]>,
     ) -> Result<MutinyInvoice, MutinyError>;
@@ -171,6 +172,12 @@ pub struct LnUrlParams {
     pub max: u64,
     pub min: u64,
     pub tag: String,
+}
+
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct CustomTLV {
+    pub tlv_type: u64,
+    pub value: String,
 }
 
 /// Plan is a subscription plan for Mutiny+
@@ -422,6 +429,60 @@ impl From<Bolt11Invoice> for MutinyInvoice {
             inbound: true,
             labels: vec![],
             last_updated: timestamp,
+        }
+    }
+}
+
+impl From<MutinyInvoice> for LookupInvoiceResponseResult {
+    fn from(invoice: MutinyInvoice) -> Self {
+        let transaction_type = if invoice.inbound {
+            Some(TransactionType::Incoming)
+        } else {
+            Some(TransactionType::Outgoing)
+        };
+
+        let (description, description_hash) = match invoice.bolt11.as_ref() {
+            None => (None, None),
+            Some(invoice) => match invoice.description() {
+                Bolt11InvoiceDescription::Direct(desc) => (Some(desc.to_string()), None),
+                Bolt11InvoiceDescription::Hash(hash) => (None, Some(hash.0.to_string())),
+            },
+        };
+
+        // try to get created_at from invoice,
+        // if it is not set, use last_updated as that's our closest approximation
+        let created_at = invoice
+            .bolt11
+            .as_ref()
+            .map(|b| b.duration_since_epoch().as_secs())
+            .unwrap_or(invoice.last_updated);
+
+        let settled_at = if invoice.status == HTLCStatus::Succeeded {
+            Some(invoice.last_updated)
+        } else {
+            None
+        };
+
+        // only reveal preimage if it is settled
+        let preimage = if invoice.status == HTLCStatus::Succeeded {
+            invoice.preimage
+        } else {
+            None
+        };
+
+        LookupInvoiceResponseResult {
+            transaction_type,
+            invoice: invoice.bolt11.map(|i| i.to_string()),
+            description,
+            description_hash,
+            preimage,
+            payment_hash: invoice.payment_hash.into_32().to_lower_hex_string(),
+            amount: invoice.amount_sats.map(|a| a * 1_000).unwrap_or(0),
+            fees_paid: invoice.fees_paid.map(|a| a * 1_000).unwrap_or(0),
+            created_at,
+            expires_at: invoice.expire,
+            settled_at,
+            metadata: Default::default(),
         }
     }
 }
@@ -3104,6 +3165,19 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
             .ok()
     }
 
+    async fn get_payments_by_label(&self, label: &str) -> Result<Vec<MutinyInvoice>, MutinyError> {
+        let label_activity = self.get_label_activity(&label.to_string()).await?;
+        let mut invoices: Vec<MutinyInvoice> = Vec::with_capacity(label.len());
+
+        for item in label_activity {
+            if let ActivityItem::Lightning(mutiny_invoice) = item {
+                invoices.push(*mutiny_invoice);
+            }
+        }
+
+        Ok(invoices)
+    }
+
     async fn pay_invoice(
         &self,
         invoice: &Bolt11Invoice,
@@ -3125,12 +3199,12 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
         &self,
         to_node: PublicKey,
         amt_sats: u64,
-        message: Option<String>,
+        custom_tlvs: Vec<CustomTLV>,
         labels: Vec<String>,
         preimage: Option<[u8; 32]>,
     ) -> Result<MutinyInvoice, MutinyError> {
         self.node_manager
-            .keysend(None, to_node, amt_sats, message, labels, preimage)
+            .keysend(None, to_node, amt_sats, custom_tlvs, labels, preimage)
             .await
     }
 }
