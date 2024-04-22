@@ -135,7 +135,6 @@ use mockall::{automock, predicate::*};
 pub const DEVICE_LOCK_INTERVAL_SECS: u64 = 30;
 const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
-const MAX_FEDERATION_INVOICE_AMT: u64 = 200_000;
 const SWAP_LABEL: &str = "SWAP";
 const MELT_CASHU_TOKEN: &str = "Cashu Token Melt";
 
@@ -1737,9 +1736,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         amount: u64,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
-        // Attempt to create federation invoice if available and below max amount
+        // Attempt to create federation invoice if available
         let federation_ids = self.list_federation_ids().await?;
-        if !federation_ids.is_empty() && amount <= MAX_FEDERATION_INVOICE_AMT {
+        if !federation_ids.is_empty() {
             let federation_id = &federation_ids[0];
             let fedimint_client = self.federations.read().await.get(federation_id).cloned();
 
