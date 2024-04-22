@@ -154,6 +154,9 @@ pub enum MutinyError {
     /// Cannot change password to the same password
     #[error("Cannot change password to the same password.")]
     SamePassword,
+    /// Error with payjoin
+    #[error("Payjoin error: {0}")]
+    Payjoin(crate::payjoin::Error),
     /// Payjoin request creation failed.
     #[error("Failed to create payjoin request.")]
     PayjoinCreateRequest,
@@ -571,6 +574,12 @@ impl From<nostr::event::builder::Error> for MutinyError {
 impl From<nostr_sdk::signer::Error> for MutinyError {
     fn from(_e: nostr_sdk::signer::Error) -> Self {
         Self::NostrError
+    }
+}
+
+impl From<crate::payjoin::Error> for MutinyError {
+    fn from(e: crate::payjoin::Error) -> Self {
+        Self::Payjoin(e)
     }
 }
 

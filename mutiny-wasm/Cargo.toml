@@ -43,7 +43,7 @@ futures = "0.3.25"
 urlencoding = "2.1.2"
 once_cell = "1.18.0"
 hex-conservative = "0.1.1"
-payjoin = { version = "0.13.0", features = ["send", "base64"] }
+payjoin = { version = "0.15.0", features = ["send", "base64"] }
 fedimint-core = "0.3.0"
 moksha-core = "0.2.1"
 

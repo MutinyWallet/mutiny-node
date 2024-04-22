@@ -2,6 +2,7 @@ use crate::auth::MutinyAuthClient;
 use crate::labels::LabelStorage;
 use crate::ldkstorage::CHANNEL_CLOSURE_PREFIX;
 use crate::logging::LOGGING_KEY;
+use crate::payjoin::{random_ohttp_relay, Error as PayjoinError, PayjoinStorage, RecvSession};
 use crate::utils::{sleep, spawn};
 use crate::MutinyInvoice;
 use crate::MutinyWalletConfig;
@@ -50,11 +51,11 @@ use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use lightning_transaction_sync::EsploraSyncClient;
 use payjoin::Uri;
+use pj::receive::v2::Enrolled;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cmp::max;
-use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
@@ -99,6 +100,8 @@ pub struct MutinyBip21RawMaterials {
     pub invoice: Option<Bolt11Invoice>,
     pub btc_amount: Option<String>,
     pub labels: Vec<String>,
+    pub pj: Option<String>,
+    pub ohttp: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
@@ -577,6 +580,18 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(())
     }
 
+    /// Starts a background task to poll payjoin sessions to attempt receiving.
+    pub(crate) fn resume_payjoins(nm: Arc<NodeManager<S>>) {
+        let receives = nm.storage.list_recv_sessions().unwrap_or_default();
+        for payjoin in receives {
+            nm.clone().spawn_payjoin_receiver(payjoin);
+        }
+        let sends = nm.storage.list_send_sessions().unwrap_or_default();
+        for payjoin in sends {
+            nm.clone().spawn_payjoin_sender(payjoin);
+        }
+    }
+
     /// Creates a background process that will sync the wallet with the blockchain.
     /// This will also update the fee estimates every 10 minutes.
     pub fn start_sync(nm: Arc<NodeManager<S>>) {
@@ -666,6 +681,36 @@ impl<S: MutinyStorage> NodeManager<S> {
         Err(MutinyError::WalletOperationFailed)
     }
 
+    pub async fn start_payjoin_session(
+        &self,
+    ) -> Result<(Enrolled, payjoin::OhttpKeys), PayjoinError> {
+        use crate::payjoin::{fetch_ohttp_keys, PAYJOIN_DIR};
+
+        log_info!(self.logger, "Starting payjoin session");
+
+        let ohttp_keys = fetch_ohttp_keys().await?;
+        let http_client = reqwest::Client::builder().build()?;
+
+        let mut enroller = payjoin::receive::v2::Enroller::from_directory_config(
+            PAYJOIN_DIR.to_owned(),
+            ohttp_keys.clone(),
+            random_ohttp_relay().to_owned(),
+        );
+        let (req, context) = enroller.extract_req()?;
+        let ohttp_response = http_client
+            .post(req.url)
+            .header("Content-Type", "message/ohttp-req")
+            .body(req.body)
+            .send()
+            .await?;
+        let ohttp_response = ohttp_response.bytes().await?;
+        Ok((
+            enroller.process_res(ohttp_response.as_ref(), context)?,
+            ohttp_keys,
+        ))
+    }
+
+    // Send v2 payjoin request
     pub async fn send_payjoin(
         &self,
         uri: Uri<'_, NetworkUnchecked>,
@@ -678,6 +723,15 @@ impl<S: MutinyStorage> NodeManager<S> {
             .map_err(|_| MutinyError::IncorrectNetwork)?;
         let address = uri.address.clone();
         let original_psbt = self.wallet.create_signed_psbt(address, amount, fee_rate)?;
+        // Track this transaction in the wallet so it shows as an ActivityItem in UI.
+        // We'll cancel it if and when this original_psbt fallback is replaced with a received payjoin.
+        self.wallet
+            .insert_tx(
+                original_psbt.clone().extract_tx(),
+                ConfirmationTime::unconfirmed(crate::utils::now().as_secs()),
+                None,
+            )
+            .await?;
 
         let fee_rate = if let Some(rate) = fee_rate {
             FeeRate::from_sat_per_vb(rate)
@@ -686,58 +740,247 @@ impl<S: MutinyStorage> NodeManager<S> {
             FeeRate::from_sat_per_kwu(sat_per_kwu as f32)
         };
         let fee_rate = payjoin::bitcoin::FeeRate::from_sat_per_kwu(fee_rate.sat_per_kwu() as u64);
-        let original_psbt = payjoin::bitcoin::psbt::PartiallySignedTransaction::from_str(
-            &original_psbt.to_string(),
-        )
-        .map_err(|_| MutinyError::WalletOperationFailed)?;
         log_debug!(self.logger, "Creating payjoin request");
-        let (req, ctx) =
-            payjoin::send::RequestBuilder::from_psbt_and_uri(original_psbt.clone(), uri)
-                .unwrap()
-                .build_recommended(fee_rate)
-                .map_err(|_| MutinyError::PayjoinCreateRequest)?
-                .extract_v1()?;
-
-        let client = Client::builder()
-            .build()
-            .map_err(|e| MutinyError::Other(e.into()))?;
-
-        log_debug!(self.logger, "Sending payjoin request");
-        let res = client
-            .post(req.url)
-            .body(req.body)
-            .header("Content-Type", "text/plain")
-            .send()
-            .await
+        let req_ctx = payjoin::send::RequestBuilder::from_psbt_and_uri(original_psbt.clone(), uri)
             .map_err(|_| MutinyError::PayjoinCreateRequest)?
-            .bytes()
+            .build_recommended(fee_rate)
+            .map_err(|_| MutinyError::PayjoinConfigError)?;
+        let session = self.storage.store_new_send_session(
+            labels.clone(),
+            original_psbt.clone(),
+            req_ctx.clone(),
+        )?;
+        self.spawn_payjoin_sender(session);
+        Ok(original_psbt.extract_tx().txid())
+    }
+
+    fn spawn_payjoin_sender(&self, session: crate::payjoin::SendSession) {
+        let wallet = self.wallet.clone();
+        let logger = self.logger.clone();
+        let stop = self.stop.clone();
+        let storage = Arc::new(self.storage.clone());
+        utils::spawn(async move {
+            let proposal_psbt = match Self::poll_payjoin_sender(
+                stop,
+                wallet.clone(),
+                storage.clone(),
+                session.clone(),
+            )
             .await
-            .map_err(|_| MutinyError::PayjoinCreateRequest)?;
+            {
+                Ok(psbt) => psbt,
+                Err(e) => {
+                    // self.wallet cancel_tx
+                    log_error!(logger, "Error polling payjoin sender: {e}");
+                    return;
+                }
+            };
 
-        let mut cursor = Cursor::new(res.to_vec());
+            let session_clone = session.clone();
+            match Self::handle_proposal_psbt(
+                logger.clone(),
+                wallet,
+                session_clone.original_psbt,
+                proposal_psbt,
+                session_clone.labels,
+            )
+            .await
+            {
+                // Ensure ResponseError is logged with debug formatting
+                Err(e) => log_error!(logger, "Error handling payjoin proposal: {:?}", e),
+                Ok(txid) => log_info!(logger, "Payjoin proposal handled: {}", txid),
+            }
+            let o_txid = session.clone().original_psbt.clone().extract_tx().txid();
+            match storage.delete_send_session(session) {
+                Ok(_) => log_info!(logger, "Deleted payjoin send session: {}", o_txid),
+                Err(e) => log_error!(logger, "Error deleting payjoin send session: {e}"),
+            }
+        });
+    }
 
-        log_debug!(self.logger, "Processing payjoin response");
-        let proposal_psbt = ctx.process_response(&mut cursor).map_err(|e| {
-            // unrecognized error contents may only appear in debug logs and will not Display
-            log_debug!(self.logger, "Payjoin response error: {:?}", e);
-            e
-        })?;
+    async fn poll_payjoin_sender(
+        stop: Arc<AtomicBool>,
+        wallet: Arc<OnChainWallet<S>>,
+        storage: Arc<S>,
+        mut session: crate::payjoin::SendSession,
+    ) -> Result<bitcoin::psbt::Psbt, MutinyError> {
+        let http = Client::builder()
+            .build()
+            .map_err(|_| MutinyError::Other(anyhow!("failed to build http client")))?;
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                return Err(MutinyError::NotRunning);
+            }
 
-        // convert to pdk types
-        let original_psbt = PartiallySignedTransaction::from_str(&original_psbt.to_string())
-            .map_err(|_| MutinyError::PayjoinConfigError)?;
-        let proposal_psbt = PartiallySignedTransaction::from_str(&proposal_psbt.to_string())
-            .map_err(|_| MutinyError::PayjoinConfigError)?;
+            if session.expiry < utils::now() {
+                wallet
+                    .cancel_tx(&session.clone().original_psbt.extract_tx())
+                    .map_err(|_| crate::payjoin::Error::CancelPayjoinTx)?;
+                storage.delete_send_session(session)?;
+                return Err(MutinyError::Payjoin(crate::payjoin::Error::SessionExpired));
+            }
 
-        log_debug!(self.logger, "Sending payjoin..");
-        let tx = self
-            .wallet
+            let (req, ctx) = session
+                .req_ctx
+                .extract_v2(random_ohttp_relay().to_owned())
+                .map_err(|_| MutinyError::PayjoinConfigError)?;
+            // extract_v2 mutates the session, so we need to update it in storage to not reuse keys
+            storage.update_send_session(session.clone())?;
+            let response = http
+                .post(req.url)
+                .header("Content-Type", "message/ohttp-req")
+                .body(req.body)
+                .send()
+                .await
+                .map_err(|_| MutinyError::Other(anyhow!("failed to parse payjoin response")))?;
+            let mut reader =
+                std::io::Cursor::new(response.bytes().await.map_err(|_| {
+                    MutinyError::Other(anyhow!("failed to parse payjoin response"))
+                })?);
+
+            let psbt = ctx
+                .process_response(&mut reader)
+                .map_err(MutinyError::PayjoinResponse)?;
+            if let Some(psbt) = psbt {
+                let psbt = bitcoin::psbt::Psbt::from_str(&psbt.to_string())
+                    .map_err(|_| MutinyError::Other(anyhow!("psbt conversion failed")))?;
+                return Ok(psbt);
+            } else {
+                log::info!("No response yet for POST payjoin request, retrying some seconds");
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+        }
+    }
+
+    async fn handle_proposal_psbt(
+        logger: Arc<MutinyLogger>,
+        wallet: Arc<OnChainWallet<S>>,
+        original_psbt: PartiallySignedTransaction,
+        proposal_psbt: PartiallySignedTransaction,
+        labels: Vec<String>,
+    ) -> Result<Txid, MutinyError> {
+        log_debug!(logger, "Sending payjoin..");
+        let original_tx = original_psbt.clone().extract_tx();
+        let tx = wallet
             .send_payjoin(original_psbt, proposal_psbt, labels)
             .await?;
         let txid = tx.txid();
-        self.broadcast_transaction(tx).await?;
-        log_debug!(self.logger, "Payjoin broadcast! TXID: {txid}");
+        wallet.broadcast_transaction(tx).await?;
+        wallet.cancel_tx(&original_tx)?;
+        log_info!(logger, "Payjoin broadcast! TXID: {txid}");
         Ok(txid)
+    }
+
+    pub fn spawn_payjoin_receiver(&self, session: RecvSession) {
+        let logger = self.logger.clone();
+        let stop = self.stop.clone();
+        let storage = Arc::new(self.storage.clone());
+        let wallet = self.wallet.clone();
+        utils::spawn(async move {
+            match Self::receive_payjoin(wallet, stop, storage, session).await {
+                Ok(txid) => log_info!(logger, "Received payjoin txid: {txid}"),
+                Err(e) => log_error!(logger, "Error receiving payjoin: {e}"),
+            };
+        });
+    }
+
+    /// Poll the payjoin relay to maintain a payjoin session and create a payjoin proposal.
+    async fn receive_payjoin(
+        wallet: Arc<OnChainWallet<S>>,
+        stop: Arc<AtomicBool>,
+        storage: Arc<S>,
+        mut session: crate::payjoin::RecvSession,
+    ) -> Result<Txid, MutinyError> {
+        let http_client = reqwest::Client::builder()
+            .build()
+            .map_err(PayjoinError::Reqwest)?;
+        let proposal: payjoin::receive::v2::UncheckedProposal = Self::poll_for_fallback_psbt(
+            stop,
+            wallet.clone(),
+            storage.clone(),
+            &http_client,
+            &mut session,
+        )
+        .await?;
+        let original_tx = proposal.extract_tx_to_schedule_broadcast();
+        let mut payjoin_proposal = match wallet
+            .process_payjoin_proposal(proposal)
+            .await
+            .map_err(|e| PayjoinError::ReceiverStateMachine(e.to_string()))
+        {
+            Ok(p) => p,
+            Err(e) => {
+                wallet.broadcast_transaction(original_tx).await?;
+                return Err(e.into());
+            }
+        };
+
+        let (req, ohttp_ctx) = payjoin_proposal
+            .extract_v2_req()
+            .map_err(|e| PayjoinError::ReceiverStateMachine(e.to_string()))?;
+        let res = http_client
+            .post(req.url)
+            .header("Content-Type", "message/ohttp-req")
+            .body(req.body)
+            .send()
+            .await
+            .map_err(PayjoinError::Reqwest)?;
+        let res = res.bytes().await.map_err(PayjoinError::Reqwest)?;
+        // enroll must succeed
+        let _res = payjoin_proposal
+            .deserialize_res(res.to_vec(), ohttp_ctx)
+            .map_err(|e| PayjoinError::ReceiverStateMachine(e.to_string()))?;
+        let payjoin_tx = payjoin_proposal.psbt().clone().extract_tx();
+        let payjoin_txid = payjoin_tx.txid();
+        wallet
+            .insert_tx(
+                payjoin_tx.clone(),
+                ConfirmationTime::unconfirmed(utils::now().as_secs()),
+                None,
+            )
+            .await?;
+        session.payjoin_tx = Some(payjoin_tx);
+        storage.update_recv_session(session)?;
+        Ok(payjoin_txid)
+    }
+
+    async fn poll_for_fallback_psbt(
+        stop: Arc<AtomicBool>,
+        wallet: Arc<OnChainWallet<S>>,
+        storage: Arc<S>,
+        client: &reqwest::Client,
+        session: &mut crate::payjoin::RecvSession,
+    ) -> Result<payjoin::receive::v2::UncheckedProposal, PayjoinError> {
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                return Err(crate::payjoin::Error::Shutdown);
+            }
+
+            if session.expiry < utils::now() {
+                if let Some(payjoin_tx) = &session.payjoin_tx {
+                    wallet
+                        .cancel_tx(payjoin_tx)
+                        .map_err(|_| crate::payjoin::Error::CancelPayjoinTx)?;
+                }
+                let _ = storage.delete_recv_session(&session.enrolled.pubkey());
+                return Err(crate::payjoin::Error::SessionExpired);
+            }
+            let (req, context) = session.enrolled.extract_req()?;
+            let ohttp_response = client
+                .post(req.url)
+                .header("Content-Type", "message/ohttp-req")
+                .body(req.body)
+                .send()
+                .await?;
+            let ohttp_response = ohttp_response.bytes().await?;
+            let proposal = session
+                .enrolled
+                .process_res(ohttp_response.as_ref(), context)?;
+            match proposal {
+                Some(proposal) => return Ok(proposal),
+                None => utils::sleep(5000).await,
+            }
+        }
     }
 
     /// Sends an on-chain transaction to the given address.
