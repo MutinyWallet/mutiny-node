@@ -421,10 +421,7 @@ impl NostrWalletConnect {
         let mut needs_save = false;
         let mut needs_delete = false;
         let mut result = None;
-        if self.profile.active()
-            && event.kind == Kind::WalletConnectRequest
-            && event.pubkey == client_pubkey
-        {
+        if event.kind == Kind::WalletConnectRequest && event.pubkey == client_pubkey {
             let server_key = self.server_key.secret_key()?;
 
             let decrypted = decrypt(server_key, &client_pubkey, &event.content)?;
@@ -445,6 +442,18 @@ impl NostrWalletConnect {
                         .map(Some);
                 }
             };
+
+            // only respond to commands sent to active profiles
+            if !self.profile.active() {
+                return self
+                    .get_skipped_error_event(
+                        &event,
+                        req.method,
+                        ErrorCode::Other,
+                        "Nostr profile inactive".to_string(),
+                    )
+                    .map(Some);
+            }
 
             // only respond to commands that are allowed by the profile
             if !self.profile.available_commands().contains(&req.method) {
