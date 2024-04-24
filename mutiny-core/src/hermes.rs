@@ -632,7 +632,7 @@ async fn claim_ecash_notification<S: MutinyStorage>(
                             if msg.is_some() {
                                 // an Anon tag with a message is a private zap
                                 // try to decrypt the message and use that as the message
-                                handle_private_zap(&zap_req, profile_key, logger)
+                                Some(handle_private_zap(&zap_req, profile_key, logger))
                             } else {
                                 // an Anon tag with no message is an anonymous zap
                                 // the content of the zap is the message
@@ -744,25 +744,26 @@ fn handle_private_zap(
     zap_req: &Event,
     profile_key: Option<&Keys>,
     logger: &MutinyLogger,
-) -> Option<(PrivacyLevel, Option<String>, Option<nostr::PublicKey>)> {
-    let key = match profile_key {
-        Some(k) => k.secret_key().ok()?,
+) -> (PrivacyLevel, Option<String>, Option<nostr::PublicKey>) {
+    let key = match profile_key.and_then(|k| k.secret_key().ok()) {
+        Some(k) => k,
         None => {
             log_error!(logger, "No primary key to decrypt private zap");
-            return None;
+            // We can't decrypt the message, treat it as an anonymous zap
+            return (PrivacyLevel::Anonymous, Some(zap_req.content.clone()), None);
         }
     };
     // try to decrypt the message
     match decrypt_received_private_zap_message(key, zap_req) {
-        Ok(event) => Some((
+        Ok(event) => (
             PrivacyLevel::Private,
             Some(event.content.clone()),
             Some(event.pubkey),
-        )),
+        ),
         Err(e) => {
             // if we can't decrypt, treat it like it's an anonymous zap
             log_error!(logger, "Error decrypting private zap: {e}");
-            Some((PrivacyLevel::Anonymous, Some(zap_req.content.clone()), None))
+            (PrivacyLevel::Anonymous, Some(zap_req.content.clone()), None)
         }
     }
 }
