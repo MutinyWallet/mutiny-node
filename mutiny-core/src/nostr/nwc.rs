@@ -421,10 +421,7 @@ impl NostrWalletConnect {
         let mut needs_save = false;
         let mut needs_delete = false;
         let mut result = None;
-        if self.profile.active()
-            && event.kind == Kind::WalletConnectRequest
-            && event.pubkey == client_pubkey
-        {
+        if event.kind == Kind::WalletConnectRequest && event.pubkey == client_pubkey {
             let server_key = self.server_key.secret_key()?;
 
             let decrypted = decrypt(server_key, &client_pubkey, &event.content)?;
@@ -445,6 +442,18 @@ impl NostrWalletConnect {
                         .map(Some);
                 }
             };
+
+            // only respond to commands sent to active profiles
+            if !self.profile.active() {
+                return self
+                    .get_skipped_error_event(
+                        &event,
+                        req.method,
+                        ErrorCode::Other,
+                        "Nostr profile inactive".to_string(),
+                    )
+                    .map(Some);
+            }
 
             // only respond to commands that are allowed by the profile
             if !self.profile.available_commands().contains(&req.method) {
@@ -593,28 +602,38 @@ impl NostrWalletConnect {
             .label
             .clone()
             .unwrap_or(self.profile.name.clone());
-        let invoice = node.create_invoice(amount_sats, vec![label]).await?;
-        let bolt11 = invoice.bolt11.expect("just made");
 
-        let content = Response {
-            result_type: Method::MakeInvoice,
-            error: None,
-            result: Some(ResponseResult::MakeInvoice(MakeInvoiceResponseResult {
-                invoice: bolt11.to_string(),
-                payment_hash: bolt11.payment_hash().to_string(),
-            })),
+        let response = match node.create_invoice(amount_sats, vec![label]).await {
+            Err(e) => self.get_skipped_error_event(
+                &event,
+                Method::MakeInvoice,
+                ErrorCode::Other,
+                format!("Failed to create invoice: {:?}", e),
+            )?,
+            Ok(invoice) => {
+                let bolt11 = invoice.bolt11.expect("just made");
+
+                let content = Response {
+                    result_type: Method::MakeInvoice,
+                    error: None,
+                    result: Some(ResponseResult::MakeInvoice(MakeInvoiceResponseResult {
+                        invoice: bolt11.to_string(),
+                        payment_hash: bolt11.payment_hash().to_string(),
+                    })),
+                };
+
+                let encrypted = encrypt(
+                    self.server_key.secret_key()?,
+                    &self.client_key.public_key(),
+                    content.as_json(),
+                )?;
+
+                let p_tag = Tag::public_key(event.pubkey);
+                let e_tag = Tag::event(event.id);
+                EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
+                    .to_event(&self.server_key)?
+            }
         };
-
-        let encrypted = encrypt(
-            self.server_key.secret_key()?,
-            &self.client_key.public_key(),
-            content.as_json(),
-        )?;
-
-        let p_tag = Tag::public_key(event.pubkey);
-        let e_tag = Tag::event(event.id);
-        let response = EventBuilder::new(Kind::WalletConnectResponse, encrypted, [p_tag, e_tag])
-            .to_event(&self.server_key)?;
 
         Ok(Some(response))
     }
