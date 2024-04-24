@@ -65,7 +65,7 @@ pub struct RegisterResponse {
 
 pub struct HermesClient<S: MutinyStorage> {
     pub(crate) dm_key: Keys,
-    claim_key: SecretKey,
+    pub(crate) claim_key: SecretKey,
     pub public_key: nostr::PublicKey,
     pub client: Client,
     http_client: reqwest::Client,
@@ -742,5 +742,114 @@ fn handle_private_zap(
             log_error!(logger, "Error decrypting private zap: {e}");
             Some((PrivacyLevel::Anonymous, Some(zap_req.content.clone()), None))
         }
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod test {
+    use super::*;
+    use crate::auth::MutinyAuthClient;
+    use crate::generate_seed;
+    use crate::storage::MemoryStorage;
+    use crate::test_utils::create_manager;
+    use bitcoin::Network;
+
+    async fn create_hermes_client() -> HermesClient<MemoryStorage> {
+        let storage = MemoryStorage::default();
+        let logger = Arc::new(MutinyLogger::default());
+        let mnemonic = generate_seed(12).unwrap();
+        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &mnemonic.to_seed("")).unwrap();
+
+        // Set up test auth client
+        let auth_manager = create_manager();
+        let lnurl_client = Arc::new(
+            lnurl::Builder::default()
+                .build_async()
+                .expect("failed to make lnurl client"),
+        );
+        let auth_client = MutinyAuthClient::new(
+            auth_manager,
+            lnurl_client,
+            logger.clone(),
+            "https://auth-staging.mutinywallet.com".to_string(),
+        );
+
+        let blinded_auth = BlindAuthClient::new(
+            xpriv,
+            Arc::new(auth_client),
+            Network::Regtest,
+            "https://blind-auth-staging.mutinywallet.com".to_string(),
+            &storage,
+            logger.clone(),
+        )
+        .unwrap();
+
+        HermesClient::new(
+            xpriv,
+            "https://signet.mutiny.plus".to_string(),
+            Arc::new(RwLock::new(HashMap::new())),
+            Arc::new(blinded_auth),
+            &storage,
+            logger,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_correct_key_parity() {
+        let secp = Secp256k1::new();
+
+        // run 10 times to make sure we get the same parity each time
+        for _ in 0..10 {
+            let hermes = create_hermes_client().await;
+            let (_, parity) = hermes.claim_key.x_only_public_key(&secp);
+            assert_eq!(parity, Parity::Even);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_check_username() {
+        let hermes = create_hermes_client().await;
+        let result = check_hermes_registration_info(
+            &hermes.http_client,
+            &hermes.base_url,
+            hermes.client.clone(),
+        )
+        .await
+        .unwrap();
+
+        // new client should have no username
+        assert!(result.name.is_none());
+        assert!(result.disabled_zaps);
+        assert!(result.federation_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_name_available() {
+        let hermes = create_hermes_client().await;
+
+        // "test1234" should be taken
+        assert!(!hermes
+            .check_available_name("test1234".to_string())
+            .await
+            .unwrap());
+
+        // "x" is invalid, too short
+        assert!(!hermes.check_available_name("x".to_string()).await.unwrap());
+
+        // "thisisoverthe30characternamelimit" is invalid, too long
+        assert!(!hermes
+            .check_available_name("thisisoverthe30characternamelimit".to_string())
+            .await
+            .unwrap());
+
+        // random string should be available
+        // generate 32 hex and take first 20 characters
+        let rand = Keys::generate().public_key().to_string();
+        let string = rand.chars().take(20).collect::<String>();
+        assert!(hermes.check_available_name(string).await.unwrap());
     }
 }
