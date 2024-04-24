@@ -407,9 +407,54 @@ fn create_blind_auth_secret(
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod test {
-    use crate::blindauth::{ServicePlanIndex, SignedToken, TokenStorage};
-    use tbs::{BlindedMessage, BlindedSignature};
+    use crate::auth::MutinyAuthClient;
+    use crate::blindauth::{BlindAuthClient, ServicePlanIndex, SignedToken, TokenStorage};
+    use crate::generate_seed;
+    use crate::logging::MutinyLogger;
+    use crate::storage::MemoryStorage;
+    use crate::test_utils::create_manager;
+    use bitcoin::bip32::ExtendedPrivKey;
+    use bitcoin::Network;
+    use nostr::prelude::hex;
+    use std::sync::Arc;
+    use tbs::{
+        unblind_signature, AggregatePublicKey, BlindedMessage, BlindedSignature, PubKeyPoint,
+    };
+
+    const FREE_PK: &str = "a5596b43416c17dcd331a64d4a5f60ab3a470fc03f83a3d834910903ee78f5ade33da927b86481d6edd3de08e89455d6115f5c5e642f4a47d24c85a458369e736cfc410b984cf7e4bf97853a40632f26ca9ad65008bfbe27f40ab8aa7bdffe9f";
+
+    fn create_client() -> BlindAuthClient<MemoryStorage> {
+        let storage = MemoryStorage::default();
+        let logger = Arc::new(MutinyLogger::default());
+        let mnemonic = generate_seed(12).unwrap();
+        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &mnemonic.to_seed("")).unwrap();
+
+        // Set up test auth client
+        let auth_manager = create_manager();
+        let lnurl_client = Arc::new(
+            lnurl::Builder::default()
+                .build_async()
+                .expect("failed to make lnurl client"),
+        );
+        let auth_client = MutinyAuthClient::new(
+            auth_manager,
+            lnurl_client,
+            logger.clone(),
+            "https://auth-staging.mutinywallet.com".to_string(),
+        );
+
+        BlindAuthClient::new(
+            xpriv,
+            Arc::new(auth_client),
+            Network::Regtest,
+            "https://blind-auth-staging.mutinywallet.com".to_string(),
+            &storage,
+            logger,
+        )
+        .unwrap()
+    }
 
     #[test]
     fn test_token_storage_serialization() {
@@ -446,5 +491,33 @@ mod test {
         let string = "{\"map\":{\"1-1\":1},\"tokens\":[{\"counter\":1,\"service_id\":1,\"plan_id\":1,\"blinded_message\":\"c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\",\"blind_sig\":\"c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\",\"spent\":false}],\"version\":0}";
         let deserialized: TokenStorage = serde_json::from_str(string).unwrap();
         assert_eq!(storage, deserialized);
+    }
+
+    #[tokio::test]
+    async fn test_blind_auth_client() {
+        let client = create_client();
+        assert!(client.available_tokens().await.is_empty());
+
+        client.redeem_available_tokens().await.unwrap();
+
+        let tokens = client.available_tokens().await;
+        assert!(!tokens.is_empty());
+
+        let token = tokens.first().unwrap();
+
+        // do the unblinding
+        let (nonce, blinding_key) = client.get_unblinded_info_from_token(token);
+        let unblinded_sig = unblind_signature(blinding_key, token.blind_sig);
+
+        // check that the signature is valid
+        let free_pk: AggregatePublicKey = AggregatePublicKey(
+            PubKeyPoint::from_compressed(
+                hex::decode(FREE_PK).expect("Invalid key hex")[..]
+                    .try_into()
+                    .expect("Invalid key byte key"),
+            )
+            .expect("Invalid FREE_PK"),
+        );
+        assert!(tbs::verify(nonce.to_message(), unblinded_sig, free_pk));
     }
 }
