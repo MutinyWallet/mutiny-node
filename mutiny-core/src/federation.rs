@@ -171,6 +171,15 @@ pub struct FedimintBalance {
     pub amount: u64,
 }
 
+#[cfg_attr(test, mockall::automock)]
+pub trait FedimintClient {
+    async fn claim_external_receive(
+        &self,
+        secret_key: &SecretKey,
+        tweaks: Vec<u64>,
+    ) -> Result<(), MutinyError>;
+}
+
 pub(crate) struct FederationClient<S: MutinyStorage> {
     pub(crate) uuid: String,
     pub(crate) fedimint_client: ClientHandleArc,
@@ -738,6 +747,16 @@ fn maybe_update_after_checking_fedimint<S: MutinyStorage>(
     }
 
     Ok(())
+}
+
+impl<S: MutinyStorage> FedimintClient for FederationClient<S> {
+    async fn claim_external_receive(
+        &self,
+        secret_key: &SecretKey,
+        tweaks: Vec<u64>,
+    ) -> Result<(), MutinyError> {
+        self.claim_external_receive(secret_key, tweaks).await
+    }
 }
 
 fn sats_round_up(amount: &Amount) -> u64 {

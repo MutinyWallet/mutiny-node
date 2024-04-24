@@ -27,6 +27,7 @@ use tbs::unblind_signature;
 use url::Url;
 
 use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
+use crate::federation::FedimintClient;
 use crate::labels::LabelStorage;
 use crate::nostr::RELAYS;
 use crate::storage::persist_payment_info;
@@ -601,6 +602,103 @@ struct EcashNotification {
     pub preimage: String,
 }
 
+async fn claim_ecash_notification<S: MutinyStorage>(
+    notification: EcashNotification,
+    created_at: Timestamp,
+    federation: &impl FedimintClient,
+    storage: &S,
+    claim_key: &SecretKey,
+    profile_key: Option<&Keys>,
+    logger: &MutinyLogger,
+) -> anyhow::Result<Option<PaymentInfo>> {
+    match federation
+        .claim_external_receive(claim_key, vec![notification.tweak_index])
+        .await
+    {
+        Ok(_) => {
+            log_info!(
+                logger,
+                "Claimed external receive for {} msats!",
+                notification.amount
+            );
+
+            let (privacy_level, msg, npub) = match notification.zap_request {
+                None => (PrivacyLevel::NotAvailable, None, None),
+                Some(zap_req) => {
+                    let zap_req = Event::from_json(zap_req)?;
+                    // handle private/anon zaps
+                    let anon = zap_req.iter_tags().find_map(|tag| {
+                        if let Tag::Anon { msg } = tag {
+                            if msg.is_some() {
+                                // an Anon tag with a message is a private zap
+                                // try to decrypt the message and use that as the message
+                                handle_private_zap(&zap_req, profile_key, logger)
+                            } else {
+                                // an Anon tag with no message is an anonymous zap
+                                // the content of the zap is the message
+                                Some((PrivacyLevel::Anonymous, Some(zap_req.content.clone()), None))
+                            }
+                        } else {
+                            None
+                        }
+                    });
+
+                    // handled the anon tag, if there wasn't one, it is a public zap
+                    anon.unwrap_or((
+                        PrivacyLevel::Public,
+                        Some(zap_req.content.clone()),
+                        Some(zap_req.pubkey),
+                    ))
+                }
+            };
+
+            // create activity item
+            let payment_hash = notification.bolt11.payment_hash().into_32();
+            let preimage = FromHex::from_hex(&notification.preimage).ok();
+            let info = PaymentInfo {
+                preimage,
+                secret: Some(notification.bolt11.payment_secret().0),
+                status: HTLCStatus::Succeeded,
+                amt_msat: MillisatAmount(Some(notification.amount)),
+                fee_paid_msat: None,
+                payee_pubkey: Some(notification.bolt11.recover_payee_pub_key()),
+                bolt11: Some(notification.bolt11.clone()),
+                privacy_level,
+                // use the notification event's created_at as last update so we can properly sort by time
+                last_update: created_at.as_u64(),
+            };
+            persist_payment_info(storage, &payment_hash, &info, true)?;
+
+            // tag the invoice if we can
+            let mut tags = Vec::with_capacity(2);
+
+            // try to tag by contact by npub, otherwise tag by pubkey
+            if let Some(npub) = npub {
+                if let Some((id, _)) = storage.get_contact_for_npub(npub)? {
+                    tags.push(id);
+                } else {
+                    tags.push(npub.to_bech32().expect("must be valid"));
+                }
+            }
+
+            // add message tag if we have one
+            if let Some(msg) = msg.filter(|m| !m.is_empty()) {
+                tags.push(msg);
+            }
+
+            // save the tags if we have any
+            if !tags.is_empty() {
+                storage.set_invoice_labels(notification.bolt11, tags)?;
+            }
+
+            return Ok(Some(info));
+        }
+        Err(e) => log_error!(logger, "Error claiming external receive: {e}"),
+    }
+
+    Ok(None)
+}
+
 /// Attempts to claim the ecash, if successful, saves the payment info
 async fn handle_ecash_notification<S: MutinyStorage>(
     notification: EcashNotification,
@@ -618,92 +716,16 @@ async fn handle_ecash_notification<S: MutinyStorage>(
     );
 
     if let Some(federation) = federations.read().await.get(&notification.federation_id) {
-        match federation
-            .claim_external_receive(claim_key, vec![notification.tweak_index])
-            .await
-        {
-            Ok(_) => {
-                log_info!(
-                    logger,
-                    "Claimed external receive for {} msats!",
-                    notification.amount
-                );
-
-                let (privacy_level, msg, npub) = match notification.zap_request {
-                    None => (PrivacyLevel::NotAvailable, None, None),
-                    Some(zap_req) => {
-                        let zap_req = Event::from_json(zap_req)?;
-                        // handle private/anon zaps
-                        let anon = zap_req.iter_tags().find_map(|tag| {
-                            if let Tag::Anon { msg } = tag {
-                                if msg.is_some() {
-                                    // an Anon tag with a message is a private zap
-                                    // try to decrypt the message and use that as the message
-                                    handle_private_zap(&zap_req, profile_key, logger)
-                                } else {
-                                    // an Anon tag with no message is an anonymous zap
-                                    // the content of the zap is the message
-                                    Some((
-                                        PrivacyLevel::Anonymous,
-                                        Some(zap_req.content.clone()),
-                                        None,
-                                    ))
-                                }
-                            } else {
-                                None
-                            }
-                        });
-
-                        // handled the anon tag, if there wasn't one, it is a public zap
-                        anon.unwrap_or((
-                            PrivacyLevel::Public,
-                            Some(zap_req.content.clone()),
-                            Some(zap_req.pubkey),
-                        ))
-                    }
-                };
-
-                // create activity item
-                let payment_hash = notification.bolt11.payment_hash().into_32();
-                let preimage = FromHex::from_hex(&notification.preimage).ok();
-                let info = PaymentInfo {
-                    preimage,
-                    secret: Some(notification.bolt11.payment_secret().0),
-                    status: HTLCStatus::Succeeded,
-                    amt_msat: MillisatAmount(Some(notification.amount)),
-                    fee_paid_msat: None,
-                    payee_pubkey: Some(notification.bolt11.recover_payee_pub_key()),
-                    bolt11: Some(notification.bolt11.clone()),
-                    privacy_level,
-                    // use the notification event's created_at as last update so we can properly sort by time
-                    last_update: created_at.as_u64(),
-                };
-                persist_payment_info(storage, &payment_hash, &info, true)?;
-
-                // tag the invoice if we can
-                let mut tags = Vec::with_capacity(2);
-
-                // try to tag by contact by npub, otherwise tag by pubkey
-                if let Some(npub) = npub {
-                    if let Some((id, _)) = storage.get_contact_for_npub(npub)? {
-                        tags.push(id);
-                    } else {
-                        tags.push(npub.to_bech32().expect("must be valid"));
-                    }
-                }
-
-                // add message tag if we have one
-                if let Some(msg) = msg.filter(|m| !m.is_empty()) {
-                    tags.push(msg);
-                }
-
-                // save the tags if we have any
-                if !tags.is_empty() {
-                    storage.set_invoice_labels(notification.bolt11, tags)?;
-                }
-            }
-            Err(e) => log_error!(logger, "Error claiming external receive: {e}"),
-        }
+        claim_ecash_notification(
+            notification,
+            created_at,
+            federation.as_ref(),
+            storage,
+            claim_key,
+            profile_key,
+            logger,
+        )
+        .await?;
     } else {
         log_warn!(
             logger,
