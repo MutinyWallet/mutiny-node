@@ -8,6 +8,7 @@ use lightning::ln::peer_handler::PeerHandleError;
 use lightning_invoice::ParseOrSemanticError;
 use lightning_rapid_gossip_sync::GraphSyncError;
 use lightning_transaction_sync::TxSyncError;
+use log::error;
 use nostr::nips::nip05;
 use std::string::FromUtf8Error;
 use thiserror::Error;
@@ -179,7 +180,7 @@ pub enum MutinyError {
     #[error("Failed to connect to a federation.")]
     FederationConnectionFailed,
     #[error(transparent)]
-    Other(#[from] anyhow::Error),
+    Other(anyhow::Error),
 }
 
 #[derive(Error, Debug)]
@@ -583,5 +584,17 @@ impl From<payjoin::send::CreateRequestError> for MutinyError {
 impl From<payjoin::send::ResponseError> for MutinyError {
     fn from(e: payjoin::send::ResponseError) -> Self {
         Self::PayjoinResponse(e)
+    }
+}
+
+impl From<anyhow::Error> for MutinyError {
+    fn from(e: anyhow::Error) -> Self {
+        error!("Got unhandled error: {e}");
+        // handle fedimint anyhow errors
+        match e.to_string().as_str() {
+            "Insufficient balance" => Self::InsufficientBalance,
+            "MissingInvoiceAmount" => Self::BadAmountError,
+            _ => Self::Other(e),
+        }
     }
 }

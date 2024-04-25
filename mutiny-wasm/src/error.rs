@@ -228,15 +228,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::TokenAlreadySpent => MutinyJsError::TokenAlreadySpent,
             MutinyError::FederationRequired => MutinyJsError::FederationRequired,
             MutinyError::FederationConnectionFailed => MutinyJsError::FederationConnectionFailed,
-            MutinyError::Other(e) => {
-                error!("Got unhandled error: {e}");
-                // FIXME: For some unknown reason, InsufficientBalance is being returned as `Other`
-                if e.to_string().starts_with("Insufficient balance") {
-                    MutinyJsError::InsufficientBalance
-                } else {
-                    MutinyJsError::UnknownError
-                }
-            }
+            MutinyError::Other(_) => MutinyJsError::UnknownError,
             MutinyError::SubscriptionClientNotConfigured => {
                 MutinyJsError::SubscriptionClientNotConfigured
             }
