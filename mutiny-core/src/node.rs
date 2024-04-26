@@ -1336,23 +1336,6 @@ impl<S: MutinyStorage> Node<S> {
         Ok(())
     }
 
-    pub fn get_invoice_by_hash(&self, payment_hash: &Sha256) -> Result<MutinyInvoice, MutinyError> {
-        let (payment_info, inbound) = self.get_payment_info_from_persisters(payment_hash)?;
-        let labels_map = self.persister.storage.get_invoice_labels()?;
-        let labels = payment_info
-            .bolt11
-            .as_ref()
-            .and_then(|inv| labels_map.get(inv).cloned())
-            .unwrap_or_default();
-
-        MutinyInvoice::from(
-            payment_info,
-            PaymentHash(payment_hash.into_32()),
-            inbound,
-            labels,
-        )
-    }
-
     /// Gets all the closed channels for this node
     pub fn get_channel_closure(
         &self,
@@ -1364,32 +1347,6 @@ impl<S: MutinyStorage> Node<S> {
     /// Gets all the closed channels for this node
     pub fn get_channel_closures(&self) -> Result<Vec<ChannelClosure>, MutinyError> {
         self.persister.list_channel_closures()
-    }
-
-    pub fn get_payment_info_from_persisters(
-        &self,
-        payment_hash: &bitcoin::hashes::sha256::Hash,
-    ) -> Result<(PaymentInfo, bool), MutinyError> {
-        // try inbound first
-        if let Some(payment_info) = read_payment_info(
-            &self.persister.storage,
-            &payment_hash.into_32(),
-            true,
-            &self.logger,
-        ) {
-            return Ok((payment_info, true));
-        }
-
-        // if no inbound check outbound
-        match read_payment_info(
-            &self.persister.storage,
-            &payment_hash.into_32(),
-            false,
-            &self.logger,
-        ) {
-            Some(payment_info) => Ok((payment_info, false)),
-            None => Err(MutinyError::NotFound),
-        }
     }
 
     fn retry_strategy() -> Retry {
@@ -2431,6 +2388,7 @@ pub(crate) fn default_user_config(accept_underpaying_htlcs: bool) -> UserConfig 
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
+    use crate::get_invoice_by_hash;
     use crate::node::{map_sending_failure, parse_peer_info};
     use crate::storage::MemoryStorage;
     use crate::test_utils::*;
@@ -2589,6 +2547,7 @@ mod tests {
     async fn test_create_invoice() {
         let storage = MemoryStorage::default();
         let node = create_node(storage.clone()).await;
+        let logger = Arc::new(MutinyLogger::default());
 
         let now = crate::utils::now().as_secs();
 
@@ -2607,8 +2566,8 @@ mod tests {
             _ => panic!("unexpected invoice description"),
         }
 
-        let from_storage = node.get_invoice_by_hash(invoice.payment_hash()).unwrap();
-        let by_hash = node.get_invoice_by_hash(invoice.payment_hash()).unwrap();
+        let from_storage = get_invoice_by_hash(invoice.payment_hash(), &storage, &logger).unwrap();
+        let by_hash = get_invoice_by_hash(invoice.payment_hash(), &storage, &logger).unwrap();
 
         assert_eq!(from_storage, by_hash);
         assert_eq!(from_storage.bolt11, Some(invoice.clone()));
@@ -2723,16 +2682,20 @@ mod tests {
 #[cfg(test)]
 #[cfg(target_arch = "wasm32")]
 mod wasm_test {
-    use crate::event::{MillisatAmount, PaymentInfo};
-    use crate::labels::LabelStorage;
     use crate::storage::MemoryStorage;
     use crate::test_utils::create_node;
     use crate::{error::MutinyError, storage::persist_payment_info};
+    use crate::{
+        event::{MillisatAmount, PaymentInfo},
+        storage::get_invoice_by_hash,
+    };
+    use crate::{labels::LabelStorage, logging::MutinyLogger};
     use crate::{HTLCStatus, PrivacyLevel};
     use itertools::Itertools;
     use lightning::ln::channelmanager::PaymentId;
     use lightning::ln::PaymentHash;
     use lightning_invoice::Bolt11InvoiceDescription;
+    use std::sync::Arc;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -2748,6 +2711,7 @@ mod wasm_test {
     async fn test_create_invoice() {
         let storage = MemoryStorage::default();
         let node = create_node(storage.clone()).await;
+        let logger = Arc::new(MutinyLogger::default());
 
         let now = crate::utils::now().as_secs();
 
@@ -2768,8 +2732,8 @@ mod wasm_test {
             _ => panic!("unexpected invoice description"),
         }
 
-        let from_storage = node.get_invoice_by_hash(invoice.payment_hash()).unwrap();
-        let by_hash = node.get_invoice_by_hash(invoice.payment_hash()).unwrap();
+        let from_storage = get_invoice_by_hash(invoice.payment_hash(), &storage, &logger).unwrap();
+        let by_hash = get_invoice_by_hash(invoice.payment_hash(), &storage, &logger).unwrap();
 
         assert_eq!(from_storage, by_hash);
         assert_eq!(from_storage.bolt11, Some(invoice.clone()));

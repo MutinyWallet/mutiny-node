@@ -1,4 +1,4 @@
-use crate::event::HTLCStatus;
+use crate::labels::LabelStorage;
 use crate::nodemanager::{ChannelClosure, NodeStorage};
 use crate::utils::{now, spawn};
 use crate::vss::{MutinyVssClient, VssKeyValueItem};
@@ -12,6 +12,7 @@ use crate::{
     error::{MutinyError, MutinyStorageError},
     event::PaymentInfo,
 };
+use crate::{event::HTLCStatus, MutinyInvoice};
 use crate::{ldkstorage::CHANNEL_MANAGER_KEY, utils::sleep};
 use async_trait::async_trait;
 use bdk::chain::{Append, PersistBackend};
@@ -932,6 +933,22 @@ pub(crate) fn persist_payment_info<S: MutinyStorage>(
     }
 
     Ok(())
+}
+
+pub(crate) fn get_invoice_by_hash<S: MutinyStorage>(
+    hash: &bitcoin::hashes::sha256::Hash,
+    storage: &S,
+    logger: &MutinyLogger,
+) -> Result<MutinyInvoice, MutinyError> {
+    let (payment_info, inbound) = get_payment_info(storage, hash, logger)?;
+    let labels_map = storage.get_invoice_labels()?;
+    let labels = payment_info
+        .bolt11
+        .as_ref()
+        .and_then(|inv| labels_map.get(inv).cloned())
+        .unwrap_or_default();
+
+    MutinyInvoice::from(payment_info, PaymentHash(hash.into_32()), inbound, labels)
 }
 
 pub(crate) fn get_payment_info<S: MutinyStorage>(

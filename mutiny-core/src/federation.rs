@@ -5,9 +5,7 @@ use crate::{
     key::{create_root_child_key, ChildKey},
     logging::MutinyLogger,
     onchain::coin_type_from_network,
-    storage::{
-        get_payment_info, list_payment_info, persist_payment_info, MutinyStorage, VersionedValue,
-    },
+    storage::{list_payment_info, persist_payment_info, MutinyStorage, VersionedValue},
     utils::sleep,
     HTLCStatus, MutinyInvoice, DEFAULT_PAYMENT_TIMEOUT,
 };
@@ -17,7 +15,6 @@ use bip39::Mnemonic;
 use bitcoin::secp256k1::{SecretKey, ThirtyTwoByteHash};
 use bitcoin::{
     bip32::{ChildNumber, DerivationPath, ExtendedPrivKey},
-    hashes::sha256,
     secp256k1::Secp256k1,
     Network,
 };
@@ -57,9 +54,7 @@ use fedimint_wallet_client::{WalletClientInit, WalletClientModule};
 use futures::{select, FutureExt};
 use futures_util::{pin_mut, StreamExt};
 use hex_conservative::{DisplayHex, FromHex};
-use lightning::{
-    ln::PaymentHash, log_debug, log_error, log_info, log_trace, log_warn, util::logger::Logger,
-};
+use lightning::{log_debug, log_error, log_info, log_trace, log_warn, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 #[cfg(not(target_arch = "wasm32"))]
@@ -75,12 +70,6 @@ use std::{
 };
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
-
-// The amount of time in milliseconds to wait for
-// checking the status of a fedimint payment. This
-// is to work around their stream status checking
-// when wanting just the current status.
-const FEDIMINT_STATUS_TIMEOUT_CHECK_MS: u64 = 30;
 
 // The maximum amount of operations we try to pull
 // from fedimint when we need to search through
@@ -514,77 +503,6 @@ impl<S: MutinyStorage> FederationClient<S> {
             self.storage.clone(),
         )?;
         Ok(())
-    }
-
-    pub async fn get_invoice_by_hash(
-        &self,
-        hash: &sha256::Hash,
-    ) -> Result<MutinyInvoice, MutinyError> {
-        log_trace!(self.logger, "get_invoice_by_hash");
-
-        // Try to get the invoice from storage first
-        let (invoice, inbound) = match get_payment_info(&self.storage, hash, &self.logger) {
-            Ok(i) => i,
-            Err(e) => {
-                log_error!(self.logger, "could not get invoice by hash: {e}");
-                return Err(e);
-            }
-        };
-
-        log_trace!(self.logger, "retrieved invoice by hash");
-
-        if matches!(invoice.status, HTLCStatus::InFlight | HTLCStatus::Pending) {
-            log_trace!(self.logger, "invoice still in flight, getting operations");
-            // If the invoice is InFlight or Pending, check the operation log for updates
-            let lightning_module = Arc::new(
-                self.fedimint_client
-                    .get_first_module::<LightningClientModule>(),
-            );
-
-            let operations = self
-                .fedimint_client
-                .operation_log()
-                .list_operations(FEDIMINT_OPERATIONS_LIST_MAX, None)
-                .await;
-
-            log_trace!(
-                self.logger,
-                "going to go through {} operations",
-                operations.len()
-            );
-            for (key, entry) in operations {
-                if entry.operation_module_kind() == LightningCommonInit::KIND.as_str() {
-                    if let Some(updated_invoice) = process_operation_until_timeout(
-                        self.logger.clone(),
-                        entry.meta(),
-                        hash.into_32(),
-                        key.operation_id,
-                        &lightning_module,
-                        Some(FEDIMINT_STATUS_TIMEOUT_CHECK_MS),
-                        self.stop.clone(),
-                    )
-                    .await
-                    {
-                        self.maybe_update_after_checking_fedimint(updated_invoice.clone())?;
-                        return Ok(updated_invoice);
-                    }
-                } else {
-                    log_warn!(
-                        self.logger,
-                        "Unsupported module: {}",
-                        entry.operation_module_kind()
-                    );
-                }
-            }
-        } else {
-            // If the invoice is not InFlight or Pending, return it directly
-            log_trace!(self.logger, "returning final invoice");
-            // TODO labels
-            return MutinyInvoice::from(invoice, PaymentHash(hash.into_32()), inbound, vec![]);
-        }
-
-        log_debug!(self.logger, "could not find invoice");
-        Err(MutinyError::NotFound)
     }
 
     pub(crate) async fn pay_invoice(

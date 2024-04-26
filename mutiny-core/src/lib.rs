@@ -46,7 +46,6 @@ mod test_utils;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
-use crate::nostr::primal::{PrimalApi, PrimalClient};
 use crate::storage::{
     get_payment_hash_from_key, list_payment_info, persist_payment_info, update_nostr_contact_list,
     IndexItem, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY,
@@ -78,6 +77,10 @@ use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{
     nostr::nwc::{BudgetPeriod, BudgetedSpendingConditions, NwcProfileTag, SpendingConditions},
     subscription::MutinySubscriptionClient,
+};
+use crate::{
+    nostr::primal::{PrimalApi, PrimalClient},
+    storage::get_invoice_by_hash,
 };
 use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::nips::nip47::Method;
@@ -1968,20 +1971,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         &self,
         hash: &sha256::Hash,
     ) -> Result<MutinyInvoice, MutinyError> {
-        // First, try to find the invoice in the node manager
-        if let Ok(invoice) = self.node_manager.get_invoice_by_hash(hash).await {
-            return Ok(invoice);
-        }
-
-        // If not found in node manager, search in federations
-        let federations = self.federations.read().await;
-        for (_fed_id, federation) in federations.iter() {
-            if let Ok(invoice) = federation.get_invoice_by_hash(hash).await {
-                return Ok(invoice);
-            }
-        }
-
-        Err(MutinyError::NotFound)
+        get_invoice_by_hash(hash, &self.storage, &self.logger)
     }
 
     /// Checks whether or not the user is subscribed to Mutiny+.
