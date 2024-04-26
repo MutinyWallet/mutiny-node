@@ -1,4 +1,4 @@
-use crate::utils::{convert_from_fedimint_invoice, convert_to_fedimint_invoice, spawn};
+use crate::utils::{convert_from_fedimint_invoice, convert_to_fedimint_invoice, now, spawn};
 use crate::{
     error::{MutinyError, MutinyStorageError},
     event::PaymentInfo,
@@ -730,7 +730,8 @@ fn maybe_update_after_checking_fedimint<S: MutinyStorage>(
             log_debug!(logger, "Saving updated payment");
             let hash = updated_invoice.payment_hash.into_32();
             let inbound = updated_invoice.inbound;
-            let payment_info = PaymentInfo::from(updated_invoice);
+            let mut payment_info = PaymentInfo::from(updated_invoice);
+            payment_info.last_update = now().as_secs();
             persist_payment_info(&storage, &hash, &payment_info, inbound)?;
         }
         HTLCStatus::Pending | HTLCStatus::InFlight => (),
