@@ -1,13 +1,11 @@
-use crate::utils::{convert_from_fedimint_invoice, convert_to_fedimint_invoice, spawn};
+use crate::utils::{convert_from_fedimint_invoice, convert_to_fedimint_invoice, now, spawn};
 use crate::{
     error::{MutinyError, MutinyStorageError},
     event::PaymentInfo,
     key::{create_root_child_key, ChildKey},
     logging::MutinyLogger,
     onchain::coin_type_from_network,
-    storage::{
-        get_payment_info, list_payment_info, persist_payment_info, MutinyStorage, VersionedValue,
-    },
+    storage::{list_payment_info, persist_payment_info, MutinyStorage, VersionedValue},
     utils::sleep,
     HTLCStatus, MutinyInvoice, DEFAULT_PAYMENT_TIMEOUT,
 };
@@ -17,14 +15,12 @@ use bip39::Mnemonic;
 use bitcoin::secp256k1::{SecretKey, ThirtyTwoByteHash};
 use bitcoin::{
     bip32::{ChildNumber, DerivationPath, ExtendedPrivKey},
-    hashes::sha256,
     secp256k1::Secp256k1,
     Network,
 };
 use core::fmt;
 use fedimint_bip39::Bip39RootSecretStrategy;
 use fedimint_client::{
-    db::ChronologicalOperationLogKey,
     derivable_secret::DerivableSecret,
     oplog::{OperationLogEntry, UpdateStreamOrOutcome},
     secret::{get_default_client_secret, RootSecretStrategy},
@@ -55,29 +51,25 @@ use fedimint_ln_common::lightning_invoice::{Bolt11InvoiceDescription, Descriptio
 use fedimint_ln_common::{LightningCommonInit, LightningGateway};
 use fedimint_mint_client::MintClientInit;
 use fedimint_wallet_client::{WalletClientInit, WalletClientModule};
-use futures::future::{self};
+use futures::{select, FutureExt};
 use futures_util::{pin_mut, StreamExt};
 use hex_conservative::{DisplayHex, FromHex};
-use lightning::{
-    ln::PaymentHash, log_debug, log_error, log_info, log_trace, log_warn, util::logger::Logger,
-};
+use lightning::{log_debug, log_error, log_info, log_trace, log_warn, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
-use std::{collections::HashMap, fmt::Debug, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    sync::{atomic::AtomicBool, Arc},
+};
 use std::{
     str::FromStr,
     sync::atomic::{AtomicU32, Ordering},
 };
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
-
-// The amount of time in milliseconds to wait for
-// checking the status of a fedimint payment. This
-// is to work around their stream status checking
-// when wanting just the current status.
-const FEDIMINT_STATUS_TIMEOUT_CHECK_MS: u64 = 30;
 
 // The maximum amount of operations we try to pull
 // from fedimint when we need to search through
@@ -187,6 +179,7 @@ pub(crate) struct FederationClient<S: MutinyStorage> {
     #[allow(dead_code)]
     fedimint_storage: FedimintStorage<S>,
     gateway: Arc<RwLock<Option<LightningGateway>>>,
+    stop: Arc<AtomicBool>,
     pub(crate) logger: Arc<MutinyLogger>,
 }
 
@@ -198,6 +191,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         xprivkey: ExtendedPrivKey,
         storage: S,
         network: Network,
+        stop: Arc<AtomicBool>,
         logger: Arc<MutinyLogger>,
     ) -> Result<Self, MutinyError> {
         log_info!(logger, "initializing a new federation client: {uuid}");
@@ -317,15 +311,97 @@ impl<S: MutinyStorage> FederationClient<S> {
         });
 
         log_debug!(logger, "Built fedimint client");
-        Ok(FederationClient {
+
+        let federation_client = FederationClient {
             uuid,
             fedimint_client,
             fedimint_storage,
             storage,
             logger,
             invite_code: federation_code,
+            stop,
             gateway,
-        })
+        };
+
+        Ok(federation_client)
+    }
+
+    pub(crate) async fn process_previous_operations(&self) -> Result<(), MutinyError> {
+        // look for our internal state pending transactions
+        let mut pending_invoices: HashSet<[u8; 32]> = HashSet::new();
+
+        pending_invoices.extend(
+            list_payment_info(&self.storage, true)?
+                .into_iter()
+                .filter(|(_h, i)| matches!(i.status, HTLCStatus::InFlight | HTLCStatus::Pending))
+                .map(|(h, _i)| h.0),
+        );
+
+        pending_invoices.extend(
+            list_payment_info(&self.storage, false)?
+                .into_iter()
+                .filter(|(_h, i)| matches!(i.status, HTLCStatus::InFlight | HTLCStatus::Pending))
+                .map(|(h, _i)| h.0),
+        );
+
+        // go through last 100 operations
+        let operations = self
+            .fedimint_client
+            .operation_log()
+            .list_operations(FEDIMINT_OPERATIONS_LIST_MAX, None)
+            .await;
+
+        // find all of the pending ones
+        for (key, entry) in operations {
+            if entry.operation_module_kind() == LightningCommonInit::KIND.as_str() {
+                let lightning_meta: LightningOperationMeta = entry.meta();
+                match lightning_meta.variant {
+                    LightningOperationMetaVariant::Pay(pay_meta) => {
+                        let hash = pay_meta.invoice.payment_hash().into_inner();
+                        if pending_invoices.contains(&hash) {
+                            self.subscribe_operation(
+                                entry,
+                                hash,
+                                key.operation_id,
+                                self.fedimint_client.clone(),
+                            );
+                        }
+                    }
+                    LightningOperationMetaVariant::Receive { invoice, .. } => {
+                        let hash = invoice.payment_hash().into_inner();
+                        if pending_invoices.contains(&hash) {
+                            self.subscribe_operation(
+                                entry,
+                                hash,
+                                key.operation_id,
+                                self.fedimint_client.clone(),
+                            );
+                        }
+                    }
+                    LightningOperationMetaVariant::Claim { .. } => {}
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn subscribe_operation(
+        &self,
+        entry: OperationLogEntry,
+        hash: [u8; 32],
+        operation_id: OperationId,
+        fedimint_client: ClientHandleArc,
+    ) {
+        subscribe_operation_ext(
+            entry,
+            hash,
+            operation_id,
+            fedimint_client,
+            self.logger.clone(),
+            self.stop.clone(),
+            self.storage.clone(),
+        );
     }
 
     pub(crate) async fn gateway_fee(&self) -> Result<GatewayFees, MutinyError> {
@@ -346,7 +422,7 @@ impl<S: MutinyStorage> FederationClient<S> {
 
         let desc = Description::new(String::new()).expect("empty string is valid");
         let gateway = self.gateway.read().await;
-        let (_id, invoice, _) = lightning_module
+        let (id, invoice, _) = lightning_module
             .create_bolt11_invoice(
                 Amount::from_sats(amount),
                 Bolt11InvoiceDescription::Direct(&desc),
@@ -368,6 +444,47 @@ impl<S: MutinyStorage> FederationClient<S> {
         persist_payment_info(&self.storage, &hash, &payment_info, inbound)?;
         log_trace!(self.logger, "Persisted payment");
 
+        // subscribe to updates for it
+        let fedimint_client_clone = self.fedimint_client.clone();
+        let logger_clone = self.logger.clone();
+        let storage_clone = self.storage.clone();
+        let stop = self.stop.clone();
+        spawn(async move {
+            let lightning_module =
+                Arc::new(fedimint_client_clone.get_first_module::<LightningClientModule>());
+
+            let operations = fedimint_client_clone
+                .operation_log()
+                .get_operation(id)
+                .await
+                .expect("just created it");
+
+            if let Some(updated_invoice) = process_operation_until_timeout(
+                logger_clone.clone(),
+                operations.meta(),
+                hash,
+                id,
+                &lightning_module,
+                None,
+                stop,
+            )
+            .await
+            {
+                match maybe_update_after_checking_fedimint(
+                    updated_invoice.clone(),
+                    logger_clone.clone(),
+                    storage_clone,
+                ) {
+                    Ok(_) => {
+                        log_info!(logger_clone, "updated invoice");
+                    }
+                    Err(e) => {
+                        log_error!(logger_clone, "could not check update invoice: {e}");
+                    }
+                }
+            }
+        });
+
         Ok(invoice.into())
     }
 
@@ -376,188 +493,16 @@ impl<S: MutinyStorage> FederationClient<S> {
         Ok(self.fedimint_client.get_balance().await.msats / 1_000)
     }
 
-    pub async fn check_activity(&self) -> Result<(), MutinyError> {
-        log_trace!(self.logger, "Getting activity");
-
-        let mut pending_invoices = Vec::new();
-        // inbound
-        pending_invoices.extend(
-            list_payment_info(&self.storage, true)?
-                .into_iter()
-                .filter_map(|(h, i)| {
-                    let mutiny_invoice = MutinyInvoice::from(i.clone(), h, true, vec![]).ok();
-
-                    // filter out finalized invoices
-                    mutiny_invoice.filter(|invoice| {
-                        matches!(invoice.status, HTLCStatus::InFlight | HTLCStatus::Pending)
-                    })
-                }),
-        );
-        // outbound
-        pending_invoices.extend(
-            list_payment_info(&self.storage, false)?
-                .into_iter()
-                .filter_map(|(h, i)| {
-                    let mutiny_invoice = MutinyInvoice::from(i.clone(), h, false, vec![]).ok();
-
-                    // filter out finalized invoices
-                    mutiny_invoice.filter(|invoice| {
-                        matches!(invoice.status, HTLCStatus::InFlight | HTLCStatus::Pending)
-                    })
-                }),
-        );
-
-        let operations = if !pending_invoices.is_empty() {
-            log_trace!(self.logger, "pending invoices, going to list operations");
-            self.fedimint_client
-                .operation_log()
-                .list_operations(FEDIMINT_OPERATIONS_LIST_MAX, None)
-                .await
-        } else {
-            vec![]
-        };
-
-        let lightning_module = Arc::new(
-            self.fedimint_client
-                .get_first_module::<LightningClientModule>(),
-        );
-
-        let mut operation_map: HashMap<
-            [u8; 32],
-            (ChronologicalOperationLogKey, OperationLogEntry),
-        > = HashMap::with_capacity(operations.len());
-        log_trace!(
-            self.logger,
-            "About to go through {} operations",
-            operations.len()
-        );
-        for (key, entry) in operations {
-            if entry.operation_module_kind() == LightningCommonInit::KIND.as_str() {
-                let lightning_meta: LightningOperationMeta = entry.meta();
-                match lightning_meta.variant {
-                    LightningOperationMetaVariant::Pay(pay_meta) => {
-                        let hash = pay_meta.invoice.payment_hash().into_inner();
-                        operation_map.insert(hash, (key, entry));
-                    }
-                    LightningOperationMetaVariant::Receive { invoice, .. } => {
-                        let hash = invoice.payment_hash().into_inner();
-                        operation_map.insert(hash, (key, entry));
-                    }
-                    LightningOperationMetaVariant::Claim { .. } => {}
-                }
-            }
-        }
-
-        log_trace!(
-            self.logger,
-            "Going through {} pending invoices to extract status",
-            pending_invoices.len()
-        );
-        for invoice in pending_invoices {
-            let hash = invoice.payment_hash.into_32();
-            if let Some((key, entry)) = operation_map.get(&hash) {
-                if let Some(updated_invoice) = extract_invoice_from_entry(
-                    self.logger.clone(),
-                    entry,
-                    hash,
-                    key.operation_id,
-                    &lightning_module,
-                )
-                .await
-                {
-                    self.maybe_update_after_checking_fedimint(updated_invoice.clone())
-                        .await?;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn maybe_update_after_checking_fedimint(
+    fn maybe_update_after_checking_fedimint(
         &self,
         updated_invoice: MutinyInvoice,
     ) -> Result<(), MutinyError> {
-        if matches!(
-            updated_invoice.status,
-            HTLCStatus::Succeeded | HTLCStatus::Failed
-        ) {
-            log_debug!(self.logger, "Saving updated payment");
-            let hash = updated_invoice.payment_hash.into_32();
-            let inbound = updated_invoice.inbound;
-            let payment_info = PaymentInfo::from(updated_invoice);
-            persist_payment_info(&self.storage, &hash, &payment_info, inbound)?;
-        }
+        maybe_update_after_checking_fedimint(
+            updated_invoice,
+            self.logger.clone(),
+            self.storage.clone(),
+        )?;
         Ok(())
-    }
-
-    pub async fn get_invoice_by_hash(
-        &self,
-        hash: &sha256::Hash,
-    ) -> Result<MutinyInvoice, MutinyError> {
-        log_trace!(self.logger, "get_invoice_by_hash");
-
-        // Try to get the invoice from storage first
-        let (invoice, inbound) = match get_payment_info(&self.storage, hash, &self.logger) {
-            Ok(i) => i,
-            Err(e) => {
-                log_error!(self.logger, "could not get invoice by hash: {e}");
-                return Err(e);
-            }
-        };
-
-        log_trace!(self.logger, "retrieved invoice by hash");
-
-        if matches!(invoice.status, HTLCStatus::InFlight | HTLCStatus::Pending) {
-            log_trace!(self.logger, "invoice still in flight, getting operations");
-            // If the invoice is InFlight or Pending, check the operation log for updates
-            let lightning_module = self
-                .fedimint_client
-                .get_first_module::<LightningClientModule>();
-
-            let operations = self
-                .fedimint_client
-                .operation_log()
-                .list_operations(FEDIMINT_OPERATIONS_LIST_MAX, None)
-                .await;
-
-            log_trace!(
-                self.logger,
-                "going to go through {} operations",
-                operations.len()
-            );
-            for (key, entry) in operations {
-                if entry.operation_module_kind() == LightningCommonInit::KIND.as_str() {
-                    if let Some(updated_invoice) = extract_invoice_from_entry(
-                        self.logger.clone(),
-                        &entry,
-                        hash.into_32(),
-                        key.operation_id,
-                        &lightning_module,
-                    )
-                    .await
-                    {
-                        self.maybe_update_after_checking_fedimint(updated_invoice.clone())
-                            .await?;
-                        return Ok(updated_invoice);
-                    }
-                } else {
-                    log_warn!(
-                        self.logger,
-                        "Unsupported module: {}",
-                        entry.operation_module_kind()
-                    );
-                }
-            }
-        } else {
-            // If the invoice is not InFlight or Pending, return it directly
-            log_trace!(self.logger, "returning final invoice");
-            // TODO labels
-            return MutinyInvoice::from(invoice, PaymentHash(hash.into_32()), inbound, vec![]);
-        }
-
-        log_debug!(self.logger, "could not find invoice");
-        Err(MutinyError::NotFound)
     }
 
     pub(crate) async fn pay_invoice(
@@ -587,50 +532,77 @@ impl<S: MutinyStorage> FederationClient<S> {
         persist_payment_info(&self.storage, &hash, &payment_info, inbound)?;
 
         // Subscribe and process outcome based on payment type
-        let mut inv = match outgoing_payment.payment_type {
+        let (mut inv, id) = match outgoing_payment.payment_type {
             fedimint_ln_client::PayType::Internal(pay_id) => {
                 match lightning_module.subscribe_internal_pay(pay_id).await {
                     Ok(o) => {
-                        process_outcome(
+                        let o = process_outcome(
                             o,
                             process_pay_state_internal,
                             invoice.clone(),
                             inbound,
-                            DEFAULT_PAYMENT_TIMEOUT * 1_000,
+                            Some(DEFAULT_PAYMENT_TIMEOUT * 1_000),
+                            self.stop.clone(),
                             Arc::clone(&self.logger),
                         )
-                        .await
+                        .await;
+                        (o, pay_id)
                     }
-                    Err(_) => invoice.clone().into(),
+                    Err(_) => (invoice.clone().into(), pay_id),
                 }
             }
             fedimint_ln_client::PayType::Lightning(pay_id) => {
                 match lightning_module.subscribe_ln_pay(pay_id).await {
                     Ok(o) => {
-                        process_outcome(
+                        let o = process_outcome(
                             o,
                             process_pay_state_ln,
                             invoice.clone(),
                             inbound,
-                            DEFAULT_PAYMENT_TIMEOUT * 1_000,
+                            Some(DEFAULT_PAYMENT_TIMEOUT * 1_000),
+                            self.stop.clone(),
                             Arc::clone(&self.logger),
                         )
-                        .await
+                        .await;
+                        (o, pay_id)
                     }
-                    Err(_) => invoice.clone().into(),
+                    Err(_) => (invoice.clone().into(), pay_id),
                 }
             }
         };
         inv.fees_paid = Some(sats_round_up(&outgoing_payment.fee));
 
-        self.maybe_update_after_checking_fedimint(inv.clone())
-            .await?;
+        self.maybe_update_after_checking_fedimint(inv.clone())?;
 
         match inv.status {
             HTLCStatus::Succeeded => Ok(inv),
             HTLCStatus::Failed => Err(MutinyError::RoutingFailed),
-            HTLCStatus::Pending => Err(MutinyError::PaymentTimeout),
-            HTLCStatus::InFlight => Err(MutinyError::PaymentTimeout),
+            _ => {
+                // keep streaming after timeout happens
+                let fedimint_client_clone = self.fedimint_client.clone();
+                let logger_clone = self.logger.clone();
+                let storage_clone = self.storage.clone();
+                let stop = self.stop.clone();
+                spawn(async move {
+                    let operation = fedimint_client_clone
+                        .operation_log()
+                        .get_operation(id)
+                        .await
+                        .expect("just created it");
+
+                    subscribe_operation_ext(
+                        operation,
+                        hash,
+                        id,
+                        fedimint_client_clone,
+                        logger_clone,
+                        stop,
+                        storage_clone,
+                    );
+                });
+
+                Err(MutinyError::PaymentTimeout)
+            }
         }
     }
 
@@ -705,6 +677,67 @@ impl<S: MutinyStorage> FederationClient<S> {
     pub async fn delete_fedimint_storage(&self) -> Result<(), MutinyError> {
         self.fedimint_storage.delete_store().await
     }
+}
+
+fn subscribe_operation_ext<S: MutinyStorage>(
+    entry: OperationLogEntry,
+    hash: [u8; 32],
+    operation_id: OperationId,
+    fedimint_client: ClientHandleArc,
+    logger: Arc<MutinyLogger>,
+    stop: Arc<AtomicBool>,
+    storage: S,
+) {
+    let lightning_meta: LightningOperationMeta = entry.meta();
+    spawn(async move {
+        let lightning_module =
+            Arc::new(fedimint_client.get_first_module::<LightningClientModule>());
+
+        if let Some(updated_invoice) = process_operation_until_timeout(
+            logger.clone(),
+            lightning_meta,
+            hash,
+            operation_id,
+            &lightning_module,
+            None,
+            stop,
+        )
+        .await
+        {
+            match maybe_update_after_checking_fedimint(
+                updated_invoice.clone(),
+                logger.clone(),
+                storage,
+            ) {
+                Ok(_) => {
+                    log_debug!(logger, "subscribed and updated federation operation")
+                }
+                Err(e) => {
+                    log_error!(logger, "could not update federation operation: {e}")
+                }
+            }
+        }
+    });
+}
+
+fn maybe_update_after_checking_fedimint<S: MutinyStorage>(
+    updated_invoice: MutinyInvoice,
+    logger: Arc<MutinyLogger>,
+    storage: S,
+) -> Result<(), MutinyError> {
+    match updated_invoice.status {
+        HTLCStatus::Succeeded | HTLCStatus::Failed => {
+            log_debug!(logger, "Saving updated payment");
+            let hash = updated_invoice.payment_hash.into_32();
+            let inbound = updated_invoice.inbound;
+            let mut payment_info = PaymentInfo::from(updated_invoice);
+            payment_info.last_update = now().as_secs();
+            persist_payment_info(&storage, &hash, &payment_info, inbound)?;
+        }
+        HTLCStatus::Pending | HTLCStatus::InFlight => (),
+    }
+
+    Ok(())
 }
 
 fn sats_round_up(amount: &Amount) -> u64 {
@@ -794,15 +827,15 @@ pub(crate) fn mnemonic_from_xpriv(xpriv: ExtendedPrivKey) -> Result<Mnemonic, Mu
     Ok(mnemonic)
 }
 
-async fn extract_invoice_from_entry(
+async fn process_operation_until_timeout(
     logger: Arc<MutinyLogger>,
-    entry: &OperationLogEntry,
+    lightning_meta: LightningOperationMeta,
     hash: [u8; 32],
     operation_id: OperationId,
-    lightning_module: &LightningClientModule,
+    lightning_module: &Arc<fedimint_client::ClientModuleInstance<'_, LightningClientModule>>,
+    timeout: Option<u64>,
+    stop: Arc<AtomicBool>,
 ) -> Option<MutinyInvoice> {
-    let lightning_meta: LightningOperationMeta = entry.meta();
-
     match lightning_meta.variant {
         LightningOperationMetaVariant::Pay(pay_meta) => {
             let invoice = convert_from_fedimint_invoice(&pay_meta.invoice);
@@ -814,12 +847,18 @@ async fn extract_invoice_from_entry(
                             process_pay_state_ln,
                             invoice,
                             false,
-                            FEDIMINT_STATUS_TIMEOUT_CHECK_MS,
+                            timeout,
+                            stop,
                             logger,
                         )
                         .await,
                     ),
-                    Err(_) => Some(invoice.into()),
+                    Err(e) => {
+                        log_error!(logger, "Error trying to process stream outcome: {e}");
+
+                        // return the latest status of the invoice even if it fails
+                        Some(invoice.into())
+                    }
                 }
             } else {
                 None
@@ -835,12 +874,18 @@ async fn extract_invoice_from_entry(
                             process_receive_state,
                             invoice,
                             true,
-                            FEDIMINT_STATUS_TIMEOUT_CHECK_MS,
+                            timeout,
+                            stop,
                             logger,
                         )
                         .await,
                     ),
-                    Err(_) => Some(invoice.into()),
+                    Err(e) => {
+                        log_error!(logger, "Error trying to process stream outcome: {e}");
+
+                        // return the latest status of the invoice even if it fails
+                        Some(invoice.into())
+                    }
                 }
             } else {
                 None
@@ -879,7 +924,8 @@ async fn process_outcome<U, F>(
     process_fn: F,
     invoice: Bolt11Invoice,
     inbound: bool,
-    timeout: u64,
+    timeout: Option<u64>,
+    stop: Arc<AtomicBool>,
     logger: Arc<MutinyLogger>,
 ) -> MutinyInvoice
 where
@@ -902,28 +948,45 @@ where
             log_trace!(logger, "Outcome received: {}", invoice.status);
         }
         UpdateStreamOrOutcome::UpdateStream(mut s) => {
-            let timeout_future = sleep(timeout as i32);
-            pin_mut!(timeout_future);
-
+            // break out after sleep time or check stop signal
             log_trace!(logger, "start timeout stream futures");
-            while let future::Either::Left((outcome_option, _)) =
-                future::select(s.next(), &mut timeout_future).await
-            {
-                if let Some(outcome) = outcome_option {
-                    log_trace!(logger, "Streamed Outcome received: {:?}", outcome);
-                    process_fn(outcome, &mut invoice);
-
-                    if matches!(invoice.status, HTLCStatus::Succeeded | HTLCStatus::Failed) {
-                        log_trace!(logger, "Streamed Outcome final, returning");
-                        break;
-                    }
+            loop {
+                let timeout_future = if let Some(t) = timeout {
+                    sleep(t as i32)
                 } else {
-                    log_debug!(
-                        logger,
-                        "Timeout reached, exiting loop for payment {}",
-                        invoice.payment_hash
-                    );
-                    break;
+                    sleep(1_000_i32)
+                };
+
+                let mut stream_fut = Box::pin(s.next()).fuse();
+                let delay_fut = Box::pin(timeout_future).fuse();
+                pin_mut!(delay_fut);
+
+                select! {
+                    outcome_option = stream_fut => {
+                        if let Some(outcome) = outcome_option {
+                            log_trace!(logger, "Streamed Outcome received: {:?}", outcome);
+                            process_fn(outcome, &mut invoice);
+
+                            if matches!(invoice.status, HTLCStatus::Succeeded | HTLCStatus::Failed) {
+                                log_trace!(logger, "Streamed Outcome final, returning");
+                                break;
+                            }
+                        }
+                    }
+                    _ = delay_fut => {
+                        if timeout.is_none() {
+                            if stop.load(Ordering::Relaxed)  {
+                                break;
+                            }
+                        } else {
+                            log_debug!(
+                                logger,
+                                "Timeout reached, exiting loop for payment {}",
+                                invoice.payment_hash
+                            );
+                            break;
+                        }
+                    }
                 }
             }
             log_trace!(

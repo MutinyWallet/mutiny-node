@@ -46,7 +46,6 @@ mod test_utils;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
-use crate::nostr::primal::{PrimalApi, PrimalClient};
 use crate::storage::{
     get_payment_hash_from_key, list_payment_info, persist_payment_info, update_nostr_contact_list,
     IndexItem, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY,
@@ -78,6 +77,10 @@ use crate::{nodemanager::NodeManager, nostr::ProfileType};
 use crate::{
     nostr::nwc::{BudgetPeriod, BudgetedSpendingConditions, NwcProfileTag, SpendingConditions},
     subscription::MutinySubscriptionClient,
+};
+use crate::{
+    nostr::primal::{PrimalApi, PrimalClient},
+    storage::get_invoice_by_hash,
 };
 use crate::{nostr::NostrManager, utils::sleep};
 use ::nostr::nips::nip47::Method;
@@ -919,6 +922,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
                 federation_storage.clone(),
                 &config,
                 self.storage.clone(),
+                stop.clone(),
                 &logger,
             )
             .await?;
@@ -1967,20 +1971,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         &self,
         hash: &sha256::Hash,
     ) -> Result<MutinyInvoice, MutinyError> {
-        // First, try to find the invoice in the node manager
-        if let Ok(invoice) = self.node_manager.get_invoice_by_hash(hash).await {
-            return Ok(invoice);
-        }
-
-        // If not found in node manager, search in federations
-        let federations = self.federations.read().await;
-        for (_fed_id, federation) in federations.iter() {
-            if let Ok(invoice) = federation.get_invoice_by_hash(hash).await {
-                return Ok(invoice);
-            }
-        }
-
-        Err(MutinyError::NotFound)
+        get_invoice_by_hash(hash, &self.storage, &self.logger)
     }
 
     /// Checks whether or not the user is subscribed to Mutiny+.
@@ -2468,6 +2459,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             self.federations.clone(),
             self.hermes_client.clone(),
             federation_code,
+            self.stop.clone(),
         )
         .await
     }
@@ -2570,39 +2562,37 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Starts a background process that will check pending fedimint operations
     pub(crate) async fn start_fedimint_background_checker(&self) {
         let logger = self.logger.clone();
-        let stop = self.stop.clone();
         let self_clone = self.clone();
         utils::spawn(async move {
-            loop {
-                if stop.load(Ordering::Relaxed) {
-                    break;
-                };
+            let federation_lock = self_clone.federations.read().await;
 
-                sleep(1000).await;
-                let federation_lock = self_clone.federations.read().await;
-
-                match self_clone.list_federation_ids().await {
-                    Ok(federation_ids) => {
-                        for fed_id in federation_ids {
-                            match federation_lock.get(&fed_id) {
-                                Some(fedimint_client) => {
-                                    let _ = fedimint_client.check_activity().await.map_err(|e| {
-                                        log_error!(logger, "error checking activity: {e}")
+            match self_clone.list_federation_ids().await {
+                Ok(federation_ids) => {
+                    for fed_id in federation_ids {
+                        match federation_lock.get(&fed_id) {
+                            Some(fedimint_client) => {
+                                let _ = fedimint_client
+                                    .process_previous_operations()
+                                    .await
+                                    .map_err(|e| {
+                                        log_error!(
+                                            logger,
+                                            "error checking previous operations: {e}"
+                                        )
                                     });
-                                }
-                                None => {
-                                    log_error!(
-                                        logger,
-                                        "could not get a federation from the lock: {}",
-                                        fed_id
-                                    )
-                                }
+                            }
+                            None => {
+                                log_error!(
+                                    logger,
+                                    "could not get a federation from the lock: {}",
+                                    fed_id
+                                )
                             }
                         }
                     }
-                    Err(e) => {
-                        log_error!(logger, "could not list federations: {e}")
-                    }
+                }
+                Err(e) => {
+                    log_error!(logger, "could not list federations: {e}")
                 }
             }
         });
@@ -3125,6 +3115,7 @@ async fn create_federations<S: MutinyStorage>(
     federation_storage: FederationStorage,
     c: &MutinyWalletConfig,
     storage: S,
+    stop: Arc<AtomicBool>,
     logger: &Arc<MutinyLogger>,
 ) -> Result<Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>, MutinyError> {
     let mut federation_map = HashMap::with_capacity(federation_storage.federations.len());
@@ -3135,6 +3126,7 @@ async fn create_federations<S: MutinyStorage>(
             c.xprivkey,
             storage.clone(),
             c.network,
+            stop.clone(),
             logger.clone(),
         )
         .await?;
@@ -3158,6 +3150,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>,
     hermes_client: Option<Arc<HermesClient<S>>>,
     federation_code: InviteCode,
+    stop: Arc<AtomicBool>,
 ) -> Result<FederationIdentity, MutinyError> {
     // Begin with a mutex lock so that nothing else can
     // save or alter the federation list while it is about to
@@ -3186,6 +3179,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         xprivkey,
         storage.clone(),
         network,
+        stop.clone(),
         logger.clone(),
     )
     .await?;

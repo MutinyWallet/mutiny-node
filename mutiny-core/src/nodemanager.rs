@@ -31,7 +31,6 @@ use bitcoin::address::NetworkUnchecked;
 use bitcoin::bip32::ExtendedPrivKey;
 use bitcoin::blockdata::script;
 use bitcoin::hashes::hex::FromHex;
-use bitcoin::hashes::sha256;
 use bitcoin::psbt::PartiallySignedTransaction;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
@@ -1413,22 +1412,6 @@ impl<S: MutinyStorage> NodeManager<S> {
         log_debug!(self.logger, "Keysending to {to_node}");
         node.keysend_with_timeout(to_node, amt_sats, message, labels, None)
             .await
-    }
-
-    /// Gets an invoice from the node manager.
-    /// This includes sent and received invoices.
-    pub(crate) async fn get_invoice_by_hash(
-        &self,
-        hash: &sha256::Hash,
-    ) -> Result<MutinyInvoice, MutinyError> {
-        let nodes = self.nodes.read().await;
-        for (_, node) in nodes.iter() {
-            if let Ok(inv) = node.get_invoice_by_hash(hash) {
-                return Ok(inv);
-            }
-        }
-
-        Err(MutinyError::NotFound)
     }
 
     pub async fn get_channel_closure(
