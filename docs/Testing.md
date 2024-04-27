@@ -17,7 +17,6 @@ Things to test before cutting a release:
   - Auto approval
   - Manual approval
   - Editing a budget
-  - Gifting
 - Syncing Nostr Contacts
 - Adding a contact
 - Restore from seed
