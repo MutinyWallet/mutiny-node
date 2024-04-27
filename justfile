@@ -49,3 +49,6 @@ clippy-nix:
     cargo clippy --all-features --tests --package mutiny-core --target=wasm32-unknown-unknown -- -D warnings
     cargo clippy --all-features --tests --package mutiny-core --target=aarch64-unknown-linux-gnu -- -D warnings
     cargo clippy --all-features --tests --package mutiny-wasm -- -D warnings
+
+test-integration test_filter="" run_params="":
+    cd integration_tests && cargo test {{test_filter}} -- --test-threads=1 {{run_params}}
