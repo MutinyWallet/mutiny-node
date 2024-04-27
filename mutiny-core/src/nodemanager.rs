@@ -579,6 +579,12 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Creates a background process that will sync the wallet with the blockchain.
     /// This will also update the fee estimates every 10 minutes.
     pub fn start_sync(nm: Arc<NodeManager<S>>) {
+        // sync every second on regtest, this makes testing easier
+        let sync_interval_secs = match nm.network {
+            Network::Bitcoin | Network::Testnet | Network::Signet => 60,
+            Network::Regtest => 1,
+            net => unreachable!("Unknown network: {net}"),
+        };
         utils::spawn(async move {
             let mut synced = false;
             loop {
@@ -617,8 +623,8 @@ impl<S: MutinyStorage> NodeManager<S> {
                     synced = true;
                 }
 
-                // sleep for 1 minute, checking graceful shutdown check each 1s.
-                for _ in 0..60 {
+                // wait for next sync round, checking graceful shutdown check each second.
+                for _ in 0..sync_interval_secs {
                     if nm.stop.load(Ordering::Relaxed) {
                         return;
                     }
