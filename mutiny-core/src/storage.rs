@@ -1,4 +1,3 @@
-use crate::labels::LabelStorage;
 use crate::nodemanager::{ChannelClosure, NodeStorage};
 use crate::utils::{now, spawn};
 use crate::vss::{MutinyVssClient, VssKeyValueItem};
@@ -13,11 +12,13 @@ use crate::{
     event::PaymentInfo,
 };
 use crate::{event::HTLCStatus, MutinyInvoice};
+use crate::{labels::LabelStorage, TransactionDetails};
 use crate::{ldkstorage::CHANNEL_MANAGER_KEY, utils::sleep};
 use async_trait::async_trait;
 use bdk::chain::{Append, PersistBackend};
 use bip39::Mnemonic;
-use bitcoin::secp256k1::ThirtyTwoByteHash;
+use bitcoin::{secp256k1::ThirtyTwoByteHash, Txid};
+use fedimint_ln_common::bitcoin::hashes::hex::ToHex;
 use futures_util::lock::Mutex;
 use hex_conservative::*;
 use lightning::{ln::PaymentHash, util::logger::Logger};
@@ -45,6 +46,7 @@ pub const DEVICE_LOCK_KEY: &str = "device_lock";
 pub(crate) const EXPECTED_NETWORK_KEY: &str = "network";
 pub const PAYMENT_INBOUND_PREFIX_KEY: &str = "payment_inbound/";
 pub const PAYMENT_OUTBOUND_PREFIX_KEY: &str = "payment_outbound/";
+pub const TRANSACTION_DETAILS_PREFIX_KEY: &str = "transaction_details/";
 pub(crate) const ONCHAIN_PREFIX: &str = "onchain_tx/";
 pub const LAST_DM_SYNC_TIME_KEY: &str = "last_dm_sync_time";
 pub const LAST_HERMES_SYNC_TIME_KEY: &str = "last_hermes_sync_time";
@@ -878,6 +880,62 @@ impl MutinyStorage for () {
 
     fn get_delayed_objects(&self) -> Arc<Mutex<HashMap<String, DelayedKeyValueItem>>> {
         Arc::new(Mutex::new(HashMap::new()))
+    }
+}
+
+pub(crate) fn transaction_details_key(internal_id: Txid) -> String {
+    format!(
+        "{}{}",
+        TRANSACTION_DETAILS_PREFIX_KEY,
+        internal_id.to_raw_hash().to_hex(),
+    )
+}
+
+pub(crate) fn persist_transaction_details<S: MutinyStorage>(
+    storage: &S,
+    transaction_details: &TransactionDetails,
+) -> Result<(), MutinyError> {
+    let key = transaction_details_key(transaction_details.internal_id);
+    storage.set_data(key.clone(), transaction_details, None)?;
+
+    // insert into activity index
+    match transaction_details.confirmation_time {
+        bdk_chain::ConfirmationTime::Confirmed { height: _, time } => {
+            let index = storage.activity_index();
+            let mut index = index.try_write()?;
+            // remove old version
+            index.remove(&IndexItem {
+                timestamp: None, // timestamp would be None for Unconfirmed
+                key: key.clone(),
+            });
+            index.insert(IndexItem {
+                timestamp: Some(time),
+                key,
+            });
+        }
+        bdk_chain::ConfirmationTime::Unconfirmed { .. } => {
+            let index = storage.activity_index();
+            let mut index = index.try_write()?;
+            index.insert(IndexItem {
+                timestamp: None,
+                key,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn get_transaction_details<S: MutinyStorage>(
+    storage: &S,
+    internal_id: Txid,
+    logger: &MutinyLogger,
+) -> Option<TransactionDetails> {
+    let key = transaction_details_key(internal_id);
+    log_trace!(logger, "Trace: checking payment key: {key}");
+    match storage.get_data(&key).transpose() {
+        Some(Ok(v)) => Some(v),
+        _ => None,
     }
 }
 

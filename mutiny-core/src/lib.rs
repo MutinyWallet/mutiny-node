@@ -43,15 +43,16 @@ pub mod vss;
 #[cfg(test)]
 mod test_utils;
 
+use crate::federation::get_federation_identity;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
-pub use bitcoin;
-pub use fedimint_core;
-pub use lightning;
-pub use lightning_invoice;
-pub use nostr_sdk;
-
+use crate::storage::{
+    get_payment_hash_from_key, get_transaction_details, list_payment_info, persist_payment_info,
+    update_nostr_contact_list, IndexItem, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY,
+    NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX, PAYMENT_INBOUND_PREFIX_KEY, PAYMENT_OUTBOUND_PREFIX_KEY,
+    SUBSCRIPTION_TIMESTAMP, TRANSACTION_DETAILS_PREFIX_KEY,
+};
 use crate::utils::spawn;
 use crate::{auth::MutinyAuthClient, hermes::HermesClient, logging::MutinyLogger};
 use crate::{blindauth::BlindAuthClient, cashu::CashuHttpClient};
@@ -59,15 +60,6 @@ use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{
     event::{HTLCStatus, MillisatAmount, PaymentInfo},
     onchain::FULL_SYNC_STOP_GAP,
-};
-use crate::{
-    federation::get_federation_identity,
-    storage::{
-        get_payment_hash_from_key, list_payment_info, persist_payment_info,
-        update_nostr_contact_list, IndexItem, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY,
-        NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX, PAYMENT_INBOUND_PREFIX_KEY,
-        PAYMENT_OUTBOUND_PREFIX_KEY, SUBSCRIPTION_TIMESTAMP,
-    },
 };
 use crate::{
     federation::{
@@ -78,7 +70,7 @@ use crate::{
 };
 use crate::{
     lnurlauth::make_lnurl_auth_connection,
-    nodemanager::{ChannelClosure, MutinyBip21RawMaterials, TransactionDetails},
+    nodemanager::{ChannelClosure, MutinyBip21RawMaterials},
 };
 use crate::{lnurlauth::AuthManager, nostr::MUTINY_PLUS_SUBSCRIPTION_LABEL};
 use crate::{logging::LOGGING_KEY, nodemanager::NodeManagerBuilder};
@@ -103,20 +95,24 @@ use ::nostr::{EventBuilder, EventId, JsonUtil, Keys, Kind};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
-use bitcoin::bip32::ExtendedPrivKey;
+pub use bitcoin;
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
+use bitcoin::{bip32::ExtendedPrivKey, Transaction};
 use bitcoin::{hashes::sha256, Network, Txid};
+pub use fedimint_core;
 use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::{pin_mut, select, FutureExt};
 use futures_util::join;
 use futures_util::lock::Mutex;
 use hex_conservative::{DisplayHex, FromHex};
 use itertools::Itertools;
+pub use lightning;
 use lightning::chain::BestBlock;
 use lightning::ln::PaymentHash;
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
+pub use lightning_invoice;
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::{lnurl::LnUrl, AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use moksha_core::primitives::{
@@ -124,6 +120,7 @@ use moksha_core::primitives::{
     PostMeltQuoteBolt11Response,
 };
 use moksha_core::token::TokenV3;
+pub use nostr_sdk;
 use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
@@ -224,6 +221,57 @@ pub enum ActivityItem {
     OnChain(TransactionDetails),
     Lightning(Box<MutinyInvoice>),
     ChannelClosed(ChannelClosure),
+}
+
+/// A wallet transaction
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TransactionDetails {
+    /// Optional transaction
+    pub transaction: Option<Transaction>,
+    /// Transaction id
+    pub txid: Option<Txid>,
+    /// Internal id before a transaction id is created
+    pub internal_id: Txid,
+    /// Received value (sats)
+    /// Sum of owned outputs of this transaction.
+    pub received: u64,
+    /// Sent value (sats)
+    /// Sum of owned inputs of this transaction.
+    pub sent: u64,
+    /// Fee value in sats if it was available.
+    pub fee: Option<u64>,
+    /// If the transaction is confirmed, contains height and Unix timestamp of the block containing the
+    /// transaction, unconfirmed transaction contains `None`.
+    pub confirmation_time: ConfirmationTime,
+    /// Labels associated with this transaction
+    pub labels: Vec<String>,
+}
+
+impl PartialOrd for TransactionDetails {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TransactionDetails {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        match (self.confirmation_time, other.confirmation_time) {
+            (ConfirmationTime::Confirmed { .. }, ConfirmationTime::Confirmed { .. }) => self
+                .confirmation_time
+                .cmp(&self.confirmation_time)
+                .then_with(|| self.txid.cmp(&other.txid)),
+            (ConfirmationTime::Confirmed { .. }, ConfirmationTime::Unconfirmed { .. }) => {
+                core::cmp::Ordering::Less
+            }
+            (ConfirmationTime::Unconfirmed { .. }, ConfirmationTime::Confirmed { .. }) => {
+                core::cmp::Ordering::Greater
+            }
+            (
+                ConfirmationTime::Unconfirmed { last_seen: a },
+                ConfirmationTime::Unconfirmed { last_seen: b },
+            ) => a.cmp(&b).then_with(|| self.txid.cmp(&other.txid)),
+        }
+    }
 }
 
 impl ActivityItem {
@@ -1036,9 +1084,24 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
                     ConfirmationTime::Confirmed { time, .. } => Some(time),
                     ConfirmationTime::Unconfirmed { .. } => None,
                 },
-                key: format!("{ONCHAIN_PREFIX}{}", t.txid),
+                key: format!("{ONCHAIN_PREFIX}{}", t.internal_id),
             })
             .collect::<Vec<_>>();
+
+        // add any transaction details stored from fedimint
+        let transaction_details = self
+            .storage
+            .scan::<TransactionDetails>(TRANSACTION_DETAILS_PREFIX_KEY, None)?
+            .into_iter()
+            .map(|(k, v)| {
+                let timestamp = match v.confirmation_time {
+                    ConfirmationTime::Confirmed { height: _, time } => Some(time), // confirmed timestamp
+                    ConfirmationTime::Unconfirmed { .. } => None, // unconfirmed timestamp
+                };
+                IndexItem { timestamp, key: k }
+            })
+            .collect::<Vec<_>>();
+        activity_index.extend(transaction_details);
 
         // add the channel closures to the activity index
         let closures = self
@@ -1581,7 +1644,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             )
         };
 
-        let Ok(address) = self.node_manager.get_new_address(labels.clone()) else {
+        let Ok(address) = self.create_address(labels.clone()).await else {
             return Err(MutinyError::WalletOperationFailed);
         };
 
@@ -1790,6 +1853,29 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(Some(lsp_fee + federation_fee))
     }
 
+    async fn create_address(&self, labels: Vec<String>) -> Result<bitcoin::Address, MutinyError> {
+        // Attempt to create federation invoice if available
+        let federation_ids = self.list_federation_ids().await?;
+        if !federation_ids.is_empty() {
+            let federation_id = &federation_ids[0];
+            let fedimint_client = self.federations.read().await.get(federation_id).cloned();
+
+            if let Some(client) = fedimint_client {
+                if let Ok(addr) = client.get_new_address(labels.clone()).await {
+                    self.storage.set_address_labels(addr.clone(), labels)?;
+                    return Ok(addr);
+                }
+            }
+        }
+
+        // Fallback to node_manager address creation
+        let Ok(addr) = self.node_manager.get_new_address(labels.clone()) else {
+            return Err(MutinyError::WalletOperationFailed);
+        };
+
+        Ok(addr)
+    }
+
     async fn create_lightning_invoice(
         &self,
         amount: u64,
@@ -1923,10 +2009,33 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         activities.push(ActivityItem::OnChain(tx_details));
                     }
                 }
+            } else if item.key.starts_with(TRANSACTION_DETAILS_PREFIX_KEY) {
+                // convert keys to internal transaction id
+                let internal_id_str = item.key.trim_start_matches(TRANSACTION_DETAILS_PREFIX_KEY);
+                let internal_id: Txid = Txid::from_str(internal_id_str)?;
+                if let Some(tx_details) =
+                    get_transaction_details(&self.storage, internal_id, &self.logger)
+                {
+                    // make sure it is a relevant transaction
+                    if tx_details.sent != 0 || tx_details.received != 0 {
+                        activities.push(ActivityItem::OnChain(tx_details));
+                    }
+                }
             }
         }
 
         Ok(activities)
+    }
+
+    pub fn get_transaction(&self, txid: Txid) -> Result<Option<TransactionDetails>, MutinyError> {
+        // check our local cache/state for fedimint first
+        match get_transaction_details(&self.storage, txid, &self.logger) {
+            Some(t) => Ok(Some(t)),
+            None => {
+                // fall back to node manager
+                self.node_manager.get_transaction(txid)
+            }
+        }
     }
 
     /// Returns all the lightning activity for a given label
@@ -3456,9 +3565,6 @@ mod tests {
 #[cfg(test)]
 #[cfg(target_arch = "wasm32")]
 mod tests {
-    use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
-    use crate::ldkstorage::CHANNEL_CLOSURE_PREFIX;
-    use crate::nodemanager::ChannelClosure;
     use crate::storage::{
         payment_key, persist_payment_info, IndexItem, MemoryStorage, MutinyStorage, ONCHAIN_PREFIX,
         PAYMENT_OUTBOUND_PREFIX_KEY,
@@ -3467,12 +3573,18 @@ mod tests {
         encrypt::encryption_key_from_pass, generate_seed, max_routing_fee_amount,
         nodemanager::NodeManager, MutinyWallet, MutinyWalletBuilder, MutinyWalletConfigBuilder,
     };
+    use crate::{
+        event::{HTLCStatus, MillisatAmount, PaymentInfo},
+        TransactionDetails,
+    };
+    use crate::{ldkstorage::CHANNEL_CLOSURE_PREFIX, storage::persist_transaction_details};
+    use crate::{nodemanager::ChannelClosure, storage::TRANSACTION_DETAILS_PREFIX_KEY};
     use bdk_chain::{BlockId, ConfirmationTime};
-    use bitcoin::absolute::LockTime;
     use bitcoin::bip32::ExtendedPrivKey;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::PublicKey;
+    use bitcoin::{absolute::LockTime, Txid};
     use bitcoin::{BlockHash, Network, Transaction, TxOut};
     use hex_conservative::DisplayHex;
     use itertools::Itertools;
@@ -3985,6 +4097,20 @@ mod tests {
         };
         persist_payment_info(&storage, &payment_hash4, &invoice4, false).unwrap();
 
+        let transaction_details1 = TransactionDetails {
+            transaction: None,
+            txid: Some(Txid::all_zeros()),
+            internal_id: Txid::all_zeros(),
+            received: 0,
+            sent: 10_000,
+            fee: Some(100),
+            confirmation_time: ConfirmationTime::Unconfirmed {
+                last_seen: now().as_secs(),
+            },
+            labels: vec![],
+        };
+        persist_transaction_details(&storage, &transaction_details1).unwrap();
+
         let vec = {
             let index = storage.activity_index();
             let vec = index.read().unwrap().clone().into_iter().collect_vec();
@@ -4008,6 +4134,13 @@ mod tests {
                 key: format!(
                     "{PAYMENT_OUTBOUND_PREFIX_KEY}{}",
                     payment_hash3.to_lower_hex_string()
+                ),
+            },
+            IndexItem {
+                timestamp: None,
+                key: format!(
+                    "{TRANSACTION_DETAILS_PREFIX_KEY}{}",
+                    transaction_details1.internal_id
                 ),
             },
             IndexItem {

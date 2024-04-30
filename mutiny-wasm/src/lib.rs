@@ -700,9 +700,7 @@ impl MutinyWallet {
         txid: String,
     ) -> Result<JsValue /* Option<TransactionDetails> */, MutinyJsError> {
         let txid = Txid::from_str(&txid)?;
-        Ok(JsValue::from_serde(
-            &self.inner.node_manager.get_transaction(txid)?,
-        )?)
+        Ok(JsValue::from_serde(&self.inner.get_transaction(txid)?)?)
     }
 
     /// Gets the current balance of the wallet.

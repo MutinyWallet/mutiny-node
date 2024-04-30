@@ -25,12 +25,12 @@ use crate::error::MutinyError;
 use crate::fees::MutinyFeeEstimator;
 use crate::labels::*;
 use crate::logging::MutinyLogger;
-use crate::nodemanager::TransactionDetails;
 use crate::storage::{
     IndexItem, MutinyStorage, OnChainStorage, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY,
     ONCHAIN_PREFIX,
 };
 use crate::utils::{now, sleep};
+use crate::TransactionDetails;
 
 pub(crate) const FULL_SYNC_STOP_GAP: usize = 150;
 pub(crate) const RESTORE_SYNC_STOP_GAP: usize = 20;
@@ -152,7 +152,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                                 ConfirmationTime::Confirmed { time, .. } => Some(time),
                                 ConfirmationTime::Unconfirmed { .. } => None,
                             },
-                            key: format!("{ONCHAIN_PREFIX}{}", t.txid),
+                            key: format!("{ONCHAIN_PREFIX}{}", t.internal_id),
                         })
                         .collect::<Vec<_>>();
 
@@ -381,7 +381,8 @@ impl<S: MutinyStorage> OnChainWallet<S> {
 
                         Some(TransactionDetails {
                             transaction,
-                            txid: tx.tx_node.txid,
+                            txid: Some(tx.tx_node.txid),
+                            internal_id: tx.tx_node.txid,
                             received,
                             sent,
                             fee,
@@ -413,7 +414,8 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                 let fee = wallet.calculate_fee(tx.tx_node.tx).ok();
                 let details = TransactionDetails {
                     transaction: Some(tx.tx_node.tx.to_owned()),
-                    txid,
+                    txid: Some(txid),
+                    internal_id: txid,
                     received,
                     sent,
                     fee,

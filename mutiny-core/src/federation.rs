@@ -1,24 +1,29 @@
 use crate::utils::{
     convert_from_fedimint_invoice, convert_to_fedimint_invoice, fetch_with_timeout, now, spawn,
 };
+use crate::TransactionDetails;
 use crate::{
     error::{MutinyError, MutinyStorageError},
     event::PaymentInfo,
     key::{create_root_child_key, ChildKey},
     logging::MutinyLogger,
     onchain::coin_type_from_network,
-    storage::{list_payment_info, persist_payment_info, MutinyStorage, VersionedValue},
+    storage::{
+        get_transaction_details, list_payment_info, persist_payment_info,
+        persist_transaction_details, MutinyStorage, VersionedValue, TRANSACTION_DETAILS_PREFIX_KEY,
+    },
     utils::sleep,
     HTLCStatus, MutinyInvoice, DEFAULT_PAYMENT_TIMEOUT,
 };
 use async_lock::RwLock;
 use async_trait::async_trait;
+use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
-use bitcoin::secp256k1::{SecretKey, ThirtyTwoByteHash};
 use bitcoin::{
     bip32::{ChildNumber, DerivationPath, ExtendedPrivKey},
-    secp256k1::Secp256k1,
-    Network,
+    hashes::Hash,
+    secp256k1::{Secp256k1, SecretKey, ThirtyTwoByteHash},
+    Address, Network, Txid,
 };
 use core::fmt;
 use fedimint_bip39::Bip39RootSecretStrategy;
@@ -52,7 +57,9 @@ use fedimint_ln_client::{
 use fedimint_ln_common::lightning_invoice::{Bolt11InvoiceDescription, Description, RoutingFees};
 use fedimint_ln_common::{LightningCommonInit, LightningGateway};
 use fedimint_mint_client::MintClientInit;
-use fedimint_wallet_client::{WalletClientInit, WalletClientModule};
+use fedimint_wallet_client::{
+    WalletClientInit, WalletClientModule, WalletCommonInit, WalletOperationMeta, WithdrawState,
+};
 use futures::{select, FutureExt};
 use futures_util::{pin_mut, StreamExt};
 use hex_conservative::{DisplayHex, FromHex};
@@ -60,6 +67,7 @@ use lightning::{log_debug, log_error, log_info, log_trace, log_warn, util::logge
 use lightning_invoice::Bolt11Invoice;
 use reqwest::Method;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 use std::{
@@ -78,6 +86,9 @@ use web_time::Instant;
 // from fedimint when we need to search through
 // their internal list.
 const FEDIMINT_OPERATIONS_LIST_MAX: usize = 100;
+
+// On chain peg in timeout
+const PEG_IN_TIMEOUT_YEAR: Duration = Duration::from_secs(86400 * 365);
 
 pub const FEDIMINTS_PREFIX_KEY: &str = "fedimints/";
 
@@ -411,6 +422,18 @@ impl<S: MutinyStorage> FederationClient<S> {
                 .map(|(h, _i)| h.0),
         );
 
+        // pending on chain operations
+        let pending_wallet_txids = self
+            .storage
+            .scan::<TransactionDetails>(TRANSACTION_DETAILS_PREFIX_KEY, None)?
+            .into_iter()
+            .filter(|(_k, v)| match v.confirmation_time {
+                ConfirmationTime::Unconfirmed { .. } => true, // return all unconfirmed transactions
+                _ => false,                                   // skip confirmed transactions
+            })
+            .map(|(_h, i)| i.internal_id)
+            .collect::<HashSet<Txid>>();
+
         // go through last 100 operations
         let operations = self
             .fedimint_client
@@ -420,51 +443,45 @@ impl<S: MutinyStorage> FederationClient<S> {
 
         // find all of the pending ones
         for (key, entry) in operations {
-            if entry.operation_module_kind() == LightningCommonInit::KIND.as_str() {
+            let module_type = entry.operation_module_kind();
+            if module_type == LightningCommonInit::KIND.as_str() {
                 let lightning_meta: LightningOperationMeta = entry.meta();
                 match lightning_meta.variant {
                     LightningOperationMetaVariant::Pay(pay_meta) => {
                         let hash = pay_meta.invoice.payment_hash().into_inner();
                         if pending_invoices.contains(&hash) {
-                            self.subscribe_operation(
-                                entry,
-                                hash,
-                                key.operation_id,
-                                self.fedimint_client.clone(),
-                            );
+                            self.subscribe_operation(entry, key.operation_id);
                         }
                     }
                     LightningOperationMetaVariant::Receive { invoice, .. } => {
                         let hash = invoice.payment_hash().into_inner();
                         if pending_invoices.contains(&hash) {
-                            self.subscribe_operation(
-                                entry,
-                                hash,
-                                key.operation_id,
-                                self.fedimint_client.clone(),
-                            );
+                            self.subscribe_operation(entry, key.operation_id);
                         }
                     }
                     LightningOperationMetaVariant::Claim { .. } => {}
                 }
+            } else if module_type == WalletCommonInit::KIND.as_str() {
+                let internal_id = Txid::from_slice(&key.operation_id.0)
+                    .map_err(|_| MutinyError::ChainAccessFailed)
+                    .expect("should convert");
+
+                if pending_wallet_txids.contains(&internal_id) {
+                    self.subscribe_operation(entry, key.operation_id);
+                }
+            } else {
+                log_warn!(self.logger, "Unknown module type: {module_type}")
             }
         }
 
         Ok(())
     }
 
-    fn subscribe_operation(
-        &self,
-        entry: OperationLogEntry,
-        hash: [u8; 32],
-        operation_id: OperationId,
-        fedimint_client: ClientHandleArc,
-    ) {
+    fn subscribe_operation(&self, entry: OperationLogEntry, operation_id: OperationId) {
         subscribe_operation_ext(
             entry,
-            hash,
             operation_id,
-            fedimint_client,
+            self.fedimint_client.clone(),
             self.logger.clone(),
             self.stop.clone(),
             self.storage.clone(),
@@ -517,42 +534,67 @@ impl<S: MutinyStorage> FederationClient<S> {
         let storage_clone = self.storage.clone();
         let stop = self.stop.clone();
         spawn(async move {
-            let lightning_module =
-                Arc::new(fedimint_client_clone.get_first_module::<LightningClientModule>());
-
-            let operations = fedimint_client_clone
+            let operation = fedimint_client_clone
                 .operation_log()
                 .get_operation(id)
                 .await
                 .expect("just created it");
 
-            if let Some(updated_invoice) = process_operation_until_timeout(
-                logger_clone.clone(),
-                operations.meta(),
-                hash,
+            subscribe_operation_ext(
+                operation,
                 id,
-                &lightning_module,
-                None,
+                fedimint_client_clone,
+                logger_clone,
                 stop,
-            )
-            .await
-            {
-                match maybe_update_after_checking_fedimint(
-                    updated_invoice.clone(),
-                    logger_clone.clone(),
-                    storage_clone,
-                ) {
-                    Ok(_) => {
-                        log_info!(logger_clone, "updated invoice");
-                    }
-                    Err(e) => {
-                        log_error!(logger_clone, "could not check update invoice: {e}");
-                    }
-                }
-            }
+                storage_clone,
+            );
         });
 
         Ok(invoice.into())
+    }
+
+    pub(crate) async fn get_new_address(
+        &self,
+        labels: Vec<String>,
+    ) -> Result<Address, MutinyError> {
+        let wallet_module = self
+            .fedimint_client
+            .get_first_module::<WalletClientModule>();
+
+        let (op_id, address) = wallet_module
+            .get_deposit_address(fedimint_core::time::now() + PEG_IN_TIMEOUT_YEAR, ())
+            .await?;
+
+        let internal_id = Txid::from_slice(&op_id.0).map_err(|_| MutinyError::ChainAccessFailed)?;
+
+        // persist the data we can while we wait for the transaction to come from fedimint
+        let pending_transaction_details = TransactionDetails {
+            transaction: None,
+            txid: None,
+            internal_id,
+            received: 0,
+            sent: 0,
+            fee: None,
+            confirmation_time: ConfirmationTime::Unconfirmed {
+                last_seen: now().as_secs(),
+            },
+            labels,
+        };
+
+        persist_transaction_details(&self.storage, &pending_transaction_details)?;
+
+        // subscribe
+        let operation = self
+            .fedimint_client
+            .operation_log()
+            .get_operation(op_id)
+            .await
+            .expect("just created it");
+        self.subscribe_operation(operation, op_id);
+
+        Ok(Address::from_str(&address.to_string())
+            .expect("should convert")
+            .assume_checked())
     }
 
     /// Get the balance of this federation client in sats
@@ -603,7 +645,7 @@ impl<S: MutinyStorage> FederationClient<S> {
             fedimint_ln_client::PayType::Internal(pay_id) => {
                 match lightning_module.subscribe_internal_pay(pay_id).await {
                     Ok(o) => {
-                        let o = process_outcome(
+                        let o = process_ln_outcome(
                             o,
                             process_pay_state_internal,
                             invoice.clone(),
@@ -621,7 +663,7 @@ impl<S: MutinyStorage> FederationClient<S> {
             fedimint_ln_client::PayType::Lightning(pay_id) => {
                 match lightning_module.subscribe_ln_pay(pay_id).await {
                     Ok(o) => {
-                        let o = process_outcome(
+                        let o = process_ln_outcome(
                             o,
                             process_pay_state_ln,
                             invoice.clone(),
@@ -659,7 +701,6 @@ impl<S: MutinyStorage> FederationClient<S> {
 
                     subscribe_operation_ext(
                         operation,
-                        hash,
                         id,
                         fedimint_client_clone,
                         logger_clone,
@@ -915,42 +956,23 @@ fn merge_values<T>(a: Option<T>, b: Option<T>) -> Option<T> {
 
 fn subscribe_operation_ext<S: MutinyStorage>(
     entry: OperationLogEntry,
-    hash: [u8; 32],
     operation_id: OperationId,
     fedimint_client: ClientHandleArc,
     logger: Arc<MutinyLogger>,
     stop: Arc<AtomicBool>,
     storage: S,
 ) {
-    let lightning_meta: LightningOperationMeta = entry.meta();
     spawn(async move {
-        let lightning_module =
-            Arc::new(fedimint_client.get_first_module::<LightningClientModule>());
-
-        if let Some(updated_invoice) = process_operation_until_timeout(
+        process_operation_until_timeout(
             logger.clone(),
-            lightning_meta,
-            hash,
+            entry,
             operation_id,
-            &lightning_module,
+            fedimint_client,
+            storage,
             None,
             stop,
         )
-        .await
-        {
-            match maybe_update_after_checking_fedimint(
-                updated_invoice.clone(),
-                logger.clone(),
-                storage,
-            ) {
-                Ok(_) => {
-                    log_debug!(logger, "subscribed and updated federation operation")
-                }
-                Err(e) => {
-                    log_error!(logger, "could not update federation operation: {e}")
-                }
-            }
-        }
+        .await;
     });
 }
 
@@ -1071,71 +1093,167 @@ pub(crate) fn mnemonic_from_xpriv(xpriv: ExtendedPrivKey) -> Result<Mnemonic, Mu
     Ok(mnemonic)
 }
 
-async fn process_operation_until_timeout(
+async fn process_operation_until_timeout<S: MutinyStorage>(
     logger: Arc<MutinyLogger>,
-    lightning_meta: LightningOperationMeta,
-    hash: [u8; 32],
+    entry: OperationLogEntry,
     operation_id: OperationId,
-    lightning_module: &Arc<fedimint_client::ClientModuleInstance<'_, LightningClientModule>>,
+    fedimint_client: ClientHandleArc,
+    storage: S,
     timeout: Option<u64>,
     stop: Arc<AtomicBool>,
-) -> Option<MutinyInvoice> {
-    match lightning_meta.variant {
-        LightningOperationMetaVariant::Pay(pay_meta) => {
-            let invoice = convert_from_fedimint_invoice(&pay_meta.invoice);
-            if invoice.payment_hash().into_32() == hash {
-                match lightning_module.subscribe_ln_pay(operation_id).await {
-                    Ok(o) => Some(
-                        process_outcome(
+) {
+    let module_type = entry.operation_module_kind();
+    if module_type == LightningCommonInit::KIND.as_str() {
+        let lightning_meta: LightningOperationMeta = entry.meta();
+
+        let lightning_module =
+            Arc::new(fedimint_client.get_first_module::<LightningClientModule>());
+
+        let updated_invoice = match lightning_meta.variant {
+            LightningOperationMetaVariant::Pay(pay_meta) => {
+                let hash = pay_meta.invoice.payment_hash().into_inner();
+                let invoice = convert_from_fedimint_invoice(&pay_meta.invoice);
+                if invoice.payment_hash().into_32() == hash {
+                    match lightning_module.subscribe_ln_pay(operation_id).await {
+                        Ok(o) => Some(
+                            process_ln_outcome(
+                                o,
+                                process_pay_state_ln,
+                                invoice,
+                                false,
+                                timeout,
+                                stop,
+                                logger.clone(),
+                            )
+                            .await,
+                        ),
+                        Err(e) => {
+                            log_error!(logger, "Error trying to process stream outcome: {e}");
+
+                            // return the latest status of the invoice even if it fails
+                            Some(invoice.into())
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+            LightningOperationMetaVariant::Receive { invoice, .. } => {
+                let hash = invoice.payment_hash().into_inner();
+                let invoice = convert_from_fedimint_invoice(&invoice);
+                if invoice.payment_hash().into_32() == hash {
+                    match lightning_module.subscribe_ln_receive(operation_id).await {
+                        Ok(o) => Some(
+                            process_ln_outcome(
+                                o,
+                                process_receive_state,
+                                invoice,
+                                true,
+                                timeout,
+                                stop,
+                                logger.clone(),
+                            )
+                            .await,
+                        ),
+                        Err(e) => {
+                            log_error!(logger, "Error trying to process stream outcome: {e}");
+
+                            // return the latest status of the invoice even if it fails
+                            Some(invoice.into())
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+            LightningOperationMetaVariant::Claim { .. } => None,
+        };
+
+        if let Some(updated_invoice) = updated_invoice {
+            match maybe_update_after_checking_fedimint(
+                updated_invoice.clone(),
+                logger.clone(),
+                storage,
+            ) {
+                Ok(_) => {
+                    log_debug!(logger, "subscribed and updated federation operation")
+                }
+                Err(e) => {
+                    log_error!(logger, "could not update federation operation: {e}")
+                }
+            }
+        }
+    } else if module_type == WalletCommonInit::KIND.as_str() {
+        let wallet_meta: WalletOperationMeta = entry.meta();
+        let wallet_module = Arc::new(fedimint_client.get_first_module::<WalletClientModule>());
+        let internal_id = Txid::from_slice(&operation_id.0)
+            .map_err(|_| MutinyError::ChainAccessFailed)
+            .expect("should convert");
+        let stored_transaction_details = get_transaction_details(&storage, internal_id, &logger);
+        if stored_transaction_details.is_none() {
+            log_warn!(logger, "could not find transaction details: {internal_id}")
+        }
+
+        match wallet_meta.variant {
+            fedimint_wallet_client::WalletOperationMetaVariant::Deposit {
+                address: _,
+                expires_at: _,
+            } => {
+                match wallet_module.subscribe_deposit_updates(operation_id).await {
+                    Ok(o) => {
+                        process_onchain_deposit_outcome(
                             o,
-                            process_pay_state_ln,
-                            invoice,
-                            false,
+                            stored_transaction_details,
+                            operation_id,
+                            storage,
                             timeout,
                             stop,
                             logger,
                         )
-                        .await,
-                    ),
+                        .await
+                    }
                     Err(e) => {
                         log_error!(logger, "Error trying to process stream outcome: {e}");
+                    }
+                };
+            }
+            fedimint_wallet_client::WalletOperationMetaVariant::Withdraw {
+                address: _,
+                amount: _,
+                fee: _,
+                change: _,
+            } => {
+                // TODO
+                let mut updates = wallet_module
+                    .subscribe_withdraw_updates(operation_id)
+                    .await
+                    .expect("should stream")
+                    .into_stream(); // TODO non-stream version
 
-                        // return the latest status of the invoice even if it fails
-                        Some(invoice.into())
+                while let Some(update) = updates.next().await {
+                    match update {
+                        WithdrawState::Succeeded(txid) => {
+                            log_info!(logger, "Withdraw successful, txid: {txid}");
+                            // TODO update state
+                        }
+                        WithdrawState::Failed(e) => {
+                            log_error!(logger, "Withdraw failed: {e}");
+                            // TODO update state
+                        }
+                        WithdrawState::Created => {
+                            log_debug!(logger, "Withdraw created");
+                            // TODO update state
+                        }
                     }
                 }
-            } else {
-                None
+            }
+            fedimint_wallet_client::WalletOperationMetaVariant::RbfWithdraw { .. } => {
+                // not supported yet
+                unimplemented!("User RBF withdrawals not supported yet")
             }
         }
-        LightningOperationMetaVariant::Receive { invoice, .. } => {
-            let invoice = convert_from_fedimint_invoice(&invoice);
-            if invoice.payment_hash().into_32() == hash {
-                match lightning_module.subscribe_ln_receive(operation_id).await {
-                    Ok(o) => Some(
-                        process_outcome(
-                            o,
-                            process_receive_state,
-                            invoice,
-                            true,
-                            timeout,
-                            stop,
-                            logger,
-                        )
-                        .await,
-                    ),
-                    Err(e) => {
-                        log_error!(logger, "Error trying to process stream outcome: {e}");
-
-                        // return the latest status of the invoice even if it fails
-                        Some(invoice.into())
-                    }
-                }
-            } else {
-                None
-            }
-        }
-        LightningOperationMetaVariant::Claim { .. } => None,
+    } else {
+        log_warn!(logger, "Unknown module type: {module_type}")
     }
 }
 
@@ -1163,7 +1281,7 @@ fn process_receive_state(receive_state: LnReceiveState, invoice: &mut MutinyInvo
     invoice.status = receive_state.into();
 }
 
-async fn process_outcome<U, F>(
+async fn process_ln_outcome<U, F>(
     stream_or_outcome: UpdateStreamOrOutcome<U>,
     process_fn: F,
     invoice: Bolt11Invoice,
@@ -1242,6 +1360,135 @@ where
     }
 
     invoice
+}
+
+async fn process_onchain_deposit_outcome<S: MutinyStorage>(
+    stream_or_outcome: UpdateStreamOrOutcome<fedimint_wallet_client::DepositState>,
+    original_transaction_details: Option<TransactionDetails>,
+    operation_id: OperationId,
+    storage: S,
+    timeout: Option<u64>,
+    stop: Arc<AtomicBool>,
+    logger: Arc<MutinyLogger>,
+) {
+    let labels = original_transaction_details
+        .as_ref()
+        .map(|o| o.labels.clone())
+        .unwrap_or_default();
+
+    match stream_or_outcome {
+        UpdateStreamOrOutcome::Outcome(outcome) => {
+            // TODO
+            log_trace!(logger, "Outcome received: {:?}", outcome);
+        }
+        UpdateStreamOrOutcome::UpdateStream(mut s) => {
+            // break out after sleep time or check stop signal
+            log_trace!(logger, "start timeout stream futures");
+            loop {
+                let timeout_future = if let Some(t) = timeout {
+                    sleep(t as i32)
+                } else {
+                    sleep(1_000_i32)
+                };
+
+                let mut stream_fut = Box::pin(s.next()).fuse();
+                let delay_fut = Box::pin(timeout_future).fuse();
+                pin_mut!(delay_fut);
+
+                select! {
+                    outcome_option = stream_fut => {
+                        if let Some(outcome) = outcome_option {
+                            // TODO refactor outcome parsing into seperate method
+                            match outcome {
+                                fedimint_wallet_client::DepositState::WaitingForTransaction => {
+                                    // Nothing to do
+                                    log_debug!(logger, "Waiting for transaction");
+                                }
+                                fedimint_wallet_client::DepositState::WaitingForConfirmation(tx) => {
+                                    // Pending state, update with info we have
+                                    log_debug!(logger, "Waiting for confirmation");
+                                    let txid = Txid::from_slice(&tx.btc_transaction.txid()).expect("should convert");
+                                    let internal_id = Txid::from_slice(&operation_id.0).expect("should convert");
+                                    let output = tx.btc_transaction.output[tx.out_idx as usize].clone();
+
+                                    let updated_transaction_details = TransactionDetails {
+                                        transaction: None,
+                                        txid: Some(txid),
+                                        internal_id,
+                                        received: output.value,
+                                        sent: 0,
+                                        fee: None,
+                                        confirmation_time: ConfirmationTime::Unconfirmed { last_seen: now().as_secs() },
+                                        labels: labels.clone(),
+                                    };
+
+                                    match persist_transaction_details(&storage, &updated_transaction_details) {
+                                        Ok(_) => {
+                                            log_info!(logger, "Transaction updated");
+                                        },
+                                        Err(e) => {
+                                            log_error!(logger, "Error updating transaction: {e}");
+                                        },
+                                    }
+                                }
+                                fedimint_wallet_client::DepositState::Confirmed(tx) => {
+                                    // Pending state, update with info we have
+                                    log_debug!(logger, "Transaction confirmed");
+                                    let txid = Txid::from_slice(&tx.btc_transaction.txid()).expect("should convert");
+                                    let internal_id = Txid::from_slice(&operation_id.0).expect("should convert");
+                                    let output = tx.btc_transaction.output[tx.out_idx as usize].clone();
+
+                                    let updated_transaction_details = TransactionDetails {
+                                        transaction: None,
+                                        txid: Some(txid),
+                                        internal_id,
+                                        received: output.value,
+                                        sent: 0,
+                                        fee: None,
+                                        confirmation_time: ConfirmationTime::Confirmed { height: 0, time: now().as_secs() }, // FIXME: can't figure this out
+                                        labels: labels.clone(),
+                                    };
+
+                                    match persist_transaction_details(&storage, &updated_transaction_details) {
+                                        Ok(_) => {
+                                            log_info!(logger, "Transaction updated");
+                                        },
+                                        Err(e) => {
+                                            log_error!(logger, "Error updating transaction: {e}");
+                                        },
+                                    }
+                                }
+                                fedimint_wallet_client::DepositState::Claimed(_) => {
+                                    // Nothing really to change from confirmed to claimed
+                                    log_debug!(logger, "Transaction claimed");
+                                    break;
+                                }
+                                fedimint_wallet_client::DepositState::Failed(e) => {
+                                    // TODO delete
+                                    log_error!(logger, "Transaction failed: {e}");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    _ = delay_fut => {
+                        if timeout.is_none() {
+                            if stop.load(Ordering::Relaxed)  {
+                                break;
+                            }
+                        } else {
+                            log_debug!(
+                                logger,
+                                "Timeout reached, exiting loop for on chain tx",
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+            log_trace!(logger, "Done with stream outcome",);
+        }
+    }
 }
 
 #[derive(Clone)]
