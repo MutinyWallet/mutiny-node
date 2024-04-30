@@ -1038,10 +1038,18 @@ impl NostrWalletConnect {
                                     }
                                 }
 
+                                let code = match e {
+                                    MutinyError::InsufficientBalance => {
+                                        ErrorCode::InsufficientBalance
+                                    }
+                                    MutinyError::PaymentTimeout => return Ok(None), // don't send error message for timeout, it can still complete
+                                    _ => ErrorCode::PaymentFailed,
+                                };
+
                                 Response {
                                     result_type: Method::PayInvoice,
                                     error: Some(NIP47Error {
-                                        code: ErrorCode::InsufficientBalance,
+                                        code,
                                         message: format!("Failed to pay invoice: {e}"),
                                     }),
                                     result: None,
