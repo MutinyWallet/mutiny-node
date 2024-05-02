@@ -20,6 +20,7 @@ use async_trait::async_trait;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
 use bitcoin::{
+    address::NetworkUnchecked,
     bip32::{ChildNumber, DerivationPath, ExtendedPrivKey},
     hashes::Hash,
     secp256k1::{Secp256k1, SecretKey, ThirtyTwoByteHash},
@@ -33,6 +34,7 @@ use fedimint_client::{
     secret::{get_default_client_secret, RootSecretStrategy},
     ClientHandleArc,
 };
+use fedimint_core::bitcoin_migration::bitcoin30_to_bitcoin29_address;
 use fedimint_core::config::ClientConfig;
 use fedimint_core::{
     api::InviteCode,
@@ -257,6 +259,7 @@ pub(crate) struct FederationClient<S: MutinyStorage> {
     #[allow(dead_code)]
     fedimint_storage: FedimintStorage<S>,
     gateway: Arc<RwLock<Option<LightningGateway>>>,
+    network: Network,
     stop: Arc<AtomicBool>,
     pub(crate) logger: Arc<MutinyLogger>,
 }
@@ -397,6 +400,7 @@ impl<S: MutinyStorage> FederationClient<S> {
             storage,
             logger,
             invite_code: federation_code,
+            network,
             stop,
             gateway,
         };
@@ -712,6 +716,85 @@ impl<S: MutinyStorage> FederationClient<S> {
                 Err(MutinyError::PaymentTimeout)
             }
         }
+    }
+
+    /// Send on chain transaction
+    pub(crate) async fn send_onchain(
+        &self,
+        send_to: bitcoin::Address<NetworkUnchecked>,
+        amount: u64,
+        labels: Vec<String>,
+    ) -> Result<Txid, MutinyError> {
+        let address = bitcoin30_to_bitcoin29_address(send_to.require_network(self.network)?);
+
+        let btc_amount = fedimint_ln_common::bitcoin::Amount::from_sat(amount);
+
+        let wallet_module = self
+            .fedimint_client
+            .get_first_module::<WalletClientModule>();
+
+        let peg_out_fees = wallet_module
+            .get_withdraw_fees(address.clone(), btc_amount)
+            .await?;
+
+        let op_id = wallet_module
+            .withdraw(address, btc_amount, peg_out_fees, ())
+            .await?;
+
+        let internal_id = Txid::from_slice(&op_id.0).map_err(|_| MutinyError::ChainAccessFailed)?;
+
+        let pending_transaction_details = TransactionDetails {
+            transaction: None,
+            txid: None,
+            internal_id,
+            received: 0,
+            sent: amount,
+            fee: Some(peg_out_fees.amount().to_sat()),
+            confirmation_time: ConfirmationTime::Unconfirmed {
+                last_seen: now().as_secs(),
+            },
+            labels,
+        };
+
+        persist_transaction_details(&self.storage, &pending_transaction_details)?;
+
+        // subscribe
+        let operation = self
+            .fedimint_client
+            .operation_log()
+            .get_operation(op_id)
+            .await
+            .expect("just created it");
+
+        // Subscribe for a little bit, just to hopefully get transaction id
+        process_operation_until_timeout(
+            self.logger.clone(),
+            operation,
+            op_id,
+            self.fedimint_client.clone(),
+            self.storage.clone(),
+            Some(DEFAULT_PAYMENT_TIMEOUT * 1_000),
+            self.stop.clone(),
+        )
+        .await;
+
+        // now check the status of the payment from storage
+        if let Some(t) = get_transaction_details(&self.storage, internal_id, &self.logger) {
+            if t.txid.is_some() {
+                return Ok(internal_id);
+            }
+        }
+
+        // keep subscribing if txid wasn't retrieved, but then return timeout
+        let operation = self
+            .fedimint_client
+            .operation_log()
+            .get_operation(op_id)
+            .await
+            .expect("just created it");
+        self.subscribe_operation(operation, op_id);
+
+        Err(MutinyError::PaymentTimeout)
     }
 
     /// Someone received a payment on our behalf, we need to claim it
@@ -1219,33 +1302,29 @@ async fn process_operation_until_timeout<S: MutinyStorage>(
             }
             fedimint_wallet_client::WalletOperationMetaVariant::Withdraw {
                 address: _,
-                amount: _,
-                fee: _,
+                amount,
+                fee,
                 change: _,
             } => {
-                // TODO
-                let mut updates = wallet_module
-                    .subscribe_withdraw_updates(operation_id)
-                    .await
-                    .expect("should stream")
-                    .into_stream(); // TODO non-stream version
-
-                while let Some(update) = updates.next().await {
-                    match update {
-                        WithdrawState::Succeeded(txid) => {
-                            log_info!(logger, "Withdraw successful, txid: {txid}");
-                            // TODO update state
-                        }
-                        WithdrawState::Failed(e) => {
-                            log_error!(logger, "Withdraw failed: {e}");
-                            // TODO update state
-                        }
-                        WithdrawState::Created => {
-                            log_debug!(logger, "Withdraw created");
-                            // TODO update state
-                        }
+                match wallet_module.subscribe_withdraw_updates(operation_id).await {
+                    Ok(o) => {
+                        process_onchain_withdraw_outcome(
+                            o,
+                            stored_transaction_details,
+                            amount,
+                            fee.amount(),
+                            operation_id,
+                            storage,
+                            timeout,
+                            stop,
+                            logger,
+                        )
+                        .await
                     }
-                }
+                    Err(e) => {
+                        log_error!(logger, "Error trying to process stream outcome: {e}");
+                    }
+                };
             }
             fedimint_wallet_client::WalletOperationMetaVariant::RbfWithdraw { .. } => {
                 // not supported yet
@@ -1360,6 +1439,108 @@ where
     }
 
     invoice
+}
+
+// FIXME: refactor
+#[allow(clippy::too_many_arguments)]
+async fn process_onchain_withdraw_outcome<S: MutinyStorage>(
+    stream_or_outcome: UpdateStreamOrOutcome<fedimint_wallet_client::WithdrawState>,
+    original_transaction_details: Option<TransactionDetails>,
+    amount: fedimint_ln_common::bitcoin::Amount,
+    fee: fedimint_ln_common::bitcoin::Amount,
+    operation_id: OperationId,
+    storage: S,
+    timeout: Option<u64>,
+    stop: Arc<AtomicBool>,
+    logger: Arc<MutinyLogger>,
+) {
+    let labels = original_transaction_details
+        .as_ref()
+        .map(|o| o.labels.clone())
+        .unwrap_or_default();
+
+    match stream_or_outcome {
+        UpdateStreamOrOutcome::Outcome(outcome) => {
+            // TODO
+            log_trace!(logger, "Outcome received: {:?}", outcome);
+        }
+        UpdateStreamOrOutcome::UpdateStream(mut s) => {
+            // break out after sleep time or check stop signal
+            log_trace!(logger, "start timeout stream futures");
+            loop {
+                let timeout_future = if let Some(t) = timeout {
+                    sleep(t as i32)
+                } else {
+                    sleep(1_000_i32)
+                };
+
+                let mut stream_fut = Box::pin(s.next()).fuse();
+                let delay_fut = Box::pin(timeout_future).fuse();
+                pin_mut!(delay_fut);
+
+                select! {
+                    outcome_option = stream_fut => {
+                        if let Some(outcome) = outcome_option {
+                            // TODO refactor outcome parsing into seperate method
+                            match outcome {
+                                WithdrawState::Created => {
+                                    // Nothing to do
+                                    log_debug!(logger, "Waiting for withdraw");
+                                },
+                                WithdrawState::Succeeded(txid) => {
+                                    log_info!(logger, "Withdraw successful: {txid}");
+
+                                    let internal_id = Txid::from_slice(&operation_id.0).expect("should convert");
+                                    let txid = Txid::from_slice(&txid).expect("should convert");
+                                    let updated_transaction_details = TransactionDetails {
+                                        transaction: None,
+                                        txid: Some(txid),
+                                        internal_id,
+                                        received: 0,
+                                        sent: amount.to_sat(),
+                                        fee: Some(fee.to_sat()),
+                                        confirmation_time: ConfirmationTime::Unconfirmed { last_seen: now().as_secs() },
+                                        labels: labels.clone(),
+                                    };
+
+                                    match persist_transaction_details(&storage, &updated_transaction_details) {
+                                        Ok(_) => {
+                                            log_info!(logger, "Transaction updated");
+                                        },
+                                        Err(e) => {
+                                            log_error!(logger, "Error updating transaction: {e}");
+                                        },
+                                    }
+
+                                    // TODO we need to get confirmations for this txid and update
+                                    break;
+                                },
+                                WithdrawState::Failed(e) => {
+                                    // TODO delete
+                                    log_error!(logger, "Transaction failed: {e}");
+                                    break;
+                                },
+                            }
+                        }
+                    }
+                    _ = delay_fut => {
+                        if timeout.is_none() {
+                            if stop.load(Ordering::Relaxed)  {
+                                break;
+                            }
+                        } else {
+                            log_debug!(
+                                logger,
+                                "Timeout reached, exiting loop for on chain tx",
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+            log_trace!(logger, "Done with stream outcome",);
+        }
+    }
 }
 
 async fn process_onchain_deposit_outcome<S: MutinyStorage>(

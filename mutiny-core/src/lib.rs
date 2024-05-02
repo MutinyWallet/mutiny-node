@@ -96,10 +96,13 @@ use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
 pub use bitcoin;
-use bitcoin::hashes::Hash;
-use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
+use bitcoin::{
+    address::NetworkUnchecked,
+    secp256k1::{PublicKey, ThirtyTwoByteHash},
+};
 use bitcoin::{bip32::ExtendedPrivKey, Transaction};
 use bitcoin::{hashes::sha256, Network, Txid};
+use bitcoin::{hashes::Hash, Address};
 pub use fedimint_core;
 use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::{pin_mut, select, FutureExt};
@@ -1851,6 +1854,56 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         };
 
         Ok(Some(lsp_fee + federation_fee))
+    }
+
+    pub async fn send_to_address(
+        &self,
+        send_to: Address<NetworkUnchecked>,
+        amount: u64,
+        labels: Vec<String>,
+        fee_rate: Option<f32>,
+    ) -> Result<Txid, MutinyError> {
+        // Try each federation first
+        let federation_ids = self.list_federation_ids().await?;
+        let mut last_federation_error = None;
+        for federation_id in federation_ids {
+            if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
+                // Check if the federation has enough balance
+                let balance = fedimint_client.get_balance().await?;
+                if balance >= amount / 1_000 {
+                    match fedimint_client
+                        .send_onchain(send_to.clone(), amount, labels.clone())
+                        .await
+                    {
+                        Ok(t) => {
+                            return Ok(t);
+                        }
+                        Err(e) => match e {
+                            MutinyError::PaymentTimeout => return Err(e),
+                            _ => {
+                                log_warn!(self.logger, "unhandled error: {e}");
+                                last_federation_error = Some(e);
+                            }
+                        },
+                    }
+                }
+                // If payment fails or balance is not sufficient, continue to next federation
+            }
+            // If federation client is not found, continue to next federation
+        }
+
+        // If any balance at all, then fallback to node manager for payment.
+        // Take the error from the node manager as the priority.
+        let b = self.node_manager.get_balance().await?;
+        if b.confirmed + b.unconfirmed > 0 {
+            let res = self
+                .node_manager
+                .send_to_address(send_to, amount, labels, fee_rate)
+                .await?;
+            Ok(res)
+        } else {
+            Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
+        }
     }
 
     async fn create_address(&self, labels: Vec<String>) -> Result<bitcoin::Address, MutinyError> {

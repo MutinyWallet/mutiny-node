@@ -548,7 +548,6 @@ impl MutinyWallet {
         let send_to = Address::from_str(&destination_address)?;
         Ok(self
             .inner
-            .node_manager
             .send_to_address(send_to, amount, labels, fee_rate)
             .await?
             .to_string())
