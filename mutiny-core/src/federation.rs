@@ -27,6 +27,7 @@ use bitcoin::{
     Address, Network, Txid,
 };
 use core::fmt;
+use esplora_client::AsyncClient;
 use fedimint_bip39::Bip39RootSecretStrategy;
 use fedimint_client::{
     derivable_secret::DerivableSecret,
@@ -259,6 +260,7 @@ pub(crate) struct FederationClient<S: MutinyStorage> {
     #[allow(dead_code)]
     fedimint_storage: FedimintStorage<S>,
     gateway: Arc<RwLock<Option<LightningGateway>>>,
+    esplora: Arc<AsyncClient>,
     network: Network,
     stop: Arc<AtomicBool>,
     pub(crate) logger: Arc<MutinyLogger>,
@@ -271,6 +273,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         federation_code: InviteCode,
         xprivkey: ExtendedPrivKey,
         storage: S,
+        esplora: Arc<AsyncClient>,
         network: Network,
         stop: Arc<AtomicBool>,
         logger: Arc<MutinyLogger>,
@@ -400,6 +403,7 @@ impl<S: MutinyStorage> FederationClient<S> {
             storage,
             logger,
             invite_code: federation_code,
+            esplora,
             network,
             stop,
             gateway,
@@ -486,6 +490,7 @@ impl<S: MutinyStorage> FederationClient<S> {
             entry,
             operation_id,
             self.fedimint_client.clone(),
+            self.esplora.clone(),
             self.logger.clone(),
             self.stop.clone(),
             self.storage.clone(),
@@ -536,6 +541,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         let fedimint_client_clone = self.fedimint_client.clone();
         let logger_clone = self.logger.clone();
         let storage_clone = self.storage.clone();
+        let esplora_clone = self.esplora.clone();
         let stop = self.stop.clone();
         spawn(async move {
             let operation = fedimint_client_clone
@@ -548,6 +554,7 @@ impl<S: MutinyStorage> FederationClient<S> {
                 operation,
                 id,
                 fedimint_client_clone,
+                esplora_clone,
                 logger_clone,
                 stop,
                 storage_clone,
@@ -695,6 +702,7 @@ impl<S: MutinyStorage> FederationClient<S> {
                 let fedimint_client_clone = self.fedimint_client.clone();
                 let logger_clone = self.logger.clone();
                 let storage_clone = self.storage.clone();
+                let esplora_clone = self.esplora.clone();
                 let stop = self.stop.clone();
                 spawn(async move {
                     let operation = fedimint_client_clone
@@ -707,6 +715,7 @@ impl<S: MutinyStorage> FederationClient<S> {
                         operation,
                         id,
                         fedimint_client_clone,
+                        esplora_clone,
                         logger_clone,
                         stop,
                         storage_clone,
@@ -773,6 +782,7 @@ impl<S: MutinyStorage> FederationClient<S> {
             op_id,
             self.fedimint_client.clone(),
             self.storage.clone(),
+            self.esplora.clone(),
             Some(DEFAULT_PAYMENT_TIMEOUT * 1_000),
             self.stop.clone(),
         )
@@ -1041,6 +1051,7 @@ fn subscribe_operation_ext<S: MutinyStorage>(
     entry: OperationLogEntry,
     operation_id: OperationId,
     fedimint_client: ClientHandleArc,
+    esplora: Arc<AsyncClient>,
     logger: Arc<MutinyLogger>,
     stop: Arc<AtomicBool>,
     storage: S,
@@ -1052,6 +1063,7 @@ fn subscribe_operation_ext<S: MutinyStorage>(
             operation_id,
             fedimint_client,
             storage,
+            esplora,
             None,
             stop,
         )
@@ -1176,12 +1188,15 @@ pub(crate) fn mnemonic_from_xpriv(xpriv: ExtendedPrivKey) -> Result<Mnemonic, Mu
     Ok(mnemonic)
 }
 
+// FIXME refactor
+#[allow(clippy::too_many_arguments)]
 async fn process_operation_until_timeout<S: MutinyStorage>(
     logger: Arc<MutinyLogger>,
     entry: OperationLogEntry,
     operation_id: OperationId,
     fedimint_client: ClientHandleArc,
     storage: S,
+    esplora: Arc<AsyncClient>,
     timeout: Option<u64>,
     stop: Arc<AtomicBool>,
 ) {
@@ -1315,6 +1330,7 @@ async fn process_operation_until_timeout<S: MutinyStorage>(
                             fee.amount(),
                             operation_id,
                             storage,
+                            esplora,
                             timeout,
                             stop,
                             logger,
@@ -1450,6 +1466,7 @@ async fn process_onchain_withdraw_outcome<S: MutinyStorage>(
     fee: fedimint_ln_common::bitcoin::Amount,
     operation_id: OperationId,
     storage: S,
+    esplora: Arc<AsyncClient>,
     timeout: Option<u64>,
     stop: Arc<AtomicBool>,
     logger: Arc<MutinyLogger>,
@@ -1512,8 +1529,10 @@ async fn process_onchain_withdraw_outcome<S: MutinyStorage>(
                                         },
                                     }
 
-                                    // TODO we need to get confirmations for this txid and update
-                                    break;
+                                    // we need to get confirmations for this txid and update
+                                    subscribe_onchain_confirmation_check(storage.clone(), esplora.clone(), txid, updated_transaction_details, stop, logger.clone()).await;
+
+                                    break
                                 },
                                 WithdrawState::Failed(e) => {
                                     // TODO delete
@@ -1541,6 +1560,49 @@ async fn process_onchain_withdraw_outcome<S: MutinyStorage>(
             log_trace!(logger, "Done with stream outcome",);
         }
     }
+}
+
+async fn subscribe_onchain_confirmation_check<S: MutinyStorage>(
+    storage: S,
+    esplora: Arc<AsyncClient>,
+    txid: Txid,
+    mut transaction_details: TransactionDetails,
+    stop: Arc<AtomicBool>,
+    logger: Arc<MutinyLogger>,
+) {
+    spawn(async move {
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            };
+
+            match esplora.get_tx_status(&txid).await {
+                Ok(s) => {
+                    if s.confirmed {
+                        log_info!(logger, "Transaction confirmed");
+                        transaction_details.confirmation_time = ConfirmationTime::Confirmed {
+                            height: s.block_height.expect("confirmed"),
+                            time: now().as_secs(),
+                        };
+                        match persist_transaction_details(&storage, &transaction_details) {
+                            Ok(_) => {
+                                log_info!(logger, "Transaction updated");
+                                break;
+                            }
+                            Err(e) => {
+                                log_error!(logger, "Error updating transaction: {e}");
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log_error!(logger, "Error updating transaction: {e}");
+                }
+            }
+
+            sleep(5_000).await;
+        }
+    });
 }
 
 async fn process_onchain_deposit_outcome<S: MutinyStorage>(

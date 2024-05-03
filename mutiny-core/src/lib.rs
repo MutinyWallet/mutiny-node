@@ -47,12 +47,6 @@ use crate::federation::get_federation_identity;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
-use crate::storage::{
-    get_payment_hash_from_key, get_transaction_details, list_payment_info, persist_payment_info,
-    update_nostr_contact_list, IndexItem, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY,
-    NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX, PAYMENT_INBOUND_PREFIX_KEY, PAYMENT_OUTBOUND_PREFIX_KEY,
-    SUBSCRIPTION_TIMESTAMP, TRANSACTION_DETAILS_PREFIX_KEY,
-};
 use crate::utils::spawn;
 use crate::{auth::MutinyAuthClient, hermes::HermesClient, logging::MutinyLogger};
 use crate::{blindauth::BlindAuthClient, cashu::CashuHttpClient};
@@ -84,6 +78,15 @@ use crate::{
     storage::get_invoice_by_hash,
 };
 use crate::{nostr::NostrManager, utils::sleep};
+use crate::{
+    onchain::get_esplora_url,
+    storage::{
+        get_payment_hash_from_key, get_transaction_details, list_payment_info,
+        persist_payment_info, update_nostr_contact_list, IndexItem, MutinyStorage, DEVICE_ID_KEY,
+        EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX, PAYMENT_INBOUND_PREFIX_KEY,
+        PAYMENT_OUTBOUND_PREFIX_KEY, SUBSCRIPTION_TIMESTAMP, TRANSACTION_DETAILS_PREFIX_KEY,
+    },
+};
 use ::nostr::nips::nip47::Method;
 use ::nostr::nips::nip57;
 #[cfg(target_arch = "wasm32")]
@@ -103,6 +106,7 @@ use bitcoin::{
 use bitcoin::{bip32::ExtendedPrivKey, Transaction};
 use bitcoin::{hashes::sha256, Network, Txid};
 use bitcoin::{hashes::Hash, Address};
+use esplora_client::AsyncClient;
 pub use fedimint_core;
 use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::{pin_mut, select, FutureExt};
@@ -930,11 +934,16 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             }
         });
 
+        let esplora_server_url = get_esplora_url(network, config.user_esplora_url.clone());
+        let esplora = esplora_client::Builder::new(&esplora_server_url).build_async()?;
+        let esplora = Arc::new(esplora);
+
         let start = Instant::now();
 
         let mut nm_builder = NodeManagerBuilder::new(self.xprivkey, self.storage.clone())
             .with_config(config.clone());
         nm_builder.with_logger(logger.clone());
+        nm_builder.with_esplora(esplora.clone());
         let node_manager = Arc::new(nm_builder.build().await?);
 
         log_trace!(
@@ -982,6 +991,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
                 federation_storage.clone(),
                 &config,
                 self.storage.clone(),
+                esplora.clone(),
                 stop.clone(),
                 &logger,
             )
@@ -1170,6 +1180,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             subscription_client,
             blind_auth_client,
             hermes_client,
+            esplora,
             auth,
             stop,
             logger,
@@ -1242,6 +1253,7 @@ pub struct MutinyWallet<S: MutinyStorage> {
     subscription_client: Option<Arc<MutinySubscriptionClient>>,
     blind_auth_client: Option<Arc<BlindAuthClient<S>>>,
     hermes_client: Option<Arc<HermesClient<S>>>,
+    esplora: Arc<AsyncClient>,
     pub stop: Arc<AtomicBool>,
     pub logger: Arc<MutinyLogger>,
     network: Network,
@@ -2675,6 +2687,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             self.federation_storage.clone(),
             self.federations.clone(),
             self.hermes_client.clone(),
+            self.esplora.clone(),
             federation_code,
             self.stop.clone(),
         )
@@ -3332,6 +3345,7 @@ async fn create_federations<S: MutinyStorage>(
     federation_storage: FederationStorage,
     c: &MutinyWalletConfig,
     storage: S,
+    esplora: Arc<AsyncClient>,
     stop: Arc<AtomicBool>,
     logger: &Arc<MutinyLogger>,
 ) -> Result<Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>, MutinyError> {
@@ -3342,6 +3356,7 @@ async fn create_federations<S: MutinyStorage>(
             federation_index.federation_code,
             c.xprivkey,
             storage.clone(),
+            esplora.clone(),
             c.network,
             stop.clone(),
             logger.clone(),
@@ -3366,6 +3381,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     federation_storage: Arc<RwLock<FederationStorage>>,
     federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>,
     hermes_client: Option<Arc<HermesClient<S>>>,
+    esplora: Arc<AsyncClient>,
     federation_code: InviteCode,
     stop: Arc<AtomicBool>,
 ) -> Result<FederationIdentity, MutinyError> {
@@ -3395,6 +3411,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         federation_code.clone(),
         xprivkey,
         storage.clone(),
+        esplora,
         network,
         stop.clone(),
         logger.clone(),

@@ -232,6 +232,7 @@ pub struct NodeBalance {
 pub struct NodeManagerBuilder<S: MutinyStorage> {
     xprivkey: ExtendedPrivKey,
     storage: S,
+    esplora: Option<Arc<AsyncClient>>,
     config: Option<MutinyWalletConfig>,
     stop: Option<Arc<AtomicBool>>,
     logger: Option<Arc<MutinyLogger>>,
@@ -242,6 +243,7 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
         NodeManagerBuilder::<S> {
             xprivkey,
             storage,
+            esplora: None,
             config: None,
             stop: None,
             logger: None,
@@ -255,6 +257,10 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
 
     pub fn with_stop(&mut self, stop: Arc<AtomicBool>) {
         self.stop = Some(stop);
+    }
+
+    pub fn with_esplora(&mut self, esplora: Arc<AsyncClient>) {
+        self.esplora = Some(esplora);
     }
 
     pub fn with_logger(&mut self, logger: Arc<MutinyLogger>) {
@@ -271,6 +277,13 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             .map_or_else(|| Err(MutinyError::InvalidArgumentsError), Ok)?;
         let logger = self.logger.unwrap_or(Arc::new(MutinyLogger::default()));
         let stop = self.stop.unwrap_or(Arc::new(AtomicBool::new(false)));
+        let esplora = if let Some(e) = self.esplora {
+            e
+        } else {
+            let esplora_server_url = get_esplora_url(c.network, c.user_esplora_url);
+            let esplora = Builder::new(&esplora_server_url).build_async()?;
+            Arc::new(esplora)
+        };
 
         #[cfg(target_arch = "wasm32")]
         let websocket_proxy_addr = c
@@ -280,14 +293,11 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
         let start = Instant::now();
         log_info!(logger, "Building node manager components");
 
-        let esplora_server_url = get_esplora_url(c.network, c.user_esplora_url);
-        let esplora = Builder::new(&esplora_server_url).build_async()?;
         let tx_sync = Arc::new(EsploraSyncClient::from_client(
-            esplora.clone(),
+            esplora.as_ref().clone(),
             logger.clone(),
         ));
 
-        let esplora = Arc::new(esplora);
         let fee_estimator = Arc::new(MutinyFeeEstimator::new(
             self.storage.clone(),
             esplora.clone(),
