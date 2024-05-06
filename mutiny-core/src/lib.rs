@@ -150,6 +150,7 @@ const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 const SWAP_LABEL: &str = "SWAP";
 const MELT_CASHU_TOKEN: &str = "Cashu Token Melt";
+const DUST_LIMIT: u64 = 546;
 
 #[cfg_attr(test, automock)]
 pub trait InvoiceHandler {
@@ -1923,7 +1924,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<u64, MutinyError> {
-        log_warn!(self.logger, "estimate_tx_fee");
+        if amount < DUST_LIMIT {
+            return Err(MutinyError::WalletOperationFailed);
+        }
 
         // Try each federation first
         let federation_ids = self.list_federation_ids().await?;
