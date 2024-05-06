@@ -20,7 +20,6 @@ use async_trait::async_trait;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
 use bitcoin::{
-    address::NetworkUnchecked,
     bip32::{ChildNumber, DerivationPath, ExtendedPrivKey},
     hashes::Hash,
     secp256k1::{Secp256k1, SecretKey, ThirtyTwoByteHash},
@@ -261,7 +260,6 @@ pub(crate) struct FederationClient<S: MutinyStorage> {
     fedimint_storage: FedimintStorage<S>,
     gateway: Arc<RwLock<Option<LightningGateway>>>,
     esplora: Arc<AsyncClient>,
-    network: Network,
     stop: Arc<AtomicBool>,
     pub(crate) logger: Arc<MutinyLogger>,
 }
@@ -404,7 +402,6 @@ impl<S: MutinyStorage> FederationClient<S> {
             logger,
             invite_code: federation_code,
             esplora,
-            network,
             stop,
             gateway,
         };
@@ -730,11 +727,11 @@ impl<S: MutinyStorage> FederationClient<S> {
     /// Send on chain transaction
     pub(crate) async fn send_onchain(
         &self,
-        send_to: bitcoin::Address<NetworkUnchecked>,
+        send_to: bitcoin::Address,
         amount: u64,
         labels: Vec<String>,
     ) -> Result<Txid, MutinyError> {
-        let address = bitcoin30_to_bitcoin29_address(send_to.require_network(self.network)?);
+        let address = bitcoin30_to_bitcoin29_address(send_to);
 
         let btc_amount = fedimint_ln_common::bitcoin::Amount::from_sat(amount);
 
@@ -805,6 +802,25 @@ impl<S: MutinyStorage> FederationClient<S> {
         self.subscribe_operation(operation, op_id);
 
         Err(MutinyError::PaymentTimeout)
+    }
+
+    pub async fn estimate_tx_fee(
+        &self,
+        destination_address: bitcoin::Address,
+        amount: u64,
+    ) -> Result<u64, MutinyError> {
+        let address = bitcoin30_to_bitcoin29_address(destination_address);
+        let btc_amount = fedimint_ln_common::bitcoin::Amount::from_sat(amount);
+
+        let wallet_module = self
+            .fedimint_client
+            .get_first_module::<WalletClientModule>();
+
+        let peg_out_fees = wallet_module
+            .get_withdraw_fees(address.clone(), btc_amount)
+            .await?;
+
+        Ok(peg_out_fees.amount().to_sat())
     }
 
     /// Someone received a payment on our behalf, we need to claim it

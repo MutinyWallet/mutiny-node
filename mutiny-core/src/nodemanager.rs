@@ -712,14 +712,12 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// If a fee rate is not provided, one will be used from the fee estimator.
     pub async fn send_to_address(
         &self,
-        send_to: Address<NetworkUnchecked>,
+        send_to: Address,
         amount: u64,
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        let address = send_to.require_network(self.network)?;
-
-        self.wallet.send(address, amount, labels, fee_rate).await
+        self.wallet.send(send_to, amount, labels, fee_rate).await
     }
 
     /// Sweeps all the funds from the wallet to the given address.
@@ -728,18 +726,16 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// If a fee rate is not provided, one will be used from the fee estimator.
     pub async fn sweep_wallet(
         &self,
-        send_to: Address<NetworkUnchecked>,
+        send_to: Address,
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        let address = send_to.require_network(self.network)?;
-
-        self.wallet.sweep(address, labels, fee_rate).await
+        self.wallet.sweep(send_to, labels, fee_rate).await
     }
 
     /// Estimates the onchain fee for a transaction sending to the given address.
     /// The amount is in satoshis and the fee rate is in sat/vbyte.
-    pub fn estimate_tx_fee(
+    pub(crate) fn estimate_tx_fee(
         &self,
         destination_address: Address,
         amount: u64,
@@ -753,7 +749,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// to the given address.
     ///
     /// The fee rate is in sat/vbyte.
-    pub fn estimate_sweep_tx_fee(
+    pub(crate) fn estimate_sweep_tx_fee(
         &self,
         destination_address: Address,
         fee_rate: Option<f32>,

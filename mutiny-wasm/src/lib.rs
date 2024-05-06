@@ -476,7 +476,7 @@ impl MutinyWallet {
     /// Returns the network of the wallet.
     #[wasm_bindgen]
     pub fn get_network(&self) -> String {
-        self.inner.node_manager.get_network().to_string()
+        self.inner.get_network().to_string()
     }
 
     /// Gets a new bitcoin address from the wallet.
@@ -545,7 +545,8 @@ impl MutinyWallet {
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<String, MutinyJsError> {
-        let send_to = Address::from_str(&destination_address)?;
+        let send_to =
+            Address::from_str(&destination_address)?.require_network(self.inner.get_network())?;
         Ok(self
             .inner
             .send_to_address(send_to, amount, labels, fee_rate)
@@ -583,10 +584,10 @@ impl MutinyWallet {
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<String, MutinyJsError> {
-        let send_to = Address::from_str(&destination_address)?;
+        let send_to =
+            Address::from_str(&destination_address)?.require_network(self.inner.get_network())?;
         Ok(self
             .inner
-            .node_manager
             .sweep_wallet(send_to, labels, fee_rate)
             .await?
             .to_string())
@@ -594,33 +595,27 @@ impl MutinyWallet {
 
     /// Estimates the onchain fee for a transaction sending to the given address.
     /// The amount is in satoshis and the fee rate is in sat/vbyte.
-    pub fn estimate_tx_fee(
+    pub async fn estimate_tx_fee(
         &self,
         destination_address: String,
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<u64, MutinyJsError> {
         let addr = Address::from_str(&destination_address)?.assume_checked();
-        Ok(self
-            .inner
-            .node_manager
-            .estimate_tx_fee(addr, amount, fee_rate)?)
+        Ok(self.inner.estimate_tx_fee(addr, amount, fee_rate).await?)
     }
 
     /// Estimates the onchain fee for a transaction sweep our on-chain balance
     /// to the given address.
     ///
     /// The fee rate is in sat/vbyte.
-    pub fn estimate_sweep_tx_fee(
+    pub async fn estimate_sweep_tx_fee(
         &self,
         destination_address: String,
         fee_rate: Option<f32>,
     ) -> Result<u64, MutinyJsError> {
         let addr = Address::from_str(&destination_address)?.assume_checked();
-        Ok(self
-            .inner
-            .node_manager
-            .estimate_sweep_tx_fee(addr, fee_rate)?)
+        Ok(self.inner.estimate_sweep_tx_fee(addr, fee_rate).await?)
     }
 
     /// Estimates the onchain fee for a opening a lightning channel.

@@ -99,10 +99,7 @@ use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
 pub use bitcoin;
-use bitcoin::{
-    address::NetworkUnchecked,
-    secp256k1::{PublicKey, ThirtyTwoByteHash},
-};
+use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
 use bitcoin::{bip32::ExtendedPrivKey, Transaction};
 use bitcoin::{hashes::sha256, Network, Txid};
 use bitcoin::{hashes::Hash, Address};
@@ -1870,7 +1867,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     pub async fn send_to_address(
         &self,
-        send_to: Address<NetworkUnchecked>,
+        send_to: Address,
         amount: u64,
         labels: Vec<String>,
         fee_rate: Option<f32>,
@@ -1915,6 +1912,150 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             Ok(res)
         } else {
             Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
+        }
+    }
+
+    /// Estimates the onchain fee for a transaction sending to the given address.
+    /// The amount is in satoshis and the fee rate is in sat/vbyte.
+    pub async fn estimate_tx_fee(
+        &self,
+        destination_address: Address,
+        amount: u64,
+        fee_rate: Option<f32>,
+    ) -> Result<u64, MutinyError> {
+        log_warn!(self.logger, "estimate_tx_fee");
+
+        // Try each federation first
+        let federation_ids = self.list_federation_ids().await?;
+        let mut last_federation_error = None;
+        for federation_id in federation_ids {
+            if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
+                // Check if the federation has enough balance
+                let balance = fedimint_client.get_balance().await?;
+                if balance >= amount / 1_000 {
+                    match fedimint_client
+                        .estimate_tx_fee(destination_address.clone(), amount)
+                        .await
+                    {
+                        Ok(t) => {
+                            return Ok(t);
+                        }
+                        Err(e) => {
+                            log_warn!(self.logger, "error estimating fedimint fee: {e}");
+                            last_federation_error = Some(e);
+                        }
+                    }
+                }
+                // If estimation fails or balance is not sufficient, continue to next federation
+            }
+            // If federation client is not found, continue to next federation
+        }
+
+        let b = self.node_manager.get_balance().await?;
+        if b.confirmed + b.unconfirmed > 0 {
+            let res = self
+                .node_manager
+                .estimate_tx_fee(destination_address, amount, fee_rate)?;
+
+            Ok(res)
+        } else {
+            Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
+        }
+    }
+
+    /// Estimates the onchain fee for a transaction sweep our on-chain balance
+    /// to the given address. If the fedimint has a balance, sweep that first.
+    /// Do not sweep the on chain wallet unless that is empty.
+    ///
+    /// The fee rate is in sat/vbyte.
+    pub async fn estimate_sweep_tx_fee(
+        &self,
+        destination_address: Address,
+        fee_rate: Option<f32>,
+    ) -> Result<u64, MutinyError> {
+        // Try each federation first
+        let federation_ids = self.list_federation_ids().await?;
+        for federation_id in federation_ids {
+            if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
+                // Check if the federation has enough balance
+                let balance = fedimint_client.get_balance().await?;
+                match fedimint_client
+                    .estimate_tx_fee(destination_address.clone(), balance)
+                    .await
+                {
+                    Ok(t) => {
+                        return Ok(t);
+                    }
+                    Err(e) => return Err(e),
+                }
+                // If estimation fails or balance is not sufficient, continue to next federation
+            }
+            // If federation client is not found, continue to next federation
+        }
+
+        let b = self.node_manager.get_balance().await?;
+        if b.confirmed + b.unconfirmed > 0 {
+            let res = self
+                .node_manager
+                .estimate_sweep_tx_fee(destination_address, fee_rate)?;
+
+            Ok(res)
+        } else {
+            log_error!(self.logger, "node manager doesn't have a balance");
+            Err(MutinyError::InsufficientBalance)
+        }
+    }
+
+    /// Sweeps all the funds from the wallet to the given address.
+    /// The fee rate is in sat/vbyte.
+    ///
+    /// If a fee rate is not provided, one will be used from the fee estimator.
+    pub async fn sweep_wallet(
+        &self,
+        send_to: Address,
+        labels: Vec<String>,
+        fee_rate: Option<f32>,
+    ) -> Result<Txid, MutinyError> {
+        // Try each federation first
+        let federation_ids = self.list_federation_ids().await?;
+        for federation_id in federation_ids {
+            if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
+                // Check if the federation has enough balance
+                let balance = fedimint_client.get_balance().await?;
+                match fedimint_client
+                    .estimate_tx_fee(send_to.clone(), balance)
+                    .await
+                {
+                    Ok(f) => {
+                        match fedimint_client
+                            .send_onchain(send_to.clone(), balance - f, labels)
+                            .await
+                        {
+                            Ok(t) => return Ok(t),
+                            Err(e) => {
+                                log_error!(self.logger, "error sending the fedimint balance");
+                                return Err(e);
+                            }
+                        }
+                    }
+                    Err(e) => return Err(e),
+                }
+                // If payment fails or balance is not sufficient, continue to next federation
+            }
+            // If federation client is not found, continue to next federation
+        }
+
+        let b = self.node_manager.get_balance().await?;
+        if b.confirmed + b.unconfirmed > 0 {
+            let res = self
+                .node_manager
+                .sweep_wallet(send_to.clone(), labels, fee_rate)
+                .await?;
+
+            Ok(res)
+        } else {
+            log_error!(self.logger, "node manager doesn't have a balance");
+            Err(MutinyError::InsufficientBalance)
         }
     }
 
@@ -3296,6 +3437,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .map_err(|_| MutinyError::BitcoinPriceError)?;
 
         Ok(response.price)
+    }
+
+    /// Returns the network of the wallet.
+    pub fn get_network(&self) -> Network {
+        self.network
     }
 }
 
