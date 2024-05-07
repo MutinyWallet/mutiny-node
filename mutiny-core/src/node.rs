@@ -1781,15 +1781,7 @@ impl<S: MutinyStorage> Node<S> {
             .lsp_client
             .as_ref()
             .is_some_and(|l| l.accept_underpaying_htlcs());
-        let mut config = default_user_config(accept_underpaying_htlcs);
-
-        // if we are opening channel to LSP, turn off SCID alias until CLN is updated
-        // LSP protects all invoice information anyways, so no UTXO leakage
-        if let Some(lsp) = self.lsp_client.clone() {
-            if pubkey == lsp.get_lsp_pubkey().await {
-                config.channel_handshake_config.negotiate_scid_privacy = false;
-            }
-        }
+        let config = default_user_config(accept_underpaying_htlcs);
 
         let user_channel_id = user_channel_id.unwrap_or_else(|| {
             // generate random user channel id
@@ -1890,14 +1882,7 @@ impl<S: MutinyStorage> Node<S> {
             .lsp_client
             .as_ref()
             .is_some_and(|l| l.accept_underpaying_htlcs());
-        let mut config = default_user_config(accept_underpaying_htlcs);
-        // if we are opening channel to LSP, turn off SCID alias until CLN is updated
-        // LSP protects all invoice information anyways, so no UTXO leakage
-        if let Some(lsp) = self.lsp_client.clone() {
-            if pubkey == lsp.get_lsp_pubkey().await {
-                config.channel_handshake_config.negotiate_scid_privacy = false;
-            }
-        }
+        let config = default_user_config(accept_underpaying_htlcs);
 
         let user_channel_id = user_chan_id.unwrap_or_else(|| {
             // generate random user channel id
@@ -2364,7 +2349,7 @@ pub(crate) fn default_user_config(accept_underpaying_htlcs: bool) -> UserConfig 
             announced_channel: false,
             negotiate_scid_privacy: true,
             commit_upfront_shutdown_pubkey: false,
-            negotiate_anchors_zero_fee_htlc_tx: false,
+            negotiate_anchors_zero_fee_htlc_tx: true, // enable anchor channels
             max_inbound_htlc_value_in_flight_percent_of_channel: 100,
             our_to_self_delay: 6 * 24 * 2, // 2 days
             their_channel_reserve_proportional_millionths: 0,

@@ -46,6 +46,12 @@ mod test_utils;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
+pub use bitcoin;
+pub use fedimint_core;
+pub use lightning;
+pub use lightning_invoice;
+pub use nostr_sdk;
+
 use crate::utils::spawn;
 use crate::{auth::MutinyAuthClient, hermes::HermesClient, logging::MutinyLogger};
 use crate::{blindauth::BlindAuthClient, cashu::CashuHttpClient};
