@@ -1060,6 +1060,7 @@ impl MutinyWallet {
         &self,
         amount: Option<u64>,
         from_federation_id: Option<String>,
+        to_federation_id: Option<String>,
     ) -> Result<FedimintSweepResult, MutinyJsError> {
         let from_federation_id = match from_federation_id {
             Some(f) => {
@@ -1068,9 +1069,16 @@ impl MutinyWallet {
             None => None,
         };
 
+        let to_federation_id = match to_federation_id {
+            Some(f) => {
+                Some(FederationId::from_str(&f).map_err(|_| MutinyJsError::InvalidArgumentsError)?)
+            }
+            None => None,
+        };
+
         Ok(self
             .inner
-            .sweep_federation_balance(amount, from_federation_id)
+            .sweep_federation_balance(amount, from_federation_id, to_federation_id)
             .await?
             .into())
     }
