@@ -1059,8 +1059,20 @@ impl MutinyWallet {
     pub async fn sweep_federation_balance(
         &self,
         amount: Option<u64>,
+        from_federation_id: Option<String>,
     ) -> Result<FedimintSweepResult, MutinyJsError> {
-        Ok(self.inner.sweep_federation_balance(amount).await?.into())
+        let from_federation_id = match from_federation_id {
+            Some(f) => {
+                Some(FederationId::from_str(&f).map_err(|_| MutinyJsError::InvalidArgumentsError)?)
+            }
+            None => None,
+        };
+
+        Ok(self
+            .inner
+            .sweep_federation_balance(amount, from_federation_id)
+            .await?
+            .into())
     }
 
     /// Estimate the fee before trying to sweep from federation

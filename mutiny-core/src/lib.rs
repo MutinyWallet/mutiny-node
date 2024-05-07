@@ -1590,16 +1590,16 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     pub async fn sweep_federation_balance(
         &self,
         amount: Option<u64>,
+        from_federation_id: Option<FederationId>,
     ) -> Result<FedimintSweepResult, MutinyError> {
-        // TODO support more than one federation
         let federation_ids = self.list_federation_ids().await?;
         if federation_ids.is_empty() {
             return Err(MutinyError::NotFound);
         }
-        let federation_id = &federation_ids[0];
+        let federation_id = from_federation_id.unwrap_or(federation_ids[0]);
         let federation_lock = self.federations.read().await;
         let fedimint_client = federation_lock
-            .get(federation_id)
+            .get(&federation_id)
             .ok_or(MutinyError::NotFound)?;
 
         let labels = vec![SWAP_LABEL.to_string()];
