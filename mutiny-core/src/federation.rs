@@ -144,6 +144,30 @@ pub struct FederationIdentity {
     pub federation_expiry_timestamp: Option<String>,
     pub welcome_message: Option<String>,
     pub gateway_fees: Option<GatewayFees>,
+    // undocumented parameters that fedi uses: https://meta.dev.fedibtc.com/meta.json
+    pub default_currency: Option<String>,
+    pub federation_icon_url: Option<String>,
+    pub max_balance_msats: Option<u32>,
+    pub max_invoice_msats: Option<u32>,
+    pub meta_external_url: Option<String>,
+    pub onchain_deposits_disabled: Option<bool>,
+    pub preview_message: Option<String>,
+    pub sites: Option<Site>,
+    pub public: Option<bool>,
+    pub tos_url: Option<String>,
+    pub popup_end_timestamp: Option<u32>,
+    pub popup_countdown_message: Option<String>,
+    pub invite_codes_disabled: Option<bool>,
+    pub stability_pool_disabled: Option<bool>,
+    pub social_recovery_disabled: Option<bool>,
+}
+
+#[derive(Default, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Site {
+    pub id: Option<String>,
+    pub url: Option<String>,
+    pub title: Option<String>,
+    pub image_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default)]
@@ -658,24 +682,68 @@ impl<S: MutinyStorage> FederationClient<S> {
 
     pub async fn get_mutiny_federation_identity(&self) -> FederationIdentity {
         let gateway_fees = self.gateway_fee().await.ok();
-
-        FederationIdentity {
-            uuid: self.uuid.clone(),
-            federation_id: self.fedimint_client.federation_id(),
-            invite_code: self.invite_code.clone(),
-            federation_name: self.fedimint_client.get_meta("federation_name"),
-            federation_expiry_timestamp: self
-                .fedimint_client
-                .get_meta("federation_expiry_timestamp"),
-            welcome_message: self.fedimint_client.get_meta("welcome_message"),
+        get_federation_identity(
+            self.uuid.clone(),
+            self.fedimint_client.clone(),
+            self.invite_code.clone(),
             gateway_fees,
-        }
+        )
     }
 
     // delete_fedimint_storage is not suggested at the moment due to the lack of easy restores
     #[allow(dead_code)]
     pub async fn delete_fedimint_storage(&self) -> Result<(), MutinyError> {
         self.fedimint_storage.delete_store().await
+    }
+}
+
+pub(crate) fn get_federation_identity(
+    uuid: String,
+    fedimint_client: ClientHandleArc,
+    invite_code: InviteCode,
+    gateway_fees: Option<GatewayFees>,
+) -> FederationIdentity {
+    FederationIdentity {
+        uuid: uuid.clone(),
+        federation_id: fedimint_client.federation_id(),
+        invite_code: invite_code.clone(),
+        federation_name: fedimint_client.get_meta("federation_name"),
+        federation_expiry_timestamp: fedimint_client.get_meta("federation_expiry_timestamp"),
+        welcome_message: fedimint_client.get_meta("welcome_message"),
+        gateway_fees,
+        default_currency: fedimint_client.get_meta("default_currency"),
+        federation_icon_url: fedimint_client.get_meta("federation_icon_url"),
+        max_balance_msats: fedimint_client
+            .get_meta("max_balance_msats")
+            .map(|v| v.parse().unwrap_or(0)),
+        max_invoice_msats: fedimint_client
+            .get_meta("max_invoice_msats")
+            .map(|v| v.parse().unwrap_or(0)),
+        meta_external_url: fedimint_client.get_meta("meta_external_url"),
+        onchain_deposits_disabled: fedimint_client
+            .get_meta("onchain_deposits_disabled")
+            .map(|v| v.parse().unwrap_or(false)),
+        preview_message: fedimint_client.get_meta("preview_message"),
+        sites: fedimint_client
+            .get_meta("sites")
+            .map(|v| serde_json::from_str(&v).unwrap_or_default()),
+        public: fedimint_client
+            .get_meta("public")
+            .map(|v| v.parse().unwrap_or(false)),
+        tos_url: fedimint_client.get_meta("tos_url"),
+        popup_end_timestamp: fedimint_client
+            .get_meta("popup_end_timestamp")
+            .map(|v| v.parse().unwrap_or(0)),
+        popup_countdown_message: fedimint_client.get_meta("popup_countdown_message"),
+        invite_codes_disabled: fedimint_client
+            .get_meta("invite_codes_disabled")
+            .map(|v| v.parse().unwrap_or(false)),
+        stability_pool_disabled: fedimint_client
+            .get_meta("stability_pool_disabled")
+            .map(|v| v.parse().unwrap_or(false)),
+        social_recovery_disabled: fedimint_client
+            .get_meta("social_recovery_disabled")
+            .map(|v| v.parse().unwrap_or(false)),
     }
 }
 

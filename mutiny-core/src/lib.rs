@@ -46,12 +46,6 @@ mod test_utils;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
-use crate::storage::{
-    get_payment_hash_from_key, list_payment_info, persist_payment_info, update_nostr_contact_list,
-    IndexItem, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY,
-    ONCHAIN_PREFIX, PAYMENT_INBOUND_PREFIX_KEY, PAYMENT_OUTBOUND_PREFIX_KEY,
-    SUBSCRIPTION_TIMESTAMP,
-};
 use crate::utils::spawn;
 use crate::{auth::MutinyAuthClient, hermes::HermesClient, logging::MutinyLogger};
 use crate::{blindauth::BlindAuthClient, cashu::CashuHttpClient};
@@ -59,6 +53,15 @@ use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{
     event::{HTLCStatus, MillisatAmount, PaymentInfo},
     onchain::FULL_SYNC_STOP_GAP,
+};
+use crate::{
+    federation::get_federation_identity,
+    storage::{
+        get_payment_hash_from_key, list_payment_info, persist_payment_info,
+        update_nostr_contact_list, IndexItem, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY,
+        NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX, PAYMENT_INBOUND_PREFIX_KEY,
+        PAYMENT_OUTBOUND_PREFIX_KEY, SUBSCRIPTION_TIMESTAMP,
+    },
 };
 use crate::{
     federation::{
@@ -3191,27 +3194,19 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     storage.insert_federations(federation_mutex.clone()).await?;
 
     let federation_id = new_federation.fedimint_client.federation_id();
-    let federation_name = new_federation.fedimint_client.get_meta("federation_name");
-    let federation_expiry_timestamp = new_federation
-        .fedimint_client
-        .get_meta("federation_expiry_timestamp");
-    let welcome_message = new_federation.fedimint_client.get_meta("welcome_message");
     let gateway_fees = new_federation.gateway_fee().await.ok();
+
+    let new_federation_identity = get_federation_identity(
+        next_federation_uuid.clone(),
+        new_federation.fedimint_client.clone(),
+        federation_code.clone(),
+        gateway_fees,
+    );
 
     federations
         .write()
         .await
         .insert(federation_id, Arc::new(new_federation));
-
-    let new_federation_identity = FederationIdentity {
-        uuid: next_federation_uuid.clone(),
-        federation_id,
-        invite_code: federation_code,
-        federation_name,
-        federation_expiry_timestamp,
-        welcome_message,
-        gateway_fees,
-    };
 
     // change the federation with hermes, if available
     if let Some(h) = hermes_client {
