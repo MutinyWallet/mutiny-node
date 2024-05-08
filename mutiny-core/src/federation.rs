@@ -1600,7 +1600,7 @@ async fn subscribe_onchain_confirmation_check<S: MutinyStorage>(
                         log_info!(logger, "Transaction confirmed");
                         transaction_details.confirmation_time = ConfirmationTime::Confirmed {
                             height: s.block_height.expect("confirmed"),
-                            time: now().as_secs(),
+                            time: s.block_time.unwrap_or(now().as_secs()),
                         };
                         match persist_transaction_details(&storage, &transaction_details) {
                             Ok(_) => {
@@ -1618,7 +1618,14 @@ async fn subscribe_onchain_confirmation_check<S: MutinyStorage>(
                 }
             }
 
-            sleep(5_000).await;
+            // wait for one minute before checking mempool again
+            // sleep every second to check if we need to stop
+            for _ in 0..60 {
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                sleep(1_000).await;
+            }
         }
     });
 }
