@@ -27,6 +27,7 @@ use tbs::unblind_signature;
 use url::Url;
 
 use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
+use crate::federation::FedimintClient;
 use crate::labels::LabelStorage;
 use crate::nostr::RELAYS;
 use crate::storage::persist_payment_info;
@@ -65,7 +66,7 @@ pub struct RegisterResponse {
 
 pub struct HermesClient<S: MutinyStorage> {
     pub(crate) dm_key: Keys,
-    claim_key: SecretKey,
+    pub(crate) claim_key: SecretKey,
     pub public_key: nostr::PublicKey,
     pub client: Client,
     http_client: reqwest::Client,
@@ -601,6 +602,103 @@ struct EcashNotification {
     pub preimage: String,
 }
 
+async fn claim_ecash_notification<S: MutinyStorage>(
+    notification: EcashNotification,
+    created_at: Timestamp,
+    federation: &impl FedimintClient,
+    storage: &S,
+    claim_key: &SecretKey,
+    profile_key: Option<&Keys>,
+    logger: &MutinyLogger,
+) -> anyhow::Result<Option<PaymentInfo>> {
+    match federation
+        .claim_external_receive(claim_key, vec![notification.tweak_index])
+        .await
+    {
+        Ok(_) => {
+            log_info!(
+                logger,
+                "Claimed external receive for {} msats!",
+                notification.amount
+            );
+
+            let (privacy_level, msg, npub) = match notification.zap_request {
+                None => (PrivacyLevel::NotAvailable, None, None),
+                Some(zap_req) => {
+                    let zap_req = Event::from_json(zap_req)?;
+                    // handle private/anon zaps
+                    let anon = zap_req.iter_tags().find_map(|tag| {
+                        if let Tag::Anon { msg } = tag {
+                            if msg.is_some() {
+                                // an Anon tag with a message is a private zap
+                                // try to decrypt the message and use that as the message
+                                Some(handle_private_zap(&zap_req, profile_key, logger))
+                            } else {
+                                // an Anon tag with no message is an anonymous zap
+                                // the content of the zap is the message
+                                Some((PrivacyLevel::Anonymous, Some(zap_req.content.clone()), None))
+                            }
+                        } else {
+                            None
+                        }
+                    });
+
+                    // handled the anon tag, if there wasn't one, it is a public zap
+                    anon.unwrap_or((
+                        PrivacyLevel::Public,
+                        Some(zap_req.content.clone()),
+                        Some(zap_req.pubkey),
+                    ))
+                }
+            };
+
+            // create activity item
+            let payment_hash = notification.bolt11.payment_hash().into_32();
+            let preimage = FromHex::from_hex(&notification.preimage).ok();
+            let info = PaymentInfo {
+                preimage,
+                secret: Some(notification.bolt11.payment_secret().0),
+                status: HTLCStatus::Succeeded,
+                amt_msat: MillisatAmount(Some(notification.amount)),
+                fee_paid_msat: None,
+                payee_pubkey: Some(notification.bolt11.recover_payee_pub_key()),
+                bolt11: Some(notification.bolt11.clone()),
+                privacy_level,
+                // use the notification event's created_at as last update so we can properly sort by time
+                last_update: created_at.as_u64(),
+            };
+            persist_payment_info(storage, &payment_hash, &info, true)?;
+
+            // tag the invoice if we can
+            let mut tags = Vec::with_capacity(2);
+
+            // try to tag by contact by npub, otherwise tag by pubkey
+            if let Some(npub) = npub {
+                if let Some((id, _)) = storage.get_contact_for_npub(npub)? {
+                    tags.push(id);
+                } else {
+                    tags.push(npub.to_bech32().expect("must be valid"));
+                }
+            }
+
+            // add message tag if we have one
+            if let Some(msg) = msg.filter(|m| !m.is_empty()) {
+                tags.push(msg);
+            }
+
+            // save the tags if we have any
+            if !tags.is_empty() {
+                storage.set_invoice_labels(notification.bolt11, tags)?;
+            }
+
+            return Ok(Some(info));
+        }
+        Err(e) => log_error!(logger, "Error claiming external receive: {e}"),
+    }
+
+    Ok(None)
+}
+
 /// Attempts to claim the ecash, if successful, saves the payment info
 async fn handle_ecash_notification<S: MutinyStorage>(
     notification: EcashNotification,
@@ -618,92 +716,16 @@ async fn handle_ecash_notification<S: MutinyStorage>(
     );
 
     if let Some(federation) = federations.read().await.get(&notification.federation_id) {
-        match federation
-            .claim_external_receive(claim_key, vec![notification.tweak_index])
-            .await
-        {
-            Ok(_) => {
-                log_info!(
-                    logger,
-                    "Claimed external receive for {} msats!",
-                    notification.amount
-                );
-
-                let (privacy_level, msg, npub) = match notification.zap_request {
-                    None => (PrivacyLevel::NotAvailable, None, None),
-                    Some(zap_req) => {
-                        let zap_req = Event::from_json(zap_req)?;
-                        // handle private/anon zaps
-                        let anon = zap_req.iter_tags().find_map(|tag| {
-                            if let Tag::Anon { msg } = tag {
-                                if msg.is_some() {
-                                    // an Anon tag with a message is a private zap
-                                    // try to decrypt the message and use that as the message
-                                    handle_private_zap(&zap_req, profile_key, logger)
-                                } else {
-                                    // an Anon tag with no message is an anonymous zap
-                                    // the content of the zap is the message
-                                    Some((
-                                        PrivacyLevel::Anonymous,
-                                        Some(zap_req.content.clone()),
-                                        None,
-                                    ))
-                                }
-                            } else {
-                                None
-                            }
-                        });
-
-                        // handled the anon tag, if there wasn't one, it is a public zap
-                        anon.unwrap_or((
-                            PrivacyLevel::Public,
-                            Some(zap_req.content.clone()),
-                            Some(zap_req.pubkey),
-                        ))
-                    }
-                };
-
-                // create activity item
-                let payment_hash = notification.bolt11.payment_hash().into_32();
-                let preimage = FromHex::from_hex(&notification.preimage).ok();
-                let info = PaymentInfo {
-                    preimage,
-                    secret: Some(notification.bolt11.payment_secret().0),
-                    status: HTLCStatus::Succeeded,
-                    amt_msat: MillisatAmount(Some(notification.amount)),
-                    fee_paid_msat: None,
-                    payee_pubkey: Some(notification.bolt11.recover_payee_pub_key()),
-                    bolt11: Some(notification.bolt11.clone()),
-                    privacy_level,
-                    // use the notification event's created_at as last update so we can properly sort by time
-                    last_update: created_at.as_u64(),
-                };
-                persist_payment_info(storage, &payment_hash, &info, true)?;
-
-                // tag the invoice if we can
-                let mut tags = Vec::with_capacity(2);
-
-                // try to tag by contact by npub, otherwise tag by pubkey
-                if let Some(npub) = npub {
-                    if let Some((id, _)) = storage.get_contact_for_npub(npub)? {
-                        tags.push(id);
-                    } else {
-                        tags.push(npub.to_bech32().expect("must be valid"));
-                    }
-                }
-
-                // add message tag if we have one
-                if let Some(msg) = msg.filter(|m| !m.is_empty()) {
-                    tags.push(msg);
-                }
-
-                // save the tags if we have any
-                if !tags.is_empty() {
-                    storage.set_invoice_labels(notification.bolt11, tags)?;
-                }
-            }
-            Err(e) => log_error!(logger, "Error claiming external receive: {e}"),
-        }
+        claim_ecash_notification(
+            notification,
+            created_at,
+            federation.as_ref(),
+            storage,
+            claim_key,
+            profile_key,
+            logger,
+        )
+        .await?;
     } else {
         log_warn!(
             logger,
@@ -722,25 +744,529 @@ fn handle_private_zap(
     zap_req: &Event,
     profile_key: Option<&Keys>,
     logger: &MutinyLogger,
-) -> Option<(PrivacyLevel, Option<String>, Option<nostr::PublicKey>)> {
-    let key = match profile_key {
-        Some(k) => k.secret_key().ok()?,
+) -> (PrivacyLevel, Option<String>, Option<nostr::PublicKey>) {
+    let key = match profile_key.and_then(|k| k.secret_key().ok()) {
+        Some(k) => k,
         None => {
             log_error!(logger, "No primary key to decrypt private zap");
-            return None;
+            // We can't decrypt the message, treat it as an anonymous zap
+            return (PrivacyLevel::Anonymous, Some(zap_req.content.clone()), None);
         }
     };
     // try to decrypt the message
     match decrypt_received_private_zap_message(key, zap_req) {
-        Ok(event) => Some((
+        Ok(event) => (
             PrivacyLevel::Private,
             Some(event.content.clone()),
             Some(event.pubkey),
-        )),
+        ),
         Err(e) => {
             // if we can't decrypt, treat it like it's an anonymous zap
             log_error!(logger, "Error decrypting private zap: {e}");
-            Some((PrivacyLevel::Anonymous, Some(zap_req.content.clone()), None))
+            (PrivacyLevel::Anonymous, Some(zap_req.content.clone()), None)
         }
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod test {
+    use super::*;
+    use crate::auth::MutinyAuthClient;
+    use crate::federation::MockFedimintClient;
+    use crate::generate_seed;
+    use crate::storage::MemoryStorage;
+    use crate::test_utils::{create_dummy_invoice, create_manager};
+    use bitcoin::secp256k1::rand::rngs::OsRng;
+    use bitcoin::Network;
+    use mockall::predicate::eq;
+    use nostr::nips;
+    use nostr::prelude::ZapRequestData;
+    use nostr::util::hex;
+
+    async fn create_hermes_client() -> HermesClient<MemoryStorage> {
+        let storage = MemoryStorage::default();
+        let logger = Arc::new(MutinyLogger::default());
+        let mnemonic = generate_seed(12).unwrap();
+        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &mnemonic.to_seed("")).unwrap();
+
+        // Set up test auth client
+        let auth_manager = create_manager();
+        let lnurl_client = Arc::new(
+            lnurl::Builder::default()
+                .build_async()
+                .expect("failed to make lnurl client"),
+        );
+        let auth_client = MutinyAuthClient::new(
+            auth_manager,
+            lnurl_client,
+            logger.clone(),
+            "https://auth-staging.mutinywallet.com".to_string(),
+        );
+
+        let blinded_auth = BlindAuthClient::new(
+            xpriv,
+            Arc::new(auth_client),
+            Network::Regtest,
+            "https://blind-auth-staging.mutinywallet.com".to_string(),
+            &storage,
+            logger.clone(),
+        )
+        .unwrap();
+
+        HermesClient::new(
+            xpriv,
+            "https://signet.mutiny.plus".to_string(),
+            Arc::new(RwLock::new(HashMap::new())),
+            Arc::new(blinded_auth),
+            &storage,
+            logger,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_correct_key_parity() {
+        let secp = Secp256k1::new();
+
+        // run 10 times to make sure we get the same parity each time
+        for _ in 0..10 {
+            let hermes = create_hermes_client().await;
+            let (_, parity) = hermes.claim_key.x_only_public_key(&secp);
+            assert_eq!(parity, Parity::Even);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_check_username() {
+        let hermes = create_hermes_client().await;
+        let result = check_hermes_registration_info(
+            &hermes.http_client,
+            &hermes.base_url,
+            hermes.client.clone(),
+        )
+        .await
+        .unwrap();
+
+        // new client should have no username
+        assert!(result.name.is_none());
+        assert!(result.disabled_zaps);
+        assert!(result.federation_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_name_available() {
+        let hermes = create_hermes_client().await;
+
+        // "test1234" should be taken
+        assert!(!hermes
+            .check_available_name("test1234".to_string())
+            .await
+            .unwrap());
+
+        // "x" is invalid, too short
+        assert!(!hermes.check_available_name("x".to_string()).await.unwrap());
+
+        // "thisisoverthe30characternamelimit" is invalid, too long
+        assert!(!hermes
+            .check_available_name("thisisoverthe30characternamelimit".to_string())
+            .await
+            .unwrap());
+
+        // random string should be available
+        // generate 32 hex and take first 20 characters
+        let rand = Keys::generate().public_key().to_string();
+        let string = rand.chars().take(20).collect::<String>();
+        assert!(hermes.check_available_name(string).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_claim_ecash_notification() {
+        let logger = MutinyLogger::default();
+        let storage = MemoryStorage::default();
+        let claim_key = SecretKey::new(&mut OsRng);
+        let mut fedimint_client = MockFedimintClient::new();
+
+        let amount = 10_000;
+        let (bolt11, preimage) = create_dummy_invoice(Some(amount), Network::Regtest, None);
+        let notification = EcashNotification {
+            amount,
+            tweak_index: 0,
+            federation_id: FederationId::dummy(),
+            zap_request: None,
+            bolt11: bolt11.clone(),
+            preimage: hex::encode(preimage),
+        };
+        let timestamp = Timestamp::now();
+
+        fedimint_client
+            .expect_claim_external_receive()
+            .once()
+            .with(eq(claim_key), eq(vec![0]))
+            .returning(|_, _| Ok(()));
+
+        let info = claim_ecash_notification(
+            notification,
+            timestamp,
+            &fedimint_client,
+            &storage,
+            &claim_key,
+            None,
+            &logger,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(info.preimage, Some(preimage));
+        assert_eq!(info.status, HTLCStatus::Succeeded);
+        assert_eq!(info.privacy_level, PrivacyLevel::NotAvailable);
+        assert_eq!(info.bolt11, Some(bolt11.clone()));
+        assert_eq!(info.fee_paid_msat, None);
+        assert_eq!(info.amt_msat, MillisatAmount(Some(amount)));
+        assert_eq!(info.last_update, timestamp.as_u64());
+
+        // check that the payment was properly tagged
+        let invoice_labels = storage.get_invoice_labels().unwrap();
+        let labels = invoice_labels.get(&bolt11);
+        assert!(labels.is_none()); // should not have been tagged
+    }
+
+    #[tokio::test]
+    async fn test_claim_ecash_notification_with_zap() {
+        let logger = MutinyLogger::default();
+        let storage = MemoryStorage::default();
+        let claim_key = SecretKey::new(&mut OsRng);
+        let mut fedimint_client = MockFedimintClient::new();
+
+        let amount = 10_000;
+        let (bolt11, preimage) = create_dummy_invoice(Some(amount), Network::Regtest, None);
+        let zap_req = EventBuilder::public_zap_request(ZapRequestData {
+            public_key: Keys::generate().public_key(),
+            relays: vec![],
+            message: "".to_string(),
+            amount: Some(amount),
+            lnurl: None,
+            event_id: None,
+            event_coordinate: None,
+        })
+        .to_event(&Keys::generate())
+        .unwrap();
+        let notification = EcashNotification {
+            amount,
+            tweak_index: 0,
+            federation_id: FederationId::dummy(),
+            zap_request: Some(zap_req.as_json()),
+            bolt11: bolt11.clone(),
+            preimage: hex::encode(preimage),
+        };
+        let timestamp = Timestamp::now();
+
+        fedimint_client
+            .expect_claim_external_receive()
+            .once()
+            .with(eq(claim_key), eq(vec![0]))
+            .returning(|_, _| Ok(()));
+
+        let info = claim_ecash_notification(
+            notification,
+            timestamp,
+            &fedimint_client,
+            &storage,
+            &claim_key,
+            None,
+            &logger,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(info.preimage, Some(preimage));
+        assert_eq!(info.status, HTLCStatus::Succeeded);
+        assert_eq!(info.privacy_level, PrivacyLevel::Public);
+        assert_eq!(info.bolt11, Some(bolt11.clone()));
+        assert_eq!(info.fee_paid_msat, None);
+        assert_eq!(info.amt_msat, MillisatAmount(Some(amount)));
+        assert_eq!(info.last_update, timestamp.as_u64());
+
+        // check that the payment was properly tagged
+        let invoice_labels = storage.get_invoice_labels().unwrap();
+        let labels = invoice_labels.get(&bolt11).unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0], zap_req.pubkey.to_bech32().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_claim_ecash_notification_with_zap_message() {
+        let logger = MutinyLogger::default();
+        let storage = MemoryStorage::default();
+        let claim_key = SecretKey::new(&mut OsRng);
+        let mut fedimint_client = MockFedimintClient::new();
+
+        let amount = 10_000;
+        let (bolt11, preimage) = create_dummy_invoice(Some(amount), Network::Regtest, None);
+        let message = "test message".to_string();
+        let zap_req = EventBuilder::public_zap_request(ZapRequestData {
+            public_key: Keys::generate().public_key(),
+            relays: vec![],
+            message: message.clone(),
+            amount: Some(amount),
+            lnurl: None,
+            event_id: None,
+            event_coordinate: None,
+        })
+        .to_event(&Keys::generate())
+        .unwrap();
+        let notification = EcashNotification {
+            amount,
+            tweak_index: 0,
+            federation_id: FederationId::dummy(),
+            zap_request: Some(zap_req.as_json()),
+            bolt11: bolt11.clone(),
+            preimage: hex::encode(preimage),
+        };
+        let timestamp = Timestamp::now();
+
+        fedimint_client
+            .expect_claim_external_receive()
+            .once()
+            .with(eq(claim_key), eq(vec![0]))
+            .returning(|_, _| Ok(()));
+
+        let info = claim_ecash_notification(
+            notification,
+            timestamp,
+            &fedimint_client,
+            &storage,
+            &claim_key,
+            None,
+            &logger,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(info.preimage, Some(preimage));
+        assert_eq!(info.status, HTLCStatus::Succeeded);
+        assert_eq!(info.privacy_level, PrivacyLevel::Public);
+        assert_eq!(info.bolt11, Some(bolt11.clone()));
+        assert_eq!(info.fee_paid_msat, None);
+        assert_eq!(info.amt_msat, MillisatAmount(Some(amount)));
+        assert_eq!(info.last_update, timestamp.as_u64());
+
+        // check that the payment was properly tagged
+        let invoice_labels = storage.get_invoice_labels().unwrap();
+        let labels = invoice_labels.get(&bolt11).unwrap();
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0], zap_req.pubkey.to_bech32().unwrap());
+        assert_eq!(labels[1], message);
+    }
+
+    #[tokio::test]
+    async fn test_claim_ecash_notification_with_private_zap() {
+        let logger = MutinyLogger::default();
+        let storage = MemoryStorage::default();
+        let claim_key = SecretKey::new(&mut OsRng);
+        let profile_key = Keys::generate();
+        let mut fedimint_client = MockFedimintClient::new();
+
+        let amount = 10_000;
+        let private_zap_keys = Keys::generate();
+        let (bolt11, preimage) = create_dummy_invoice(Some(amount), Network::Regtest, None);
+        let message = "test private message".to_string();
+        let zap_req = nips::nip57::private_zap_request(
+            ZapRequestData {
+                public_key: profile_key.public_key(),
+                relays: vec![],
+                message: message.clone(),
+                amount: Some(amount),
+                lnurl: None,
+                event_id: None,
+                event_coordinate: None,
+            },
+            &private_zap_keys,
+        )
+        .unwrap();
+        let notification = EcashNotification {
+            amount,
+            tweak_index: 0,
+            federation_id: FederationId::dummy(),
+            zap_request: Some(zap_req.as_json()),
+            bolt11: bolt11.clone(),
+            preimage: hex::encode(preimage),
+        };
+        let timestamp = Timestamp::now();
+
+        fedimint_client
+            .expect_claim_external_receive()
+            .once()
+            .with(eq(claim_key), eq(vec![0]))
+            .returning(|_, _| Ok(()));
+
+        let info = claim_ecash_notification(
+            notification,
+            timestamp,
+            &fedimint_client,
+            &storage,
+            &claim_key,
+            Some(&profile_key),
+            &logger,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(info.preimage, Some(preimage));
+        assert_eq!(info.status, HTLCStatus::Succeeded);
+        assert_eq!(info.privacy_level, PrivacyLevel::Private);
+        assert_eq!(info.bolt11, Some(bolt11.clone()));
+        assert_eq!(info.fee_paid_msat, None);
+        assert_eq!(info.amt_msat, MillisatAmount(Some(amount)));
+        assert_eq!(info.last_update, timestamp.as_u64());
+
+        // check that the payment was properly tagged
+        let invoice_labels = storage.get_invoice_labels().unwrap();
+        let labels = invoice_labels.get(&bolt11).unwrap();
+        assert_eq!(labels.len(), 2);
+        assert_eq!(
+            labels[0],
+            private_zap_keys.public_key().to_bech32().unwrap()
+        );
+        assert_eq!(labels[1], message);
+    }
+
+    #[tokio::test]
+    async fn test_claim_ecash_notification_with_private_zap_no_profile() {
+        let logger = MutinyLogger::default();
+        let storage = MemoryStorage::default();
+        let claim_key = SecretKey::new(&mut OsRng);
+        let profile_key = Keys::generate();
+        let mut fedimint_client = MockFedimintClient::new();
+
+        let amount = 10_000;
+        let private_zap_keys = Keys::generate();
+        let (bolt11, preimage) = create_dummy_invoice(Some(amount), Network::Regtest, None);
+        let message = "test private message".to_string();
+        let zap_req = nips::nip57::private_zap_request(
+            ZapRequestData {
+                public_key: profile_key.public_key(),
+                relays: vec![],
+                message: message.clone(),
+                amount: Some(amount),
+                lnurl: None,
+                event_id: None,
+                event_coordinate: None,
+            },
+            &private_zap_keys,
+        )
+        .unwrap();
+        let notification = EcashNotification {
+            amount,
+            tweak_index: 0,
+            federation_id: FederationId::dummy(),
+            zap_request: Some(zap_req.as_json()),
+            bolt11: bolt11.clone(),
+            preimage: hex::encode(preimage),
+        };
+        let timestamp = Timestamp::now();
+
+        fedimint_client
+            .expect_claim_external_receive()
+            .once()
+            .with(eq(claim_key), eq(vec![0]))
+            .returning(|_, _| Ok(()));
+
+        let info = claim_ecash_notification(
+            notification,
+            timestamp,
+            &fedimint_client,
+            &storage,
+            &claim_key,
+            None, // don't have a profile key
+            &logger,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(info.preimage, Some(preimage));
+        assert_eq!(info.status, HTLCStatus::Succeeded);
+        assert_eq!(info.privacy_level, PrivacyLevel::Anonymous);
+        assert_eq!(info.bolt11, Some(bolt11.clone()));
+        assert_eq!(info.fee_paid_msat, None);
+        assert_eq!(info.amt_msat, MillisatAmount(Some(amount)));
+        assert_eq!(info.last_update, timestamp.as_u64());
+
+        // check that the payment was properly tagged
+        let invoice_labels = storage.get_invoice_labels().unwrap();
+        let labels = invoice_labels.get(&bolt11);
+        assert!(labels.is_none()); // should not have been tagged
+    }
+
+    #[tokio::test]
+    async fn test_claim_ecash_notification_with_anonymous_zap() {
+        let logger = MutinyLogger::default();
+        let storage = MemoryStorage::default();
+        let claim_key = SecretKey::new(&mut OsRng);
+        let profile_key = Keys::generate();
+        let mut fedimint_client = MockFedimintClient::new();
+
+        let amount = 10_000;
+        let (bolt11, preimage) = create_dummy_invoice(Some(amount), Network::Regtest, None);
+        let message = "test anonymous message".to_string();
+        let zap_req = nips::nip57::anonymous_zap_request(ZapRequestData {
+            public_key: profile_key.public_key(),
+            relays: vec![],
+            message: message.clone(),
+            amount: Some(amount),
+            lnurl: None,
+            event_id: None,
+            event_coordinate: None,
+        })
+        .unwrap();
+        let notification = EcashNotification {
+            amount,
+            tweak_index: 0,
+            federation_id: FederationId::dummy(),
+            zap_request: Some(zap_req.as_json()),
+            bolt11: bolt11.clone(),
+            preimage: hex::encode(preimage),
+        };
+        let timestamp = Timestamp::now();
+
+        fedimint_client
+            .expect_claim_external_receive()
+            .once()
+            .with(eq(claim_key), eq(vec![0]))
+            .returning(|_, _| Ok(()));
+
+        let info = claim_ecash_notification(
+            notification,
+            timestamp,
+            &fedimint_client,
+            &storage,
+            &claim_key,
+            Some(&profile_key),
+            &logger,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(info.preimage, Some(preimage));
+        assert_eq!(info.status, HTLCStatus::Succeeded);
+        assert_eq!(info.privacy_level, PrivacyLevel::Anonymous);
+        assert_eq!(info.bolt11, Some(bolt11.clone()));
+        assert_eq!(info.fee_paid_msat, None);
+        assert_eq!(info.amt_msat, MillisatAmount(Some(amount)));
+        assert_eq!(info.last_update, timestamp.as_u64());
+
+        // check that the payment was properly tagged
+        let invoice_labels = storage.get_invoice_labels().unwrap();
+        let labels = invoice_labels.get(&bolt11).unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0], message);
     }
 }
