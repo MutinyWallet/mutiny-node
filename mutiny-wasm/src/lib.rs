@@ -1059,16 +1059,55 @@ impl MutinyWallet {
     pub async fn sweep_federation_balance(
         &self,
         amount: Option<u64>,
+        from_federation_id: Option<String>,
+        to_federation_id: Option<String>,
     ) -> Result<FedimintSweepResult, MutinyJsError> {
-        Ok(self.inner.sweep_federation_balance(amount).await?.into())
+        let from_federation_id = match from_federation_id {
+            Some(f) => {
+                Some(FederationId::from_str(&f).map_err(|_| MutinyJsError::InvalidArgumentsError)?)
+            }
+            None => None,
+        };
+
+        let to_federation_id = match to_federation_id {
+            Some(f) => {
+                Some(FederationId::from_str(&f).map_err(|_| MutinyJsError::InvalidArgumentsError)?)
+            }
+            None => None,
+        };
+
+        Ok(self
+            .inner
+            .sweep_federation_balance(amount, from_federation_id, to_federation_id)
+            .await?
+            .into())
     }
 
     /// Estimate the fee before trying to sweep from federation
     pub async fn estimate_sweep_federation_fee(
         &self,
         amount: Option<u64>,
+        from_federation_id: Option<String>,
+        to_federation_id: Option<String>,
     ) -> Result<Option<u64>, MutinyJsError> {
-        Ok(self.inner.estimate_sweep_federation_fee(amount).await?)
+        let from_federation_id = match from_federation_id {
+            Some(f) => {
+                Some(FederationId::from_str(&f).map_err(|_| MutinyJsError::InvalidArgumentsError)?)
+            }
+            None => None,
+        };
+
+        let to_federation_id = match to_federation_id {
+            Some(f) => {
+                Some(FederationId::from_str(&f).map_err(|_| MutinyJsError::InvalidArgumentsError)?)
+            }
+            None => None,
+        };
+
+        Ok(self
+            .inner
+            .estimate_sweep_federation_fee(amount, from_federation_id, to_federation_id)
+            .await?)
     }
 
     /// Closes a channel with the given outpoint.
