@@ -926,6 +926,24 @@ pub(crate) fn persist_transaction_details<S: MutinyStorage>(
     Ok(())
 }
 
+pub(crate) fn delete_transaction_details<S: MutinyStorage>(
+    storage: &S,
+    transaction_details: &TransactionDetails,
+) -> Result<(), MutinyError> {
+    let key = transaction_details_key(transaction_details.internal_id);
+    storage.delete(&[key.clone()])?;
+
+    // delete from index
+    let index = storage.activity_index();
+    let mut index = index.try_write()?;
+    index.insert(IndexItem {
+        timestamp: None,
+        key,
+    });
+
+    Ok(())
+}
+
 pub(crate) fn get_transaction_details<S: MutinyStorage>(
     storage: &S,
     internal_id: Txid,
