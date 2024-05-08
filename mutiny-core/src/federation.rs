@@ -1,4 +1,6 @@
-use crate::utils::{convert_from_fedimint_invoice, convert_to_fedimint_invoice, now, spawn};
+use crate::utils::{
+    convert_from_fedimint_invoice, convert_to_fedimint_invoice, fetch_with_timeout, now, spawn,
+};
 use crate::{
     error::{MutinyError, MutinyStorageError},
     event::PaymentInfo,
@@ -56,6 +58,7 @@ use futures_util::{pin_mut, StreamExt};
 use hex_conservative::{DisplayHex, FromHex};
 use lightning::{log_debug, log_error, log_info, log_trace, log_warn, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
+use reqwest::Method;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -152,7 +155,6 @@ pub struct FederationIdentity {
     pub meta_external_url: Option<String>,
     pub onchain_deposits_disabled: Option<bool>,
     pub preview_message: Option<String>,
-    pub sites: Option<Site>,
     pub public: Option<bool>,
     pub tos_url: Option<String>,
     pub popup_end_timestamp: Option<u32>,
@@ -160,6 +162,38 @@ pub struct FederationIdentity {
     pub invite_codes_disabled: Option<bool>,
     pub stability_pool_disabled: Option<bool>,
     pub social_recovery_disabled: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct FederationMetaConfig {
+    #[serde(flatten)]
+    pub federations: std::collections::HashMap<String, FederationMeta>,
+}
+
+// This is the FederationUrlConfig that refer to a specific federation
+// Normal config information that might exist from their URL.
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq, Debug)]
+pub struct FederationMeta {
+    // https://github.com/fedimint/fedimint/tree/master/docs/meta_fields
+    pub federation_name: Option<String>,
+    pub federation_expiry_timestamp: Option<String>,
+    pub welcome_message: Option<String>,
+    pub gateway_fees: Option<GatewayFees>,
+    // undocumented parameters that fedi uses: https://meta.dev.fedibtc.com/meta.json
+    pub default_currency: Option<String>,
+    pub federation_icon_url: Option<String>,
+    pub max_balance_msats: Option<String>,
+    pub max_invoice_msats: Option<String>,
+    pub meta_external_url: Option<String>,
+    pub onchain_deposits_disabled: Option<String>,
+    pub preview_message: Option<String>,
+    pub public: Option<String>,
+    pub tos_url: Option<String>,
+    pub popup_end_timestamp: Option<String>,
+    pub popup_countdown_message: Option<String>,
+    pub invite_codes_disabled: Option<String>,
+    pub stability_pool_disabled: Option<String>,
+    pub social_recovery_disabled: Option<String>,
 }
 
 #[derive(Default, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -696,7 +730,9 @@ impl<S: MutinyStorage> FederationClient<S> {
             self.fedimint_client.clone(),
             self.invite_code.clone(),
             gateway_fees,
+            self.logger.clone(),
         )
+        .await
     }
 
     // delete_fedimint_storage is not suggested at the moment due to the lack of easy restores
@@ -706,53 +742,174 @@ impl<S: MutinyStorage> FederationClient<S> {
     }
 }
 
-pub(crate) fn get_federation_identity(
+pub(crate) async fn get_federation_identity(
     uuid: String,
     fedimint_client: ClientHandleArc,
     invite_code: InviteCode,
     gateway_fees: Option<GatewayFees>,
+
+    logger: Arc<MutinyLogger>,
 ) -> FederationIdentity {
+    let federation_id = fedimint_client.federation_id();
+    let meta_external_url = fedimint_client.get_meta("meta_external_url");
+    let config = if let Some(ref url) = meta_external_url {
+        log_info!(
+            logger,
+            "Getting config for {federation_id} from meta_external_url: {url}"
+        );
+        let http_client = reqwest::Client::new();
+        let request = http_client.request(Method::GET, url);
+
+        match fetch_with_timeout(&http_client, request.build().expect("should build req")).await {
+            Ok(r) => match r.json::<FederationMetaConfig>().await {
+                Ok(c) =>
+                {
+                    #[allow(clippy::map_clone)]
+                    c.federations
+                        .get(&federation_id.to_string())
+                        .map(|f| f.clone())
+                }
+                Err(e) => {
+                    log_error!(logger, "Error parsing meta config: {e}");
+                    None
+                }
+            },
+            Err(e) => {
+                log_error!(logger, "Error fetching meta config: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     FederationIdentity {
         uuid: uuid.clone(),
-        federation_id: fedimint_client.federation_id(),
+        federation_id,
         invite_code: invite_code.clone(),
-        federation_name: fedimint_client.get_meta("federation_name"),
-        federation_expiry_timestamp: fedimint_client.get_meta("federation_expiry_timestamp"),
-        welcome_message: fedimint_client.get_meta("welcome_message"),
-        gateway_fees,
-        default_currency: fedimint_client.get_meta("default_currency"),
-        federation_icon_url: fedimint_client.get_meta("federation_icon_url"),
-        max_balance_msats: fedimint_client
-            .get_meta("max_balance_msats")
-            .map(|v| v.parse().unwrap_or(0)),
-        max_invoice_msats: fedimint_client
-            .get_meta("max_invoice_msats")
-            .map(|v| v.parse().unwrap_or(0)),
-        meta_external_url: fedimint_client.get_meta("meta_external_url"),
-        onchain_deposits_disabled: fedimint_client
-            .get_meta("onchain_deposits_disabled")
-            .map(|v| v.parse().unwrap_or(false)),
-        preview_message: fedimint_client.get_meta("preview_message"),
-        sites: fedimint_client
-            .get_meta("sites")
-            .map(|v| serde_json::from_str(&v).unwrap_or_default()),
-        public: fedimint_client
-            .get_meta("public")
-            .map(|v| v.parse().unwrap_or(false)),
-        tos_url: fedimint_client.get_meta("tos_url"),
-        popup_end_timestamp: fedimint_client
-            .get_meta("popup_end_timestamp")
-            .map(|v| v.parse().unwrap_or(0)),
-        popup_countdown_message: fedimint_client.get_meta("popup_countdown_message"),
-        invite_codes_disabled: fedimint_client
-            .get_meta("invite_codes_disabled")
-            .map(|v| v.parse().unwrap_or(false)),
-        stability_pool_disabled: fedimint_client
-            .get_meta("stability_pool_disabled")
-            .map(|v| v.parse().unwrap_or(false)),
-        social_recovery_disabled: fedimint_client
-            .get_meta("social_recovery_disabled")
-            .map(|v| v.parse().unwrap_or(false)),
+        federation_name: merge_values(
+            fedimint_client.get_meta("federation_name").clone(),
+            config.as_ref().and_then(|c| c.federation_name.clone()),
+        ),
+        federation_expiry_timestamp: merge_values(
+            fedimint_client.get_meta("federation_expiry_timestamp"),
+            config
+                .as_ref()
+                .and_then(|c| c.federation_expiry_timestamp.clone()),
+        ),
+        welcome_message: merge_values(
+            fedimint_client.get_meta("welcome_message"),
+            config.as_ref().and_then(|c| c.welcome_message.clone()),
+        ),
+        gateway_fees, // Already merged using helper function...
+        default_currency: merge_values(
+            fedimint_client.get_meta("default_currency"),
+            config.as_ref().and_then(|c| c.default_currency.clone()),
+        ),
+        federation_icon_url: merge_values(
+            fedimint_client.get_meta("federation_icon_url"),
+            config.as_ref().and_then(|c| c.federation_icon_url.clone()),
+        ),
+        max_balance_msats: merge_values(
+            fedimint_client
+                .get_meta("max_balance_msats")
+                .map(|v| v.parse().unwrap_or(0)),
+            config
+                .as_ref()
+                .and_then(|c| c.max_balance_msats.clone().map(|v| v.parse().unwrap_or(0))),
+        ),
+        max_invoice_msats: merge_values(
+            fedimint_client
+                .get_meta("max_invoice_msats")
+                .map(|v| v.parse().unwrap_or(0)),
+            config
+                .as_ref()
+                .and_then(|c| c.max_invoice_msats.clone().map(|v| v.parse().unwrap_or(0))),
+        ),
+        meta_external_url, // Already set...
+        onchain_deposits_disabled: merge_values(
+            fedimint_client
+                .get_meta("onchain_deposits_disabled")
+                .map(|v| v.parse().unwrap_or(false)),
+            config.as_ref().and_then(|c| {
+                c.onchain_deposits_disabled
+                    .clone()
+                    .map(|v| v.parse().unwrap_or(false))
+            }),
+        ),
+        preview_message: merge_values(
+            fedimint_client.get_meta("preview_message"),
+            config.as_ref().and_then(|c| c.preview_message.clone()),
+        ),
+        public: merge_values(
+            fedimint_client
+                .get_meta("public")
+                .map(|v| v.parse().unwrap_or(false)),
+            config
+                .as_ref()
+                .and_then(|c| c.public.clone().map(|v| v.parse().unwrap_or(false))),
+        ),
+        tos_url: merge_values(
+            fedimint_client.get_meta("tos_url"),
+            config.as_ref().and_then(|c| c.tos_url.clone()),
+        ),
+        popup_end_timestamp: merge_values(
+            fedimint_client
+                .get_meta("popup_end_timestamp")
+                .map(|v| v.parse().unwrap_or(0)),
+            config.as_ref().and_then(|c| {
+                c.popup_end_timestamp
+                    .clone()
+                    .map(|v| v.parse().unwrap_or(0))
+            }),
+        ),
+        popup_countdown_message: merge_values(
+            fedimint_client
+                .get_meta("popup_countdown_message")
+                .map(|v| v.to_string()),
+            config
+                .as_ref()
+                .and_then(|c| c.popup_countdown_message.clone()),
+        ),
+        invite_codes_disabled: merge_values(
+            fedimint_client
+                .get_meta("invite_codes_disabled")
+                .map(|v| v.parse().unwrap_or(false)),
+            config.as_ref().and_then(|c| {
+                c.invite_codes_disabled
+                    .clone()
+                    .map(|v| v.parse().unwrap_or(false))
+            }),
+        ),
+        stability_pool_disabled: merge_values(
+            fedimint_client
+                .get_meta("stability_pool_disabled")
+                .map(|v| v.parse().unwrap_or(false)),
+            config.as_ref().and_then(|c| {
+                c.stability_pool_disabled
+                    .clone()
+                    .map(|v| v.parse().unwrap_or(false))
+            }),
+        ),
+        social_recovery_disabled: merge_values(
+            fedimint_client
+                .get_meta("social_recovery_disabled")
+                .map(|v| v.parse().unwrap_or(false)),
+            config.as_ref().and_then(|c| {
+                c.social_recovery_disabled
+                    .clone()
+                    .map(|v| v.parse().unwrap_or(false))
+            }),
+        ),
+    }
+}
+
+fn merge_values<T>(a: Option<T>, b: Option<T>) -> Option<T> {
+    match (a, b) {
+        // If a has value return that; otherwise, use the one from b if available.
+        (Some(val), _) => Some(val),
+        (None, Some(val)) => Some(val),
+        (None, None) => None,
     }
 }
 
