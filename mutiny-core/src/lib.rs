@@ -3201,6 +3201,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         new_federation.fedimint_client.clone(),
         federation_code.clone(),
         gateway_fees,
+        logger.clone(),
     )
     .await;
 

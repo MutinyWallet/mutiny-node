@@ -155,7 +155,6 @@ pub struct FederationIdentity {
     pub meta_external_url: Option<String>,
     pub onchain_deposits_disabled: Option<bool>,
     pub preview_message: Option<String>,
-    pub sites: Option<Site>,
     pub public: Option<bool>,
     pub tos_url: Option<String>,
     pub popup_end_timestamp: Option<u32>,
@@ -165,7 +164,7 @@ pub struct FederationIdentity {
     pub social_recovery_disabled: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct FederationMetaConfig {
     #[serde(flatten)]
     pub federations: std::collections::HashMap<String, FederationMeta>,
@@ -173,7 +172,7 @@ struct FederationMetaConfig {
 
 // This is the FederationUrlConfig that refer to a specific federation
 // Normal config information that might exist from their URL.
-#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq, Debug)]
 pub struct FederationMeta {
     // https://github.com/fedimint/fedimint/tree/master/docs/meta_fields
     pub federation_name: Option<String>,
@@ -183,19 +182,18 @@ pub struct FederationMeta {
     // undocumented parameters that fedi uses: https://meta.dev.fedibtc.com/meta.json
     pub default_currency: Option<String>,
     pub federation_icon_url: Option<String>,
-    pub max_balance_msats: Option<u32>,
-    pub max_invoice_msats: Option<u32>,
+    pub max_balance_msats: Option<String>,
+    pub max_invoice_msats: Option<String>,
     pub meta_external_url: Option<String>,
-    pub onchain_deposits_disabled: Option<bool>,
+    pub onchain_deposits_disabled: Option<String>,
     pub preview_message: Option<String>,
-    pub sites: Option<Site>,
-    pub public: Option<bool>,
+    pub public: Option<String>,
     pub tos_url: Option<String>,
-    pub popup_end_timestamp: Option<u32>,
+    pub popup_end_timestamp: Option<String>,
     pub popup_countdown_message: Option<String>,
-    pub invite_codes_disabled: Option<bool>,
-    pub stability_pool_disabled: Option<bool>,
-    pub social_recovery_disabled: Option<bool>,
+    pub invite_codes_disabled: Option<String>,
+    pub stability_pool_disabled: Option<String>,
+    pub social_recovery_disabled: Option<String>,
 }
 
 #[derive(Default, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -723,6 +721,7 @@ impl<S: MutinyStorage> FederationClient<S> {
             self.fedimint_client.clone(),
             self.invite_code.clone(),
             gateway_fees,
+            self.logger.clone(),
         )
         .await
     }
@@ -739,10 +738,16 @@ pub(crate) async fn get_federation_identity(
     fedimint_client: ClientHandleArc,
     invite_code: InviteCode,
     gateway_fees: Option<GatewayFees>,
+
+    logger: Arc<MutinyLogger>,
 ) -> FederationIdentity {
     let federation_id = fedimint_client.federation_id();
     let meta_external_url = fedimint_client.get_meta("meta_external_url");
     let config = if let Some(ref url) = meta_external_url {
+        log_info!(
+            logger,
+            "Getting config for {federation_id} from meta_external_url: {url}"
+        );
         let http_client = reqwest::Client::new();
         let request = http_client.request(Method::GET, url);
 
@@ -755,9 +760,15 @@ pub(crate) async fn get_federation_identity(
                         .get(&federation_id.to_string())
                         .map(|f| f.clone())
                 }
-                Err(_) => None,
+                Err(e) => {
+                    log_error!(logger, "Error parsing meta config: {e}");
+                    None
+                }
             },
-            Err(_) => None,
+            Err(e) => {
+                log_error!(logger, "Error fetching meta config: {e}");
+                None
+            }
         }
     } else {
         None
@@ -794,36 +805,40 @@ pub(crate) async fn get_federation_identity(
             fedimint_client
                 .get_meta("max_balance_msats")
                 .map(|v| v.parse().unwrap_or(0)),
-            config.as_ref().and_then(|c| c.max_balance_msats),
+            config
+                .as_ref()
+                .and_then(|c| c.max_balance_msats.clone().map(|v| v.parse().unwrap_or(0))),
         ),
         max_invoice_msats: merge_values(
             fedimint_client
                 .get_meta("max_invoice_msats")
                 .map(|v| v.parse().unwrap_or(0)),
-            config.as_ref().and_then(|c| c.max_invoice_msats),
+            config
+                .as_ref()
+                .and_then(|c| c.max_invoice_msats.clone().map(|v| v.parse().unwrap_or(0))),
         ),
         meta_external_url, // Already set...
         onchain_deposits_disabled: merge_values(
             fedimint_client
                 .get_meta("onchain_deposits_disabled")
                 .map(|v| v.parse().unwrap_or(false)),
-            config.as_ref().and_then(|c| c.onchain_deposits_disabled),
+            config.as_ref().and_then(|c| {
+                c.onchain_deposits_disabled
+                    .clone()
+                    .map(|v| v.parse().unwrap_or(false))
+            }),
         ),
         preview_message: merge_values(
             fedimint_client.get_meta("preview_message"),
             config.as_ref().and_then(|c| c.preview_message.clone()),
         ),
-        sites: merge_values(
-            fedimint_client
-                .get_meta("sites")
-                .map(|v| serde_json::from_str(&v).unwrap_or_default()),
-            config.as_ref().and_then(|c| c.sites.clone()),
-        ),
         public: merge_values(
             fedimint_client
                 .get_meta("public")
                 .map(|v| v.parse().unwrap_or(false)),
-            config.as_ref().and_then(|c| c.public),
+            config
+                .as_ref()
+                .and_then(|c| c.public.clone().map(|v| v.parse().unwrap_or(false))),
         ),
         tos_url: merge_values(
             fedimint_client.get_meta("tos_url"),
@@ -833,7 +848,11 @@ pub(crate) async fn get_federation_identity(
             fedimint_client
                 .get_meta("popup_end_timestamp")
                 .map(|v| v.parse().unwrap_or(0)),
-            config.as_ref().and_then(|c| c.popup_end_timestamp),
+            config.as_ref().and_then(|c| {
+                c.popup_end_timestamp
+                    .clone()
+                    .map(|v| v.parse().unwrap_or(0))
+            }),
         ),
         popup_countdown_message: merge_values(
             fedimint_client
@@ -847,19 +866,31 @@ pub(crate) async fn get_federation_identity(
             fedimint_client
                 .get_meta("invite_codes_disabled")
                 .map(|v| v.parse().unwrap_or(false)),
-            config.as_ref().and_then(|c| c.invite_codes_disabled),
+            config.as_ref().and_then(|c| {
+                c.invite_codes_disabled
+                    .clone()
+                    .map(|v| v.parse().unwrap_or(false))
+            }),
         ),
         stability_pool_disabled: merge_values(
             fedimint_client
                 .get_meta("stability_pool_disabled")
                 .map(|v| v.parse().unwrap_or(false)),
-            config.as_ref().and_then(|c| c.stability_pool_disabled),
+            config.as_ref().and_then(|c| {
+                c.stability_pool_disabled
+                    .clone()
+                    .map(|v| v.parse().unwrap_or(false))
+            }),
         ),
         social_recovery_disabled: merge_values(
             fedimint_client
                 .get_meta("social_recovery_disabled")
                 .map(|v| v.parse().unwrap_or(false)),
-            config.as_ref().and_then(|c| c.social_recovery_disabled),
+            config.as_ref().and_then(|c| {
+                c.social_recovery_disabled
+                    .clone()
+                    .map(|v| v.parse().unwrap_or(false))
+            }),
         ),
     }
 }
