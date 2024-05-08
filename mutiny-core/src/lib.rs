@@ -1724,31 +1724,38 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     pub async fn estimate_sweep_federation_fee(
         &self,
         amount: Option<u64>,
+        from_federation_id: Option<FederationId>,
+        to_federation_id: Option<FederationId>,
     ) -> Result<Option<u64>, MutinyError> {
         if let Some(0) = amount {
             return Ok(None);
         }
 
-        // TODO support more than one federation
         let federation_ids = self.list_federation_ids().await?;
         if federation_ids.is_empty() {
             return Err(MutinyError::NotFound);
         }
 
-        let federation_id = &federation_ids[0];
+        let from_federation_id = from_federation_id.unwrap_or(federation_ids[0]);
         let federation_lock = self.federations.read().await;
         let fedimint_client = federation_lock
-            .get(federation_id)
+            .get(&from_federation_id)
             .ok_or(MutinyError::NotFound)?;
         let fees = fedimint_client.gateway_fee().await?;
 
         let (lsp_fee, federation_fee) = {
             if let Some(amt) = amount {
                 // if the user provided amount, this is easy
-                (
-                    self.node_manager.get_lsp_fee(amt).await?,
-                    (calc_routing_fee_msat(amt as f64 * 1_000.0, &fees) / 1_000.0).floor() as u64,
-                )
+                let incoming_fee = if to_federation_id.is_some() {
+                    0
+                } else {
+                    self.node_manager.get_lsp_fee(amt).await?
+                };
+
+                let outgoing_fee =
+                    (calc_routing_fee_msat(amt as f64 * 1_000.0, &fees) / 1_000.0).floor() as u64;
+
+                (incoming_fee, outgoing_fee)
             } else {
                 // If no amount, figure out the amount to send over
                 let current_balance = fedimint_client.get_balance().await?;
@@ -1762,11 +1769,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     .map_or(Err(MutinyError::InsufficientBalance), Ok)?;
                 log_debug!(self.logger, "max spendable: {}", amt);
 
-                // try to get an invoice for this exact amount
-                (
-                    self.node_manager.get_lsp_fee(amt).await?,
-                    current_balance - amt,
-                )
+                let incoming_fee = if to_federation_id.is_some() {
+                    0
+                } else {
+                    self.node_manager.get_lsp_fee(amt).await?
+                };
+
+                let outgoing_fee = current_balance - amt;
+
+                (incoming_fee, outgoing_fee)
             }
         };
 
