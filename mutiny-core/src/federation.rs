@@ -603,13 +603,12 @@ impl<S: MutinyStorage> FederationClient<S> {
     fn maybe_update_after_checking_fedimint(
         &self,
         updated_invoice: MutinyInvoice,
-    ) -> Result<(), MutinyError> {
+    ) -> Result<MutinyInvoice, MutinyError> {
         maybe_update_after_checking_fedimint(
             updated_invoice,
             self.logger.clone(),
             self.storage.clone(),
-        )?;
-        Ok(())
+        )
     }
 
     pub(crate) async fn pay_invoice(
@@ -679,7 +678,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         };
         inv.fees_paid = Some(sats_round_up(&outgoing_payment.fee));
 
-        self.maybe_update_after_checking_fedimint(inv.clone())?;
+        inv = self.maybe_update_after_checking_fedimint(inv)?;
 
         match inv.status {
             HTLCStatus::Succeeded => Ok(inv),
@@ -1081,23 +1080,28 @@ fn subscribe_operation_ext<S: MutinyStorage>(
 }
 
 fn maybe_update_after_checking_fedimint<S: MutinyStorage>(
-    updated_invoice: MutinyInvoice,
+    mut updated_invoice: MutinyInvoice,
     logger: Arc<MutinyLogger>,
     storage: S,
-) -> Result<(), MutinyError> {
+) -> Result<MutinyInvoice, MutinyError> {
     match updated_invoice.status {
         HTLCStatus::Succeeded | HTLCStatus::Failed => {
-            log_debug!(logger, "Saving updated payment");
             let hash = updated_invoice.payment_hash.into_32();
             let inbound = updated_invoice.inbound;
-            let mut payment_info = PaymentInfo::from(updated_invoice);
-            payment_info.last_update = now().as_secs();
+            updated_invoice.last_updated = now().as_secs();
+            let payment_info = PaymentInfo::from(updated_invoice.clone());
+            log_debug!(
+                logger,
+                "Saving updated payment: {} {}",
+                hash.to_lower_hex_string(),
+                payment_info.last_update
+            );
             persist_payment_info(&storage, &hash, &payment_info, inbound)?;
         }
         HTLCStatus::Pending | HTLCStatus::InFlight => (),
     }
 
-    Ok(())
+    Ok(updated_invoice)
 }
 
 impl<S: MutinyStorage> FedimintClient for FederationClient<S> {
