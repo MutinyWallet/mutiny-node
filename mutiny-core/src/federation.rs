@@ -11,11 +11,11 @@ use crate::{
     storage::{
         delete_transaction_details, get_transaction_details, list_payment_info,
         persist_payment_info, persist_transaction_details, MutinyStorage, VersionedValue,
-        TRANSACTION_DETAILS_PREFIX_KEY,
     },
     utils::sleep,
     HTLCStatus, MutinyInvoice, DEFAULT_PAYMENT_TIMEOUT,
 };
+use crate::{labels::LabelStorage, storage::TRANSACTION_DETAILS_PREFIX_KEY};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use bdk_chain::ConfirmationTime;
@@ -428,14 +428,14 @@ impl<S: MutinyStorage> FederationClient<S> {
                 .map(|(h, _i)| h.0),
         );
 
-        // pending on chain operations
-        let pending_wallet_txids = self
+        // confirmed on chain operations
+        let confirmed_wallet_txids = self
             .storage
             .scan::<TransactionDetails>(TRANSACTION_DETAILS_PREFIX_KEY, None)?
             .into_iter()
             .filter(|(_k, v)| match v.confirmation_time {
-                ConfirmationTime::Unconfirmed { .. } => true, // return all unconfirmed transactions
-                _ => false,                                   // skip confirmed transactions
+                ConfirmationTime::Unconfirmed { .. } => false, // skip unconfirmed transactions
+                ConfirmationTime::Confirmed { .. } => true,    // return all confirmed transactions
             })
             .map(|(_h, i)| i.internal_id)
             .collect::<HashSet<Txid>>();
@@ -472,7 +472,8 @@ impl<S: MutinyStorage> FederationClient<S> {
                     .map_err(|_| MutinyError::ChainAccessFailed)
                     .expect("should convert");
 
-                if pending_wallet_txids.contains(&internal_id) {
+                // if already confirmed, no reason to subscribe
+                if !confirmed_wallet_txids.contains(&internal_id) {
                     self.subscribe_operation(entry, key.operation_id);
                 }
             } else {
@@ -574,23 +575,13 @@ impl<S: MutinyStorage> FederationClient<S> {
             .get_deposit_address(fedimint_core::time::now() + PEG_IN_TIMEOUT_YEAR, ())
             .await?;
 
-        let internal_id = Txid::from_slice(&op_id.0).map_err(|_| MutinyError::ChainAccessFailed)?;
+        let address = Address::from_str(&address.to_string())
+            .expect("should convert")
+            .assume_checked();
 
-        // persist the data we can while we wait for the transaction to come from fedimint
-        let pending_transaction_details = TransactionDetails {
-            transaction: None,
-            txid: None,
-            internal_id,
-            received: 0,
-            sent: 0,
-            fee: None,
-            confirmation_time: ConfirmationTime::Unconfirmed {
-                last_seen: now().as_secs(),
-            },
-            labels,
-        };
-
-        persist_transaction_details(&self.storage, &pending_transaction_details)?;
+        // persist the labels
+        self.storage
+            .set_address_labels(address.clone(), labels.clone())?;
 
         // subscribe
         let operation = self
@@ -601,9 +592,7 @@ impl<S: MutinyStorage> FederationClient<S> {
             .expect("just created it");
         self.subscribe_operation(operation, op_id);
 
-        Ok(Address::from_str(&address.to_string())
-            .expect("should convert")
-            .assume_checked())
+        Ok(address)
     }
 
     /// Get the balance of this federation client in sats
@@ -732,7 +721,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         amount: u64,
         labels: Vec<String>,
     ) -> Result<Txid, MutinyError> {
-        let address = bitcoin30_to_bitcoin29_address(send_to);
+        let address = bitcoin30_to_bitcoin29_address(send_to.clone());
 
         let btc_amount = fedimint_ln_common::bitcoin::Amount::from_sat(amount);
 
@@ -760,10 +749,13 @@ impl<S: MutinyStorage> FederationClient<S> {
             confirmation_time: ConfirmationTime::Unconfirmed {
                 last_seen: now().as_secs(),
             },
-            labels,
+            labels: labels.clone(),
         };
 
         persist_transaction_details(&self.storage, &pending_transaction_details)?;
+
+        // persist the labels
+        self.storage.set_address_labels(send_to, labels)?;
 
         // subscribe
         let operation = self
@@ -1301,24 +1293,25 @@ async fn process_operation_until_timeout<S: MutinyStorage>(
     } else if module_type == WalletCommonInit::KIND.as_str() {
         let wallet_meta: WalletOperationMeta = entry.meta();
         let wallet_module = Arc::new(fedimint_client.get_first_module::<WalletClientModule>());
-        let internal_id = Txid::from_slice(&operation_id.0)
-            .map_err(|_| MutinyError::ChainAccessFailed)
-            .expect("should convert");
-        let stored_transaction_details = get_transaction_details(&storage, internal_id, &logger);
-        if stored_transaction_details.is_none() {
-            log_warn!(logger, "could not find transaction details: {internal_id}")
-        }
 
         match wallet_meta.variant {
             fedimint_wallet_client::WalletOperationMetaVariant::Deposit {
-                address: _,
+                address,
                 expires_at: _,
             } => {
                 match wallet_module.subscribe_deposit_updates(operation_id).await {
                     Ok(o) => {
+                        let labels = match storage.get_address_labels() {
+                            Ok(l) => l.get(&address.to_string()).cloned(),
+                            Err(e) => {
+                                log_warn!(logger, "could not get labels: {e}");
+                                None
+                            }
+                        };
+
                         process_onchain_deposit_outcome(
                             o,
-                            stored_transaction_details,
+                            labels.unwrap_or_default(),
                             operation_id,
                             storage,
                             esplora,
@@ -1334,16 +1327,24 @@ async fn process_operation_until_timeout<S: MutinyStorage>(
                 };
             }
             fedimint_wallet_client::WalletOperationMetaVariant::Withdraw {
-                address: _,
+                address,
                 amount,
                 fee,
                 change: _,
             } => {
                 match wallet_module.subscribe_withdraw_updates(operation_id).await {
                     Ok(o) => {
+                        let labels = match storage.get_address_labels() {
+                            Ok(l) => l.get(&address.to_string()).cloned(),
+                            Err(e) => {
+                                log_warn!(logger, "could not get labels: {e}");
+                                None
+                            }
+                        };
+
                         process_onchain_withdraw_outcome(
                             o,
-                            stored_transaction_details,
+                            labels.unwrap_or_default(),
                             amount,
                             fee.amount(),
                             operation_id,
@@ -1479,7 +1480,7 @@ where
 #[allow(clippy::too_many_arguments)]
 async fn process_onchain_withdraw_outcome<S: MutinyStorage>(
     stream_or_outcome: UpdateStreamOrOutcome<fedimint_wallet_client::WithdrawState>,
-    original_transaction_details: Option<TransactionDetails>,
+    labels: Vec<String>,
     amount: fedimint_ln_common::bitcoin::Amount,
     fee: fedimint_ln_common::bitcoin::Amount,
     operation_id: OperationId,
@@ -1489,10 +1490,7 @@ async fn process_onchain_withdraw_outcome<S: MutinyStorage>(
     stop: Arc<AtomicBool>,
     logger: Arc<MutinyLogger>,
 ) {
-    let labels = original_transaction_details
-        .as_ref()
-        .map(|o| o.labels.clone())
-        .unwrap_or_default();
+    let internal_id = Txid::from_slice(&operation_id.0).expect("should convert");
 
     let mut s = stream_or_outcome.into_stream();
 
@@ -1520,7 +1518,6 @@ async fn process_onchain_withdraw_outcome<S: MutinyStorage>(
                         WithdrawState::Succeeded(txid) => {
                             log_info!(logger, "Withdraw successful: {txid}");
 
-                            let internal_id = Txid::from_slice(&operation_id.0).expect("should convert");
                             let txid = Txid::from_slice(&txid).expect("should convert");
                             let updated_transaction_details = TransactionDetails {
                                 transaction: None,
@@ -1550,16 +1547,14 @@ async fn process_onchain_withdraw_outcome<S: MutinyStorage>(
                         WithdrawState::Failed(e) => {
                             log_error!(logger, "Transaction failed: {e}");
 
-                            // if we have the original transaction details, delete it
-                            if let Some(t) = original_transaction_details {
-                                match delete_transaction_details(&storage, &t) {
-                                    Ok(_) => {
-                                        log_info!(logger, "Transaction deleted");
-                                    },
-                                    Err(e) => {
-                                        log_error!(logger, "Error deleting transaction: {e}");
-                                    },
-                                }
+                            // Delete the pending tx if it failed
+                            match delete_transaction_details(&storage, internal_id) {
+                                Ok(_) => {
+                                    log_info!(logger, "Transaction deleted");
+                                },
+                                Err(e) => {
+                                    log_error!(logger, "Error deleting transaction: {e}");
+                                },
                             }
 
                             break;
@@ -1632,7 +1627,7 @@ async fn subscribe_onchain_confirmation_check<S: MutinyStorage>(
 #[allow(clippy::too_many_arguments)]
 async fn process_onchain_deposit_outcome<S: MutinyStorage>(
     stream_or_outcome: UpdateStreamOrOutcome<fedimint_wallet_client::DepositState>,
-    original_transaction_details: Option<TransactionDetails>,
+    labels: Vec<String>,
     operation_id: OperationId,
     storage: S,
     esplora: Arc<AsyncClient>,
@@ -1640,11 +1635,6 @@ async fn process_onchain_deposit_outcome<S: MutinyStorage>(
     stop: Arc<AtomicBool>,
     logger: Arc<MutinyLogger>,
 ) {
-    let labels = original_transaction_details
-        .as_ref()
-        .map(|o| o.labels.clone())
-        .unwrap_or_default();
-
     let mut s = stream_or_outcome.into_stream();
 
     // break out after sleep time or check stop signal
@@ -1733,18 +1723,6 @@ async fn process_onchain_deposit_outcome<S: MutinyStorage>(
                         }
                         fedimint_wallet_client::DepositState::Failed(e) => {
                             log_error!(logger, "Transaction failed: {e}");
-
-                            // if we have the original transaction details, delete it
-                            if let Some(t) = original_transaction_details {
-                                match delete_transaction_details(&storage, &t) {
-                                    Ok(_) => {
-                                        log_info!(logger, "Transaction deleted");
-                                    },
-                                    Err(e) => {
-                                        log_error!(logger, "Error deleting transaction: {e}");
-                                    },
-                                }
-                            }
 
                             break;
                         }

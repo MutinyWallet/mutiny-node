@@ -926,19 +926,20 @@ pub(crate) fn persist_transaction_details<S: MutinyStorage>(
     Ok(())
 }
 
+// Deletes the transaction detail and removes the pending index if it exists
 pub(crate) fn delete_transaction_details<S: MutinyStorage>(
     storage: &S,
-    transaction_details: &TransactionDetails,
+    txid: Txid,
 ) -> Result<(), MutinyError> {
-    let key = transaction_details_key(transaction_details.internal_id);
+    let key = transaction_details_key(txid);
     storage.delete(&[key.clone()])?;
 
-    // delete from index
+    // delete the pending index item, if it exists
     let index = storage.activity_index();
     let mut index = index.try_write()?;
-    index.insert(IndexItem {
-        timestamp: None,
-        key,
+    index.remove(&IndexItem {
+        timestamp: None, // timestamp would be None for Unconfirmed
+        key: key.clone(),
     });
 
     Ok(())

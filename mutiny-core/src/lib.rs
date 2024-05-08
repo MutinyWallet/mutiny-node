@@ -2062,7 +2062,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
     }
 
-    async fn create_address(&self, labels: Vec<String>) -> Result<bitcoin::Address, MutinyError> {
+    pub async fn create_address(
+        &self,
+        labels: Vec<String>,
+    ) -> Result<bitcoin::Address, MutinyError> {
         // Attempt to create federation invoice if available
         let federation_ids = self.list_federation_ids().await?;
         if !federation_ids.is_empty() {
