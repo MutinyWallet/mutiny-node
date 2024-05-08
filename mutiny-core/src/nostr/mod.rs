@@ -730,6 +730,15 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
             .read()
             .unwrap()
             .iter()
+            .map(|x| x.nwc_profile())
+            .collect()
+    }
+
+    pub fn active_profiles(&self) -> Vec<NwcProfile> {
+        self.nwc
+            .read()
+            .unwrap()
+            .iter()
             .filter(|x| x.profile.active())
             .map(|x| x.nwc_profile())
             .collect()
@@ -738,7 +747,8 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
     pub(crate) fn remove_inactive_profiles(&self) -> Result<(), MutinyError> {
         let mut profiles = self.nwc.write().unwrap();
 
-        profiles.retain(|x| x.profile.active());
+        let mutiny_plus_index = ReservedProfile::MutinySubscription.info().1;
+        profiles.retain(|x| x.profile.active() || x.profile.index == mutiny_plus_index);
 
         // save to storage
         {
@@ -836,6 +846,7 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
 
         // save to storage
         {
+            log_info!(self.logger, "Saving nwc to storage");
             let profiles = profiles
                 .iter()
                 .map(|x| x.profile.clone())
@@ -992,6 +1003,8 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
         tag: NwcProfileTag,
         commands: Vec<Method>,
     ) -> Result<NwcProfile, MutinyError> {
+        log_info!(self.logger, "Creating new internal nwc profile");
+
         let mut profiles = self.nwc.try_write()?;
 
         let (name, index, child_key_index) = get_next_nwc_index(profile_type, &profiles)?;
@@ -1569,9 +1582,15 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
     }
 
     pub fn delete_nwc_profile(&self, index: u32) -> Result<(), MutinyError> {
-        let mut vec = self.nwc.write().unwrap();
+        log_info!(self.logger, "Deleting nwc profile: {index}");
+
+        // don't delete mutiny+ profile
+        if index == ReservedProfile::MutinySubscription.info().1 {
+            return self.disable_mutiny_plus_profile();
+        }
 
         // update the profile
+        let mut vec = self.nwc.write().unwrap();
         vec.retain(|x| x.profile.index != index);
 
         let profiles = vec.iter().map(|x| x.profile.clone()).collect::<Vec<_>>();
@@ -1580,6 +1599,30 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
             .set_data(NWC_STORAGE_KEY.to_string(), profiles, None)?;
 
         Ok(())
+    }
+
+    pub fn disable_mutiny_plus_profile(&self) -> Result<(), MutinyError> {
+        log_info!(self.logger, "Disabling mutiny+ subscription");
+
+        let mut vec = self.nwc.write().unwrap();
+
+        let profile_opt = vec
+            .iter_mut()
+            .find(|p| p.profile.index == ReservedProfile::MutinySubscription.info().1);
+
+        match profile_opt {
+            Some(p) => {
+                p.profile.enabled = Some(false);
+
+                let profiles = vec.iter().map(|x| x.profile.clone()).collect::<Vec<_>>();
+
+                self.storage
+                    .set_data(NWC_STORAGE_KEY.to_string(), profiles, None)?;
+
+                Ok(())
+            }
+            None => Err(MutinyError::NotFound),
+        }
     }
 
     pub async fn claim_single_use_nwc(
