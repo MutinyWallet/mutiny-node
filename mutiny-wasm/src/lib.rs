@@ -484,11 +484,11 @@ impl MutinyWallet {
     ///
     /// It is recommended to create a new address for every transaction.
     #[wasm_bindgen]
-    pub fn get_new_address(
+    pub async fn get_new_address(
         &self,
         labels: Vec<String>,
     ) -> Result<MutinyBip21RawMaterials, MutinyJsError> {
-        let address = self.inner.node_manager.get_new_address(labels.clone())?;
+        let address = self.inner.create_address(labels.clone()).await?;
         Ok(MutinyBip21RawMaterials {
             address: address.to_string(),
             invoice: None,
