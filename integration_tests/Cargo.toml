@@ -1,19 +1,22 @@
-[workspace]
-resolver = "2"
+[package]
+name = "integration_tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
 
-members = [
-    "mutiny-core",
-    "mutiny-wasm",
-]
+[lib]
+name = "integration_tests"
+path = "src/lib.rs"
+crate-type = ["rlib", "dylib", "staticlib"]
 
-exclude = ["integration_tests"]
+[dependencies]
+mutiny-core = { path = "../mutiny-core" }
 
-# Tell `rustc` to optimize for small code size.
-[profile.release.package.mutiny-core]
-opt-level = "z"
-
-[profile.release.package.mutiny-wasm]
-opt-level = "z"
+electrsd = { version = "=0.26.0", features = ["legacy", "esplora_a33e97e1", "bitcoind_25_0"] }
+lazy_static = "1.4.0"
+lnd = { version = "0.1.4", git = "https://github.com/benthecarman/lnd-test-util.git", branch = "both", features = ["lnd_0_17_5"] }
+tokio = { version = "1", features = ["rt"] }
+futures = "0.3.25"
 
 [patch.crates-io]
 lightning = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "e660e068f6f93b13dc782b2d607795716b48ed15" }
