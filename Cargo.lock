@@ -2553,7 +2553,7 @@ dependencies = [
 
 [[package]]
 name = "mutiny-core"
-version = "1.7.0-rc2"
+version = "1.7.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2622,7 +2622,7 @@ dependencies = [
 
 [[package]]
 name = "mutiny-wasm"
-version = "1.7.0-rc2"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
