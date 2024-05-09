@@ -846,6 +846,7 @@ pub struct NwcProfile {
     nwc_uri: Option<String>,
     tag: String,
     label: Option<String>,
+    enabled: bool,
 }
 
 impl Serialize for NwcProfile {
@@ -869,6 +870,7 @@ impl Serialize for NwcProfile {
             "active_payments": self._active_payments(),
             "spending_conditions_type": self.spending_conditions_type(),
             "url_suffix": self.url_suffix(),
+            "enabled": self.enabled(),
         });
 
         json.serialize(serializer)
@@ -983,6 +985,11 @@ impl NwcProfile {
             None
         }
     }
+
+    #[wasm_bindgen(getter)]
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
 }
 
 impl From<nostr::nwc::NwcProfile> for NwcProfile {
@@ -1009,6 +1016,7 @@ impl From<nostr::nwc::NwcProfile> for NwcProfile {
             nwc_uri: value.nwc_uri,
             tag: value.tag.to_string(),
             label: value.label,
+            enabled: value.enabled.unwrap_or(true),
         }
     }
 }

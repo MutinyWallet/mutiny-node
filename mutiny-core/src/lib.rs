@@ -2098,6 +2098,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             self.ensure_mutiny_nwc_profile(subscription_client, autopay)
                 .await?;
 
+            // FIXME: switch the subscription from disabled to enabled if it was disabled
+
             self.check_blind_tokens();
 
             Ok(())
@@ -2117,47 +2119,39 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .iter()
             .find(|profile| profile.index == reserved_profile_index);
 
-        match profile_opt {
-            None => {
-                // profile with the reserved index does not exist, create a new one
-                let nwc = if autopay {
-                    self.nostr
-                        .create_new_nwc_profile(
-                            ProfileType::Reserved(ReservedProfile::MutinySubscription),
-                            SpendingConditions::Budget(BudgetedSpendingConditions {
-                                budget: 21_000,
-                                single_max: None,
-                                payments: vec![],
-                                period: BudgetPeriod::Month,
-                            }),
-                            NwcProfileTag::Subscription,
-                            vec![Method::PayInvoice], // subscription only needs pay invoice
-                        )
-                        .await?
-                        .nwc_uri
-                } else {
-                    self.nostr
-                        .create_new_nwc_profile(
-                            ProfileType::Reserved(ReservedProfile::MutinySubscription),
-                            SpendingConditions::RequireApproval,
-                            NwcProfileTag::Subscription,
-                            vec![Method::PayInvoice], // subscription only needs pay invoice
-                        )
-                        .await?
-                        .nwc_uri
-                };
+        if profile_opt.is_none() {
+            log_debug!(self.logger, "Did not find a mutiny+ nwc profile");
+            // profile with the reserved index does not exist, create a new one
+            let nwc = if autopay {
+                self.nostr
+                    .create_new_nwc_profile(
+                        ProfileType::Reserved(ReservedProfile::MutinySubscription),
+                        SpendingConditions::Budget(BudgetedSpendingConditions {
+                            budget: 21_000,
+                            single_max: None,
+                            payments: vec![],
+                            period: BudgetPeriod::Month,
+                        }),
+                        NwcProfileTag::Subscription,
+                        vec![Method::PayInvoice], // subscription only needs pay invoice
+                    )
+                    .await?
+                    .nwc_uri
+            } else {
+                self.nostr
+                    .create_new_nwc_profile(
+                        ProfileType::Reserved(ReservedProfile::MutinySubscription),
+                        SpendingConditions::RequireApproval,
+                        NwcProfileTag::Subscription,
+                        vec![Method::PayInvoice], // subscription only needs pay invoice
+                    )
+                    .await?
+                    .nwc_uri
+            };
 
-                if let Some(nwc) = nwc {
-                    // only should have to submit the NWC if never created locally before
-                    subscription_client.submit_nwc(nwc).await?;
-                }
-            }
-            Some(profile) => {
-                if profile.tag != NwcProfileTag::Subscription {
-                    let mut nwc = profile.clone();
-                    nwc.tag = NwcProfileTag::Subscription;
-                    self.nostr.edit_nwc_profile(nwc)?;
-                }
+            if let Some(nwc) = nwc {
+                // only should have to submit the NWC if never created locally before
+                subscription_client.submit_nwc(nwc).await?;
             }
         }
 
