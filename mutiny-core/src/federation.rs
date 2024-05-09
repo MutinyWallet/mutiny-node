@@ -1704,7 +1704,7 @@ async fn process_onchain_deposit_outcome<S: MutinyStorage>(
                             let output = tx.btc_transaction.output[tx.out_idx as usize].clone();
 
                             // store as confirmed 0 block height until we can check esplora after
-                            let updated_transaction_details = TransactionDetails {
+                            let transaction_details_update = TransactionDetails {
                                 transaction: None,
                                 txid: Some(txid),
                                 internal_id,
@@ -1715,17 +1715,8 @@ async fn process_onchain_deposit_outcome<S: MutinyStorage>(
                                 labels: labels.clone(),
                             };
 
-                            match persist_transaction_details(&storage, &updated_transaction_details) {
-                                Ok(_) => {
-                                    log_info!(logger, "Transaction updated");
-                                },
-                                Err(e) => {
-                                    log_error!(logger, "Error updating transaction: {e}");
-                                },
-                            }
-
                             // we need to get confirmations for this txid and update
-                            subscribe_onchain_confirmation_check(storage.clone(), esplora.clone(), txid, updated_transaction_details, stop.clone(), logger.clone()).await;
+                            subscribe_onchain_confirmation_check(storage.clone(), esplora.clone(), txid, transaction_details_update, stop.clone(), logger.clone()).await;
                         }
                         fedimint_wallet_client::DepositState::Claimed(_) => {
                             // Nothing really to change from confirmed to claimed
