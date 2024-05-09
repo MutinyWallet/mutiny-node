@@ -296,6 +296,7 @@ pub struct MutinyChannel {
     pub confirmations: u32,
     pub is_outbound: bool,
     pub is_usable: bool,
+    pub is_anchor: bool,
 }
 
 #[wasm_bindgen]
@@ -343,6 +344,7 @@ impl From<nodemanager::MutinyChannel> for MutinyChannel {
             confirmations: m.confirmations,
             is_outbound: m.is_outbound,
             is_usable: m.is_usable,
+            is_anchor: m.is_anchor,
         }
     }
 }
@@ -363,6 +365,7 @@ impl From<MutinyChannel> for nodemanager::MutinyChannel {
             confirmations: m.confirmations,
             is_outbound: m.is_outbound,
             is_usable: m.is_usable,
+            is_anchor: m.is_anchor,
         }
     }
 }

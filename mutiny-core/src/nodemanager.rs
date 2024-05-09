@@ -139,6 +139,7 @@ pub struct MutinyChannel {
     pub confirmations: u32,
     pub is_outbound: bool,
     pub is_usable: bool,
+    pub is_anchor: bool,
 }
 
 impl From<&ChannelDetails> for MutinyChannel {
@@ -150,6 +151,12 @@ impl From<&ChannelDetails> for MutinyChannel {
         // Don't calculate reserve, just make it what we didn't
         // account for in balance and inbound
         let reserve = size - (balance + inbound);
+
+        let is_anchor = c
+            .channel_type
+            .as_ref()
+            .map(|t| t.supports_anchors_zero_fee_htlc_tx())
+            .unwrap_or(false);
 
         MutinyChannel {
             user_chan_id: c.user_channel_id.to_be_bytes().to_lower_hex_string(),
@@ -163,6 +170,7 @@ impl From<&ChannelDetails> for MutinyChannel {
             confirmations: c.confirmations.unwrap_or(0),
             is_outbound: c.is_outbound,
             is_usable: c.is_usable,
+            is_anchor,
         }
     }
 }
