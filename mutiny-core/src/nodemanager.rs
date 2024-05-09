@@ -1,10 +1,10 @@
-use crate::auth::MutinyAuthClient;
 use crate::labels::LabelStorage;
 use crate::ldkstorage::CHANNEL_CLOSURE_PREFIX;
 use crate::logging::LOGGING_KEY;
 use crate::utils::{sleep, spawn};
 use crate::MutinyInvoice;
 use crate::MutinyWalletConfig;
+use crate::{auth::MutinyAuthClient, TransactionDetails};
 use crate::{
     chain::MutinyChain,
     error::MutinyError,
@@ -167,55 +167,6 @@ impl From<&ChannelDetails> for MutinyChannel {
     }
 }
 
-/// A wallet transaction
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct TransactionDetails {
-    /// Optional transaction
-    pub transaction: Option<Transaction>,
-    /// Transaction id
-    pub txid: Txid,
-    /// Received value (sats)
-    /// Sum of owned outputs of this transaction.
-    pub received: u64,
-    /// Sent value (sats)
-    /// Sum of owned inputs of this transaction.
-    pub sent: u64,
-    /// Fee value in sats if it was available.
-    pub fee: Option<u64>,
-    /// If the transaction is confirmed, contains height and Unix timestamp of the block containing the
-    /// transaction, unconfirmed transaction contains `None`.
-    pub confirmation_time: ConfirmationTime,
-    /// Labels associated with this transaction
-    pub labels: Vec<String>,
-}
-
-impl PartialOrd for TransactionDetails {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for TransactionDetails {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        match (self.confirmation_time, other.confirmation_time) {
-            (ConfirmationTime::Confirmed { .. }, ConfirmationTime::Confirmed { .. }) => self
-                .confirmation_time
-                .cmp(&self.confirmation_time)
-                .then_with(|| self.txid.cmp(&other.txid)),
-            (ConfirmationTime::Confirmed { .. }, ConfirmationTime::Unconfirmed { .. }) => {
-                core::cmp::Ordering::Less
-            }
-            (ConfirmationTime::Unconfirmed { .. }, ConfirmationTime::Confirmed { .. }) => {
-                core::cmp::Ordering::Greater
-            }
-            (
-                ConfirmationTime::Unconfirmed { last_seen: a },
-                ConfirmationTime::Unconfirmed { last_seen: b },
-            ) => a.cmp(&b).then_with(|| self.txid.cmp(&other.txid)),
-        }
-    }
-}
-
 /// Information about a channel that was closed.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ChannelClosure {
@@ -281,6 +232,7 @@ pub struct NodeBalance {
 pub struct NodeManagerBuilder<S: MutinyStorage> {
     xprivkey: ExtendedPrivKey,
     storage: S,
+    esplora: Option<Arc<AsyncClient>>,
     config: Option<MutinyWalletConfig>,
     stop: Option<Arc<AtomicBool>>,
     logger: Option<Arc<MutinyLogger>>,
@@ -291,6 +243,7 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
         NodeManagerBuilder::<S> {
             xprivkey,
             storage,
+            esplora: None,
             config: None,
             stop: None,
             logger: None,
@@ -304,6 +257,10 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
 
     pub fn with_stop(&mut self, stop: Arc<AtomicBool>) {
         self.stop = Some(stop);
+    }
+
+    pub fn with_esplora(&mut self, esplora: Arc<AsyncClient>) {
+        self.esplora = Some(esplora);
     }
 
     pub fn with_logger(&mut self, logger: Arc<MutinyLogger>) {
@@ -320,6 +277,13 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             .map_or_else(|| Err(MutinyError::InvalidArgumentsError), Ok)?;
         let logger = self.logger.unwrap_or(Arc::new(MutinyLogger::default()));
         let stop = self.stop.unwrap_or(Arc::new(AtomicBool::new(false)));
+        let esplora = if let Some(e) = self.esplora {
+            e
+        } else {
+            let esplora_server_url = get_esplora_url(c.network, c.user_esplora_url);
+            let esplora = Builder::new(&esplora_server_url).build_async()?;
+            Arc::new(esplora)
+        };
 
         #[cfg(target_arch = "wasm32")]
         let websocket_proxy_addr = c
@@ -329,14 +293,11 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
         let start = Instant::now();
         log_info!(logger, "Building node manager components");
 
-        let esplora_server_url = get_esplora_url(c.network, c.user_esplora_url);
-        let esplora = Builder::new(&esplora_server_url).build_async()?;
         let tx_sync = Arc::new(EsploraSyncClient::from_client(
-            esplora.clone(),
+            esplora.as_ref().clone(),
             logger.clone(),
         ));
 
-        let esplora = Arc::new(esplora);
         let fee_estimator = Arc::new(MutinyFeeEstimator::new(
             self.storage.clone(),
             esplora.clone(),
@@ -751,14 +712,12 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// If a fee rate is not provided, one will be used from the fee estimator.
     pub async fn send_to_address(
         &self,
-        send_to: Address<NetworkUnchecked>,
+        send_to: Address,
         amount: u64,
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        let address = send_to.require_network(self.network)?;
-
-        self.wallet.send(address, amount, labels, fee_rate).await
+        self.wallet.send(send_to, amount, labels, fee_rate).await
     }
 
     /// Sweeps all the funds from the wallet to the given address.
@@ -767,18 +726,16 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// If a fee rate is not provided, one will be used from the fee estimator.
     pub async fn sweep_wallet(
         &self,
-        send_to: Address<NetworkUnchecked>,
+        send_to: Address,
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        let address = send_to.require_network(self.network)?;
-
-        self.wallet.sweep(address, labels, fee_rate).await
+        self.wallet.sweep(send_to, labels, fee_rate).await
     }
 
     /// Estimates the onchain fee for a transaction sending to the given address.
     /// The amount is in satoshis and the fee rate is in sat/vbyte.
-    pub fn estimate_tx_fee(
+    pub(crate) fn estimate_tx_fee(
         &self,
         destination_address: Address,
         amount: u64,
@@ -792,7 +749,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// to the given address.
     ///
     /// The fee rate is in sat/vbyte.
-    pub fn estimate_sweep_tx_fee(
+    pub(crate) fn estimate_sweep_tx_fee(
         &self,
         destination_address: Address,
         fee_rate: Option<f32>,
@@ -885,7 +842,8 @@ impl<S: MutinyStorage> NodeManager<S> {
 
             let details = TransactionDetails {
                 transaction: Some(tx.to_tx()),
-                txid: tx.txid,
+                txid: Some(tx.txid),
+                internal_id: tx.txid,
                 received,
                 sent: 0,
                 fee: None,
@@ -2047,12 +2005,12 @@ mod tests {
 
         assert_eq!(txs.len(), 1);
         let tx = &txs[0];
-        assert_eq!(tx.txid, fake_tx.txid());
+        assert_eq!(tx.txid, Some(fake_tx.txid()));
         assert_eq!(tx.labels, labels);
 
         assert!(tx_opt.is_some());
         let tx = tx_opt.unwrap();
-        assert_eq!(tx.txid, fake_tx.txid());
+        assert_eq!(tx.txid, Some(fake_tx.txid()));
         assert_eq!(tx.labels, labels);
     }
 
@@ -2219,7 +2177,8 @@ mod tests {
 
         let tx1: TransactionDetails = TransactionDetails {
             transaction: None,
-            txid: Txid::all_zeros(),
+            txid: Some(Txid::all_zeros()),
+            internal_id: Txid::all_zeros(),
             received: 0,
             sent: 0,
             fee: None,
@@ -2229,7 +2188,8 @@ mod tests {
 
         let tx2: TransactionDetails = TransactionDetails {
             transaction: None,
-            txid: Txid::all_zeros(),
+            txid: Some(Txid::all_zeros()),
+            internal_id: Txid::all_zeros(),
             received: 0,
             sent: 0,
             fee: None,

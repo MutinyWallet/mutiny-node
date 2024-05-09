@@ -75,7 +75,7 @@ impl From<mutiny_core::ActivityItem> for ActivityItem {
         };
 
         let id = match a {
-            mutiny_core::ActivityItem::OnChain(ref t) => t.txid.to_string(),
+            mutiny_core::ActivityItem::OnChain(ref t) => t.internal_id.to_string(),
             mutiny_core::ActivityItem::Lightning(ref ln) => {
                 ln.payment_hash.into_32().to_lower_hex_string()
             }

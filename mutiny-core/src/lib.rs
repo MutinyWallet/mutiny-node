@@ -43,15 +43,10 @@ pub mod vss;
 #[cfg(test)]
 mod test_utils;
 
+use crate::federation::get_federation_identity;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
-pub use bitcoin;
-pub use fedimint_core;
-pub use lightning;
-pub use lightning_invoice;
-pub use nostr_sdk;
-
 use crate::utils::spawn;
 use crate::{auth::MutinyAuthClient, hermes::HermesClient, logging::MutinyLogger};
 use crate::{blindauth::BlindAuthClient, cashu::CashuHttpClient};
@@ -59,15 +54,6 @@ use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{
     event::{HTLCStatus, MillisatAmount, PaymentInfo},
     onchain::FULL_SYNC_STOP_GAP,
-};
-use crate::{
-    federation::get_federation_identity,
-    storage::{
-        get_payment_hash_from_key, list_payment_info, persist_payment_info,
-        update_nostr_contact_list, IndexItem, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY,
-        NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX, PAYMENT_INBOUND_PREFIX_KEY,
-        PAYMENT_OUTBOUND_PREFIX_KEY, SUBSCRIPTION_TIMESTAMP,
-    },
 };
 use crate::{
     federation::{
@@ -78,7 +64,7 @@ use crate::{
 };
 use crate::{
     lnurlauth::make_lnurl_auth_connection,
-    nodemanager::{ChannelClosure, MutinyBip21RawMaterials, TransactionDetails},
+    nodemanager::{ChannelClosure, MutinyBip21RawMaterials},
 };
 use crate::{lnurlauth::AuthManager, nostr::MUTINY_PLUS_SUBSCRIPTION_LABEL};
 use crate::{logging::LOGGING_KEY, nodemanager::NodeManagerBuilder};
@@ -92,6 +78,15 @@ use crate::{
     storage::get_invoice_by_hash,
 };
 use crate::{nostr::NostrManager, utils::sleep};
+use crate::{
+    onchain::get_esplora_url,
+    storage::{
+        get_payment_hash_from_key, get_transaction_details, list_payment_info,
+        persist_payment_info, update_nostr_contact_list, IndexItem, MutinyStorage, DEVICE_ID_KEY,
+        EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX, PAYMENT_INBOUND_PREFIX_KEY,
+        PAYMENT_OUTBOUND_PREFIX_KEY, SUBSCRIPTION_TIMESTAMP, TRANSACTION_DETAILS_PREFIX_KEY,
+    },
+};
 use ::nostr::nips::nip47::Method;
 use ::nostr::nips::nip57;
 #[cfg(target_arch = "wasm32")]
@@ -103,20 +98,25 @@ use ::nostr::{EventBuilder, EventId, JsonUtil, Keys, Kind};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
-use bitcoin::bip32::ExtendedPrivKey;
-use bitcoin::hashes::Hash;
+pub use bitcoin;
 use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
+use bitcoin::{bip32::ExtendedPrivKey, Transaction};
 use bitcoin::{hashes::sha256, Network, Txid};
+use bitcoin::{hashes::Hash, Address};
+use esplora_client::AsyncClient;
+pub use fedimint_core;
 use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::{pin_mut, select, FutureExt};
 use futures_util::join;
 use futures_util::lock::Mutex;
 use hex_conservative::{DisplayHex, FromHex};
 use itertools::Itertools;
+pub use lightning;
 use lightning::chain::BestBlock;
 use lightning::ln::PaymentHash;
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
+pub use lightning_invoice;
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::{lnurl::LnUrl, AsyncClient as LnUrlClient, LnUrlResponse, Response};
 use moksha_core::primitives::{
@@ -124,6 +124,7 @@ use moksha_core::primitives::{
     PostMeltQuoteBolt11Response,
 };
 use moksha_core::token::TokenV3;
+pub use nostr_sdk;
 use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
@@ -149,6 +150,7 @@ const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 const SWAP_LABEL: &str = "SWAP";
 const MELT_CASHU_TOKEN: &str = "Cashu Token Melt";
+const DUST_LIMIT: u64 = 546;
 
 #[cfg_attr(test, automock)]
 pub trait InvoiceHandler {
@@ -224,6 +226,57 @@ pub enum ActivityItem {
     OnChain(TransactionDetails),
     Lightning(Box<MutinyInvoice>),
     ChannelClosed(ChannelClosure),
+}
+
+/// A wallet transaction
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TransactionDetails {
+    /// Optional transaction
+    pub transaction: Option<Transaction>,
+    /// Transaction id
+    pub txid: Option<Txid>,
+    /// Internal id before a transaction id is created
+    pub internal_id: Txid,
+    /// Received value (sats)
+    /// Sum of owned outputs of this transaction.
+    pub received: u64,
+    /// Sent value (sats)
+    /// Sum of owned inputs of this transaction.
+    pub sent: u64,
+    /// Fee value in sats if it was available.
+    pub fee: Option<u64>,
+    /// If the transaction is confirmed, contains height and Unix timestamp of the block containing the
+    /// transaction, unconfirmed transaction contains `None`.
+    pub confirmation_time: ConfirmationTime,
+    /// Labels associated with this transaction
+    pub labels: Vec<String>,
+}
+
+impl PartialOrd for TransactionDetails {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TransactionDetails {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        match (self.confirmation_time, other.confirmation_time) {
+            (ConfirmationTime::Confirmed { .. }, ConfirmationTime::Confirmed { .. }) => self
+                .confirmation_time
+                .cmp(&self.confirmation_time)
+                .then_with(|| self.txid.cmp(&other.txid)),
+            (ConfirmationTime::Confirmed { .. }, ConfirmationTime::Unconfirmed { .. }) => {
+                core::cmp::Ordering::Less
+            }
+            (ConfirmationTime::Unconfirmed { .. }, ConfirmationTime::Confirmed { .. }) => {
+                core::cmp::Ordering::Greater
+            }
+            (
+                ConfirmationTime::Unconfirmed { last_seen: a },
+                ConfirmationTime::Unconfirmed { last_seen: b },
+            ) => a.cmp(&b).then_with(|| self.txid.cmp(&other.txid)),
+        }
+    }
 }
 
 impl ActivityItem {
@@ -879,11 +932,16 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             }
         });
 
+        let esplora_server_url = get_esplora_url(network, config.user_esplora_url.clone());
+        let esplora = esplora_client::Builder::new(&esplora_server_url).build_async()?;
+        let esplora = Arc::new(esplora);
+
         let start = Instant::now();
 
         let mut nm_builder = NodeManagerBuilder::new(self.xprivkey, self.storage.clone())
             .with_config(config.clone());
         nm_builder.with_logger(logger.clone());
+        nm_builder.with_esplora(esplora.clone());
         let node_manager = Arc::new(nm_builder.build().await?);
 
         log_trace!(
@@ -931,6 +989,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
                 federation_storage.clone(),
                 &config,
                 self.storage.clone(),
+                esplora.clone(),
                 stop.clone(),
                 &logger,
             )
@@ -1036,9 +1095,24 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
                     ConfirmationTime::Confirmed { time, .. } => Some(time),
                     ConfirmationTime::Unconfirmed { .. } => None,
                 },
-                key: format!("{ONCHAIN_PREFIX}{}", t.txid),
+                key: format!("{ONCHAIN_PREFIX}{}", t.internal_id),
             })
             .collect::<Vec<_>>();
+
+        // add any transaction details stored from fedimint
+        let transaction_details = self
+            .storage
+            .scan::<TransactionDetails>(TRANSACTION_DETAILS_PREFIX_KEY, None)?
+            .into_iter()
+            .map(|(k, v)| {
+                let timestamp = match v.confirmation_time {
+                    ConfirmationTime::Confirmed { height: _, time } => Some(time), // confirmed timestamp
+                    ConfirmationTime::Unconfirmed { .. } => None, // unconfirmed timestamp
+                };
+                IndexItem { timestamp, key: k }
+            })
+            .collect::<Vec<_>>();
+        activity_index.extend(transaction_details);
 
         // add the channel closures to the activity index
         let closures = self
@@ -1104,6 +1178,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             subscription_client,
             blind_auth_client,
             hermes_client,
+            esplora,
             auth,
             stop,
             logger,
@@ -1176,6 +1251,7 @@ pub struct MutinyWallet<S: MutinyStorage> {
     subscription_client: Option<Arc<MutinySubscriptionClient>>,
     blind_auth_client: Option<Arc<BlindAuthClient<S>>>,
     hermes_client: Option<Arc<HermesClient<S>>>,
+    esplora: Arc<AsyncClient>,
     pub stop: Arc<AtomicBool>,
     pub logger: Arc<MutinyLogger>,
     network: Network,
@@ -1581,7 +1657,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             )
         };
 
-        let Ok(address) = self.node_manager.get_new_address(labels.clone()) else {
+        let Ok(address) = self.create_address(labels.clone()).await else {
             return Err(MutinyError::WalletOperationFailed);
         };
 
@@ -1790,6 +1866,228 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(Some(lsp_fee + federation_fee))
     }
 
+    pub async fn send_to_address(
+        &self,
+        send_to: Address,
+        amount: u64,
+        labels: Vec<String>,
+        fee_rate: Option<f32>,
+    ) -> Result<Txid, MutinyError> {
+        // Try each federation first
+        let federation_ids = self.list_federation_ids().await?;
+        let mut last_federation_error = None;
+        for federation_id in federation_ids {
+            if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
+                // Check if the federation has enough balance
+                let balance = fedimint_client.get_balance().await?;
+                if balance >= amount / 1_000 {
+                    match fedimint_client
+                        .send_onchain(send_to.clone(), amount, labels.clone())
+                        .await
+                    {
+                        Ok(t) => {
+                            return Ok(t);
+                        }
+                        Err(e) => match e {
+                            MutinyError::PaymentTimeout => return Err(e),
+                            _ => {
+                                log_warn!(self.logger, "unhandled error: {e}");
+                                last_federation_error = Some(e);
+                            }
+                        },
+                    }
+                }
+                // If payment fails or balance is not sufficient, continue to next federation
+            }
+            // If federation client is not found, continue to next federation
+        }
+
+        // If any balance at all, then fallback to node manager for payment.
+        // Take the error from the node manager as the priority.
+        let b = self.node_manager.get_balance().await?;
+        if b.confirmed + b.unconfirmed > 0 {
+            let res = self
+                .node_manager
+                .send_to_address(send_to, amount, labels, fee_rate)
+                .await?;
+            Ok(res)
+        } else {
+            Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
+        }
+    }
+
+    /// Estimates the onchain fee for a transaction sending to the given address.
+    /// The amount is in satoshis and the fee rate is in sat/vbyte.
+    pub async fn estimate_tx_fee(
+        &self,
+        destination_address: Address,
+        amount: u64,
+        fee_rate: Option<f32>,
+    ) -> Result<u64, MutinyError> {
+        if amount < DUST_LIMIT {
+            return Err(MutinyError::WalletOperationFailed);
+        }
+
+        // Try each federation first
+        let federation_ids = self.list_federation_ids().await?;
+        let mut last_federation_error = None;
+        for federation_id in federation_ids {
+            if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
+                // Check if the federation has enough balance
+                let balance = fedimint_client.get_balance().await?;
+                if balance >= amount / 1_000 {
+                    match fedimint_client
+                        .estimate_tx_fee(destination_address.clone(), amount)
+                        .await
+                    {
+                        Ok(t) => {
+                            return Ok(t);
+                        }
+                        Err(e) => {
+                            log_warn!(self.logger, "error estimating fedimint fee: {e}");
+                            last_federation_error = Some(e);
+                        }
+                    }
+                }
+                // If estimation fails or balance is not sufficient, continue to next federation
+            }
+            // If federation client is not found, continue to next federation
+        }
+
+        let b = self.node_manager.get_balance().await?;
+        if b.confirmed + b.unconfirmed > 0 {
+            let res = self
+                .node_manager
+                .estimate_tx_fee(destination_address, amount, fee_rate)?;
+
+            Ok(res)
+        } else {
+            Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
+        }
+    }
+
+    /// Estimates the onchain fee for a transaction sweep our on-chain balance
+    /// to the given address. If the fedimint has a balance, sweep that first.
+    /// Do not sweep the on chain wallet unless that is empty.
+    ///
+    /// The fee rate is in sat/vbyte.
+    pub async fn estimate_sweep_tx_fee(
+        &self,
+        destination_address: Address,
+        fee_rate: Option<f32>,
+    ) -> Result<u64, MutinyError> {
+        // Try each federation first
+        let federation_ids = self.list_federation_ids().await?;
+        for federation_id in federation_ids {
+            if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
+                // Check if the federation has enough balance
+                let balance = fedimint_client.get_balance().await?;
+                match fedimint_client
+                    .estimate_tx_fee(destination_address.clone(), balance)
+                    .await
+                {
+                    Ok(t) => {
+                        return Ok(t);
+                    }
+                    Err(e) => return Err(e),
+                }
+                // If estimation fails or balance is not sufficient, continue to next federation
+            }
+            // If federation client is not found, continue to next federation
+        }
+
+        let b = self.node_manager.get_balance().await?;
+        if b.confirmed + b.unconfirmed > 0 {
+            let res = self
+                .node_manager
+                .estimate_sweep_tx_fee(destination_address, fee_rate)?;
+
+            Ok(res)
+        } else {
+            log_error!(self.logger, "node manager doesn't have a balance");
+            Err(MutinyError::InsufficientBalance)
+        }
+    }
+
+    /// Sweeps all the funds from the wallet to the given address.
+    /// The fee rate is in sat/vbyte.
+    ///
+    /// If a fee rate is not provided, one will be used from the fee estimator.
+    pub async fn sweep_wallet(
+        &self,
+        send_to: Address,
+        labels: Vec<String>,
+        fee_rate: Option<f32>,
+    ) -> Result<Txid, MutinyError> {
+        // Try each federation first
+        let federation_ids = self.list_federation_ids().await?;
+        for federation_id in federation_ids {
+            if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
+                // Check if the federation has enough balance
+                let balance = fedimint_client.get_balance().await?;
+                match fedimint_client
+                    .estimate_tx_fee(send_to.clone(), balance)
+                    .await
+                {
+                    Ok(f) => {
+                        match fedimint_client
+                            .send_onchain(send_to.clone(), balance - f, labels)
+                            .await
+                        {
+                            Ok(t) => return Ok(t),
+                            Err(e) => {
+                                log_error!(self.logger, "error sending the fedimint balance");
+                                return Err(e);
+                            }
+                        }
+                    }
+                    Err(e) => return Err(e),
+                }
+                // If payment fails or balance is not sufficient, continue to next federation
+            }
+            // If federation client is not found, continue to next federation
+        }
+
+        let b = self.node_manager.get_balance().await?;
+        if b.confirmed + b.unconfirmed > 0 {
+            let res = self
+                .node_manager
+                .sweep_wallet(send_to.clone(), labels, fee_rate)
+                .await?;
+
+            Ok(res)
+        } else {
+            log_error!(self.logger, "node manager doesn't have a balance");
+            Err(MutinyError::InsufficientBalance)
+        }
+    }
+
+    pub async fn create_address(
+        &self,
+        labels: Vec<String>,
+    ) -> Result<bitcoin::Address, MutinyError> {
+        // Attempt to create federation invoice if available
+        let federation_ids = self.list_federation_ids().await?;
+        if !federation_ids.is_empty() {
+            let federation_id = &federation_ids[0];
+            let fedimint_client = self.federations.read().await.get(federation_id).cloned();
+
+            if let Some(client) = fedimint_client {
+                if let Ok(addr) = client.get_new_address(labels.clone()).await {
+                    self.storage.set_address_labels(addr.clone(), labels)?;
+                    return Ok(addr);
+                }
+            }
+        }
+
+        // Fallback to node_manager address creation
+        let Ok(addr) = self.node_manager.get_new_address(labels.clone()) else {
+            return Err(MutinyError::WalletOperationFailed);
+        };
+
+        Ok(addr)
+    }
+
     async fn create_lightning_invoice(
         &self,
         amount: u64,
@@ -1923,10 +2221,33 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                         activities.push(ActivityItem::OnChain(tx_details));
                     }
                 }
+            } else if item.key.starts_with(TRANSACTION_DETAILS_PREFIX_KEY) {
+                // convert keys to internal transaction id
+                let internal_id_str = item.key.trim_start_matches(TRANSACTION_DETAILS_PREFIX_KEY);
+                let internal_id: Txid = Txid::from_str(internal_id_str)?;
+                if let Some(tx_details) =
+                    get_transaction_details(&self.storage, internal_id, &self.logger)
+                {
+                    // make sure it is a relevant transaction
+                    if tx_details.sent != 0 || tx_details.received != 0 {
+                        activities.push(ActivityItem::OnChain(tx_details));
+                    }
+                }
             }
         }
 
         Ok(activities)
+    }
+
+    pub fn get_transaction(&self, txid: Txid) -> Result<Option<TransactionDetails>, MutinyError> {
+        // check our local cache/state for fedimint first
+        match get_transaction_details(&self.storage, txid, &self.logger) {
+            Some(t) => Ok(Some(t)),
+            None => {
+                // fall back to node manager
+                self.node_manager.get_transaction(txid)
+            }
+        }
     }
 
     /// Returns all the lightning activity for a given label
@@ -2507,6 +2828,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             self.federation_storage.clone(),
             self.federations.clone(),
             self.hermes_client.clone(),
+            self.esplora.clone(),
             federation_code,
             self.stop.clone(),
         )
@@ -3116,6 +3438,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         Ok(response.price)
     }
+
+    /// Returns the network of the wallet.
+    pub fn get_network(&self) -> Network {
+        self.network
+    }
 }
 
 impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
@@ -3164,6 +3491,7 @@ async fn create_federations<S: MutinyStorage>(
     federation_storage: FederationStorage,
     c: &MutinyWalletConfig,
     storage: S,
+    esplora: Arc<AsyncClient>,
     stop: Arc<AtomicBool>,
     logger: &Arc<MutinyLogger>,
 ) -> Result<Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>, MutinyError> {
@@ -3174,6 +3502,7 @@ async fn create_federations<S: MutinyStorage>(
             federation_index.federation_code,
             c.xprivkey,
             storage.clone(),
+            esplora.clone(),
             c.network,
             stop.clone(),
             logger.clone(),
@@ -3198,6 +3527,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     federation_storage: Arc<RwLock<FederationStorage>>,
     federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>,
     hermes_client: Option<Arc<HermesClient<S>>>,
+    esplora: Arc<AsyncClient>,
     federation_code: InviteCode,
     stop: Arc<AtomicBool>,
 ) -> Result<FederationIdentity, MutinyError> {
@@ -3227,6 +3557,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         federation_code.clone(),
         xprivkey,
         storage.clone(),
+        esplora,
         network,
         stop.clone(),
         logger.clone(),
@@ -3450,9 +3781,6 @@ mod tests {
 #[cfg(test)]
 #[cfg(target_arch = "wasm32")]
 mod tests {
-    use crate::event::{HTLCStatus, MillisatAmount, PaymentInfo};
-    use crate::ldkstorage::CHANNEL_CLOSURE_PREFIX;
-    use crate::nodemanager::ChannelClosure;
     use crate::storage::{
         payment_key, persist_payment_info, IndexItem, MemoryStorage, MutinyStorage, ONCHAIN_PREFIX,
         PAYMENT_OUTBOUND_PREFIX_KEY,
@@ -3461,12 +3789,18 @@ mod tests {
         encrypt::encryption_key_from_pass, generate_seed, max_routing_fee_amount,
         nodemanager::NodeManager, MutinyWallet, MutinyWalletBuilder, MutinyWalletConfigBuilder,
     };
+    use crate::{
+        event::{HTLCStatus, MillisatAmount, PaymentInfo},
+        TransactionDetails,
+    };
+    use crate::{ldkstorage::CHANNEL_CLOSURE_PREFIX, storage::persist_transaction_details};
+    use crate::{nodemanager::ChannelClosure, storage::TRANSACTION_DETAILS_PREFIX_KEY};
     use bdk_chain::{BlockId, ConfirmationTime};
-    use bitcoin::absolute::LockTime;
     use bitcoin::bip32::ExtendedPrivKey;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::PublicKey;
+    use bitcoin::{absolute::LockTime, Txid};
     use bitcoin::{BlockHash, Network, Transaction, TxOut};
     use hex_conservative::DisplayHex;
     use itertools::Itertools;
@@ -3979,6 +4313,20 @@ mod tests {
         };
         persist_payment_info(&storage, &payment_hash4, &invoice4, false).unwrap();
 
+        let transaction_details1 = TransactionDetails {
+            transaction: None,
+            txid: Some(Txid::all_zeros()),
+            internal_id: Txid::all_zeros(),
+            received: 0,
+            sent: 10_000,
+            fee: Some(100),
+            confirmation_time: ConfirmationTime::Unconfirmed {
+                last_seen: now().as_secs(),
+            },
+            labels: vec![],
+        };
+        persist_transaction_details(&storage, &transaction_details1).unwrap();
+
         let vec = {
             let index = storage.activity_index();
             let vec = index.read().unwrap().clone().into_iter().collect_vec();
@@ -4002,6 +4350,13 @@ mod tests {
                 key: format!(
                     "{PAYMENT_OUTBOUND_PREFIX_KEY}{}",
                     payment_hash3.to_lower_hex_string()
+                ),
+            },
+            IndexItem {
+                timestamp: None,
+                key: format!(
+                    "{TRANSACTION_DETAILS_PREFIX_KEY}{}",
+                    transaction_details1.internal_id
                 ),
             },
             IndexItem {
