@@ -3132,15 +3132,18 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     }
 
                     let mut inv = self.pay_invoice(&invoice, None, labels).await?;
-                    // save privacy level to storage
-                    inv.privacy_level = privacy_level;
-                    persist_payment_info(
-                        &self.storage,
-                        &inv.payment_hash.into_32(),
-                        &inv.clone().into(),
-                        false,
-                    )?;
-
+                    // save privacy level to storage, can skip if its the default privacy level
+                    if privacy_level != PrivacyLevel::default() {
+                        inv.privacy_level = privacy_level;
+                        let hash = inv.payment_hash.into_32();
+                        log_debug!(
+                            self.logger,
+                            "Saving updated payment: {} {}",
+                            hash.to_lower_hex_string(),
+                            inv.last_updated
+                        );
+                        persist_payment_info(&self.storage, &hash, &inv.clone().into(), false)?;
+                    }
                     Ok(inv)
                 } else {
                     log_error!(self.logger, "LNURL return invoice with incorrect amount");
