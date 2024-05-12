@@ -135,16 +135,13 @@ impl MutinyAuthClient {
             log_error!(self.logger, "Error receiving LNURL from ws: {e}");
             MutinyError::LnUrlFailure
         })?;
-        let lnurl = match LnUrl::from_str(&lnurl_auth_str) {
-            Ok(l) => l,
-            Err(e) => {
-                log_error!(
-                    self.logger,
-                    "Error parsing LNURL string {lnurl_auth_str}: {e}"
-                );
-                return Err(MutinyError::LnUrlFailure);
-            }
-        };
+        let lnurl = LnUrl::from_str(&lnurl_auth_str).map_err(|e| {
+            log_error!(
+                self.logger,
+                "Error parsing LNURL string {lnurl_auth_str}: {e}"
+            );
+            Err(MutinyError::LnUrlFailure)
+        })?;
 
         make_lnurl_auth_connection(
             self.auth.clone(),
