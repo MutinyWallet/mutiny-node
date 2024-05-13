@@ -162,20 +162,11 @@ pub struct FederationIdentity {
     pub welcome_message: Option<String>,
     pub gateway_fees: Option<GatewayFees>,
     // undocumented parameters that fedi uses: https://meta.dev.fedibtc.com/meta.json
-    pub default_currency: Option<String>,
     pub federation_icon_url: Option<String>,
-    pub max_balance_msats: Option<u32>,
-    pub max_invoice_msats: Option<u32>,
     pub meta_external_url: Option<String>,
-    pub onchain_deposits_disabled: Option<bool>,
     pub preview_message: Option<String>,
-    pub public: Option<bool>,
-    pub tos_url: Option<String>,
     pub popup_end_timestamp: Option<u32>,
     pub popup_countdown_message: Option<String>,
-    pub invite_codes_disabled: Option<bool>,
-    pub stability_pool_disabled: Option<bool>,
-    pub social_recovery_disabled: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -199,15 +190,10 @@ pub struct FederationMeta {
     pub max_balance_msats: Option<String>,
     pub max_invoice_msats: Option<String>,
     pub meta_external_url: Option<String>,
-    pub onchain_deposits_disabled: Option<String>,
     pub preview_message: Option<String>,
-    pub public: Option<String>,
     pub tos_url: Option<String>,
     pub popup_end_timestamp: Option<String>,
     pub popup_countdown_message: Option<String>,
-    pub invite_codes_disabled: Option<String>,
-    pub stability_pool_disabled: Option<String>,
-    pub social_recovery_disabled: Option<String>,
 }
 
 #[derive(Default, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -944,56 +930,14 @@ pub(crate) async fn get_federation_identity(
             config.as_ref().and_then(|c| c.welcome_message.clone()),
         ),
         gateway_fees, // Already merged using helper function...
-        default_currency: merge_values(
-            fedimint_client.get_meta("default_currency"),
-            config.as_ref().and_then(|c| c.default_currency.clone()),
-        ),
         federation_icon_url: merge_values(
             fedimint_client.get_meta("federation_icon_url"),
             config.as_ref().and_then(|c| c.federation_icon_url.clone()),
         ),
-        max_balance_msats: merge_values(
-            fedimint_client
-                .get_meta("max_balance_msats")
-                .map(|v| v.parse().unwrap_or(0)),
-            config
-                .as_ref()
-                .and_then(|c| c.max_balance_msats.clone().map(|v| v.parse().unwrap_or(0))),
-        ),
-        max_invoice_msats: merge_values(
-            fedimint_client
-                .get_meta("max_invoice_msats")
-                .map(|v| v.parse().unwrap_or(0)),
-            config
-                .as_ref()
-                .and_then(|c| c.max_invoice_msats.clone().map(|v| v.parse().unwrap_or(0))),
-        ),
         meta_external_url, // Already set...
-        onchain_deposits_disabled: merge_values(
-            fedimint_client
-                .get_meta("onchain_deposits_disabled")
-                .map(|v| v.parse().unwrap_or(false)),
-            config.as_ref().and_then(|c| {
-                c.onchain_deposits_disabled
-                    .clone()
-                    .map(|v| v.parse().unwrap_or(false))
-            }),
-        ),
         preview_message: merge_values(
             fedimint_client.get_meta("preview_message"),
             config.as_ref().and_then(|c| c.preview_message.clone()),
-        ),
-        public: merge_values(
-            fedimint_client
-                .get_meta("public")
-                .map(|v| v.parse().unwrap_or(false)),
-            config
-                .as_ref()
-                .and_then(|c| c.public.clone().map(|v| v.parse().unwrap_or(false))),
-        ),
-        tos_url: merge_values(
-            fedimint_client.get_meta("tos_url"),
-            config.as_ref().and_then(|c| c.tos_url.clone()),
         ),
         popup_end_timestamp: merge_values(
             fedimint_client
@@ -1012,36 +956,6 @@ pub(crate) async fn get_federation_identity(
             config
                 .as_ref()
                 .and_then(|c| c.popup_countdown_message.clone()),
-        ),
-        invite_codes_disabled: merge_values(
-            fedimint_client
-                .get_meta("invite_codes_disabled")
-                .map(|v| v.parse().unwrap_or(false)),
-            config.as_ref().and_then(|c| {
-                c.invite_codes_disabled
-                    .clone()
-                    .map(|v| v.parse().unwrap_or(false))
-            }),
-        ),
-        stability_pool_disabled: merge_values(
-            fedimint_client
-                .get_meta("stability_pool_disabled")
-                .map(|v| v.parse().unwrap_or(false)),
-            config.as_ref().and_then(|c| {
-                c.stability_pool_disabled
-                    .clone()
-                    .map(|v| v.parse().unwrap_or(false))
-            }),
-        ),
-        social_recovery_disabled: merge_values(
-            fedimint_client
-                .get_meta("social_recovery_disabled")
-                .map(|v| v.parse().unwrap_or(false)),
-            config.as_ref().and_then(|c| {
-                c.social_recovery_disabled
-                    .clone()
-                    .map(|v| v.parse().unwrap_or(false))
-            }),
         ),
     }
 }
