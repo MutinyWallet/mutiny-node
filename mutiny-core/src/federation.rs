@@ -58,7 +58,7 @@ use fedimint_ln_client::{
     LightningOperationMetaVariant, LnPayState, LnReceiveState,
 };
 use fedimint_ln_common::lightning_invoice::{Bolt11InvoiceDescription, Description, RoutingFees};
-use fedimint_ln_common::{LightningCommonInit, LightningGateway};
+use fedimint_ln_common::{LightningCommonInit, LightningGateway, LightningGatewayAnnouncement};
 use fedimint_mint_client::MintClientInit;
 use fedimint_wallet_client::{
     WalletClientInit, WalletClientModule, WalletCommonInit, WalletOperationMeta, WithdrawState,
@@ -1034,10 +1034,10 @@ fn sats_round_up(amount: &Amount) -> u64 {
 
 // Get a preferred gateway from a federation
 fn get_gateway_preference(
-    gateways: Vec<fedimint_ln_common::LightningGatewayAnnouncement>,
+    gateways: Vec<LightningGatewayAnnouncement>,
     federation_id: FederationId,
 ) -> Option<fedimint_ln_common::bitcoin::secp256k1::PublicKey> {
-    let mut active_choice: Option<fedimint_ln_common::bitcoin::secp256k1::PublicKey> = None;
+    let mut active_choice: Option<LightningGatewayAnnouncement> = None;
 
     let signet_gateway_id =
         fedimint_ln_common::bitcoin::secp256k1::PublicKey::from_str(SIGNET_GATEWAY)
@@ -1063,26 +1063,25 @@ fn get_gateway_preference(
 
         // if vetted, set up as current active choice
         if g.vetted {
-            active_choice = Some(g_id);
-            continue;
+            active_choice = Some(g.clone());
+            break;
         }
 
         // if not vetted, make sure fee is high enough
-        if active_choice.is_none() {
-            let fees = g.info.fees;
-            if fees.base_msat >= 1_000 && fees.proportional_millionths >= 100 {
-                active_choice = Some(g_id);
-                continue;
+        let fees = g.info.fees;
+        if fees.base_msat >= 1_000 && fees.proportional_millionths >= 100 {
+            // only select gateways that support private payments, unless we don't have a gateway
+            if g.info.supports_private_payments || active_choice.is_none() {
+                active_choice = Some(g.clone());
             }
         }
     }
 
     // fallback to any gateway if none fit our criteria
-    if active_choice.is_none() {
-        active_choice = gateways.first().map(|g| g.info.gateway_id);
+    match active_choice {
+        None => gateways.first().map(|g| g.info.gateway_id),
+        Some(g) => Some(g.info.gateway_id),
     }
-
-    active_choice
 }
 
 // A federation private key will be derived from
@@ -1906,7 +1905,6 @@ fn fedimint_mnemonic_generation() {
 fn gateway_preference() {
     use fedimint_core::util::SafeUrl;
     use fedimint_ln_common::bitcoin::secp256k1::PublicKey;
-    use fedimint_ln_common::LightningGatewayAnnouncement;
 
     use super::*;
 
@@ -1921,6 +1919,11 @@ fn gateway_preference() {
         "0384526253c27c7aef56c7b71a5cd25bebb66dddda437826defc5b2568bde81f07";
     let unvetted_gateway_high_fee_pubkey =
         PublicKey::from_str(UNVETTED_GATEWAY_KEY_HIGH_FEE).unwrap();
+
+    const UNVETTED_GATEWAY_KEY_HIGH_FEE_NO_PRIVATE: &str =
+        "033d8656219478701227199cbd6f670335c8d408a92ae88b962c49d4dc0e83e025";
+    let unvetted_gateway_high_fee_no_private_pubkey =
+        PublicKey::from_str(UNVETTED_GATEWAY_KEY_HIGH_FEE_NO_PRIVATE).unwrap();
 
     const UNVETTED_GATEWAY_KEY_LOW_FEE: &str =
         "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443";
@@ -1996,11 +1999,30 @@ fn gateway_preference() {
             api: SafeUrl::parse("http://localhost:8080").unwrap(),
             route_hints: vec![],
             fees: RoutingFees {
-                base_msat: 200,
-                proportional_millionths: 20,
+                base_msat: 1_000,
+                proportional_millionths: 100,
             },
             gateway_id: unvetted_gateway_high_fee_pubkey,
             supports_private_payments: true,
+        },
+        vetted: false,
+        ttl: Duration::from_secs(3600),
+    };
+
+    let unvetted_gateway_high_fee_no_private = LightningGatewayAnnouncement {
+        info: LightningGateway {
+            mint_channel_id: 12345,
+            gateway_redeem_key: random_key,
+            node_pub_key: unvetted_gateway_high_fee_no_private_pubkey,
+            lightning_alias: "Unvetted Gateway".to_string(),
+            api: SafeUrl::parse("http://localhost:8080").unwrap(),
+            route_hints: vec![],
+            fees: RoutingFees {
+                base_msat: 1_000,
+                proportional_millionths: 100,
+            },
+            gateway_id: unvetted_gateway_high_fee_no_private_pubkey,
+            supports_private_payments: false,
         },
         vetted: false,
         ttl: Duration::from_secs(3600),
@@ -2030,6 +2052,7 @@ fn gateway_preference() {
         mainnet_gateway.clone(),
         vetted_gateway.clone(),
         unvetted_gateway_low_fee.clone(),
+        unvetted_gateway_high_fee_no_private.clone(),
         unvetted_gateway_high_fee.clone(),
     ];
 
@@ -2055,12 +2078,24 @@ fn gateway_preference() {
     // Test that the method returns the first vetted gateway if none of the gateways match the federation ID
     let gateways = vec![
         unvetted_gateway_low_fee.clone(),
+        unvetted_gateway_high_fee_no_private.clone(),
         unvetted_gateway_high_fee.clone(),
         vetted_gateway.clone(),
     ];
     assert_eq!(
         get_gateway_preference(gateways, random_federation_id),
         Some(vetted_gateway_pubkey)
+    );
+
+    // Test that the method returns the private high fee gateway if none of the gateways match the federation ID and no vetted gateways
+    let gateways = vec![
+        unvetted_gateway_low_fee.clone(),
+        unvetted_gateway_high_fee_no_private.clone(),
+        unvetted_gateway_high_fee.clone(),
+    ];
+    assert_eq!(
+        get_gateway_preference(gateways, random_federation_id),
+        Some(unvetted_gateway_high_fee_pubkey)
     );
 
     // Test that the method returns the first when given a non-matching federation ID and gateway ID,
