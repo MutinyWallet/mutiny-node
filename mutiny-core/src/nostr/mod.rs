@@ -1,3 +1,4 @@
+use crate::federation::FederationMetaConfig;
 use crate::labels::Contact;
 use crate::logging::MutinyLogger;
 use crate::nostr::client::NostrClient;
@@ -9,6 +10,7 @@ use crate::nostr::nwc::{
 };
 use crate::nostr::primal::PrimalApi;
 use crate::storage::{update_nostr_contact_list, MutinyStorage, NOSTR_CONTACT_LIST};
+use crate::utils::fetch_with_timeout;
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
 use crate::{labels::LabelStorage, InvoiceHandler};
 use crate::{utils, HTLCStatus};
@@ -17,8 +19,9 @@ use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{Secp256k1, Signing};
 use bitcoin::{hashes::hex::FromHex, secp256k1::ThirtyTwoByteHash, Network};
 use fedimint_core::api::InviteCode;
-use fedimint_core::config::FederationId;
+use fedimint_core::config::{ClientConfig, FederationId};
 use futures::{pin_mut, select, FutureExt};
+use futures_util::future::join_all;
 use futures_util::lock::Mutex;
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info, log_warn};
@@ -211,6 +214,53 @@ impl Ord for NostrDiscoveredFedimint {
                     .unwrap_or(u64::MAX)
                     .cmp(&other.created_at.unwrap_or(u64::MAX))
             })
+    }
+}
+
+impl NostrDiscoveredFedimint {
+    /// If this fedimint doesn't have metadata, try to fetch it from the first invite code
+    pub async fn try_fetch_metadata(&mut self) {
+        if self.metadata.is_none() && !self.invite_codes.is_empty() {
+            let code = self.invite_codes.first().unwrap();
+            if let Ok(config) = ClientConfig::download_from_invite_code(code).await {
+                // need to handle this case where the meta_external_url is set and we fetch it externally
+                let external = config.global.meta.get("meta_external_url");
+                match external {
+                    Some(url) => {
+                        let http_client = reqwest::Client::new();
+                        let request = http_client.request(reqwest::Method::GET, url);
+
+                        if let Ok(r) = fetch_with_timeout(
+                            &http_client,
+                            request.build().expect("should build req"),
+                        )
+                        .await
+                        {
+                            if let Ok(config) = r.json::<FederationMetaConfig>().await {
+                                let metadata =
+                                    config.federations.get(&self.id.to_string()).cloned().map(
+                                        |f| Metadata {
+                                            name: f.federation_name.clone(),
+                                            display_name: f.federation_name,
+                                            picture: f.federation_icon_url,
+                                            ..Default::default()
+                                        },
+                                    );
+                                self.metadata = metadata;
+                            }
+                        }
+                    }
+                    None => {
+                        self.metadata = Some(Metadata {
+                            name: config.global.meta.get("federation_name").cloned(),
+                            display_name: config.global.meta.get("federation_name").cloned(),
+                            picture: config.global.meta.get("federation_icon_url").cloned(),
+                            ..Default::default()
+                        })
+                    }
+                };
+            }
+        }
     }
 }
 
@@ -2151,6 +2201,13 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
 
         // sort mints by most recommended then by oldest
         mints.sort();
+
+        // try to get federation info from client config if not in event
+        let futures = mints
+            .iter_mut()
+            .map(|mint| mint.try_fetch_metadata())
+            .collect::<Vec<_>>();
+        join_all(futures).await;
 
         Ok(mints)
     }
