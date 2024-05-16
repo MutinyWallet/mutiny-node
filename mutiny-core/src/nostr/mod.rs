@@ -193,6 +193,8 @@ pub struct NostrDiscoveredFedimint {
     pub metadata: Option<Metadata>,
     /// Contacts that recommend this fedimint
     pub recommendations: Vec<Contact>,
+    /// Timestamp when this fedimint expires
+    pub expire_timestamp: Option<u64>,
 }
 
 impl PartialOrd for NostrDiscoveredFedimint {
@@ -237,15 +239,18 @@ impl NostrDiscoveredFedimint {
                         .await
                         {
                             if let Ok(config) = r.json::<FederationMetaConfig>().await {
-                                let metadata =
-                                    config.federations.get(&self.id.to_string()).cloned().map(
-                                        |f| Metadata {
-                                            name: f.federation_name.clone(),
-                                            display_name: f.federation_name,
-                                            picture: f.federation_icon_url,
-                                            ..Default::default()
-                                        },
-                                    );
+                                let config = config.federations.get(&self.id.to_string()).cloned();
+                                self.expire_timestamp = config.as_ref().and_then(|f| {
+                                    f.federation_expiry_timestamp
+                                        .clone()
+                                        .and_then(|t| t.parse().ok())
+                                });
+                                let metadata = config.map(|f| Metadata {
+                                    name: f.federation_name.clone(),
+                                    display_name: f.federation_name,
+                                    picture: f.federation_icon_url,
+                                    ..Default::default()
+                                });
                                 self.metadata = metadata;
                             }
                         }
@@ -256,7 +261,12 @@ impl NostrDiscoveredFedimint {
                             display_name: config.global.meta.get("federation_name").cloned(),
                             picture: config.global.meta.get("federation_icon_url").cloned(),
                             ..Default::default()
-                        })
+                        });
+                        self.expire_timestamp = config
+                            .global
+                            .meta
+                            .get("expire_timestamp")
+                            .and_then(|s| s.parse().ok());
                     }
                 };
             }
@@ -2074,6 +2084,7 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
                         created_at: Some(event.created_at.as_u64()),
                         metadata,
                         recommendations: vec![], // we'll add these in the next step
+                        expire_timestamp: None,
                     })
                 }
             })
@@ -2160,6 +2171,7 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
                             created_at: None,
                             metadata: None,
                             recommendations: vec![contact],
+                            expire_timestamp: None,
                         };
                         mints.push(mint);
                     }
@@ -2208,6 +2220,14 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
             .map(|mint| mint.try_fetch_metadata())
             .collect::<Vec<_>>();
         join_all(futures).await;
+
+        // remove mints that expire within the 30 days and ones we couldn't fetch metadata for
+        let days_30_from_now = utils::now() + Duration::from_secs(86_400 * 30);
+        mints.retain(|m| {
+            m.metadata.is_some()
+                && (m.expire_timestamp.is_none()
+                    || m.expire_timestamp.unwrap() > days_30_from_now.as_secs())
+        });
 
         Ok(mints)
     }
@@ -2864,6 +2884,7 @@ mod test {
             created_at: Some(200),
             metadata: None,
             recommendations: vec![Contact::default(), Contact::default()],
+            expire_timestamp: None,
         };
 
         let most_recommendations = NostrDiscoveredFedimint {
@@ -2874,6 +2895,7 @@ mod test {
             created_at: Some(100),
             metadata: None,
             recommendations: vec![Contact::default(), Contact::default()],
+            expire_timestamp: None,
         };
 
         let one_recommendation = NostrDiscoveredFedimint {
@@ -2884,6 +2906,7 @@ mod test {
             created_at: Some(100),
             metadata: None,
             recommendations: vec![Contact::default()],
+            expire_timestamp: None,
         };
 
         let one_recommendation_no_time = NostrDiscoveredFedimint {
@@ -2894,6 +2917,7 @@ mod test {
             created_at: None,
             metadata: None,
             recommendations: vec![Contact::default()],
+            expire_timestamp: None,
         };
 
         let no_recommendations = NostrDiscoveredFedimint {
@@ -2904,6 +2928,7 @@ mod test {
             created_at: Some(100),
             metadata: None,
             recommendations: vec![],
+            expire_timestamp: None,
         };
 
         let no_recommendations_or_time = NostrDiscoveredFedimint {
@@ -2914,6 +2939,7 @@ mod test {
             created_at: None,
             metadata: None,
             recommendations: vec![],
+            expire_timestamp: None,
         };
 
         let mut vec = vec![
