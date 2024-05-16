@@ -1,3 +1,4 @@
+use crate::federation::FederationMetaConfig;
 use crate::labels::Contact;
 use crate::logging::MutinyLogger;
 use crate::nostr::client::NostrClient;
@@ -9,6 +10,7 @@ use crate::nostr::nwc::{
 };
 use crate::nostr::primal::PrimalApi;
 use crate::storage::{update_nostr_contact_list, MutinyStorage, NOSTR_CONTACT_LIST};
+use crate::utils::fetch_with_timeout;
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
 use crate::{labels::LabelStorage, InvoiceHandler};
 use crate::{utils, HTLCStatus};
@@ -17,8 +19,9 @@ use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{Secp256k1, Signing};
 use bitcoin::{hashes::hex::FromHex, secp256k1::ThirtyTwoByteHash, Network};
 use fedimint_core::api::InviteCode;
-use fedimint_core::config::FederationId;
+use fedimint_core::config::{ClientConfig, FederationId};
 use futures::{pin_mut, select, FutureExt};
+use futures_util::future::join_all;
 use futures_util::lock::Mutex;
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info, log_warn};
@@ -190,6 +193,8 @@ pub struct NostrDiscoveredFedimint {
     pub metadata: Option<Metadata>,
     /// Contacts that recommend this fedimint
     pub recommendations: Vec<Contact>,
+    /// Timestamp when this fedimint expires
+    pub expire_timestamp: Option<u64>,
 }
 
 impl PartialOrd for NostrDiscoveredFedimint {
@@ -211,6 +216,61 @@ impl Ord for NostrDiscoveredFedimint {
                     .unwrap_or(u64::MAX)
                     .cmp(&other.created_at.unwrap_or(u64::MAX))
             })
+    }
+}
+
+impl NostrDiscoveredFedimint {
+    /// If this fedimint doesn't have metadata, try to fetch it from the first invite code
+    pub async fn try_fetch_metadata(&mut self) {
+        if self.metadata.is_none() && !self.invite_codes.is_empty() {
+            let code = self.invite_codes.first().unwrap();
+            if let Ok(config) = ClientConfig::download_from_invite_code(code).await {
+                // need to handle this case where the meta_external_url is set and we fetch it externally
+                let external = config.global.meta.get("meta_external_url");
+                match external {
+                    Some(url) => {
+                        let http_client = reqwest::Client::new();
+                        let request = http_client.request(reqwest::Method::GET, url);
+
+                        if let Ok(r) = fetch_with_timeout(
+                            &http_client,
+                            request.build().expect("should build req"),
+                        )
+                        .await
+                        {
+                            if let Ok(config) = r.json::<FederationMetaConfig>().await {
+                                let config = config.federations.get(&self.id.to_string()).cloned();
+                                self.expire_timestamp = config.as_ref().and_then(|f| {
+                                    f.federation_expiry_timestamp
+                                        .clone()
+                                        .and_then(|t| t.parse().ok())
+                                });
+                                let metadata = config.map(|f| Metadata {
+                                    name: f.federation_name.clone(),
+                                    display_name: f.federation_name,
+                                    picture: f.federation_icon_url,
+                                    ..Default::default()
+                                });
+                                self.metadata = metadata;
+                            }
+                        }
+                    }
+                    None => {
+                        self.metadata = Some(Metadata {
+                            name: config.global.meta.get("federation_name").cloned(),
+                            display_name: config.global.meta.get("federation_name").cloned(),
+                            picture: config.global.meta.get("federation_icon_url").cloned(),
+                            ..Default::default()
+                        });
+                        self.expire_timestamp = config
+                            .global
+                            .meta
+                            .get("expire_timestamp")
+                            .and_then(|s| s.parse().ok());
+                    }
+                };
+            }
+        }
     }
 }
 
@@ -2024,6 +2084,7 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
                         created_at: Some(event.created_at.as_u64()),
                         metadata,
                         recommendations: vec![], // we'll add these in the next step
+                        expire_timestamp: None,
                     })
                 }
             })
@@ -2110,6 +2171,7 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
                             created_at: None,
                             metadata: None,
                             recommendations: vec![contact],
+                            expire_timestamp: None,
                         };
                         mints.push(mint);
                     }
@@ -2151,6 +2213,21 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
 
         // sort mints by most recommended then by oldest
         mints.sort();
+
+        // try to get federation info from client config if not in event
+        let futures = mints
+            .iter_mut()
+            .map(|mint| mint.try_fetch_metadata())
+            .collect::<Vec<_>>();
+        join_all(futures).await;
+
+        // remove mints that expire within the 30 days and ones we couldn't fetch metadata for
+        let days_30_from_now = utils::now() + Duration::from_secs(86_400 * 30);
+        mints.retain(|m| {
+            m.metadata.is_some()
+                && (m.expire_timestamp.is_none()
+                    || m.expire_timestamp.unwrap() > days_30_from_now.as_secs())
+        });
 
         Ok(mints)
     }
@@ -2807,6 +2884,7 @@ mod test {
             created_at: Some(200),
             metadata: None,
             recommendations: vec![Contact::default(), Contact::default()],
+            expire_timestamp: None,
         };
 
         let most_recommendations = NostrDiscoveredFedimint {
@@ -2817,6 +2895,7 @@ mod test {
             created_at: Some(100),
             metadata: None,
             recommendations: vec![Contact::default(), Contact::default()],
+            expire_timestamp: None,
         };
 
         let one_recommendation = NostrDiscoveredFedimint {
@@ -2827,6 +2906,7 @@ mod test {
             created_at: Some(100),
             metadata: None,
             recommendations: vec![Contact::default()],
+            expire_timestamp: None,
         };
 
         let one_recommendation_no_time = NostrDiscoveredFedimint {
@@ -2837,6 +2917,7 @@ mod test {
             created_at: None,
             metadata: None,
             recommendations: vec![Contact::default()],
+            expire_timestamp: None,
         };
 
         let no_recommendations = NostrDiscoveredFedimint {
@@ -2847,6 +2928,7 @@ mod test {
             created_at: Some(100),
             metadata: None,
             recommendations: vec![],
+            expire_timestamp: None,
         };
 
         let no_recommendations_or_time = NostrDiscoveredFedimint {
@@ -2857,6 +2939,7 @@ mod test {
             created_at: None,
             metadata: None,
             recommendations: vec![],
+            expire_timestamp: None,
         };
 
         let mut vec = vec![

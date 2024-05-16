@@ -170,7 +170,7 @@ pub struct FederationIdentity {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct FederationMetaConfig {
+pub(crate) struct FederationMetaConfig {
     #[serde(flatten)]
     pub federations: std::collections::HashMap<String, FederationMeta>,
 }
