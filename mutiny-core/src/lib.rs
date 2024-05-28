@@ -94,7 +94,7 @@ use ::nostr::prelude::rand::rngs::OsRng;
 use ::nostr::prelude::ZapRequestData;
 #[cfg(target_arch = "wasm32")]
 use ::nostr::Tag;
-use ::nostr::{EventBuilder, EventId, JsonUtil, Keys, Kind};
+use ::nostr::{EventBuilder, EventId, HttpMethod, JsonUtil, Keys, Kind};
 use async_lock::RwLock;
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
@@ -2499,11 +2499,26 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Uploads a profile pic to nostr.build and returns the uploaded file's URL
     pub async fn upload_profile_pic(&self, image_bytes: Vec<u8>) -> Result<String, MutinyError> {
         let client = reqwest::Client::new();
-
+        let hash = sha256::Hash::hash(&image_bytes);
         let form = Form::new().part("fileToUpload", Part::bytes(image_bytes));
+
+        let url = "https://nostr.build/api/v2/upload/profile";
+
+        let nip98 = ::nostr::nips::nip98::HttpData {
+            url: url.into(),
+            method: HttpMethod::POST,
+            payload: Some(hash),
+        };
+        let event_builder = EventBuilder::http_auth(nip98);
+        let event = self.nostr.client.sign_event_builder(event_builder).await?;
+
         let res: NostrBuildResult = client
-            .post("https://nostr.build/api/v2/upload/profile")
+            .post(url)
             .multipart(form)
+            .header(
+                "Authorization",
+                format!("Nostr {}", base64::encode(event.as_json().as_bytes())),
+            )
             .send()
             .await
             .map_err(|e| {
