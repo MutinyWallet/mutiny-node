@@ -1607,9 +1607,25 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
     ) -> anyhow::Result<Option<Event>> {
         let nwc = {
             let vec = self.nwc.read().unwrap();
-            vec.iter()
-                .find(|nwc| nwc.client_pubkey() == event.pubkey)
-                .cloned()
+            // Need to find the p tag, not the client pubkey because there can be duplicates
+            // of the same client pubkey but we guarantee that the p tag is unique.
+            let p_tag = event
+                .tags
+                .iter()
+                .find_map(|tag| {
+                    if let Tag::PublicKey {
+                        public_key,
+                        uppercase: false,
+                        ..
+                    } = tag
+                    {
+                        Some(*public_key)
+                    } else {
+                        None
+                    }
+                })
+                .ok_or(anyhow::anyhow!("No P tag found"))?;
+            vec.iter().find(|nwc| nwc.server_pubkey() == p_tag).cloned()
         };
 
         self.storage.set_nwc_sync_time(event.created_at.as_u64())?;
