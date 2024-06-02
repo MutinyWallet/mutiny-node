@@ -272,6 +272,59 @@ impl NostrDiscoveredFedimint {
             }
         }
     }
+
+    pub fn merge(&mut self, other: &Self) {
+        // merge metadata
+        if let Some(other) = other.metadata.as_ref() {
+            match self.metadata.as_mut() {
+                Some(self_metadata) => {
+                    if self_metadata.name.is_none() {
+                        self_metadata.name = other.name.clone();
+                    }
+                    if self_metadata.display_name.is_none() {
+                        self_metadata.display_name = other.display_name.clone();
+                    }
+                    if self_metadata.picture.is_none() {
+                        self_metadata.picture = other.picture.clone();
+                    }
+                }
+                None => {
+                    self.metadata = Some(other.clone());
+                }
+            }
+        }
+        // merge created_at
+        match self.created_at.as_ref() {
+            Some(self_created_at) => {
+                if other
+                    .created_at
+                    .is_some_and(|other| *self_created_at > other)
+                {
+                    self.created_at = other.created_at;
+                }
+            }
+            None => {
+                self.created_at = other.created_at;
+            }
+        }
+
+        // merge invite codes
+        let mut invite_codes = self.invite_codes.clone();
+        for other_invite_code in other.invite_codes.iter() {
+            if !invite_codes.contains(other_invite_code) {
+                invite_codes.push(other_invite_code.clone());
+            }
+        }
+
+        self.invite_codes = invite_codes;
+
+        // merge expire_timestamp
+        if let Some(other) = other.expire_timestamp {
+            if other < self.expire_timestamp.unwrap_or(0) {
+                self.expire_timestamp = Some(other);
+            }
+        }
+    }
 }
 
 impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
@@ -2045,70 +2098,77 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
             )
             .await?;
 
-        let mut mints: Vec<NostrDiscoveredFedimint> = events
-            .iter()
-            .filter_map(|event| {
-                // only process federation announcements
-                if event.kind != Kind::from(38173) {
-                    return None;
-                }
+        let mut mints: HashMap<FederationId, NostrDiscoveredFedimint> = HashMap::new();
 
-                let network_tag = event.tags.iter().find_map(|tag| {
-                    if tag.kind() == TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::N))
-                    {
-                        Some(tag.as_vec().get(1).cloned().unwrap_or_default())
-                    } else {
-                        None
-                    }
-                });
+        for event in events.iter() {
+            // only process federation announcements
+            if event.kind != Kind::from(38173) {
+                continue;
+            }
 
-                // if the network tag is missing, we assume it is on mainnet
-                let network_tag = network_tag
-                    .as_deref()
-                    .unwrap_or(network_to_string(Network::Bitcoin));
-                // skip if the network doesn't match
-                if network_tag != network_str {
-                    return None;
-                }
-
-                let federation_id = event.tags.iter().find_map(|tag| {
-                    if let Tag::Identifier(id) = tag {
-                        FederationId::from_str(id).ok()
-                    } else {
-                        None
-                    }
-                })?;
-
-                let invite_codes: Vec<InviteCode> = event
-                    .tags
-                    .iter()
-                    .filter_map(|tag| parse_invite_code_from_tag(tag, &federation_id))
-                    .collect();
-
-                // if we have no invite codes left, skip
-                if invite_codes.is_empty() {
-                    None
+            let network_tag = event.tags.iter().find_map(|tag| {
+                if tag.kind() == TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::N)) {
+                    Some(tag.as_vec().get(1).cloned().unwrap_or_default())
                 } else {
-                    // try to parse the metadata if available, it's okay if it fails
-                    // todo could lookup kind 0 of the federation to get the metadata as well
-                    let metadata = serde_json::from_str(&event.content).ok();
-                    Some(NostrDiscoveredFedimint {
-                        invite_codes,
-                        id: federation_id,
-                        pubkey: Some(event.pubkey),
-                        event_id: Some(event.id),
-                        created_at: Some(event.created_at.as_u64()),
-                        metadata,
-                        recommendations: vec![], // we'll add these in the next step
-                        expire_timestamp: None,
-                    })
+                    None
                 }
-            })
-            .collect();
+            });
 
-        // remove duplicates by federation id, keep the one with the newest event
-        mints.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        mints.dedup_by(|a, b| a.id == b.id);
+            // if the network tag is missing, we assume it is on mainnet
+            let network_tag = network_tag
+                .as_deref()
+                .unwrap_or(network_to_string(Network::Bitcoin));
+            // skip if the network doesn't match
+            if network_tag != network_str {
+                continue;
+            }
+
+            let federation_id = event.tags.iter().find_map(|tag| {
+                if let Tag::Identifier(id) = tag {
+                    FederationId::from_str(id).ok()
+                } else {
+                    None
+                }
+            });
+
+            let federation_id = match federation_id {
+                Some(id) => id,
+                None => continue,
+            };
+
+            let invite_codes: Vec<InviteCode> = event
+                .tags
+                .iter()
+                .filter_map(|tag| parse_invite_code_from_tag(tag, &federation_id))
+                .collect();
+
+            // if we have no invite codes left, skip
+            if !invite_codes.is_empty() {
+                // try to parse the metadata if available, it's okay if it fails
+                // todo could lookup kind 0 of the federation to get the metadata as well
+                let metadata = serde_json::from_str(&event.content).ok();
+                let mint = NostrDiscoveredFedimint {
+                    invite_codes,
+                    id: federation_id,
+                    pubkey: Some(event.pubkey),
+                    event_id: Some(event.id),
+                    created_at: Some(event.created_at.as_u64()),
+                    metadata,
+                    recommendations: vec![], // we'll add these in the next step
+                    expire_timestamp: None,
+                };
+
+                match mints.get_mut(&federation_id) {
+                    Some(m) => {
+                        // if we already have a mint for this federation, merge the two
+                        m.merge(&mint);
+                    }
+                    None => {
+                        mints.insert(federation_id, mint);
+                    }
+                }
+            }
+        }
 
         // add on contact recommendations to mints
         for event in events {
@@ -2170,8 +2230,8 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
 
             // todo read `a` tag recommendations as well
 
-            match mints.iter_mut().find(|m| m.id == federation_id) {
-                Some(mint) => {
+            match mints.iter_mut().find(|(_, m)| m.id == federation_id) {
+                Some((_id, mint)) => {
                     mint.recommendations.push(contact);
                 }
                 None => {
@@ -2189,14 +2249,14 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
                             recommendations: vec![contact],
                             expire_timestamp: None,
                         };
-                        mints.push(mint);
+                        mints.insert(federation_id, mint);
                     }
                 }
             }
         }
 
         // sort the recommendations by whether they are contacts or not and if they have an image
-        for mint in mints.iter_mut() {
+        for (_, mint) in mints.iter_mut() {
             mint.recommendations.sort_by(|a, b| {
                 let a_is_contact = a
                     .npub
@@ -2228,6 +2288,7 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
         }
 
         // sort mints by most recommended then by oldest
+        let mut mints: Vec<NostrDiscoveredFedimint> = mints.into_values().collect();
         mints.sort();
 
         // try to get federation info from client config if not in event
