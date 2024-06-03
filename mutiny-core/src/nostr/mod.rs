@@ -21,7 +21,6 @@ use bitcoin::{hashes::hex::FromHex, secp256k1::ThirtyTwoByteHash, Network};
 use fedimint_core::api::InviteCode;
 use fedimint_core::config::{ClientConfig, FederationId};
 use futures::{pin_mut, select, FutureExt};
-use futures_util::future::join_all;
 use futures_util::lock::Mutex;
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info, log_warn};
@@ -2292,19 +2291,20 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
         mints.sort();
 
         // try to get federation info from client config if not in event
-        let futures = mints
-            .iter_mut()
-            .map(|mint| mint.try_fetch_metadata())
-            .collect::<Vec<_>>();
-        join_all(futures).await;
+        // todo this currently retries which takes forever with bad mints, need to wait for next release of fedimint
+        // let futures = mints
+        //     .iter_mut()
+        //     .map(|mint| mint.try_fetch_metadata())
+        //     .collect::<Vec<_>>();
+        // join_all(futures).await;
 
         // remove mints that expire within the 30 days and ones we couldn't fetch metadata for
-        let days_30_from_now = utils::now() + Duration::from_secs(86_400 * 30);
-        mints.retain(|m| {
-            m.metadata.is_some()
-                && (m.expire_timestamp.is_none()
-                    || m.expire_timestamp.unwrap() > days_30_from_now.as_secs())
-        });
+        // let days_30_from_now = utils::now() + Duration::from_secs(86_400 * 30);
+        // mints.retain(|m| {
+        //     m.metadata.is_some()
+        //         && (m.expire_timestamp.is_none()
+        //             || m.expire_timestamp.unwrap() > days_30_from_now.as_secs())
+        // });
 
         Ok(mints)
     }
