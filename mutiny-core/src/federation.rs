@@ -1692,7 +1692,7 @@ impl<S: MutinyStorage> FedimintStorage<S> {
         let federation_version = match storage.get_data::<VersionedValue>(&key) {
             Ok(Some(versioned_value)) => {
                 // get the value/version and load it into fedimint memory
-                let hex: String = serde_json::from_value(versioned_value.value.clone())?;
+                let hex: String = serde_json::from_value(versioned_value.value)?;
                 if !hex.is_empty() {
                     let bytes: Vec<u8> =
                         FromHex::from_hex(&hex).map_err(|e| MutinyError::ReadError {
@@ -1721,7 +1721,8 @@ impl<S: MutinyStorage> FedimintStorage<S> {
             }
             Ok(None) => 0,
             Err(e) => {
-                panic!("unparsable value in federation storage: {e}")
+                log_error!(logger, "unparsable value in federation storage: {e}");
+                return Err(e);
             }
         };
 
