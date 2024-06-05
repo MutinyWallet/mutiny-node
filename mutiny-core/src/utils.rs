@@ -61,19 +61,23 @@ pub async fn fetch_with_timeout(
     client: &Client,
     req: reqwest::Request,
 ) -> Result<reqwest::Response, MutinyError> {
-    let fetch_future = fetch(client, req);
-    let timeout_future = async {
-        sleep(FETCH_TIMEOUT).await;
-        Err(MutinyError::ConnectionFailed)
-    };
+    // let fetch_future = fetch(client, req);
+    // let timeout_future = async {
+    //     sleep(FETCH_TIMEOUT).await;
+    //     Err(MutinyError::ConnectionFailed)
+    // };
 
-    pin_mut!(fetch_future);
-    pin_mut!(timeout_future);
+    // pin_mut!(fetch_future, timeout_future);
+    // // pin_mut!(timeout_future);
 
-    match future::select(fetch_future, timeout_future).await {
-        Either::Left((ok, _)) => ok,
-        Either::Right((err, _)) => err,
-    }
+    // match future::select(fetch_future, timeout_future).await {
+    //     Either::Left((ok, _)) => ok,
+    //     Either::Right((err, _)) => err,
+    // }
+    client
+        .execute(req)
+        .await
+        .map_err(|_| MutinyError::ConnectionFailed)
 }
 
 async fn fetch(client: &Client, req: reqwest::Request) -> Result<reqwest::Response, MutinyError> {

@@ -2060,6 +2060,7 @@ impl MutinyWallet {
     /// This can be useful if you get stuck in a bad state.
     #[wasm_bindgen]
     pub async fn reset_onchain_tracker(&mut self) -> Result<(), MutinyJsError> {
+        panic!("reset onchain tracker panic");
         Ok(self.inner.reset_onchain_tracker().await?)
     }
 
@@ -2182,6 +2183,13 @@ impl MutinyWallet {
     pub async fn is_potential_hodl_invoice(invoice: String) -> Result<bool, MutinyJsError> {
         let invoice = Bolt11Invoice::from_str(&invoice)?;
         Ok(mutiny_core::utils::is_hodl_invoice(&invoice))
+    }
+
+    /// Force a panic for the sake of testing
+    #[wasm_bindgen]
+    pub async fn force_panic(&self) -> Result<(), MutinyJsError> {
+        log_info!(self.inner.logger, "about to panic");
+        panic!("test panic");
     }
 }
 

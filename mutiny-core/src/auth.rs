@@ -92,6 +92,7 @@ impl MutinyAuthClient {
         url: Url,
         body: Option<Value>,
     ) -> Result<reqwest::Response, MutinyError> {
+        log_info!(self.logger, "Doing an authenticated request {url:?}");
         let mut request = self.http_client.request(method, url);
 
         let mut jwt = self.is_authenticated().await;

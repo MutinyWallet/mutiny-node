@@ -436,10 +436,15 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             }
         };
 
+        log_info!(logger, "finished creating lsp client");
+
         // init channel manager
+        log_info!(logger, "initializing channel manager");
+        log_info!(logger, "accept underpaying htlcs...");
         let accept_underpaying_htlcs = lsp_config
             .as_ref()
             .is_some_and(|l| l.accept_underpaying_htlcs());
+        log_info!(logger, "read channel manager...");
         let mut read_channel_manager = persister
             .read_channel_manager(
                 network,
@@ -455,11 +460,15 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             )
             .await?;
 
+        log_info!(logger, "arc new channel manager...");
+
         let channel_manager: Arc<PhantomChannelManager<S>> =
             Arc::new(read_channel_manager.channel_manager);
 
+        log_info!(logger, "stop atomic...");
         let stop = Arc::new(AtomicBool::new(false));
 
+        log_info!(logger, "making lsp client...");
         let (lsp_client, lsp_client_pubkey, liquidity) = match lsp_config {
             Some(LspConfig::VoltageFlow(config)) => {
                 let lsp = AnyLsp::new_voltage_flow(config, logger.clone()).await?;
@@ -493,7 +502,9 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             None => (None, None, None),
         };
 
+        log_info!(logger, "message router...");
         let message_router = Arc::new(LspMessageRouter::new(lsp_client_pubkey));
+        log_info!(logger, "onion message handler...");
         let onion_message_handler = Arc::new(OnionMessenger::new(
             keys_manager.clone(),
             keys_manager.clone(),
@@ -503,13 +514,16 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             IgnoringMessageHandler {},
         ));
 
+        log_info!(logger, "route handler...");
         let route_handler = Arc::new(GossipMessageHandler {
             storage: persister.storage.clone(),
             network_graph: gossip_sync.network_graph().clone(),
             logger: logger.clone(),
         });
 
+        log_info!(logger, "init peer manager");
         // init peer manager
+        log_info!(logger, "message handler...");
         let ln_msg_handler = MessageHandler {
             chan_handler: channel_manager.clone(),
             route_handler,
@@ -519,6 +533,8 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             }),
         };
 
+        log_info!(logger, "bump tx event handler...");
+
         let bump_tx_event_handler = Arc::new(BumpTransactionEventHandler::new(
             Arc::clone(&chain),
             Arc::new(Wallet::new(Arc::clone(&wallet), Arc::clone(&logger))),
@@ -527,6 +543,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
         ));
 
         // init event handler
+        log_info!(logger, "init event handler");
         let event_handler = EventHandler::new(
             channel_manager.clone(),
             fee_estimator.clone(),
@@ -552,6 +569,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
         }
 
         // sync to chain tip
+        log_info!(logger, "syncing to chain tip");
         if read_channel_manager.is_restarting {
             let start = Instant::now();
             let mut chain_listener_channel_monitors =
@@ -595,6 +613,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
         // processor so we prevent any race conditions.
         // if we fail to read the spendable outputs, just log a warning and
         // continue
+        log_info!(logger, "retrying failed spendable outputs");
         let retry_spendable_outputs = persister
             .get_failed_spendable_outputs()
             .map_err(|e| MutinyError::ReadError {
