@@ -107,13 +107,13 @@ impl Logger for MutinyLogger {
         let raw_log = record.args.to_string();
         let log = format!(
             "{} {} {:<5} [{}:{}] {}\n",
-            // log the session id so we can tie logs to a particular session, useful for detecting
-            // if we have multiple sessions running at once
-            self.session_id,
             // Note that a "real" lightning node almost certainly does *not* want subsecond
             // precision for message-receipt information as it makes log entries a target for
             // deanonymization attacks. For testing, however, its quite useful.
             Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+            // log the session id so we can tie logs to a particular session, useful for detecting
+            // if we have multiple sessions running at once
+            self.session_id,
             record.level,
             record.module_path,
             record.line,
@@ -129,7 +129,7 @@ impl Logger for MutinyLogger {
         }
 
         match record.level {
-            Level::Gossip => trace!("{}", log),
+            Level::Gossip => (), // way too noisy
             Level::Trace => trace!("{}", log),
             Level::Debug => debug!("{}", log),
             Level::Info => info!("{}", log),
