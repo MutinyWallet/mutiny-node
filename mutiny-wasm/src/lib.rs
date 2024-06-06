@@ -82,7 +82,7 @@ impl MutinyWallet {
     /// Creates a new [MutinyWallet] with the given parameters.
     /// The mnemonic seed is read from storage, unless one is provided.
     /// If no mnemonic is provided, a new one is generated and stored.
-    #[wasm_bindgen(constructor)]
+    #[wasm_bindgen]
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         password: Option<String>,
