@@ -2836,12 +2836,22 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             return Err(MutinyError::NotFound);
         }
 
-        // remove the federation from hermes
+        // update hermes to change the federation
         if let Some(h) = self.hermes_client.as_ref() {
-            match h.disable_zaps().await {
-                Ok(_) => (),
-                Err(e) => {
-                    log_error!(self.logger, "could not disable hermes zaps: {e}")
+            match federations_guard.values().next() {
+                None => {
+                    log_debug!(self.logger, "No federations left, disabling hermes zaps");
+                    match h.disable_zaps().await {
+                        Ok(_) => (),
+                        Err(e) => {
+                            log_error!(self.logger, "could not disable hermes zaps: {e}")
+                        }
+                    }
+                }
+                Some(f) => {
+                    if let Err(e) = h.change_federation_info(&f.invite_code).await {
+                        log_error!(self.logger, "could not change hermes federation: {e}")
+                    }
                 }
             }
         }
@@ -3547,7 +3557,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     // change the federation with hermes, if available
     if let Some(h) = hermes_client {
         match h
-            .change_federation_info(new_federation_identity.clone())
+            .change_federation_info(&new_federation_identity.invite_code)
             .await
         {
             Ok(_) => (),
