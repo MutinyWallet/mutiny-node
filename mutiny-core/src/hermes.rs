@@ -11,6 +11,7 @@ use bitcoin::hashes::hex::FromHex;
 use bitcoin::key::Parity;
 use bitcoin::secp256k1::ThirtyTwoByteHash;
 use bitcoin::{bip32::ExtendedPrivKey, secp256k1::Secp256k1};
+use fedimint_core::api::InviteCode;
 use fedimint_core::config::FederationId;
 use futures::{pin_mut, select, FutureExt};
 use lightning::util::logger::Logger;
@@ -193,7 +194,7 @@ impl<S: MutinyStorage> HermesClient<S> {
                                 &base_url_check_clone,
                                 nostr_client_check_clone,
                                 current_address_check_clone,
-                                f,
+                                &f.invite_code,
                                 &logger_check_clone,
                             )
                             .await
@@ -321,14 +322,14 @@ impl<S: MutinyStorage> HermesClient<S> {
 
     pub async fn change_federation_info(
         &self,
-        federation: FederationIdentity,
+        invite_code: &InviteCode,
     ) -> Result<(), MutinyError> {
         change_federation_info(
             &self.http_client,
             &self.base_url,
             self.client.clone(),
             self.current_address.clone(),
-            federation,
+            invite_code,
             &self.logger,
         )
         .await
@@ -434,7 +435,7 @@ async fn change_federation_info(
     base_url: &str,
     nostr_client: Client,
     current_address: Arc<RwLock<(Option<String>, bool)>>,
-    federation: FederationIdentity,
+    invite_code: &InviteCode,
     logger: &MutinyLogger,
 ) -> Result<(), MutinyError> {
     // make sure name is registered already
@@ -444,11 +445,7 @@ async fn change_federation_info(
 
     // create nostr event
     let signer = nostr_client.signer().await?;
-    let event_builder = EventBuilder::new(
-        NEW_FEDERATION_EVENT_KIND,
-        federation.invite_code.to_string(),
-        [],
-    );
+    let event_builder = EventBuilder::new(NEW_FEDERATION_EVENT_KIND, invite_code.to_string(), []);
     let event = signer.sign_event_builder(event_builder).await?;
 
     // send request

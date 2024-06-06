@@ -241,7 +241,7 @@ pub trait FedimintClient {
 pub(crate) struct FederationClient<S: MutinyStorage> {
     pub(crate) uuid: String,
     pub(crate) fedimint_client: ClientHandleArc,
-    invite_code: InviteCode,
+    pub(crate) invite_code: InviteCode,
     storage: S,
     #[allow(dead_code)]
     fedimint_storage: FedimintStorage<S>,
