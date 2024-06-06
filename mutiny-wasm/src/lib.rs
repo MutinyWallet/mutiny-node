@@ -1048,11 +1048,10 @@ impl MutinyWallet {
     }
 
     /// Sweep the federation balance into a lightning channel
-    pub async fn sweep_federation_balance(
+    pub async fn sweep_federation_balance_to_invoice(
         &self,
-        amount: Option<u64>,
         from_federation_id: Option<String>,
-        to_federation_id: Option<String>,
+        bolt_11: String,
     ) -> Result<FedimintSweepResult, MutinyJsError> {
         let from_federation_id = match from_federation_id {
             Some(f) => {
@@ -1061,27 +1060,22 @@ impl MutinyWallet {
             None => None,
         };
 
-        let to_federation_id = match to_federation_id {
-            Some(f) => {
-                Some(FederationId::from_str(&f).map_err(|_| MutinyJsError::InvalidArgumentsError)?)
-            }
-            None => None,
-        };
+        let bolt_11 = Bolt11Invoice::from_str(&bolt_11)?;
 
         Ok(self
             .inner
-            .sweep_federation_balance(amount, from_federation_id, to_federation_id)
+            .sweep_federation_balance_to_invoice(from_federation_id, bolt_11)
             .await?
             .into())
     }
 
     /// Estimate the fee before trying to sweep from federation
-    pub async fn estimate_sweep_federation_fee(
+    pub async fn create_sweep_federation_invoice(
         &self,
         amount: Option<u64>,
         from_federation_id: Option<String>,
         to_federation_id: Option<String>,
-    ) -> Result<Option<u64>, MutinyJsError> {
+    ) -> Result<MutinyInvoice, MutinyJsError> {
         let from_federation_id = match from_federation_id {
             Some(f) => {
                 Some(FederationId::from_str(&f).map_err(|_| MutinyJsError::InvalidArgumentsError)?)
@@ -1098,8 +1092,9 @@ impl MutinyWallet {
 
         Ok(self
             .inner
-            .estimate_sweep_federation_fee(amount, from_federation_id, to_federation_id)
-            .await?)
+            .create_sweep_federation_invoice(amount, from_federation_id, to_federation_id)
+            .await?
+            .into())
     }
 
     /// Closes a channel with the given outpoint.
