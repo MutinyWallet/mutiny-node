@@ -15,10 +15,7 @@ pub fn set_panic_hook() {
 
 #[wasm_bindgen(start)]
 pub async fn main_js() -> Result<(), JsValue> {
-    init(
-        Config::new(Level::Trace).message_on_new_line(),
-        Style::none(),
-    );
+    init(Config::new(Level::Trace).message_on_new_line());
     debug!("Main function begins and ends");
     Ok(())
 }
@@ -75,48 +72,9 @@ impl Config {
     }
 }
 
-/// The log styles
-pub struct Style {
-    pub lvl_trace: String,
-    pub lvl_debug: String,
-    pub lvl_info: String,
-    pub lvl_warn: String,
-    pub lvl_error: String,
-    pub tgt: String,
-    pub args: String,
-}
-
-impl Style {
-    pub fn new() -> Style {
-        let base = String::from("color: white; padding: 0 3px; background:");
-        Style {
-            lvl_trace: format!("{} gray;", base),
-            lvl_debug: format!("{} blue;", base),
-            lvl_info: format!("{} green;", base),
-            lvl_warn: format!("{} orange;", base),
-            lvl_error: format!("{} darkred;", base),
-            tgt: String::from("font-weight: bold; color: inherit"),
-            args: String::from("background: inherit; color: inherit"),
-        }
-    }
-
-    pub fn none() -> Style {
-        Style {
-            lvl_trace: String::new(),
-            lvl_debug: String::new(),
-            lvl_info: String::new(),
-            lvl_warn: String::new(),
-            lvl_error: String::new(),
-            tgt: String::new(),
-            args: String::new(),
-        }
-    }
-}
-
 /// The logger
 pub struct WasmLogger {
     pub config: Config,
-    pub style: Style,
 }
 
 impl Log for WasmLogger {
@@ -130,37 +88,14 @@ impl Log for WasmLogger {
 
     fn log(&self, record: &Record<'_>) {
         if self.enabled(record.metadata()) {
-            let style = &self.style;
-            let s = format!("{}", record.args());
-            let s = JsValue::from_str(&s);
-            let tgt_style = JsValue::from_str(&style.tgt);
-            let args_style = JsValue::from_str(&style.args);
+            let s = JsValue::from_str(&format!("{}", record.args()));
 
             match record.level() {
-                Level::Trace => console::debug_4(
-                    &s,
-                    &JsValue::from(&style.lvl_trace),
-                    &tgt_style,
-                    &args_style,
-                ),
-                Level::Debug => console::log_4(
-                    &s,
-                    &JsValue::from(&style.lvl_debug),
-                    &tgt_style,
-                    &args_style,
-                ),
-                Level::Info => {
-                    console::info_4(&s, &JsValue::from(&style.lvl_info), &tgt_style, &args_style)
-                }
-                Level::Warn => {
-                    console::warn_4(&s, &JsValue::from(&style.lvl_warn), &tgt_style, &args_style)
-                }
-                Level::Error => console::error_4(
-                    &s,
-                    &JsValue::from(&style.lvl_error),
-                    &tgt_style,
-                    &args_style,
-                ),
+                Level::Trace => console::debug_1(&s),
+                Level::Debug => console::log_1(&s),
+                Level::Info => console::info_1(&s),
+                Level::Warn => console::warn_1(&s),
+                Level::Error => console::error_1(&s),
             }
         }
     }
@@ -178,9 +113,9 @@ impl Log for WasmLogger {
 /// ```rust
 /// wasm_logger::init(wasm_logger::Config::with_prefix(log::Level::Debug, "some::module"));
 /// ```
-pub fn init(config: Config, style: Style) {
+pub fn init(config: Config) {
     let max_level = config.level;
-    let wl = WasmLogger { config, style };
+    let wl = WasmLogger { config };
 
     match log::set_boxed_logger(Box::new(wl)) {
         Ok(_) => log::set_max_level(max_level.to_level_filter()),
