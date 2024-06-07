@@ -154,6 +154,7 @@ impl LspClient {
     ) -> Result<(PublicKey, String), MutinyError> {
         let request = http_client
             .get(format!("{}{}", url, GET_INFO_PATH))
+            .header("x-auth-token", "mutiny")
             .build()
             .map_err(|e| {
                 log_error!(logger, "Error building connection info request: {e}");
@@ -287,6 +288,7 @@ impl Lsp for LspClient {
             .http_client
             .post(format!("{}{}", &self.url, PROPOSAL_PATH))
             .json(&payload)
+            .header("x-auth-token", "mutiny")
             .build()
             .map_err(|_| MutinyError::LspGenericError)?;
 
@@ -344,6 +346,7 @@ impl Lsp for LspClient {
             .http_client
             .post(format!("{}{}", &self.url, FEE_PATH))
             .json(&fee_request)
+            .header("x-auth-token", "mutiny")
             .build()
             .map_err(|_| MutinyError::LspGenericError)?;
         let response: reqwest::Response = utils::fetch_with_timeout(&self.http_client, request)
