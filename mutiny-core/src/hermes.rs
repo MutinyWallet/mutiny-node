@@ -194,6 +194,12 @@ impl<S: MutinyStorage> HermesClient<S> {
 
                             // user has a federation registered but is different than current
                             // so we should update it
+                            log_info!(
+                                logger_check_clone,
+                                "registered federation is different, changing {:?} to {:?}",
+                                o.federation_id,
+                                f.federation_id
+                            );
                             match change_federation_info(
                                 &http_client_check_clone,
                                 &base_url_check_clone,
@@ -204,7 +210,12 @@ impl<S: MutinyStorage> HermesClient<S> {
                             )
                             .await
                             {
-                                Ok(_) => (),
+                                Ok(_) => {
+                                    log_debug!(
+                                        logger_check_clone,
+                                        "changed federation successfully"
+                                    );
+                                }
                                 Err(e) => {
                                     log_error!(
                                         logger_check_clone,
@@ -216,6 +227,10 @@ impl<S: MutinyStorage> HermesClient<S> {
                             // handle the case where the user no longer has a federation
                             // if user is already disabled, no need to call again
                             if !o.disabled_zaps {
+                                log_info!(
+                                    logger_check_clone,
+                                    "user no longer has a federation, disabling zaps"
+                                );
                                 match disable_zaps(
                                     &http_client_check_clone,
                                     &base_url_check_clone,
@@ -225,7 +240,12 @@ impl<S: MutinyStorage> HermesClient<S> {
                                 )
                                 .await
                                 {
-                                    Ok(_) => (),
+                                    Ok(_) => {
+                                        log_debug!(
+                                            logger_check_clone,
+                                            "disabled zaps successfully"
+                                        );
+                                    }
                                     Err(e) => {
                                         log_error!(
                                             logger_check_clone,
@@ -480,6 +500,10 @@ async fn change_federation_info(
 ) -> Result<(), MutinyError> {
     // make sure name is registered already
     if current_address.read().await.0.is_none() {
+        log_warn!(
+            logger,
+            "can't change federation when the address is unknown"
+        );
         return Ok(());
     }
 
@@ -492,9 +516,12 @@ async fn change_federation_info(
     let url = Url::parse(&format!("{}/v1/change-federation", base_url))
         .map_err(|_| MutinyError::ConnectionFailed)?;
     let request = http_client.request(Method::POST, url).json(&event);
-    let _ = utils::fetch_with_timeout(http_client, request.build().expect("should build req"))
-        .await
-        .map_err(|_| MutinyError::ConnectionFailed)?;
+    let _ = utils::fetch_with_timeout(
+        http_client,
+        request.build().map_err(|_| MutinyError::ConnectionFailed)?,
+    )
+    .await
+    .map_err(|_| MutinyError::ConnectionFailed)?;
 
     log_info!(logger, "changed federation info to current federation");
 
@@ -510,6 +537,7 @@ async fn disable_zaps(
 ) -> Result<(), MutinyError> {
     // make sure name is registered already
     if current_address.read().await.0.is_none() {
+        log_warn!(logger, "can't disable zaps when the address is unknown");
         return Ok(());
     }
 
@@ -522,9 +550,12 @@ async fn disable_zaps(
     let url = Url::parse(&format!("{}/v1/disable-zaps", base_url))
         .map_err(|_| MutinyError::ConnectionFailed)?;
     let request = http_client.request(Method::POST, url).json(&event);
-    let _ = utils::fetch_with_timeout(http_client, request.build().expect("should build req"))
-        .await
-        .map_err(|_| MutinyError::ConnectionFailed)?;
+    let _ = utils::fetch_with_timeout(
+        http_client,
+        request.build().map_err(|_| MutinyError::ConnectionFailed)?,
+    )
+    .await
+    .map_err(|_| MutinyError::ConnectionFailed)?;
 
     log_info!(logger, "disabled zaps for the user");
 
@@ -562,11 +593,14 @@ async fn check_hermes_registration_info(
     let url = Url::parse(&format!("{}/v1/check-registration", base_url))
         .map_err(|_| MutinyError::ConnectionFailed)?;
     let request = http_client.request(Method::POST, url).json(&event);
-    let res = utils::fetch_with_timeout(http_client, request.build().expect("should build req"))
-        .await?
-        .json::<RegistrationInfo>()
-        .await
-        .map_err(|_| MutinyError::ConnectionFailed)?;
+    let res = utils::fetch_with_timeout(
+        http_client,
+        request.build().map_err(|_| MutinyError::ConnectionFailed)?,
+    )
+    .await?
+    .json::<RegistrationInfo>()
+    .await
+    .map_err(|_| MutinyError::ConnectionFailed)?;
 
     Ok(res)
 }
@@ -580,11 +614,14 @@ async fn check_name_request(
         .map_err(|_| MutinyError::ConnectionFailed)?;
     let request = http_client.request(Method::GET, url);
 
-    let res = utils::fetch_with_timeout(http_client, request.build().expect("should build req"))
-        .await?
-        .json::<bool>()
-        .await
-        .map_err(|_| MutinyError::ConnectionFailed)?;
+    let res = utils::fetch_with_timeout(
+        http_client,
+        request.build().map_err(|_| MutinyError::ConnectionFailed)?,
+    )
+    .await?
+    .json::<bool>()
+    .await
+    .map_err(|_| MutinyError::ConnectionFailed)?;
 
     Ok(res)
 }
@@ -598,11 +635,14 @@ async fn register_name(
         .map_err(|_| MutinyError::ConnectionFailed)?;
     let request = http_client.request(Method::POST, url).json(&req);
 
-    let res = utils::fetch_with_timeout(http_client, request.build().expect("should build req"))
-        .await?
-        .json::<RegisterResponse>()
-        .await
-        .map_err(|_| MutinyError::ConnectionFailed)?;
+    let res = utils::fetch_with_timeout(
+        http_client,
+        request.build().map_err(|_| MutinyError::ConnectionFailed)?,
+    )
+    .await?
+    .json::<RegisterResponse>()
+    .await
+    .map_err(|_| MutinyError::ConnectionFailed)?;
 
     Ok(res)
 }
