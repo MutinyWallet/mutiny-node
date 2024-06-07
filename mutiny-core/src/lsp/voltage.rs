@@ -152,14 +152,9 @@ impl LspClient {
         url: &str,
         logger: &MutinyLogger,
     ) -> Result<(PublicKey, String), MutinyError> {
-        let request = http_client
-            .get(format!("{}{}", url, GET_INFO_PATH))
-            .header("x-auth-token", "mutiny")
-            .build()
-            .map_err(|e| {
-                log_error!(logger, "Error building connection info request: {e}");
-                MutinyError::LspGenericError
-            })?;
+        let builder = http_client.get(format!("{}{}", url, GET_INFO_PATH));
+        let request = add_x_auth_token_if_needed(url, builder)?;
+
         let response: reqwest::Response = utils::fetch_with_timeout(http_client, request)
             .await
             .map_err(|e| {
@@ -266,6 +261,21 @@ impl LspClient {
     }
 }
 
+/// Adds the x-auth-token header if needed
+fn add_x_auth_token_if_needed(
+    lsp_url: &str,
+    builder: reqwest::RequestBuilder,
+) -> Result<reqwest::Request, MutinyError> {
+    if lsp_url.contains("lnolymp.us") {
+        Ok(builder
+            .header("X-Auth-Token", "mutiny")
+            .build()
+            .map_err(|_| MutinyError::LspGenericError)?)
+    } else {
+        Ok(builder.build().map_err(|_| MutinyError::LspGenericError)?)
+    }
+}
+
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl Lsp for LspClient {
@@ -284,13 +294,12 @@ impl Lsp for LspClient {
             fee_id: invoice_request.fee_id,
         };
 
-        let request = self
+        let builder = self
             .http_client
             .post(format!("{}{}", &self.url, PROPOSAL_PATH))
-            .json(&payload)
-            .header("x-auth-token", "mutiny")
-            .build()
-            .map_err(|_| MutinyError::LspGenericError)?;
+            .json(&payload);
+
+        let request = add_x_auth_token_if_needed(&self.url, builder)?;
 
         let response: reqwest::Response =
             utils::fetch_with_timeout(&self.http_client, request).await?;
@@ -342,13 +351,13 @@ impl Lsp for LspClient {
     }
 
     async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> Result<FeeResponse, MutinyError> {
-        let request = self
+        let builder = self
             .http_client
             .post(format!("{}{}", &self.url, FEE_PATH))
-            .json(&fee_request)
-            .header("x-auth-token", "mutiny")
-            .build()
-            .map_err(|_| MutinyError::LspGenericError)?;
+            .json(&fee_request);
+
+        let request = add_x_auth_token_if_needed(&self.url, builder)?;
+
         let response: reqwest::Response = utils::fetch_with_timeout(&self.http_client, request)
             .await
             .map_err(|e| {
