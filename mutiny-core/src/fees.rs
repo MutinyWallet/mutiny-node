@@ -187,9 +187,10 @@ impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
             }
         };
 
-        // any post processing we do after the we get the fee rate from the cache
+        // any post processing we do after we get the fee rate from the cache
         match confirmation_target {
             ConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee => fee - 250, // helps with rounding errors
+            ConfirmationTarget::AnchorChannelFee => (fee / 2).max(250), // do half the mempool minimum just to prevent force closes
             _ => fee,
         }
     }
