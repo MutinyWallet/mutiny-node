@@ -152,14 +152,9 @@ impl LspClient {
         url: &str,
         logger: &MutinyLogger,
     ) -> Result<(PublicKey, String), MutinyError> {
-        let request = http_client
-            .get(format!("{}{}", url, GET_INFO_PATH))
-            .header("x-auth-token", "mutiny")
-            .build()
-            .map_err(|e| {
-                log_error!(logger, "Error building connection info request: {e}");
-                MutinyError::LspGenericError
-            })?;
+        let builder = http_client.get(format!("{}{}", url, GET_INFO_PATH));
+        let request = add_x_auth_token_if_needed(url, builder)?;
+
         let response: reqwest::Response = utils::fetch_with_timeout(http_client, request)
             .await
             .map_err(|e| {
@@ -266,6 +261,21 @@ impl LspClient {
     }
 }
 
+/// Adds the x-auth-token header if needed
+fn add_x_auth_token_if_needed(
+    lsp_url: &str,
+    builder: reqwest::RequestBuilder,
+) -> Result<reqwest::Request, MutinyError> {
+    if lsp_url.contains("lnolymp.us") {
+        Ok(builder
+            .header("X-Auth-Token", "mutiny")
+            .build()
+            .map_err(|_| MutinyError::LspGenericError)?)
+    } else {
+        Ok(builder.build().map_err(|_| MutinyError::LspGenericError)?)
+    }
+}
+
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl Lsp for LspClient {
@@ -284,13 +294,12 @@ impl Lsp for LspClient {
             fee_id: invoice_request.fee_id,
         };
 
-        let request = self
+        let builder = self
             .http_client
             .post(format!("{}{}", &self.url, PROPOSAL_PATH))
-            .json(&payload)
-            .header("x-auth-token", "mutiny")
-            .build()
-            .map_err(|_| MutinyError::LspGenericError)?;
+            .json(&payload);
+
+        let request = add_x_auth_token_if_needed(&self.url, builder)?;
 
         let response: reqwest::Response =
             utils::fetch_with_timeout(&self.http_client, request).await?;
@@ -342,13 +351,13 @@ impl Lsp for LspClient {
     }
 
     async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> Result<FeeResponse, MutinyError> {
-        let request = self
+        let builder = self
             .http_client
             .post(format!("{}{}", &self.url, FEE_PATH))
-            .json(&fee_request)
-            .header("x-auth-token", "mutiny")
-            .build()
-            .map_err(|_| MutinyError::LspGenericError)?;
+            .json(&fee_request);
+
+        let request = add_x_auth_token_if_needed(&self.url, builder)?;
+
         let response: reqwest::Response = utils::fetch_with_timeout(&self.http_client, request)
             .await
             .map_err(|e| {
@@ -389,6 +398,39 @@ impl Lsp for LspClient {
 }
 
 #[cfg(test)]
+async fn run_lsp_fee_api_test(url: &str) {
+    let client = LspClient::new(
+        VoltageConfig {
+            url: url.to_string(),
+            pubkey: None,
+            connection_string: None,
+        },
+        Arc::new(MutinyLogger::default()),
+    )
+    .await
+    .unwrap();
+
+    // make sure we have a connection string and pubkey
+    assert!(!client.connection_string.is_empty());
+    assert!(!client.pubkey.to_string().is_empty());
+
+    // make sure we can get the fee
+    let amount_msat = 100_000_000;
+    let fee_response = client
+        .get_lsp_fee_msat(FeeRequest {
+            pubkey: "02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b"
+                .to_string(),
+            amount_msat,
+        })
+        .await
+        .unwrap();
+
+    assert!(!fee_response.id.is_empty());
+    assert!(fee_response.fee_amount_msat > 0);
+}
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod test {
     use crate::logging::MutinyLogger;
     use crate::lsp::voltage::{LspClient, VoltageConfig};
@@ -572,5 +614,25 @@ mod test {
             .verify_invoice(&our_invoice, &lsp_invoice, lsp_fee_msat)
             .unwrap();
         assert!(err.contains("Received invoice with wrong amount"));
+    }
+
+    #[tokio::test]
+    async fn test_lsp_client() {
+        super::run_lsp_fee_api_test("https://mutinynet-flow.lnolymp.us").await;
+        super::run_lsp_fee_api_test("https://signet-lsp.mutinywallet.com").await;
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_arch = "wasm32")]
+mod wasm_test {
+    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test]
+    async fn test_lsp_client() {
+        super::run_lsp_fee_api_test("https://mutinynet-flow.lnolymp.us").await;
+        super::run_lsp_fee_api_test("https://signet-lsp.mutinywallet.com").await;
     }
 }
