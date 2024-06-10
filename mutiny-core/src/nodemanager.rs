@@ -59,6 +59,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 use std::{collections::HashMap, ops::Deref, sync::Arc};
+use url::Url;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
@@ -347,7 +348,15 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
         let lsp_config = if c.safe_mode {
             None
         } else {
-            create_lsp_config(c.lsp_url, c.lsp_connection_string, c.lsp_token)?
+            create_lsp_config(c.lsp_url, c.lsp_connection_string, c.lsp_token).unwrap_or_else(
+                |_| {
+                    log_warn!(
+                        logger,
+                        "Failed to create lsp config, falling back to no LSP configured"
+                    );
+                    None
+                },
+            )
         };
         log_trace!(logger, "finished creating lsp config");
 
@@ -2036,8 +2045,14 @@ pub fn create_lsp_config(
 ) -> Result<Option<LspConfig>, MutinyError> {
     match (lsp_url.clone(), lsp_connection_string.clone()) {
         (Some(lsp_url), None) => {
-            if !lsp_url.is_empty() {
-                Ok(Some(LspConfig::new_voltage_flow(lsp_url)))
+            let trimmed = lsp_url.trim().to_string();
+            if !trimmed.is_empty() {
+                // make sure url is valid
+                if Url::parse(&trimmed).is_err() {
+                    return Err(MutinyError::InvalidArgumentsError);
+                }
+
+                Ok(Some(LspConfig::new_voltage_flow(trimmed)))
             } else {
                 Ok(None)
             }
