@@ -8,8 +8,8 @@ use crate::{
 };
 use async_lock::RwLock;
 use jwt_compact::UntrustedToken;
-use lightning::util::logger::*;
 use lightning::{log_debug, log_error, log_info};
+use lightning::{log_trace, util::logger::*};
 use lnurl::{lnurl::LnUrl, AsyncClient as LnUrlClient};
 use reqwest::Client;
 use reqwest::{Method, StatusCode, Url};
@@ -92,6 +92,8 @@ impl MutinyAuthClient {
         url: Url,
         body: Option<Value>,
     ) -> Result<reqwest::Response, MutinyError> {
+        log_trace!(self.logger, "Doing an authenticated request {url:?}");
+
         let mut request = self.http_client.request(method, url);
 
         let mut jwt = self.is_authenticated().await;

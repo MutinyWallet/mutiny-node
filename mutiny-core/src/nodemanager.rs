@@ -301,17 +301,22 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
         let start = Instant::now();
         log_info!(logger, "Building node manager components");
 
+        log_trace!(logger, "creating tx sync client");
         let tx_sync = Arc::new(EsploraSyncClient::from_client(
             esplora.as_ref().clone(),
             logger.clone(),
         ));
+        log_trace!(logger, "finished creating tx sync client");
 
+        log_trace!(logger, "creating fee estimator");
         let fee_estimator = Arc::new(MutinyFeeEstimator::new(
             self.storage.clone(),
             esplora.clone(),
             logger.clone(),
         ));
+        log_trace!(logger, "finished creating fee estimator");
 
+        log_trace!(logger, "creating on chain wallet");
         let wallet = Arc::new(OnChainWallet::new(
             self.xprivkey,
             self.storage.clone(),
@@ -321,23 +326,34 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             stop.clone(),
             logger.clone(),
         )?);
+        log_trace!(logger, "finished creating on chain wallet");
 
+        log_trace!(logger, "creating chain");
         let chain = Arc::new(MutinyChain::new(tx_sync, wallet.clone(), logger.clone()));
+        log_trace!(logger, "finished creating chain");
 
+        log_trace!(logger, "creating gossip sync");
         let (gossip_sync, scorer) =
             get_gossip_sync(&self.storage, c.network, logger.clone()).await?;
+        log_trace!(logger, "finished creating gossip sync");
 
+        log_trace!(logger, "creating scorer");
         let scorer = Arc::new(utils::Mutex::new(scorer));
+        log_trace!(logger, "finished creating scorer");
 
         let gossip_sync = Arc::new(gossip_sync);
 
+        log_trace!(logger, "creating lsp config");
         let lsp_config = if c.safe_mode {
             None
         } else {
             create_lsp_config(c.lsp_url, c.lsp_connection_string, c.lsp_token)?
         };
+        log_trace!(logger, "finished creating lsp config");
 
+        log_trace!(logger, "getting nodes from storage");
         let node_storage = self.storage.get_nodes()?;
+        log_trace!(logger, "finished getting nodes from storage");
 
         log_trace!(
             logger,
@@ -352,6 +368,8 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             log_warn!(logger, "Safe mode enabled, not starting any nodes");
             Arc::new(RwLock::new(HashMap::new()))
         } else {
+            log_trace!(logger, "going through nodes");
+
             // Remove the archived nodes, we don't need to start them up.
             let unarchived_nodes = node_storage
                 .clone()
@@ -514,17 +532,24 @@ impl<S: MutinyStorage> NodeManager<S> {
         &self,
         pk: Option<&PublicKey>,
     ) -> Result<Arc<Node<S>>, MutinyError> {
+        log_trace!(self.logger, "calling get_node_by_key_or_first");
+
         let nodes = self.nodes.read().await;
         let node = match pk {
             Some(pubkey) => nodes.get(pubkey),
             None => nodes.iter().next().map(|(_, node)| node),
         };
-        node.cloned().ok_or(MutinyError::NotFound)
+        let res = node.cloned().ok_or(MutinyError::NotFound);
+        log_trace!(self.logger, "finished calling get_node_by_key_or_first");
+
+        res
     }
 
     /// Stops all of the nodes and background processes.
     /// Returns after node has been stopped.
     pub async fn stop(&self) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling stop");
+
         self.stop.swap(true, Ordering::Relaxed);
         let mut nodes = self.nodes.write().await;
         let node_futures = nodes.iter().map(|(_, n)| async {
@@ -540,7 +565,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         log_debug!(self.logger, "stopping all nodes");
         join_all(node_futures).await;
         nodes.clear();
-        log_debug!(self.logger, "stopped all nodes");
+        log_debug!(self.logger, "finished calling stop");
 
         Ok(())
     }
@@ -548,6 +573,8 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Creates a background process that will sync the wallet with the blockchain.
     /// This will also update the fee estimates every 10 minutes.
     pub fn start_sync(nm: Arc<NodeManager<S>>) {
+        log_trace!(nm.logger, "calling start_sync");
+
         // sync every second on regtest, this makes testing easier
         let sync_interval_secs = match nm.network {
             Network::Bitcoin | Network::Testnet | Network::Signet => 60,
@@ -606,7 +633,11 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Broadcast a transaction to the network.
     /// The transaction is broadcast through the configured esplora server.
     pub async fn broadcast_transaction(&self, tx: Transaction) -> Result<(), MutinyError> {
-        self.wallet.broadcast_transaction(tx).await
+        log_trace!(self.logger, "calling broadcast_transaction");
+        let res = self.wallet.broadcast_transaction(tx).await;
+        log_trace!(self.logger, "finished calling broadcast_transaction");
+
+        res
     }
 
     /// Returns the network of the wallet.
@@ -617,9 +648,13 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Gets a new bitcoin address from the wallet.
     /// Will generate the last unused address in our bdk wallet.
     pub fn get_new_address(&self, labels: Vec<String>) -> Result<Address, MutinyError> {
+        log_trace!(self.logger, "calling get_new_address");
+
         if let Ok(mut wallet) = self.wallet.wallet.try_write() {
             let address = wallet.try_get_address(AddressIndex::LastUnused)?.address;
             self.set_address_labels(address.clone(), labels)?;
+            log_trace!(self.logger, "finished calling get_new_address");
+
             return Ok(address);
         }
 
@@ -629,7 +664,10 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Gets the current balance of the on-chain wallet.
     pub fn get_wallet_balance(&self) -> Result<u64, MutinyError> {
+        log_trace!(self.logger, "calling get_wallet_balance");
+
         if let Ok(wallet) = self.wallet.wallet.try_read() {
+            log_trace!(self.logger, "finished calling get_wallet_balance");
             return Ok(wallet.get_balance().total());
         }
 
@@ -647,6 +685,8 @@ impl<S: MutinyStorage> NodeManager<S> {
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
+        log_trace!(self.logger, "calling send_payjoin");
+
         let uri = uri
             .require_network(self.network)
             .map_err(|_| MutinyError::IncorrectNetwork)?;
@@ -711,6 +751,8 @@ impl<S: MutinyStorage> NodeManager<S> {
         let txid = tx.txid();
         self.broadcast_transaction(tx).await?;
         log_debug!(self.logger, "Payjoin broadcast! TXID: {txid}");
+
+        log_trace!(self.logger, "finished calling send_payjoin");
         Ok(txid)
     }
 
@@ -725,7 +767,11 @@ impl<S: MutinyStorage> NodeManager<S> {
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        self.wallet.send(send_to, amount, labels, fee_rate).await
+        log_trace!(self.logger, "calling send_to_address");
+        let res = self.wallet.send(send_to, amount, labels, fee_rate).await;
+        log_trace!(self.logger, "finished calling send_to_address");
+
+        res
     }
 
     /// Sweeps all the funds from the wallet to the given address.
@@ -738,7 +784,11 @@ impl<S: MutinyStorage> NodeManager<S> {
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
-        self.wallet.sweep(send_to, labels, fee_rate).await
+        log_trace!(self.logger, "calling sweep_wallet");
+        let res = self.wallet.sweep(send_to, labels, fee_rate).await;
+        log_trace!(self.logger, "calling sweep_wallet");
+
+        res
     }
 
     /// Estimates the onchain fee for a transaction sending to the given address.
@@ -749,8 +799,13 @@ impl<S: MutinyStorage> NodeManager<S> {
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<u64, MutinyError> {
-        self.wallet
-            .estimate_tx_fee(destination_address.script_pubkey(), amount, fee_rate)
+        log_trace!(self.logger, "calling estimate_tx_fee");
+        let res =
+            self.wallet
+                .estimate_tx_fee(destination_address.script_pubkey(), amount, fee_rate);
+        log_trace!(self.logger, "calling estimate_tx_fee");
+
+        res
     }
 
     /// Estimates the onchain fee for a transaction sweep our on-chain balance
@@ -773,12 +828,17 @@ impl<S: MutinyStorage> NodeManager<S> {
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<u64, MutinyError> {
+        log_trace!(self.logger, "calling estimate_channel_open_fee");
+
         // Dummy p2wsh script for the channel output
         let script = script::Builder::new()
             .push_int(0)
             .push_slice([0; 32])
             .into_script();
-        self.wallet.estimate_tx_fee(script, amount, fee_rate)
+        let res = self.wallet.estimate_tx_fee(script, amount, fee_rate);
+        log_trace!(self.logger, "calling estimate_channel_open_fee");
+
+        res
     }
 
     /// Estimates the onchain fee for sweeping our on-chain balance to open a lightning channel.
@@ -787,17 +847,24 @@ impl<S: MutinyStorage> NodeManager<S> {
         &self,
         fee_rate: Option<f32>,
     ) -> Result<u64, MutinyError> {
+        log_trace!(self.logger, "calling estimate_sweep_channel_open_fee");
+
         // Dummy p2wsh script for the channel output
         let script = script::Builder::new()
             .push_int(0)
             .push_slice([0; 32])
             .into_script();
-        self.wallet.estimate_sweep_tx_fee(script, fee_rate)
+        let res = self.wallet.estimate_sweep_tx_fee(script, fee_rate);
+        log_trace!(self.logger, "calling estimate_sweep_channel_open_fee");
+
+        res
     }
 
     /// Bumps the given transaction by replacing the given tx with a transaction at
     /// the new given fee rate in sats/vbyte
     pub async fn bump_fee(&self, txid: Txid, new_fee_rate: f32) -> Result<Txid, MutinyError> {
+        log_trace!(self.logger, "calling bump_fee");
+
         // check that this is not a funding tx for any channels,
         // bumping those can cause loss of funds
         let channels = self.list_channels().await?;
@@ -808,7 +875,10 @@ impl<S: MutinyStorage> NodeManager<S> {
             return Err(MutinyError::ChannelCreationFailed);
         }
 
-        self.wallet.bump_fee(txid, new_fee_rate).await
+        let res = self.wallet.bump_fee(txid, new_fee_rate).await;
+        log_trace!(self.logger, "finished calling bump_fee");
+
+        res
     }
 
     /// Checks if the given address has any transactions.
@@ -819,6 +889,8 @@ impl<S: MutinyStorage> NodeManager<S> {
         &self,
         address: Address<NetworkUnchecked>,
     ) -> Result<Option<TransactionDetails>, MutinyError> {
+        log_trace!(self.logger, "calling check_address");
+
         let address = address.require_network(self.network)?;
 
         let script = address.payload.script_pubkey();
@@ -885,6 +957,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             });
         }
 
+        log_trace!(self.logger, "finished calling check_address");
         Ok(details_opt.map(|(d, _)| d))
     }
 
@@ -919,6 +992,8 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// Lists all the on-chain transactions in the wallet.
     /// These are sorted by confirmation time.
     pub fn list_onchain(&self) -> Result<Vec<TransactionDetails>, MutinyError> {
+        log_trace!(self.logger, "calling list_onchain");
+
         let mut txs = self.wallet.list_transactions(true)?;
         txs.sort();
         let address_labels = self.get_address_labels()?;
@@ -927,19 +1002,25 @@ impl<S: MutinyStorage> NodeManager<S> {
             .map(|tx| self.add_onchain_labels(&address_labels, tx))
             .collect();
 
+        log_trace!(self.logger, "finished calling list_onchain");
         Ok(txs)
     }
 
     /// Gets the details of a specific on-chain transaction.
     pub fn get_transaction(&self, txid: Txid) -> Result<Option<TransactionDetails>, MutinyError> {
-        match self.wallet.get_transaction(txid)? {
+        log_trace!(self.logger, "calling get_transaction");
+
+        let res = match self.wallet.get_transaction(txid)? {
             Some(tx) => {
                 let address_labels = self.get_address_labels()?;
                 let tx_details = self.add_onchain_labels(&address_labels, tx);
                 Ok(Some(tx_details))
             }
             None => Ok(None),
-        }
+        };
+        log_trace!(self.logger, "finished calling get_transaction");
+
+        res
     }
 
     /// Gets the current balance of the wallet.
@@ -947,6 +1028,8 @@ impl<S: MutinyStorage> NodeManager<S> {
     ///
     /// This will not include any funds in an unconfirmed lightning channel.
     pub(crate) async fn get_balance(&self) -> Result<NodeBalance, MutinyError> {
+        log_trace!(self.logger, "calling get_balance");
+
         let onchain = if let Ok(wallet) = self.wallet.wallet.try_read() {
             wallet.get_balance()
         } else {
@@ -981,6 +1064,8 @@ impl<S: MutinyStorage> NodeManager<S> {
             .map(|bal| bal.claimable_amount_satoshis())
             .sum();
 
+        log_trace!(self.logger, "finished calling get_balance");
+
         Ok(NodeBalance {
             confirmed: onchain.confirmed + onchain.trusted_pending,
             unconfirmed: onchain.untrusted_pending + onchain.immature,
@@ -991,7 +1076,11 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Lists all the UTXOs in the wallet.
     pub fn list_utxos(&self) -> Result<Vec<LocalOutput>, MutinyError> {
-        self.wallet.list_utxos()
+        log_trace!(self.logger, "calling list_utxos");
+        let res = self.wallet.list_utxos();
+        log_trace!(self.logger, "calling list_utxos");
+
+        res
     }
 
     /// Syncs the lightning wallet with the blockchain.
@@ -1001,6 +1090,8 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// This should be called before syncing the on-chain wallet
     /// to ensure that new on-chain transactions are picked up.
     async fn sync_ldk(&self) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling sync_ldk");
+
         // get nodes hashmap, immediately drop lock because sync can take a while
         let nodes = {
             let nodes = self.nodes.read().await;
@@ -1030,12 +1121,15 @@ impl<S: MutinyStorage> NodeManager<S> {
             .await
             .map_err(|_e| MutinyError::ChainAccessFailed)?;
 
+        log_trace!(self.logger, "finished calling sync_ldk");
         Ok(())
     }
 
     /// Syncs the rapid gossip sync data.
     /// Will be skipped if in safe mode.
     async fn sync_rgs(&self) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling sync_rgs");
+
         // Skip syncing RGS if we are in safe mode.
         if self.safe_mode {
             log_info!(self.logger, "Skipping rgs sync in safe mode");
@@ -1065,12 +1159,15 @@ impl<S: MutinyStorage> NodeManager<S> {
             }
         }
 
+        log_trace!(self.logger, "finished calling sync_rgs");
         Ok(())
     }
 
     /// Downloads the latest score data from the server and replaces the current scorer.
     /// Will be skipped if in safe mode.
     async fn sync_scorer(&self) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling sync_scorer");
+
         // Skip syncing scorer if we are in safe mode.
         if self.safe_mode {
             log_info!(self.logger, "Skipping scorer sync in safe mode");
@@ -1098,6 +1195,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             *lock = scorer;
         }
 
+        log_trace!(self.logger, "finished calling sync_scorer");
         Ok(())
     }
 
@@ -1106,6 +1204,8 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// transactions and update the lightning wallet with
     /// any channels that have been opened or closed.
     async fn sync(&self) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling sync");
+
         // If we are stopped, don't sync
         if self.stop.load(Ordering::Relaxed) {
             return Ok(());
@@ -1127,40 +1227,59 @@ impl<S: MutinyStorage> NodeManager<S> {
         self.has_done_initial_ldk_sync.swap(true, Ordering::SeqCst);
 
         // sync bdk wallet
-        match self.wallet.sync().await {
+        let res = match self.wallet.sync().await {
             Ok(()) => Ok(log_info!(self.logger, "We are synced!")),
             Err(e) => {
                 log_error!(self.logger, "Failed to sync on-chain wallet: {e}");
                 Err(e)
             }
-        }
+        };
+        log_trace!(self.logger, "finished calling sync");
+
+        res
     }
 
     /// Gets a fee estimate for a very low priority transaction.
     /// Value is in sat/vbyte.
     pub fn estimate_fee_low(&self) -> u32 {
-        max(self.fee_estimator.get_low_fee_rate() / 250, 1)
+        log_trace!(self.logger, "calling estimate_fee_low");
+        let res = max(self.fee_estimator.get_low_fee_rate() / 250, 1);
+        log_trace!(self.logger, "finished calling estimate_fee_low");
+
+        res
     }
 
     /// Gets a fee estimate for an average priority transaction.
     /// Value is in sat/vbyte.
     pub fn estimate_fee_normal(&self) -> u32 {
-        max(self.fee_estimator.get_normal_fee_rate() / 250, 1)
+        log_trace!(self.logger, "calling estimate_fee_normal");
+        let res = max(self.fee_estimator.get_normal_fee_rate() / 250, 1);
+        log_trace!(self.logger, "finished calling estimate_fee_normal");
+
+        res
     }
 
     /// Gets a fee estimate for an high priority transaction.
     /// Value is in sat/vbyte.
     pub fn estimate_fee_high(&self) -> u32 {
-        max(self.fee_estimator.get_high_fee_rate() / 250, 1)
+        log_trace!(self.logger, "calling estimate_fee_high");
+        let res = max(self.fee_estimator.get_high_fee_rate() / 250, 1);
+        log_trace!(self.logger, "finished calling estimate_fee_high");
+
+        res
     }
 
     /// Creates a new lightning node and adds it to the manager.
     pub async fn new_node(&self) -> Result<NodeIdentity, MutinyError> {
+        log_trace!(self.logger, "calling new_node");
         if self.safe_mode {
             return Err(MutinyError::NotRunning);
         }
 
-        create_new_node_from_node_manager(self).await
+        let res = create_new_node_from_node_manager(self).await;
+        log_trace!(self.logger, "finished calling new_node");
+
+        res
     }
 
     /// Archives a node so it will not be started up next time the node manager is created.
@@ -1206,8 +1325,12 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Lists the pubkeys of the lightning node in the manager.
     pub async fn list_nodes(&self) -> Result<Vec<PublicKey>, MutinyError> {
+        log_trace!(self.logger, "calling list_nodes");
+
         let nodes = self.nodes.read().await;
         let peers = nodes.iter().map(|(_, n)| n.pubkey).collect();
+
+        log_trace!(self.logger, "finished calling list_nodes");
         Ok(peers)
     }
 
@@ -1216,6 +1339,8 @@ impl<S: MutinyStorage> NodeManager<S> {
     ///
     /// Requires a restart of the node manager to take effect.
     pub async fn change_lsp(&self, lsp_config: Option<LspConfig>) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling change_lsp");
+
         // if we are in safe mode we don't load the lightning state so we can't know if it is safe to change the LSP.
         if self.safe_mode {
             return Err(MutinyError::NotRunning);
@@ -1246,6 +1371,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         // save updated lsp to storage
         self.storage.insert_nodes(&node_storage).await?;
+        log_trace!(self.logger, "finished calling change_lsp");
 
         Ok(())
     }
@@ -1257,11 +1383,14 @@ impl<S: MutinyStorage> NodeManager<S> {
         connection_string: &str,
         label: Option<String>,
     ) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling connect_to_peer");
+
         let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
         let connect_info = PubkeyConnectionInfo::new(connection_string)?;
         let label_opt = label.filter(|s| !s.is_empty()); // filter out empty strings
         let res = node.connect_peer(connect_info, label_opt).await;
 
+        log_trace!(self.logger, "finished calling connect_to_peer");
         match res {
             Ok(_) => {
                 log_info!(self.logger, "Connected to peer: {connection_string}");
@@ -1283,8 +1412,12 @@ impl<S: MutinyStorage> NodeManager<S> {
         self_node_pubkey: Option<&PublicKey>,
         peer: PublicKey,
     ) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling disconnect_peer");
+
         let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
         node.disconnect_peer(peer);
+        log_trace!(self.logger, "finished calling disconnect_peer");
+
         Ok(())
     }
 
@@ -1295,14 +1428,21 @@ impl<S: MutinyStorage> NodeManager<S> {
         self_node_pubkey: Option<&PublicKey>,
         peer: &NodeId,
     ) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling delete_peer");
+
         let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
         gossip::delete_peer_info(&self.storage, &node.uuid, peer)?;
+        log_trace!(self.logger, "finished calling delete_peer");
+
         Ok(())
     }
 
     /// Sets the label of a peer from the selected node.
     pub fn label_peer(&self, node_id: &NodeId, label: Option<String>) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling label_peer");
         gossip::set_peer_label(&self.storage, node_id, label)?;
+        log_trace!(self.logger, "finished calling label_peer");
+
         Ok(())
     }
 
@@ -1318,6 +1458,8 @@ impl<S: MutinyStorage> NodeManager<S> {
         amount: u64,
         labels: Vec<String>,
     ) -> Result<(MutinyInvoice, u64), MutinyError> {
+        log_trace!(self.logger, "calling create_invoice");
+
         let nodes = self.nodes.read().await;
         let use_phantom = nodes.len() > 1 && self.lsp_config.is_none();
         if nodes.len() == 0 {
@@ -1343,6 +1485,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         let invoice = first_node
             .create_invoice(amount, route_hints, labels)
             .await?;
+        log_trace!(self.logger, "finished calling create_invoice");
 
         Ok((invoice.0.into(), invoice.1))
     }
@@ -1351,8 +1494,14 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// This could include the fee if a channel open is necessary. Otherwise the fee
     /// will be low or non-existant.
     pub async fn get_lsp_fee(&self, amount: u64) -> Result<u64, MutinyError> {
+        log_trace!(self.logger, "calling get_lsp_fee");
+
         let node = self.get_node_by_key_or_first(None).await?;
-        node.get_lsp_fee(amount).await
+        let res = node.get_lsp_fee(amount).await;
+
+        log_trace!(self.logger, "finished calling get_lsp_fee");
+
+        res
     }
 
     /// Pays a lightning invoice from either a specified node or the first available node.
@@ -1365,9 +1514,15 @@ impl<S: MutinyStorage> NodeManager<S> {
         amt_sats: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
+        log_trace!(self.logger, "calling pay_invoice");
+
         let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
-        node.pay_invoice_with_timeout(invoice, amt_sats, None, labels)
-            .await
+        let res = node
+            .pay_invoice_with_timeout(invoice, amt_sats, None, labels)
+            .await;
+        log_trace!(self.logger, "finished calling pay_invoice");
+
+        res
     }
 
     /// Sends a spontaneous payment to a node from either a specified node or the first available node.
@@ -1380,27 +1535,39 @@ impl<S: MutinyStorage> NodeManager<S> {
         message: Option<String>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
+        log_trace!(self.logger, "calling keysend");
+
         let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
         log_debug!(self.logger, "Keysending to {to_node}");
-        node.keysend_with_timeout(to_node, amt_sats, message, labels, None)
-            .await
+        let res = node
+            .keysend_with_timeout(to_node, amt_sats, message, labels, None)
+            .await;
+        log_trace!(self.logger, "finished calling keysend");
+
+        res
     }
 
     pub async fn get_channel_closure(
         &self,
         user_channel_id: u128,
     ) -> Result<ChannelClosure, MutinyError> {
+        log_trace!(self.logger, "calling get_channel_closure");
+
         let nodes = self.nodes.read().await;
         for (_, node) in nodes.iter() {
             if let Ok(Some(closure)) = node.get_channel_closure(user_channel_id) {
+                log_trace!(self.logger, "finished calling get_channel_closure");
                 return Ok(closure);
             }
         }
 
+        log_trace!(self.logger, "finished calling get_channel_closure");
         Err(MutinyError::NotFound)
     }
 
     pub async fn list_channel_closures(&self) -> Result<Vec<ChannelClosure>, MutinyError> {
+        log_trace!(self.logger, "calling list_channel_closures");
+
         let mut channels: Vec<ChannelClosure> = vec![];
         let nodes = self.nodes.read().await;
         for (_, node) in nodes.iter() {
@@ -1408,6 +1575,8 @@ impl<S: MutinyStorage> NodeManager<S> {
                 channels.append(&mut invs)
             }
         }
+
+        log_trace!(self.logger, "finished calling list_channel_closures");
         Ok(channels)
     }
 
@@ -1424,6 +1593,8 @@ impl<S: MutinyStorage> NodeManager<S> {
         fee_rate: Option<f32>,
         user_channel_id: Option<u128>,
     ) -> Result<MutinyChannel, MutinyError> {
+        log_trace!(self.logger, "calling open_channel");
+
         let node = self.get_node_by_key_or_first(self_node_pubkey).await?;
         let to_pubkey = match to_pubkey {
             Some(pubkey) => pubkey,
@@ -1445,6 +1616,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             .iter()
             .find(|chan| chan.funding_txo.map(|a| a.into_bitcoin_outpoint()) == Some(outpoint));
 
+        log_trace!(self.logger, "finished calling open_channel");
         match found_channel {
             Some(channel) => Ok(channel.into()),
             None => Err(MutinyError::ChannelCreationFailed),
@@ -1461,6 +1633,8 @@ impl<S: MutinyStorage> NodeManager<S> {
         utxos: &[OutPoint],
         to_pubkey: Option<PublicKey>,
     ) -> Result<MutinyChannel, MutinyError> {
+        log_trace!(self.logger, "calling sweep_utxos_to_channel");
+
         let node = self.get_node_by_key_or_first(None).await?;
         let to_pubkey = match to_pubkey {
             Some(pubkey) => pubkey,
@@ -1482,6 +1656,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             .iter()
             .find(|chan| chan.funding_txo.map(|a| a.into_bitcoin_outpoint()) == Some(outpoint));
 
+        log_trace!(self.logger, "finished calling sweep_utxos_to_channel");
         match found_channel {
             Some(channel) => Ok(channel.into()),
             None => Err(MutinyError::ChannelCreationFailed),
@@ -1496,13 +1671,18 @@ impl<S: MutinyStorage> NodeManager<S> {
         &self,
         to_pubkey: Option<PublicKey>,
     ) -> Result<MutinyChannel, MutinyError> {
+        log_trace!(self.logger, "calling sweep_all_to_channel");
+
         let utxos = self
             .list_utxos()?
             .iter()
             .map(|u| u.outpoint)
             .collect::<Vec<_>>();
 
-        self.sweep_utxos_to_channel(&utxos, to_pubkey).await
+        let res = self.sweep_utxos_to_channel(&utxos, to_pubkey).await;
+        log_trace!(self.logger, "finished calling sweep_all_to_channel");
+
+        res
     }
 
     /// Closes a channel with the given outpoint.
@@ -1521,6 +1701,8 @@ impl<S: MutinyStorage> NodeManager<S> {
         force: bool,
         abandon: bool,
     ) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling close_channel");
+
         if force && abandon {
             return Err(MutinyError::ChannelClosingFailed);
         }
@@ -1535,7 +1717,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                     .map(|c| (n.clone(), c.clone()))
             });
 
-        match channel_opt {
+        let res = match channel_opt {
             Some((node, channel)) => {
                 if force {
                     node.channel_manager
@@ -1606,11 +1788,16 @@ impl<S: MutinyStorage> NodeManager<S> {
                 );
                 Err(MutinyError::NotFound)
             }
-        }
+        };
+        log_trace!(self.logger, "finished calling close_channel");
+
+        res
     }
 
     /// Lists all the channels for all the nodes in the node manager.
     pub async fn list_channels(&self) -> Result<Vec<MutinyChannel>, MutinyError> {
+        log_trace!(self.logger, "calling list_channels");
+
         let nodes = self.nodes.read().await;
         let channels: Vec<ChannelDetails> = nodes
             .iter()
@@ -1620,11 +1807,14 @@ impl<S: MutinyStorage> NodeManager<S> {
         let mutiny_channels: Vec<MutinyChannel> =
             channels.iter().map(MutinyChannel::from).collect();
 
+        log_trace!(self.logger, "finished calling list_channels");
         Ok(mutiny_channels)
     }
 
     /// Lists all the peers for all the nodes in the node manager.
     pub async fn list_peers(&self) -> Result<Vec<MutinyPeer>, MutinyError> {
+        log_trace!(self.logger, "calling list_peers");
+
         let peer_data = gossip::get_all_peers(&self.storage)?;
 
         // get peers saved in storage
@@ -1676,6 +1866,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         storage_peers.append(&mut missing);
         storage_peers.sort();
 
+        log_trace!(self.logger, "finished calling list_peers");
         Ok(storage_peers)
     }
 
@@ -1689,6 +1880,8 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.
     pub async fn reset_router(&self) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling reset_router");
+
         // if we're not connected to the db, start it up
         let needs_db_connection = !self.storage.clone().connected().unwrap_or(true);
         if needs_db_connection {
@@ -1704,6 +1897,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             self.storage.clone().stop();
         }
 
+        log_trace!(self.logger, "finished calling reset_router");
         Ok(())
     }
 
@@ -1711,6 +1905,8 @@ impl<S: MutinyStorage> NodeManager<S> {
     ///
     /// This can be useful if you get stuck in a bad state.
     pub async fn reset_onchain_tracker(&self) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling reset_onchain_tracker");
+
         // if we're not connected to the db, start it up
         let needs_db_connection = !self.storage.clone().connected().unwrap_or(true);
         if needs_db_connection {
@@ -1727,6 +1923,7 @@ impl<S: MutinyStorage> NodeManager<S> {
             self.storage.clone().stop();
         }
 
+        log_trace!(self.logger, "finished calling reset_onchain_tracker");
         Ok(())
     }
 
