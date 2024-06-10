@@ -312,8 +312,44 @@ impl<S: MutinyStorage> NodeBuilder<S> {
         self.do_not_connect_peers = true;
     }
 
+    pub fn log_params(&self, logger: &Arc<MutinyLogger>) {
+        log_debug!(logger, "build parameters:");
+        log_debug!(logger, "- xprivkey: {:?}", self.xprivkey);
+        log_debug!(logger, "- uuid: {:?}", self.uuid);
+        log_debug!(logger, "- node_index: {:?}", self.node_index);
+        log_debug!(logger, "- gossip_sync: {:#?}", self.gossip_sync.is_some());
+        log_debug!(logger, "- scorer: {:#?}", self.scorer.is_some());
+        log_debug!(logger, "- chain: {:#?}", self.chain.is_some());
+        log_debug!(
+            logger,
+            "- fee_estimator: {:#?}",
+            self.fee_estimator.is_some()
+        );
+        log_debug!(logger, "- wallet: {:#?}", self.wallet.is_some());
+        log_debug!(logger, "- esplora: {:?}", self.esplora);
+        #[cfg(target_arch = "wasm32")]
+        log_debug!(
+            logger,
+            "- websocket_proxy_addr: {:?}",
+            self.websocket_proxy_addr
+        );
+        log_debug!(logger, "- network: {:?}", self.network);
+        log_debug!(
+            logger,
+            "- has_done_initial_sync: {:?}",
+            self.has_done_initial_sync
+        );
+        log_debug!(logger, "- lsp_config: {:?}", self.lsp_config);
+        log_debug!(
+            logger,
+            "- do_not_connect_peers: {}",
+            self.do_not_connect_peers
+        );
+    }
+
     pub async fn build(self) -> Result<Node<S>, MutinyError> {
         let node_start = Instant::now();
+
         // check for all required parameters
         let node_index = self.node_index.as_ref().map_or_else(
             || Err(MutinyError::InvalidArgumentsError),
@@ -352,7 +388,12 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             |v| Ok(v.clone()),
         )?;
 
-        let logger = self.logger.unwrap_or(Arc::new(MutinyLogger::default()));
+        let logger = self
+            .logger
+            .clone()
+            .unwrap_or(Arc::new(MutinyLogger::default()));
+
+        self.log_params(&logger);
 
         log_info!(logger, "initializing a new node: {:?}", self.uuid);
 
@@ -414,7 +455,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             scoring_params(),
         ));
 
-        log_info!(logger, "creating lsp client");
+        log_trace!(logger, "creating lsp config");
         let lsp_config: Option<LspConfig> = match node_index.lsp {
             None => {
                 log_info!(logger, "no lsp saved, using configured one if present");
@@ -435,8 +476,10 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                 }
             }
         };
+        log_trace!(logger, "finished creating lsp config");
 
         // init channel manager
+        log_trace!(logger, "initializing channel manager");
         let accept_underpaying_htlcs = lsp_config
             .as_ref()
             .is_some_and(|l| l.accept_underpaying_htlcs());
@@ -454,12 +497,14 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                 &esplora,
             )
             .await?;
+        log_trace!(logger, "finished initializing channel manager");
 
         let channel_manager: Arc<PhantomChannelManager<S>> =
             Arc::new(read_channel_manager.channel_manager);
 
         let stop = Arc::new(AtomicBool::new(false));
 
+        log_trace!(logger, "creating lsp client");
         let (lsp_client, lsp_client_pubkey, liquidity) = match lsp_config {
             Some(LspConfig::VoltageFlow(config)) => {
                 let lsp = AnyLsp::new_voltage_flow(config, logger.clone()).await?;
@@ -492,7 +537,9 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             }
             None => (None, None, None),
         };
+        log_trace!(logger, "finished creating lsp client");
 
+        log_trace!(logger, "creating onion routers");
         let message_router = Arc::new(LspMessageRouter::new(lsp_client_pubkey));
         let onion_message_handler = Arc::new(OnionMessenger::new(
             keys_manager.clone(),
@@ -508,8 +555,10 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             network_graph: gossip_sync.network_graph().clone(),
             logger: logger.clone(),
         });
+        log_trace!(logger, "finished creating onion routers");
 
         // init peer manager
+        log_trace!(logger, "creating peer manager");
         let ln_msg_handler = MessageHandler {
             chan_handler: channel_manager.clone(),
             route_handler,
@@ -518,15 +567,19 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                 liquidity: liquidity.clone(),
             }),
         };
+        log_trace!(logger, "finished creating peer manager");
 
+        log_trace!(logger, "creating bump tx event handler");
         let bump_tx_event_handler = Arc::new(BumpTransactionEventHandler::new(
             Arc::clone(&chain),
             Arc::new(Wallet::new(Arc::clone(&wallet), Arc::clone(&logger))),
             Arc::clone(&keys_manager),
             Arc::clone(&logger),
         ));
+        log_trace!(logger, "finished creating bump tx event handler");
 
         // init event handler
+        log_trace!(logger, "creating event handler");
         let event_handler = EventHandler::new(
             channel_manager.clone(),
             fee_estimator.clone(),
@@ -537,27 +590,34 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             lsp_client.clone(),
             logger.clone(),
         );
+        log_trace!(logger, "finished creating event handler");
 
+        log_trace!(logger, "creating peer manager");
         let peer_man = Arc::new(create_peer_manager(
             keys_manager.clone(),
             ln_msg_handler,
             logger.clone(),
         ));
+        log_trace!(logger, "finished creating peer manager");
 
         if let Some(liquidity) = liquidity {
+            log_trace!(logger, "setting liqudity callback");
             let process_msgs_pm = peer_man.clone();
             liquidity.set_process_msgs_callback(move || {
                 process_msgs_pm.process_events();
             });
+            log_trace!(logger, "finished setting liqudity callback");
         }
 
         // sync to chain tip
+        log_trace!(logger, "syncing chain to tip");
         if read_channel_manager.is_restarting {
             let start = Instant::now();
             let mut chain_listener_channel_monitors =
                 Vec::with_capacity(read_channel_manager.channel_monitors.len());
             for (blockhash, channel_monitor) in read_channel_manager.channel_monitors.drain(..) {
                 // Get channel monitor ready to sync
+                log_trace!(logger, "loading outputs to watch");
                 channel_monitor.load_outputs_to_watch(&chain, &logger);
 
                 let outpoint = channel_monitor.get_funding_txo().0;
@@ -574,6 +634,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             }
 
             // give channel monitors to chain monitor
+            log_trace!(logger, "giving channel monitors to chain monitor");
             for item in chain_listener_channel_monitors.drain(..) {
                 let channel_monitor = item.1 .0;
                 let funding_outpoint = item.2;
@@ -589,12 +650,14 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                 start.elapsed().as_millis()
             );
         }
+        log_trace!(logger, "finished syncing chain to tip");
 
         // Before we start the background processor, retry previously failed
         // spendable outputs. We should do this before we start the background
         // processor so we prevent any race conditions.
         // if we fail to read the spendable outputs, just log a warning and
         // continue
+        log_trace!(logger, "retrying spendable outputs");
         let retry_spendable_outputs = persister
             .get_failed_spendable_outputs()
             .map_err(|e| MutinyError::ReadError {
@@ -660,10 +723,12 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                 );
             });
         }
+        log_trace!(logger, "finished retrying spendable outputs");
 
         // Check all existing channels against default configs.
         // If we have default config changes, those should apply
         // to all existing and new channels.
+        log_trace!(logger, "checking default user config against channels");
         let default_config = default_user_config(accept_underpaying_htlcs).channel_config;
         for channel in channel_manager.list_channels() {
             // unwrap is safe after LDK.0.0.109
@@ -690,7 +755,12 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                 };
             }
         }
+        log_trace!(
+            logger,
+            "finished checking default user config against channels"
+        );
 
+        log_trace!(logger, "spawning ldk background thread");
         let background_persister = persister.clone();
         let background_event_handler = event_handler.clone();
         let background_processor_logger = logger.clone();
@@ -748,11 +818,13 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                 }
             }
         });
+        log_trace!(logger, "finished spawning ldk background thread");
 
         if !self.do_not_connect_peers {
             #[cfg(target_arch = "wasm32")]
             let reconnection_proxy_addr = websocket_proxy_addr.clone();
 
+            log_trace!(logger, "spawning ldk reconnect thread");
             let reconnection_storage = persister.storage.clone();
             let reconnection_pubkey = pubkey;
             let reconnection_peer_man = peer_man.clone();
@@ -780,6 +852,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                 )
                 .await;
             });
+            log_trace!(logger, "finished spawning ldk reconnect thread");
         }
 
         log_info!(
@@ -791,6 +864,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
         let sync_lock = Arc::new(Mutex::new(()));
 
         // Here we re-attempt to persist any monitors that failed to persist previously.
+        log_trace!(logger, "reattempt monitor persistance thread");
         let retry_logger = logger.clone();
         let retry_persister = persister.clone();
         let retry_stop = stop.clone();
@@ -847,6 +921,10 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                     };
 
                     if let Some((key, object, version)) = data_opt {
+                        log_debug!(
+                            retry_logger,
+                            "Persisting monitor for output: {funding_txo:?}"
+                        );
                         let res = persist_monitor(
                             retry_persister.storage.clone(),
                             key,
@@ -863,7 +941,12 @@ impl<S: MutinyStorage> NodeBuilder<S> {
 										.channel_monitor_updated(funding_txo, id)
 									{
 										log_error!(retry_logger, "Error notifying chain monitor of channel monitor update: {e:?}");
-									}
+									} else {
+                                        log_debug!(
+                                            retry_logger,
+                                            "notified channel monitor updated: {funding_txo:?}"
+                                        );
+                                    }
 								}
 							}
 							Err(e) => log_error!(
@@ -878,6 +961,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                 sleep(3_000).await;
             }
         });
+        log_trace!(logger, "finished reattempt monitor persistance thread");
 
         log_trace!(
             logger,
@@ -937,13 +1021,21 @@ pub(crate) struct Node<S: MutinyStorage> {
 
 impl<S: MutinyStorage> Node<S> {
     pub async fn stop(&self) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling stop");
+
         self.stop.store(true, Ordering::Relaxed);
 
-        self.stopped().await
+        self.stopped().await?;
+
+        log_trace!(self.logger, "finished calling stop");
+
+        Ok(())
     }
 
     /// stopped will await until the node is fully shut down
     pub async fn stopped(&self) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling stopped");
+
         loop {
             let all_stopped = {
                 let stopped_components = self
@@ -959,19 +1051,28 @@ impl<S: MutinyStorage> Node<S> {
 
             sleep(500).await;
         }
+
+        log_trace!(self.logger, "finished calling stopped");
         Ok(())
     }
 
     pub async fn node_index(&self) -> NodeIndex {
+        log_trace!(self.logger, "calling node_index");
+
         let lsp = match self.lsp_client.as_ref() {
             Some(lsp) => Some(lsp.get_config().await),
             None => None,
         };
-        NodeIndex {
+
+        let n = NodeIndex {
             child_index: self.child_index,
             lsp,
             archived: Some(false),
-        }
+        };
+
+        log_trace!(self.logger, "finished calling node_index");
+
+        n
     }
 
     pub async fn connect_peer(
@@ -979,6 +1080,8 @@ impl<S: MutinyStorage> Node<S> {
         peer_connection_info: PubkeyConnectionInfo,
         label: Option<String>,
     ) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling connect_peer");
+
         let connect_res = connect_peer_if_necessary(
             #[cfg(target_arch = "wasm32")]
             &self.websocket_proxy_addr,
@@ -990,7 +1093,7 @@ impl<S: MutinyStorage> Node<S> {
             self.stop.clone(),
         )
         .await;
-        match connect_res {
+        let res = match connect_res {
             Ok(_) => {
                 let node_id = NodeId::from_pubkey(&peer_connection_info.pubkey);
 
@@ -1033,18 +1136,30 @@ impl<S: MutinyStorage> Node<S> {
                 Ok(())
             }
             Err(e) => Err(e),
-        }
+        };
+
+        log_trace!(self.logger, "finished calling connect_peer");
+
+        res
     }
 
     pub fn disconnect_peer(&self, peer_id: PublicKey) {
+        log_trace!(self.logger, "calling disconnect_peer");
         self.peer_manager.disconnect_by_node_id(peer_id);
+        log_trace!(self.logger, "finished calling disconnect_peer");
     }
 
     pub fn get_phantom_route_hint(&self) -> PhantomRouteHints {
-        self.channel_manager.get_phantom_route_hints()
+        log_trace!(self.logger, "calling get_phantom_route_hint");
+        let res = self.channel_manager.get_phantom_route_hints();
+        log_trace!(self.logger, "calling get_phantom_route_hint");
+
+        res
     }
+
     pub async fn get_lsp_fee(&self, amount_sat: u64) -> Result<u64, MutinyError> {
-        match self.lsp_client.as_ref() {
+        log_trace!(self.logger, "calling get_lsp_fee");
+        let res = match self.lsp_client.as_ref() {
             Some(lsp) => {
                 let connect = lsp.get_lsp_connection_string().await;
                 self.connect_peer(PubkeyConnectionInfo::new(&connect)?, None)
@@ -1085,7 +1200,10 @@ impl<S: MutinyStorage> Node<S> {
                 Ok(lsp_fee.fee_amount_msat / 1000)
             }
             None => Ok(0),
-        }
+        };
+        log_trace!(self.logger, "finished calling get_lsp_fee");
+
+        res
     }
 
     pub async fn create_invoice(
@@ -1094,7 +1212,9 @@ impl<S: MutinyStorage> Node<S> {
         route_hints: Option<Vec<PhantomRouteHints>>,
         labels: Vec<String>,
     ) -> Result<(Bolt11Invoice, u64), MutinyError> {
-        match self.lsp_client.as_ref() {
+        log_trace!(self.logger, "calling create_invoice");
+
+        let res = match self.lsp_client.as_ref() {
             Some(lsp) => {
                 let connect = lsp.get_lsp_connection_string().await;
                 self.connect_peer(PubkeyConnectionInfo::new(&connect)?, None)
@@ -1230,7 +1350,10 @@ impl<S: MutinyStorage> Node<S> {
                     .await?,
                 0,
             )),
-        }
+        };
+        log_trace!(self.logger, "finished calling create_invoice");
+
+        res
     }
 
     async fn create_internal_invoice(
@@ -1341,12 +1464,20 @@ impl<S: MutinyStorage> Node<S> {
         &self,
         user_channel_id: u128,
     ) -> Result<Option<ChannelClosure>, MutinyError> {
-        self.persister.get_channel_closure(user_channel_id)
+        log_trace!(self.logger, "calling get_channel_closure");
+        let res = self.persister.get_channel_closure(user_channel_id);
+        log_trace!(self.logger, "finished calling get_channel_closure");
+
+        res
     }
 
     /// Gets all the closed channels for this node
     pub fn get_channel_closures(&self) -> Result<Vec<ChannelClosure>, MutinyError> {
-        self.persister.list_channel_closures()
+        log_trace!(self.logger, "calling get_channel_closures");
+        let res = self.persister.list_channel_closures();
+        log_trace!(self.logger, "finished calling get_channel_closures");
+
+        res
     }
 
     fn retry_strategy() -> Retry {
@@ -1360,6 +1491,8 @@ impl<S: MutinyStorage> Node<S> {
         invoice: &Bolt11Invoice,
         amt_sats: Option<u64>,
     ) -> Result<(PaymentId, PaymentHash), MutinyError> {
+        log_trace!(self.logger, "calling init_invoice_payment");
+
         let payment_hash = invoice.payment_hash().into_32();
 
         if read_payment_info(&self.persister.storage, &payment_hash, false, &self.logger)
@@ -1450,7 +1583,7 @@ impl<S: MutinyStorage> Node<S> {
 
         persist_payment_info(&self.persister.storage, &payment_hash, &payment_info, false)?;
 
-        match pay_result {
+        let res = match pay_result {
             Ok(id) => Ok((id, PaymentHash(payment_hash))),
             Err(error) => {
                 log_error!(self.logger, "failed to make payment: {error:?}");
@@ -1467,7 +1600,10 @@ impl<S: MutinyStorage> Node<S> {
 
                 Err(map_sending_failure(error, amt_msat, &current_channels))
             }
-        }
+        };
+        log_trace!(self.logger, "finished calling init_invoice_payment");
+
+        res
     }
 
     // copied from LDK, modified to change a couple params
@@ -1557,12 +1693,18 @@ impl<S: MutinyStorage> Node<S> {
         timeout_secs: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
+        log_trace!(self.logger, "calling pay_invoice_with_timeout");
+
         // initiate payment
         let (payment_id, payment_hash) = self.init_invoice_payment(invoice, amt_sats).await?;
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
 
-        self.await_payment(payment_id, payment_hash, timeout, labels)
-            .await
+        let res = self
+            .await_payment(payment_id, payment_hash, timeout, labels)
+            .await;
+        log_trace!(self.logger, "finished calling pay_invoice_with_timeout");
+
+        res
     }
 
     /// init_keysend_payment sends off the payment but does not wait for results
@@ -1575,6 +1717,8 @@ impl<S: MutinyStorage> Node<S> {
         labels: Vec<String>,
         payment_id: PaymentId,
     ) -> Result<MutinyInvoice, MutinyError> {
+        log_trace!(self.logger, "calling init_keysend_payment");
+
         let amt_msats = amt_sats * 1_000;
 
         // check if we have enough balance to send
@@ -1665,7 +1809,7 @@ impl<S: MutinyStorage> Node<S> {
             false,
         )?;
 
-        match pay_result {
+        let res = match pay_result {
             Ok(_) => {
                 let mutiny_invoice =
                     MutinyInvoice::from(payment_info, payment_hash, false, labels)?;
@@ -1682,7 +1826,10 @@ impl<S: MutinyStorage> Node<S> {
                 let current_channels = self.channel_manager.list_channels();
                 Err(map_sending_failure(error, amt_msats, &current_channels))
             }
-        }
+        };
+        log_trace!(self.logger, "finished calling init_keysend_payment");
+
+        res
     }
 
     pub async fn keysend_with_timeout(
@@ -1693,6 +1840,8 @@ impl<S: MutinyStorage> Node<S> {
         labels: Vec<String>,
         timeout_secs: Option<u64>,
     ) -> Result<MutinyInvoice, MutinyError> {
+        log_trace!(self.logger, "calling keysend_with_timeout");
+
         let mut entropy = [0u8; 32];
         getrandom::getrandom(&mut entropy).map_err(|_| MutinyError::SeedGenerationFailed)?;
         let payment_id = PaymentId(entropy);
@@ -1705,8 +1854,12 @@ impl<S: MutinyStorage> Node<S> {
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
         let payment_hash = PaymentHash(pay.payment_hash.into_32());
 
-        self.await_payment(payment_id, payment_hash, timeout, labels)
-            .await
+        let res = self
+            .await_payment(payment_id, payment_hash, timeout, labels)
+            .await;
+        log_trace!(self.logger, "finished calling keysend_with_timeout");
+
+        res
     }
 
     async fn await_chan_funding_tx(
@@ -1777,6 +1930,8 @@ impl<S: MutinyStorage> Node<S> {
         fee_rate: Option<f32>,
         user_channel_id: Option<u128>,
     ) -> Result<u128, MutinyError> {
+        log_trace!(self.logger, "calling init_open_channel");
+
         let accept_underpaying_htlcs = self
             .lsp_client
             .as_ref()
@@ -1803,7 +1958,7 @@ impl<S: MutinyStorage> Node<S> {
         self.persister
             .persist_channel_open_params(user_channel_id, params)?;
 
-        match self.channel_manager.create_channel(
+        let res = match self.channel_manager.create_channel(
             pubkey,
             amount_sat,
             0,
@@ -1825,7 +1980,11 @@ impl<S: MutinyStorage> Node<S> {
                 );
                 Err(MutinyError::ChannelCreationFailed)
             }
-        }
+        };
+
+        log_trace!(self.logger, "finished calling init_open_channel");
+
+        res
     }
 
     pub async fn open_channel_with_timeout(
@@ -1836,11 +1995,16 @@ impl<S: MutinyStorage> Node<S> {
         user_channel_id: Option<u128>,
         timeout: u64,
     ) -> Result<OutPoint, MutinyError> {
+        log_trace!(self.logger, "calling open_channel_with_timeout");
+
         let init = self
             .init_open_channel(pubkey, amount_sat, fee_rate, user_channel_id)
             .await?;
 
-        self.await_chan_funding_tx(init, &pubkey, timeout).await
+        let res = self.await_chan_funding_tx(init, &pubkey, timeout).await;
+        log_trace!(self.logger, "finished calling open_channel_with_timeout");
+
+        res
     }
 
     pub async fn init_sweep_utxos_to_channel(
@@ -1849,6 +2013,8 @@ impl<S: MutinyStorage> Node<S> {
         utxos: &[OutPoint],
         pubkey: PublicKey,
     ) -> Result<u128, MutinyError> {
+        log_trace!(self.logger, "calling init_sweep_utxos_to_channel");
+
         // Calculate the total value of the selected utxos
         let utxo_value: u64 = {
             // find the wallet utxos
@@ -1897,7 +2063,7 @@ impl<S: MutinyStorage> Node<S> {
         self.persister
             .persist_channel_open_params(user_channel_id, params)?;
 
-        match self.channel_manager.create_channel(
+        let res = match self.channel_manager.create_channel(
             pubkey,
             channel_value_satoshis,
             0,
@@ -1921,7 +2087,10 @@ impl<S: MutinyStorage> Node<S> {
                 self.persister.delete_channel_open_params(user_channel_id)?;
                 Err(MutinyError::ChannelCreationFailed)
             }
-        }
+        };
+        log_trace!(self.logger, "finished calling init_sweep_utxos_to_channel");
+
+        res
     }
 
     pub async fn sweep_utxos_to_channel_with_timeout(
@@ -1931,11 +2100,19 @@ impl<S: MutinyStorage> Node<S> {
         pubkey: PublicKey,
         timeout: u64,
     ) -> Result<OutPoint, MutinyError> {
+        log_trace!(self.logger, "calling sweep_utxos_to_channel_with_timeout");
+
         let init = self
             .init_sweep_utxos_to_channel(user_chan_id, utxos, pubkey)
             .await?;
 
-        self.await_chan_funding_tx(init, &pubkey, timeout).await
+        let res = self.await_chan_funding_tx(init, &pubkey, timeout).await;
+        log_trace!(
+            self.logger,
+            "finished calling sweep_utxos_to_channel_with_timeout"
+        );
+
+        res
     }
 }
 

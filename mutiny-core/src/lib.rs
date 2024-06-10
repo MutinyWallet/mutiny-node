@@ -902,6 +902,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         ));
 
         // Need to prevent other devices from running at the same time
+        log_trace!(logger, "checking device lock");
         if !config.skip_device_lock {
             let start = Instant::now();
             log_trace!(logger, "Checking device lock");
@@ -915,8 +916,10 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
                 start.elapsed().as_millis()
             );
         }
+        log_trace!(logger, "finished checking device lock");
 
         // spawn thread to claim device lock
+        log_trace!(logger, "spawning claim device lock");
         let storage_clone = self.storage.clone();
         let logger_clone = logger.clone();
         let stop_clone = stop.clone();
@@ -931,13 +934,16 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
                 }
             }
         });
+        log_trace!(logger, "finished spawning claim device lock");
 
+        log_trace!(logger, "setting up esplora");
         let esplora_server_url = get_esplora_url(network, config.user_esplora_url.clone());
         let esplora = esplora_client::Builder::new(&esplora_server_url).build_async()?;
         let esplora = Arc::new(esplora);
+        log_trace!(logger, "finished setting up esplora");
 
+        log_trace!(logger, "setting up node manager");
         let start = Instant::now();
-
         let mut nm_builder = NodeManagerBuilder::new(self.xprivkey, self.storage.clone())
             .with_config(config.clone());
         nm_builder.with_logger(logger.clone());
@@ -951,18 +957,22 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         );
 
         // start syncing node manager
+        log_trace!(logger, "starting node manager sync");
         NodeManager::start_sync(node_manager.clone());
+        log_trace!(logger, "finished node manager sync");
 
+        log_trace!(logger, "creating primal client");
         let primal_client = PrimalClient::new(
             config
                 .primal_url
                 .clone()
                 .unwrap_or("https://primal-cache.mutinywallet.com/api".to_string()),
         );
-
-        let client = Client::default();
+        log_trace!(logger, "finished creating primal client");
 
         // create nostr manager
+        log_trace!(logger, "creating nostr client");
+        let client = Client::default();
         let nostr = Arc::new(
             NostrManager::from_mnemonic(
                 self.xprivkey,
@@ -975,12 +985,14 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             )
             .await?,
         );
+        log_trace!(logger, "finished creating nostr client");
 
         // connect to relays when not in tests
         #[cfg(not(test))]
         nostr.connect().await?;
 
         // create federation module if any exist
+        log_trace!(logger, "creating federation modules");
         let federation_storage = self.storage.get_federations()?;
         let federations = if !federation_storage.federations.is_empty() {
             let start = Instant::now();
@@ -1004,6 +1016,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             Arc::new(RwLock::new(HashMap::new()))
         };
         let federation_storage = Arc::new(RwLock::new(federation_storage));
+        log_trace!(logger, "finished creating federation modules");
 
         if !self.skip_hodl_invoices {
             log_warn!(
@@ -1014,20 +1027,25 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
 
         let start = Instant::now();
 
+        log_trace!(logger, "creating lnurl client");
         let lnurl_client = Arc::new(
             lnurl::Builder::default()
                 .build_async()
                 .expect("failed to make lnurl client"),
         );
+        log_trace!(logger, "finished creating lnurl client");
 
         // auth manager, take from auth_client if it already exists
+        log_trace!(logger, "creating auth manager");
         let auth = if let Some(auth_client) = self.auth_client.clone() {
             auth_client.auth.clone()
         } else {
             AuthManager::new(self.xprivkey)?
         };
+        log_trace!(logger, "finished creating auth manager");
 
         // Subscription client, only usable if we have an auth client
+        log_trace!(logger, "creating subscription client");
         let subscription_client = if let Some(auth_client) = self.auth_client.clone() {
             if let Some(subscription_url) = self.subscription_url {
                 let s = Arc::new(MutinySubscriptionClient::new(
@@ -1042,8 +1060,10 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         } else {
             None
         };
+        log_trace!(logger, "finished creating subscription client");
 
         // Blind auth client, only usable if we have an auth client
+        log_trace!(logger, "creating blind auth client");
         let blind_auth_client = if let Some(auth_client) = self.auth_client.clone() {
             if let Some(blind_auth_url) = self.blind_auth_url {
                 let s = Arc::new(BlindAuthClient::new(
@@ -1061,8 +1081,10 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         } else {
             None
         };
+        log_trace!(logger, "finished creating blind auth client");
 
         // Hermes client, only usable if we have the blind auth client
+        log_trace!(logger, "creating hermes client");
         let hermes_client = if let Some(blind_auth_client) = blind_auth_client.clone() {
             if let Some(hermes_url) = self.hermes_url {
                 let s = Arc::new(
@@ -1084,8 +1106,10 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         } else {
             None
         };
+        log_trace!(logger, "finished creating hermes client");
 
         // populate the activity index
+        log_trace!(logger, "populating activity index");
         let mut activity_index = node_manager
             .wallet
             .list_transactions(false)?
@@ -1158,14 +1182,18 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             let mut read = index.try_write()?;
             read.extend(activity_index);
         }
+        log_trace!(logger, "finished populating activity index");
 
+        log_trace!(logger, "creating price cache");
         let price_cache = self
             .storage
             .get_bitcoin_price_cache()?
             .into_iter()
             .map(|(k, v)| (k, (v, Duration::from_secs(0))))
             .collect();
+        log_trace!(logger, "finished creating price cache");
 
+        log_trace!(logger, "creating mutiny wallet");
         let mw = MutinyWallet {
             xprivkey: self.xprivkey,
             config,
@@ -1181,14 +1209,14 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             esplora,
             auth,
             stop,
-            logger,
+            logger: logger.clone(),
             network,
             skip_hodl_invoices: self.skip_hodl_invoices,
             safe_mode: self.safe_mode,
             cashu_client: CashuHttpClient::new(),
             bitcoin_price_cache: Arc::new(Mutex::new(price_cache)),
         };
-
+        log_trace!(logger, "finished creating mutiny wallet");
         // if we are in safe mode, don't create any nodes or
         // start any nostr services
         if self.safe_mode {
@@ -1196,7 +1224,9 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         }
 
         // if we don't have any nodes, create one
+        log_trace!(logger, "listing nodes");
         if mw.node_manager.list_nodes().await?.is_empty() {
+            log_trace!(logger, "going to create first node");
             let nm = mw.node_manager.clone();
             // spawn in background, this can take a while and we don't want to block
             utils::spawn(async move {
@@ -1205,24 +1235,36 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
                 }
             })
         };
+        log_trace!(logger, "finished listing nodes");
 
         // start the nostr background process
+        log_trace!(logger, "starting nostr");
         mw.start_nostr().await;
+        log_trace!(logger, "finished starting nostr");
 
         // start the federation background processor
+        log_trace!(logger, "starting fedimint background checker");
         mw.start_fedimint_background_checker().await;
+        log_trace!(logger, "finished starting fedimint background checker");
 
         // start the blind auth fetching process
+        log_trace!(logger, "checking blind tokens");
         mw.check_blind_tokens();
+        log_trace!(logger, "finsihed checking blind tokens");
 
         // start the hermes background process
         // get profile key if we have it, we need this to decrypt private zaps
+        log_trace!(logger, "getting nostr profile key");
         let profile_key = match &mw.nostr.nostr_keys.read().await.signer {
             NostrSigner::Keys(keys) => Some(keys.clone()),
             #[cfg(target_arch = "wasm32")]
             NostrSigner::NIP07(_) => None,
         };
+        log_trace!(logger, "finished getting nostr profile key");
+
+        log_trace!(logger, "starting hermes");
         mw.start_hermes(profile_key).await?;
+        log_trace!(logger, "finished starting hermes");
 
         log_info!(
             mw.logger,
@@ -1265,6 +1307,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Starts up all the nodes again.
     /// Not needed after [NodeManager]'s `new()` function.
     pub async fn start(&mut self) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling start");
+
         self.storage.start().await?;
 
         let mut nm_builder = NodeManagerBuilder::new(self.xprivkey, self.storage.clone())
@@ -1275,11 +1319,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         self.node_manager = Arc::new(nm_builder.build().await?);
         NodeManager::start_sync(self.node_manager.clone());
 
+        log_trace!(self.logger, "finished calling start");
         Ok(())
     }
 
     /// Starts a background process that will watch for nostr events
     pub(crate) async fn start_nostr(&self) {
+        log_trace!(self.logger, "calling start_nostr");
+
         // spawn thread to fetch nostr events for NWC, DMs, etc.
         let nostr = self.nostr.clone();
         let logger = self.logger.clone();
@@ -1449,6 +1496,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 };
             }
         });
+
+        log_trace!(self.logger, "finished calling start_nostr");
     }
 
     /// Pays a lightning invoice from a federation (preferred) or node.
@@ -1461,6 +1510,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         amt_sats: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
+        log_trace!(self.logger, "calling pay_invoice");
+
         if inv.network() != self.network {
             return Err(MutinyError::IncorrectNetwork);
         }
@@ -1505,10 +1556,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                     log_warn!(logger, "Failed to remove pending NWC invoice: {e}");
                                 }
                             });
+                            log_trace!(self.logger, "finished calling pay_invoice");
                             return Ok(r);
                         }
                         Err(e) => match e {
-                            MutinyError::PaymentTimeout => return Err(e),
+                            MutinyError::PaymentTimeout => {
+                                log_trace!(self.logger, "finished calling pay_invoice");
+                                return Err(e);
+                            }
                             MutinyError::RoutingFailed => {
                                 log_debug!(
                                     self.logger,
@@ -1531,7 +1586,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         // If any balance at all, then fallback to node manager for payment.
         // Take the error from the node manager as the priority.
-        if self
+        let res = if self
             .node_manager
             .nodes
             .read()
@@ -1560,7 +1615,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             Ok(res)
         } else {
             Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
-        }
+        };
+        log_trace!(self.logger, "finished calling pay_invoice");
+
+        res
     }
 
     /// Estimates the lightning fee for a transaction. Amount is either from the invoice
@@ -1573,6 +1631,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         inv: Option<&Bolt11Invoice>,
         amt_sats: Option<u64>,
     ) -> Result<Option<u64>, MutinyError> {
+        log_trace!(self.logger, "calling estimate_ln_fee");
+
         let amt = amt_sats
             .or(inv.and_then(|i| i.amount_milli_satoshis()))
             .ok_or(MutinyError::BadAmountError)?;
@@ -1601,11 +1661,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                                 / 1_000_000.0;
 
                         let total_fee = fees.base_msat as f64 + prop_fee_msat;
+                        log_trace!(self.logger, "finished calling estimate_ln_fee");
+
                         return Ok(Some((total_fee / 1_000.0).floor() as u64));
                     }
                 }
             }
         }
+        log_trace!(self.logger, "finished calling estimate_ln_fee");
 
         if total_balances.lightning > amt {
             // TODO try something to try to get lightning fee
@@ -1646,6 +1709,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         amount: Option<u64>,
         labels: Vec<String>,
     ) -> Result<MutinyBip21RawMaterials, MutinyError> {
+        log_trace!(self.logger, "calling create_bip21");
+
         let invoice = if self.safe_mode || amount.is_none() {
             None
         } else {
@@ -1660,6 +1725,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let Ok(address) = self.create_address(labels.clone()).await else {
             return Err(MutinyError::WalletOperationFailed);
         };
+        log_trace!(self.logger, "finished calling create_bip21");
 
         Ok(MutinyBip21RawMaterials {
             address,
@@ -1674,6 +1740,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         from_federation_id: Option<FederationId>,
         bolt_11: Bolt11Invoice,
     ) -> Result<FedimintSweepResult, MutinyError> {
+        log_trace!(self.logger, "calling sweep_federation_balance_to_invoice");
+
         // invoice must have an amount
         if bolt_11.amount_milli_satoshis().is_none() {
             return Err(MutinyError::BadAmountError);
@@ -1724,6 +1792,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .unwrap_or(0);
 
         let total_fees = outgoing_fee + incoming_fee;
+        log_trace!(
+            self.logger,
+            "finished calling sweep_federation_balance_to_invoice"
+        );
+
         Ok(FedimintSweepResult {
             amount: bolt_11.amount_milli_satoshis().unwrap_or_default() / 1_000,
             fees: Some(total_fees),
@@ -1737,6 +1810,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         from_federation_id: Option<FederationId>,
         to_federation_id: Option<FederationId>,
     ) -> Result<MutinyInvoice, MutinyError> {
+        log_trace!(self.logger, "calling create_sweep_federation_invoice");
+
         if let Some(0) = amount {
             return Err(MutinyError::BadAmountError);
         }
@@ -1757,7 +1832,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         };
         let fees = fedimint_client.gateway_fee().await?;
 
-        if let Some(amt) = amount {
+        let res = if let Some(amt) = amount {
             // if the user provided amount, this is easy
             let (mut invoice, incoming_fee) = if let Some(fed_client) = to_federation_client {
                 let invoice = fed_client
@@ -1802,7 +1877,13 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
             invoice.fees_paid = Some(incoming_fee + outgoing_fee);
             Ok(invoice)
-        }
+        };
+        log_trace!(
+            self.logger,
+            "finished calling create_sweep_federation_invoice"
+        );
+
+        res
     }
 
     pub async fn send_to_address(
@@ -1812,6 +1893,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
+        log_trace!(self.logger, "calling send_to_address");
+
         // Try each federation first
         let federation_ids = self.list_federation_ids().await?;
         let mut last_federation_error = None;
@@ -1844,7 +1927,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // If any balance at all, then fallback to node manager for payment.
         // Take the error from the node manager as the priority.
         let b = self.node_manager.get_balance().await?;
-        if b.confirmed + b.unconfirmed > 0 {
+        let res = if b.confirmed + b.unconfirmed > 0 {
             let res = self
                 .node_manager
                 .send_to_address(send_to, amount, labels, fee_rate)
@@ -1852,7 +1935,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             Ok(res)
         } else {
             Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
-        }
+        };
+        log_trace!(self.logger, "finished calling send_to_address");
+
+        res
     }
 
     /// Estimates the onchain fee for a transaction sending to the given address.
@@ -1863,6 +1949,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         amount: u64,
         fee_rate: Option<f32>,
     ) -> Result<u64, MutinyError> {
+        log_trace!(self.logger, "calling estimate_tx_fee");
+
         if amount < DUST_LIMIT {
             return Err(MutinyError::WalletOperationFailed);
         }
@@ -1894,7 +1982,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         let b = self.node_manager.get_balance().await?;
-        if b.confirmed + b.unconfirmed > 0 {
+        let res = if b.confirmed + b.unconfirmed > 0 {
             let res = self
                 .node_manager
                 .estimate_tx_fee(destination_address, amount, fee_rate)?;
@@ -1902,7 +1990,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             Ok(res)
         } else {
             Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
-        }
+        };
+        log_trace!(self.logger, "finished calling estimate_tx_fee");
+
+        res
     }
 
     /// Estimates the onchain fee for a transaction sweep our on-chain balance
@@ -1915,6 +2006,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         destination_address: Address,
         fee_rate: Option<f32>,
     ) -> Result<u64, MutinyError> {
+        log_trace!(self.logger, "calling estimate_sweep_tx_fee");
+
         // Try each federation first
         let federation_ids = self.list_federation_ids().await?;
         for federation_id in federation_ids {
@@ -1936,7 +2029,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         let b = self.node_manager.get_balance().await?;
-        if b.confirmed + b.unconfirmed > 0 {
+        let res = if b.confirmed + b.unconfirmed > 0 {
             let res = self
                 .node_manager
                 .estimate_sweep_tx_fee(destination_address, fee_rate)?;
@@ -1945,7 +2038,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         } else {
             log_error!(self.logger, "node manager doesn't have a balance");
             Err(MutinyError::InsufficientBalance)
-        }
+        };
+        log_trace!(self.logger, "calling estimate_sweep_tx_fee");
+
+        res
     }
 
     /// Sweeps all the funds from the wallet to the given address.
@@ -1958,6 +2054,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         labels: Vec<String>,
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
+        log_trace!(self.logger, "calling sweep_wallet");
+
         // Try each federation first
         let federation_ids = self.list_federation_ids().await?;
         for federation_id in federation_ids {
@@ -1988,7 +2086,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         let b = self.node_manager.get_balance().await?;
-        if b.confirmed + b.unconfirmed > 0 {
+        let res = if b.confirmed + b.unconfirmed > 0 {
             let res = self
                 .node_manager
                 .sweep_wallet(send_to.clone(), labels, fee_rate)
@@ -1998,13 +2096,18 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         } else {
             log_error!(self.logger, "node manager doesn't have a balance");
             Err(MutinyError::InsufficientBalance)
-        }
+        };
+        log_trace!(self.logger, "finished calling sweep_wallet");
+
+        res
     }
 
     pub async fn create_address(
         &self,
         labels: Vec<String>,
     ) -> Result<bitcoin::Address, MutinyError> {
+        log_trace!(self.logger, "calling create_address");
+
         // Attempt to create federation invoice if available
         let federation_ids = self.list_federation_ids().await?;
         if !federation_ids.is_empty() {
@@ -2024,6 +2127,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             return Err(MutinyError::WalletOperationFailed);
         };
 
+        log_trace!(self.logger, "finished calling create_address");
         Ok(addr)
     }
 
@@ -2032,6 +2136,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         amount: u64,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
+        log_trace!(self.logger, "calling create_lightning_invoice");
+
         // Attempt to create federation invoice if available
         let federation_ids = self.list_federation_ids().await?;
         if !federation_ids.is_empty() {
@@ -2050,6 +2156,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // Fallback to node_manager invoice creation if no federation invoice created
         let (inv, _fee) = self.node_manager.create_invoice(amount, labels).await?;
 
+        log_trace!(self.logger, "finished calling create_lightning_invoice");
         Ok(inv)
     }
 
@@ -2058,8 +2165,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     ///
     /// This will not include any funds in an unconfirmed lightning channel.
     pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyError> {
+        log_trace!(self.logger, "calling get_balance");
+
         let ln_balance = self.node_manager.get_balance().await?;
         let federation_balance = self.get_total_federation_balance().await?;
+        log_trace!(self.logger, "finished calling get_balance");
 
         Ok(MutinyBalance::new(ln_balance, federation_balance))
     }
@@ -2094,6 +2204,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         limit: Option<usize>,
         offset: Option<usize>,
     ) -> Result<Vec<ActivityItem>, MutinyError> {
+        log_trace!(self.logger, "calling get_activity");
+
         let index = {
             let index = self.storage.activity_index();
             let vec = index.try_read()?.clone().into_iter().collect_vec();
@@ -2174,19 +2286,25 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 }
             }
         }
+        log_trace!(self.logger, "finished calling get_activity");
 
         Ok(activities)
     }
 
     pub fn get_transaction(&self, txid: Txid) -> Result<Option<TransactionDetails>, MutinyError> {
+        log_trace!(self.logger, "calling get_transaction");
+
         // check our local cache/state for fedimint first
-        match get_transaction_details(&self.storage, txid, &self.logger) {
+        let res = match get_transaction_details(&self.storage, txid, &self.logger) {
             Some(t) => Ok(Some(t)),
             None => {
                 // fall back to node manager
                 self.node_manager.get_transaction(txid)
             }
-        }
+        };
+        log_trace!(self.logger, "finished calling get_transaction");
+
+        res
     }
 
     /// Returns all the lightning activity for a given label
@@ -2194,6 +2312,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         &self,
         label: &String,
     ) -> Result<Vec<ActivityItem>, MutinyError> {
+        log_trace!(self.logger, "calling get_label_activity");
+
         let Some(label_item) = self.node_manager.get_label(label)? else {
             return Ok(Vec::new());
         };
@@ -2238,14 +2358,19 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 }
             }
         }
+        log_trace!(self.logger, "finished calling get_label_activity");
 
         Ok(activities)
     }
 
     pub fn list_invoices(&self) -> Result<Vec<MutinyInvoice>, MutinyError> {
+        log_trace!(self.logger, "calling list_invoices");
+
         let mut inbound_invoices = self.list_payment_info_from_persisters(true)?;
         let mut outbound_invoices = self.list_payment_info_from_persisters(false)?;
         inbound_invoices.append(&mut outbound_invoices);
+        log_trace!(self.logger, "finished calling list_invoices");
+
         Ok(inbound_invoices)
     }
 
@@ -2277,7 +2402,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Gets an invoice.
     /// This includes sent and received invoices.
     pub async fn get_invoice(&self, invoice: &Bolt11Invoice) -> Result<MutinyInvoice, MutinyError> {
-        self.get_invoice_by_hash(invoice.payment_hash()).await
+        log_trace!(self.logger, "calling get_invoice");
+
+        let res = self.get_invoice_by_hash(invoice.payment_hash()).await;
+        log_trace!(self.logger, "finished calling get_invoice");
+
+        res
     }
 
     /// Looks up an invoice by hash.
@@ -2286,7 +2416,12 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         &self,
         hash: &sha256::Hash,
     ) -> Result<MutinyInvoice, MutinyError> {
-        get_invoice_by_hash(hash, &self.storage, &self.logger)
+        log_trace!(self.logger, "calling get_invoice_by_hash");
+
+        let res = get_invoice_by_hash(hash, &self.storage, &self.logger);
+        log_trace!(self.logger, "finished calling get_invoice_by_hash");
+
+        res
     }
 
     /// Checks whether or not the user is subscribed to Mutiny+.
@@ -2296,7 +2431,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// Returns Some(u64) for their unix expiration timestamp, which may be in the
     /// past or in the future, depending on whether or not it is currently active.
     pub async fn check_subscribed(&self) -> Result<Option<u64>, MutinyError> {
-        if let Some(ref subscription_client) = self.subscription_client {
+        log_trace!(self.logger, "calling check_subscribed");
+
+        let res = if let Some(ref subscription_client) = self.subscription_client {
             let now = utils::now().as_secs();
             match self.storage.get_data::<u64>(SUBSCRIPTION_TIMESTAMP) {
                 Ok(Some(timestamp)) if timestamp > now => {
@@ -2320,27 +2457,40 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             }
         } else {
             Ok(None)
-        }
+        };
+        log_trace!(self.logger, "finished calling check_subscribed");
+
+        res
     }
 
     /// Gets the subscription plans for Mutiny+ subscriptions
     pub async fn get_subscription_plans(&self) -> Result<Vec<Plan>, MutinyError> {
-        if let Some(subscription_client) = self.subscription_client.clone() {
+        log_trace!(self.logger, "calling get_subscription_plans");
+
+        let res = if let Some(subscription_client) = self.subscription_client.clone() {
             Ok(subscription_client.get_plans().await?)
         } else {
             Ok(vec![])
-        }
+        };
+        log_trace!(self.logger, "finished calling get_subscription_plans");
+
+        res
     }
 
     /// Subscribes to a Mutiny+ plan with a specific plan id.
     ///
     /// Returns a lightning invoice so that the plan can be paid for to start it.
     pub async fn subscribe_to_plan(&self, id: u8) -> Result<MutinyInvoice, MutinyError> {
-        if let Some(subscription_client) = self.subscription_client.clone() {
+        log_trace!(self.logger, "calling subscribe_to_plan");
+
+        let res = if let Some(subscription_client) = self.subscription_client.clone() {
             Ok(Bolt11Invoice::from_str(&subscription_client.subscribe_to_plan(id).await?)?.into())
         } else {
             Err(MutinyError::SubscriptionClientNotConfigured)
-        }
+        };
+        log_trace!(self.logger, "finished calling subscribe_to_plan");
+
+        res
     }
 
     /// Pay the subscription invoice. This will post a NWC automatically afterwards.
@@ -2349,7 +2499,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         inv: &Bolt11Invoice,
         autopay: bool,
     ) -> Result<(), MutinyError> {
-        if let Some(subscription_client) = self.subscription_client.as_ref() {
+        log_trace!(self.logger, "calling pay_subscription_invoice");
+
+        let res = if let Some(subscription_client) = self.subscription_client.as_ref() {
             // TODO if this times out, we should make the next part happen in EventManager
             self.pay_invoice(inv, None, vec![MUTINY_PLUS_SUBSCRIPTION_LABEL.to_string()])
                 .await?;
@@ -2365,7 +2517,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             Ok(())
         } else {
             Err(MutinyError::SubscriptionClientNotConfigured)
-        }
+        };
+        log_trace!(self.logger, "finished calling pay_subscription_invoice");
+
+        res
     }
 
     async fn ensure_mutiny_nwc_profile(
@@ -2437,6 +2592,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     /// Uploads a profile pic to nostr.build and returns the uploaded file's URL
     pub async fn upload_profile_pic(&self, image_bytes: Vec<u8>) -> Result<String, MutinyError> {
+        log_trace!(self.logger, "calling upload_profile_pic");
+
         let client = reqwest::Client::new();
         let hash = sha256::Hash::hash(&image_bytes);
         let form = Form::new().part("fileToUpload", Part::bytes(image_bytes));
@@ -2485,6 +2642,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             );
             return Err(MutinyError::NostrError);
         }
+        log_trace!(self.logger, "finished calling upload_profile_pic");
 
         // get url from response body
         if let Some(value) = res.data.first() {
@@ -2504,6 +2662,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         keys: Option<Keys>,
         #[cfg(target_arch = "wasm32")] extension_pk: Option<::nostr::PublicKey>,
     ) -> Result<::nostr::PublicKey, MutinyError> {
+        log_trace!(self.logger, "calling change_nostr_keys");
+
         #[cfg(target_arch = "wasm32")]
         let source = utils::build_nostr_key_source(keys, extension_pk)?;
 
@@ -2515,11 +2675,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // re-sync nostr profile data
         self.sync_nostr().await?;
 
+        log_trace!(self.logger, "finished calling change_nostr_keys");
         Ok(new_pk)
     }
 
     /// Syncs all of our nostr data from the configured primal instance
     pub async fn sync_nostr(&self) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling sync_nostr");
+
         let npub = self.nostr.get_npub().await;
         let contacts_fut = self.sync_nostr_contacts(npub);
         let profile_fut = self.sync_nostr_profile();
@@ -2529,6 +2692,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         contacts_res?;
         profile_res?;
 
+        log_trace!(self.logger, "finished calling sync_nostr");
         Ok(())
     }
 
@@ -2544,6 +2708,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
     /// Get contacts from the given npub and sync them to the wallet
     pub async fn sync_nostr_contacts(&self, npub: ::nostr::PublicKey) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling sync_nostr_contacts");
+
         let (contact_list, mut metadata) =
             self.nostr.primal_client.get_nostr_contacts(npub).await?;
 
@@ -2610,6 +2776,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         self.storage.set(updated_contacts)?;
+        log_trace!(self.logger, "finished calling sync_nostr_contacts");
 
         Ok(())
     }
@@ -2623,6 +2790,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         until: Option<u64>,
         since: Option<u64>,
     ) -> Result<Vec<DirectMessage>, MutinyError> {
+        log_trace!(self.logger, "calling get_dm_conversation");
+
         let self_key = self.nostr.get_npub().await;
         let events = self
             .nostr
@@ -2653,12 +2822,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // sort messages, newest first
         messages.sort_by(|a, b| b.cmp(a));
 
+        log_trace!(self.logger, "finished calling get_dm_conversation");
         Ok(messages)
     }
 
     /// Stops all of the nodes and background processes.
     /// Returns after node has been stopped.
     pub async fn stop(&self) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling stop");
+
         self.stop.store(true, Ordering::Relaxed);
 
         self.node_manager.stop().await?;
@@ -2670,6 +2842,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             log_debug!(self.logger, "stopped storage");
         }
 
+        log_trace!(self.logger, "finished calling stop");
         Ok(())
     }
 
@@ -2678,6 +2851,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         old: Option<String>,
         new: Option<String>,
     ) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling change_password");
+
         // check if old password is correct
         if old != self.storage.password().map(|s| s.to_owned()) {
             return Err(MutinyError::IncorrectPassword);
@@ -2704,6 +2879,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // the user has saved their seed already.
         sleep(5_000).await;
 
+        log_trace!(self.logger, "finished calling change_password");
         Ok(())
     }
 
@@ -2711,6 +2887,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     ///
     /// This can be useful if you get stuck in a bad state.
     pub async fn reset_onchain_tracker(&mut self) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling reset_onchain_tracker");
+
         self.node_manager.reset_onchain_tracker().await?;
         // sleep for 250ms to give time for the storage to write
         utils::sleep(250).await;
@@ -2727,12 +2905,17 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             .full_sync(FULL_SYNC_STOP_GAP)
             .await?;
 
+        log_trace!(self.logger, "finished calling reset_onchain_tracker");
         Ok(())
     }
 
     /// Deletes all the storage
     pub async fn delete_all(&self) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling delete_all");
+
         self.storage.delete_all().await?;
+        log_trace!(self.logger, "finished calling delete_all");
+
         Ok(())
     }
 
@@ -2762,11 +2945,16 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         invoice: Bolt11Invoice,
         network: Option<Network>,
     ) -> Result<MutinyInvoice, MutinyError> {
+        log_trace!(self.logger, "calling decode_invoice");
+
         if invoice.network() != network.unwrap_or(self.network) {
             return Err(MutinyError::IncorrectNetwork);
         }
 
-        Ok(invoice.into())
+        let res = invoice.into();
+        log_trace!(self.logger, "finished calling decode_invoice");
+
+        Ok(res)
     }
 
     /// Adds a new federation based on its federation code
@@ -2774,7 +2962,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         &mut self,
         federation_code: InviteCode,
     ) -> Result<FederationIdentity, MutinyError> {
-        create_new_federation(
+        log_trace!(self.logger, "calling new_federation");
+
+        let res = create_new_federation(
             self.xprivkey,
             self.storage.clone(),
             self.network,
@@ -2786,32 +2976,45 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             federation_code,
             self.stop.clone(),
         )
-        .await
+        .await;
+        log_trace!(self.logger, "finished calling new_federation");
+
+        res
     }
 
     /// Lists the federation id's of the federation clients in the manager.
     pub async fn list_federations(&self) -> Result<Vec<FederationIdentity>, MutinyError> {
+        log_trace!(self.logger, "calling list_federations");
+
         let federations = self.federations.read().await;
         let mut federation_identities = Vec::new();
         for f in federations.iter() {
             let i = f.1.get_mutiny_federation_identity().await;
             federation_identities.push(i);
         }
+
+        log_trace!(self.logger, "finished calling list_federations");
         Ok(federation_identities)
     }
 
     /// Lists the federation id's of the federation clients in the manager.
     pub async fn list_federation_ids(&self) -> Result<Vec<FederationId>, MutinyError> {
+        log_trace!(self.logger, "calling list_federation_ids");
+
         let federations = self.federations.read().await;
         let federation_identities = federations
             .iter()
             .map(|(_, n)| n.fedimint_client.federation_id())
             .collect();
+
+        log_trace!(self.logger, "finished calling list_federation_ids");
         Ok(federation_identities)
     }
 
     /// Removes a federation by removing it from the user's federation list.
     pub async fn remove_federation(&self, federation_id: FederationId) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling remove_federation");
+
         let mut federations_guard = self.federations.write().await;
 
         if let Some(fedimint_client) = federations_guard.get(&federation_id) {
@@ -2855,11 +3058,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 }
             }
         }
+        log_trace!(self.logger, "finshed calling remove_federation");
 
         Ok(())
     }
 
     pub async fn get_total_federation_balance(&self) -> Result<u64, MutinyError> {
+        log_trace!(self.logger, "calling get_total_federation_balance");
+
         let federation_ids = self.list_federation_ids().await?;
         let mut total_balance = 0;
 
@@ -2874,10 +3080,13 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             total_balance += balance;
         }
 
+        log_trace!(self.logger, "finsihed calling get_total_federation_balance");
         Ok(total_balance)
     }
 
     pub async fn get_federation_balances(&self) -> Result<FederationBalances, MutinyError> {
+        log_trace!(self.logger, "calling get_federation_balances");
+
         let federation_lock = self.federations.read().await;
 
         let federation_ids = self.list_federation_ids().await?;
@@ -2891,11 +3100,14 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             balances.push(FederationBalance { identity, balance });
         }
 
+        log_trace!(self.logger, "finsihed calling get_federation_balances");
         Ok(FederationBalances { balances })
     }
 
     /// Starts a background process that will check pending fedimint operations
     pub(crate) async fn start_fedimint_background_checker(&self) {
+        log_trace!(self.logger, "calling start_fedimint_background_checker");
+
         let logger = self.logger.clone();
         let self_clone = self.clone();
         utils::spawn(async move {
@@ -2931,12 +3143,19 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 }
             }
         });
+
+        log_trace!(
+            self.logger,
+            "finsihed calling start_fedimint_background_checker"
+        );
     }
 
     /// Calls upon a LNURL to get the parameters for it.
     /// This contains what kind of LNURL it is (pay, withdrawal, auth, etc).
     // todo revamp LnUrlParams to be well designed
     pub async fn decode_lnurl(&self, lnurl: LnUrl) -> Result<LnUrlParams, MutinyError> {
+        log_trace!(self.logger, "calling decode_lnurl");
+
         // handle LNURL-AUTH
         if lnurl.is_lnurl_auth() {
             return Ok(LnUrlParams {
@@ -2966,6 +3185,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             },
         };
 
+        log_trace!(self.logger, "finished calling decode_lnurl");
         Ok(params)
     }
 
@@ -2980,9 +3200,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         comment: Option<String>,
         privacy_level: PrivacyLevel,
     ) -> Result<MutinyInvoice, MutinyError> {
+        log_trace!(self.logger, "calling lnurl_pay");
+
         let response = self.lnurl_client.make_request(&lnurl.url).await?;
 
-        match response {
+        let res = match response {
             LnUrlResponse::LnUrlPayResponse(pay) => {
                 let msats = amount_sats * 1000;
 
@@ -3116,7 +3338,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             }
             LnUrlResponse::LnUrlWithdrawResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
             LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
-        }
+        };
+        log_trace!(self.logger, "finished calling lnurl_pay");
+
+        res
     }
 
     /// Calls upon a LNURL and withdraws from it.
@@ -3126,9 +3351,11 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         lnurl: &LnUrl,
         amount_sats: u64,
     ) -> Result<bool, MutinyError> {
+        log_trace!(self.logger, "calling lnurl_withdraw");
+
         let response = self.lnurl_client.make_request(&lnurl.url).await?;
 
-        match response {
+        let res = match response {
             LnUrlResponse::LnUrlPayResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
             LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
             LnUrlResponse::LnUrlWithdrawResponse(withdraw) => {
@@ -3147,18 +3374,26 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                     Response::Error { .. } => Ok(false),
                 }
             }
-        }
+        };
+        log_trace!(self.logger, "finished calling lnurl_withdraw");
+
+        res
     }
 
     /// Authenticate with a LNURL-auth
     pub async fn lnurl_auth(&self, lnurl: LnUrl) -> Result<(), MutinyError> {
-        make_lnurl_auth_connection(
+        log_trace!(self.logger, "calling lnurl_auth");
+
+        let res = make_lnurl_auth_connection(
             self.auth.clone(),
             self.lnurl_client.clone(),
             lnurl,
             self.logger.clone(),
         )
-        .await
+        .await;
+        log_trace!(self.logger, "finished calling lnurl_auth");
+
+        res
     }
 
     pub fn is_safe_mode(&self) -> bool {
@@ -3170,6 +3405,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         &self,
         token_v3: TokenV3,
     ) -> Result<Vec<MutinyInvoice>, MutinyError> {
+        log_trace!(self.logger, "calling melt_cashu_token");
+
         let mut invoices: Vec<MutinyInvoice> = Vec::with_capacity(token_v3.tokens.len());
 
         for token in token_v3.tokens {
@@ -3231,44 +3468,67 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 invoices.push(mutiny_invoice);
             }
         }
+        log_trace!(self.logger, "finished calling melt_cashu_token");
+
         Ok(invoices)
     }
 
     pub async fn check_available_lnurl_name(&self, name: String) -> Result<bool, MutinyError> {
-        if let Some(hermes_client) = self.hermes_client.clone() {
+        log_trace!(self.logger, "calling check_available_lnurl_name");
+
+        let res = if let Some(hermes_client) = self.hermes_client.clone() {
             Ok(hermes_client.check_available_name(name).await?)
         } else {
             Err(MutinyError::NotFound)
-        }
+        };
+        log_trace!(self.logger, "calling check_available_lnurl_name");
+
+        res
     }
 
     pub async fn reserve_lnurl_name(&self, name: String) -> Result<(), MutinyError> {
-        if let Some(hermes_client) = self.hermes_client.clone() {
+        log_trace!(self.logger, "calling reserve_lnurl_name");
+
+        let res = if let Some(hermes_client) = self.hermes_client.clone() {
             Ok(hermes_client.reserve_name(name).await?)
         } else {
             Err(MutinyError::NotFound)
-        }
+        };
+        log_trace!(self.logger, "calling reserve_lnurl_name");
+
+        res
     }
 
     pub async fn check_lnurl_name(&self) -> Result<Option<String>, MutinyError> {
-        if let Some(hermes_client) = self.hermes_client.as_ref() {
+        log_trace!(self.logger, "calling check_lnurl_name");
+
+        let res = if let Some(hermes_client) = self.hermes_client.as_ref() {
             hermes_client.check_username().await
         } else {
             Err(MutinyError::NotFound)
-        }
+        };
+        log_trace!(self.logger, "finished calling check_lnurl_name");
+
+        res
     }
 
     /// Starts up the hermes client if available
     pub async fn start_hermes(&self, profile_key: Option<Keys>) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling start_hermes");
+
         if let Some(hermes_client) = self.hermes_client.as_ref() {
             hermes_client.start(profile_key).await?
         }
+
+        log_trace!(self.logger, "finished calling start_hermes");
         Ok(())
     }
 
     /// Checks available blind tokens
     /// Only needs to be ran once successfully on startup
     pub fn check_blind_tokens(&self) {
+        log_trace!(self.logger, "calling check_blind_tokens");
+
         if let Some(blind_auth_client) = self.blind_auth_client.clone() {
             let logger = self.logger.clone();
             let stop = self.stop.clone();
@@ -3292,10 +3552,13 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 }
             });
         }
+        log_trace!(self.logger, "finished calling check_blind_tokens");
     }
 
     /// Gets the current bitcoin price in USD.
     pub async fn get_bitcoin_price(&self, fiat: Option<String>) -> Result<f32, MutinyError> {
+        log_trace!(self.logger, "calling get_bitcoin_price");
+
         let now = crate::utils::now();
         let fiat = fiat.unwrap_or("usd".to_string());
 
@@ -3304,7 +3567,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             cache.get(&fiat).cloned()
         };
 
-        match cache_result {
+        let res = match cache_result {
             Some((price, timestamp)) if timestamp == Duration::from_secs(0) => {
                 // Cache is from previous run, return it but fetch a new price in the background
                 let cache = self.bitcoin_price_cache.clone();
@@ -3336,7 +3599,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 )
                 .await
             }
-        }
+        };
+        log_trace!(self.logger, "finished calling get_bitcoin_price");
+
+        res
     }
 
     async fn fetch_and_cache_price(

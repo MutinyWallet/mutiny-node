@@ -18,8 +18,6 @@ use esplora_client::AsyncClient;
 use futures::{try_join, TryFutureExt};
 use futures_util::lock::Mutex;
 use hex_conservative::DisplayHex;
-use lightning::chain::chainmonitor::{MonitorUpdateId, Persist};
-use lightning::chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate};
 use lightning::chain::transaction::OutPoint;
 use lightning::chain::{BestBlock, ChannelMonitorUpdateStatus};
 use lightning::io::Cursor;
@@ -30,6 +28,14 @@ use lightning::sign::{InMemorySigner, SpendableOutputDescriptor};
 use lightning::util::logger::Logger;
 use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
+use lightning::{
+    chain::chainmonitor::{MonitorUpdateId, Persist},
+    log_trace,
+};
+use lightning::{
+    chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate},
+    log_warn,
+};
 use lightning::{log_debug, log_error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -213,6 +219,11 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         let key = self.get_key(CHANNEL_MANAGER_KEY);
         match self.storage.get_data::<VersionedValue>(&key) {
             Ok(Some(versioned_value)) => {
+                log_trace!(
+                    mutiny_logger,
+                    "Got versioned value: {}",
+                    versioned_value.version
+                );
                 // new encoding is in hex
                 let hex: String = serde_json::from_value(versioned_value.value.clone())?;
                 let bytes = FromHex::from_hex(&hex)?;
@@ -222,11 +233,13 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
                     chain_monitor,
                     mutiny_chain,
                     fee_estimator,
-                    mutiny_logger,
+                    mutiny_logger.clone(),
                     keys_manager,
                     router,
                     channel_monitors,
                 )?;
+
+                log_trace!(mutiny_logger, "parsed channel manager, swapping it");
 
                 self.manager_version
                     .swap(versioned_value.version, Ordering::SeqCst);
@@ -235,6 +248,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             }
             Ok(None) => {
                 // no key manager stored, start a new one
+                log_debug!(mutiny_logger, "Creating a new channel manager");
 
                 Self::create_new_channel_manager(
                     network,
@@ -252,6 +266,11 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             }
             Err(_) => {
                 // old encoding with no version number and as an array of numbers
+                log_warn!(
+                    mutiny_logger,
+                    "A very old encoding of channel manager with no version number, parsing it"
+                );
+
                 let bytes = self.read_value(CHANNEL_MANAGER_KEY)?;
                 Self::parse_channel_manager(
                     bytes,
@@ -280,6 +299,8 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         router: Arc<Router>,
         mut channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
     ) -> Result<ReadChannelManager<S>, MutinyError> {
+        log_debug!(mutiny_logger, "Parsing channel manager");
+
         let mut channel_monitor_mut_references = Vec::new();
         for (_, channel_monitor) in channel_monitors.iter_mut() {
             channel_monitor_mut_references.push(channel_monitor);
@@ -292,18 +313,23 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
             chain_monitor,
             mutiny_chain,
             router,
-            mutiny_logger,
+            mutiny_logger.clone(),
             default_user_config(accept_underpaying_htlcs),
             channel_monitor_mut_references,
         );
+
+        log_trace!(mutiny_logger, "Read channel manager arguments");
         let mut readable_kv_value = Cursor::new(bytes);
         let Ok((_, channel_manager)) =
             <(BlockHash, PhantomChannelManager<S>)>::read(&mut readable_kv_value, read_args)
         else {
+            log_error!(mutiny_logger, "Could not read channel manager");
             return Err(MutinyError::ReadError {
                 source: MutinyStorageError::Other(anyhow!("could not read manager")),
             });
         };
+
+        log_debug!(mutiny_logger, "Read channel manager okay");
         Ok(ReadChannelManager {
             channel_manager,
             is_restarting: true,
