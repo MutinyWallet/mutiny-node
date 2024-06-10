@@ -1,5 +1,5 @@
 pack:
-    wasm-pack build ./mutiny-wasm --dev --weak-refs --target web --scope mutinywallet
+    wasm-pack build ./mutiny-wasm --weak-refs --target web --scope mutinywallet
 
 link:
     wasm-pack build ./mutiny-wasm --dev --weak-refs --target web --scope mutinywallet && cd mutiny-wasm/pkg && pnpm link --global
@@ -8,7 +8,7 @@ login:
     wasm-pack login --scope=@mutinywallet
 
 dev: 
-    wasm-pack build ./mutiny-wasm --weak-refs --target web --scope mutinywallet
+    wasm-pack build ./mutiny-wasm --dev --weak-refs --target web --scope mutinywallet
 
 release:
     wasm-pack build ./mutiny-wasm --release --weak-refs --target web --scope mutinywallet
