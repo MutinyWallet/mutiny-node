@@ -33,3 +33,16 @@ Things to test before cutting a release:
 - [ ] Mutual Close Channel
   - [ ] Known Issue: balance will be double counted until 6 confirmations
 - [ ] Force Close Channel
+- [ ] Get Mutiny+
+- [ ] Test lightning address payments
+- [ ] Change to Zeus LSP (https://mutinynet-flow.lnolymp.us)
+  - [ ] Doesn't allow if you have channels
+  - [ ] re-test all channel things again
+
+Testing Utils:
+
+- [Faucet](https://faucet.mutinynet.com/)
+- You can also DM the faucet, just search `Mutinynet`
+  - DM it an invoice or on-chain address and it'll send to them
+  - DM it `zap me` for it to zap you, you need a lightning address for this
+  - DM it `spam me` for it to zap you 25 times, you need a lightning address for this
