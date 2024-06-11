@@ -184,10 +184,10 @@ impl<S: MutinyStorage> HermesClient<S> {
 
                         // check that federation is still the same
                         if let Some(f) = first_federation {
-                            // if a registered federation exists and is what we have
+                            // if a registered federation exists and is what we have and zaps are enabled
                             // then there is no reason to update
-                            if o.federation_id.is_some()
-                                && f.federation_id == o.federation_id.unwrap()
+                            if o.federation_id.is_some_and(|id| id == f.federation_id)
+                                && !o.disabled_zaps
                             {
                                 break;
                             }
