@@ -147,12 +147,12 @@ impl LspClient {
     }
 
     /// Get the pubkey and connection string from the LSP from the /info endpoint
-    async fn fetch_connection_info(
+    pub(crate) async fn fetch_connection_info(
         http_client: &Client,
         url: &str,
         logger: &MutinyLogger,
     ) -> Result<(PublicKey, String), MutinyError> {
-        let builder = http_client.get(format!("{}{}", url, GET_INFO_PATH));
+        let builder = http_client.get(format!("{}{}", url.trim(), GET_INFO_PATH));
         let request = add_x_auth_token_if_needed(url, builder)?;
 
         let response: reqwest::Response = utils::fetch_with_timeout(http_client, request)
@@ -296,7 +296,7 @@ impl Lsp for LspClient {
 
         let builder = self
             .http_client
-            .post(format!("{}{}", &self.url, PROPOSAL_PATH))
+            .post(format!("{}{}", &self.url.trim(), PROPOSAL_PATH))
             .json(&payload);
 
         let request = add_x_auth_token_if_needed(&self.url, builder)?;
@@ -353,7 +353,7 @@ impl Lsp for LspClient {
     async fn get_lsp_fee_msat(&self, fee_request: FeeRequest) -> Result<FeeResponse, MutinyError> {
         let builder = self
             .http_client
-            .post(format!("{}{}", &self.url, FEE_PATH))
+            .post(format!("{}{}", &self.url.trim(), FEE_PATH))
             .json(&fee_request);
 
         let request = add_x_auth_token_if_needed(&self.url, builder)?;

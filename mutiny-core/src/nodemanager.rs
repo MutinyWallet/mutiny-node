@@ -1,6 +1,7 @@
 use crate::labels::LabelStorage;
 use crate::ldkstorage::CHANNEL_CLOSURE_PREFIX;
 use crate::logging::LOGGING_KEY;
+use crate::lsp::voltage;
 use crate::utils::{sleep, spawn};
 use crate::MutinyInvoice;
 use crate::MutinyWalletConfig;
@@ -59,6 +60,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 use std::{collections::HashMap, ops::Deref, sync::Arc};
+use url::Url;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
@@ -347,7 +349,15 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
         let lsp_config = if c.safe_mode {
             None
         } else {
-            create_lsp_config(c.lsp_url, c.lsp_connection_string, c.lsp_token)?
+            create_lsp_config(c.lsp_url, c.lsp_connection_string, c.lsp_token).unwrap_or_else(
+                |_| {
+                    log_warn!(
+                        logger,
+                        "Failed to create lsp config, falling back to no LSP configured"
+                    );
+                    None
+                },
+            )
         };
         log_trace!(logger, "finished creating lsp config");
 
@@ -1338,7 +1348,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// current LSP, it will fail to change the LSP.
     ///
     /// Requires a restart of the node manager to take effect.
-    pub async fn change_lsp(&self, lsp_config: Option<LspConfig>) -> Result<(), MutinyError> {
+    pub async fn change_lsp(&self, mut lsp_config: Option<LspConfig>) -> Result<(), MutinyError> {
         log_trace!(self.logger, "calling change_lsp");
 
         // if we are in safe mode we don't load the lightning state so we can't know if it is safe to change the LSP.
@@ -1361,6 +1371,28 @@ impl<S: MutinyStorage> NodeManager<S> {
             }
         }
         drop(nodes);
+
+        // verify that the LSP config is valid
+        match lsp_config.as_mut() {
+            Some(LspConfig::VoltageFlow(config)) => {
+                let http_client = Client::new();
+
+                // try to connect to the LSP, update the config if successful
+                let (pk, str) = voltage::LspClient::fetch_connection_info(
+                    &http_client,
+                    &config.url,
+                    &self.logger,
+                )
+                .await?;
+                config.pubkey = Some(pk);
+                config.connection_string = Some(str);
+            }
+            Some(LspConfig::Lsps(config)) => {
+                // make sure a valid connection string was provided
+                PubkeyConnectionInfo::new(&config.connection_string)?;
+            }
+            None => {} // Nothing to verify
+        }
 
         // edit node storage
         let mut node_storage = self.node_storage.write().await;
@@ -2036,8 +2068,14 @@ pub fn create_lsp_config(
 ) -> Result<Option<LspConfig>, MutinyError> {
     match (lsp_url.clone(), lsp_connection_string.clone()) {
         (Some(lsp_url), None) => {
-            if !lsp_url.is_empty() {
-                Ok(Some(LspConfig::new_voltage_flow(lsp_url)))
+            let trimmed = lsp_url.trim().to_string();
+            if !trimmed.is_empty() {
+                // make sure url is valid
+                if Url::parse(&trimmed).is_err() {
+                    return Err(MutinyError::InvalidArgumentsError);
+                }
+
+                Ok(Some(LspConfig::new_voltage_flow(trimmed)))
             } else {
                 Ok(None)
             }
