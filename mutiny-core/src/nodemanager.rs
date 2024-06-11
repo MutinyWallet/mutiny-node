@@ -1,6 +1,7 @@
 use crate::labels::LabelStorage;
 use crate::ldkstorage::CHANNEL_CLOSURE_PREFIX;
 use crate::logging::LOGGING_KEY;
+use crate::lsp::voltage;
 use crate::utils::{sleep, spawn};
 use crate::MutinyInvoice;
 use crate::MutinyWalletConfig;
@@ -1347,7 +1348,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// current LSP, it will fail to change the LSP.
     ///
     /// Requires a restart of the node manager to take effect.
-    pub async fn change_lsp(&self, lsp_config: Option<LspConfig>) -> Result<(), MutinyError> {
+    pub async fn change_lsp(&self, mut lsp_config: Option<LspConfig>) -> Result<(), MutinyError> {
         log_trace!(self.logger, "calling change_lsp");
 
         // if we are in safe mode we don't load the lightning state so we can't know if it is safe to change the LSP.
@@ -1370,6 +1371,28 @@ impl<S: MutinyStorage> NodeManager<S> {
             }
         }
         drop(nodes);
+
+        // verify that the LSP config is valid
+        match lsp_config.as_mut() {
+            Some(LspConfig::VoltageFlow(config)) => {
+                let http_client = Client::new();
+
+                // try to connect to the LSP, update the config if successful
+                let (pk, str) = voltage::LspClient::fetch_connection_info(
+                    &http_client,
+                    &config.url,
+                    &self.logger,
+                )
+                .await?;
+                config.pubkey = Some(pk);
+                config.connection_string = Some(str);
+            }
+            Some(LspConfig::Lsps(config)) => {
+                // make sure a valid connection string was provided
+                PubkeyConnectionInfo::new(&config.connection_string)?;
+            }
+            None => {} // Nothing to verify
+        }
 
         // edit node storage
         let mut node_storage = self.node_storage.write().await;

@@ -147,7 +147,7 @@ impl LspClient {
     }
 
     /// Get the pubkey and connection string from the LSP from the /info endpoint
-    async fn fetch_connection_info(
+    pub(crate) async fn fetch_connection_info(
         http_client: &Client,
         url: &str,
         logger: &MutinyLogger,
