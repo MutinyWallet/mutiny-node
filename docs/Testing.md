@@ -3,6 +3,7 @@
 Things to test before cutting a release:
 
 - [ ] `just test`/CI passes
+- [ ] Enable diagnostics
 - [ ] Join a fedimint
 - [ ] Leave a fedimint and rejoin
 - [ ] Receive on lightning
