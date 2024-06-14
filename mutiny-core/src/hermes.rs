@@ -180,6 +180,11 @@ impl<S: MutinyStorage> HermesClient<S> {
                                 o.name
                             );
                             *c = (o.name.clone(), true);
+
+                            // if we don't have a lightning address, no need to continue
+                            if o.name.is_none() {
+                                break;
+                            }
                         }
 
                         // check that federation is still the same
