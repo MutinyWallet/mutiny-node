@@ -492,11 +492,18 @@ impl<S: MutinyStorage> FederationClient<S> {
         amount: u64,
         labels: Vec<String>,
     ) -> Result<MutinyInvoice, MutinyError> {
+        log_trace!(self.logger, "calling federation.get_invoice");
         let inbound = true;
 
         let lightning_module = self
             .fedimint_client
             .get_first_module::<LightningClientModule>();
+
+        log_debug!(
+            self.logger,
+            "getting invoice from federation: {}",
+            self.fedimint_client.federation_id()
+        );
 
         let desc = Description::new(String::new()).expect("empty string is valid");
         let gateway = self.gateway.read().await;
@@ -510,6 +517,8 @@ impl<S: MutinyStorage> FederationClient<S> {
             )
             .await?;
         let invoice = convert_from_fedimint_invoice(&invoice);
+
+        log_debug!(self.logger, "got invoice from federation: {invoice}");
 
         // persist the invoice
         let mut stored_payment: MutinyInvoice = invoice.clone().into();
@@ -546,6 +555,7 @@ impl<S: MutinyStorage> FederationClient<S> {
             );
         });
 
+        log_trace!(self.logger, "finished calling get_invoice");
         Ok(invoice.into())
     }
 
@@ -553,13 +563,22 @@ impl<S: MutinyStorage> FederationClient<S> {
         &self,
         labels: Vec<String>,
     ) -> Result<Address, MutinyError> {
+        log_trace!(self.logger, "calling federation.get_new_address");
         let wallet_module = self
             .fedimint_client
             .get_first_module::<WalletClientModule>();
 
+        log_debug!(
+            self.logger,
+            "getting new address from federation: {}",
+            self.fedimint_client.federation_id()
+        );
+
         let (op_id, address) = wallet_module
             .get_deposit_address(fedimint_core::time::now() + PEG_IN_TIMEOUT_YEAR, ())
             .await?;
+
+        log_debug!(self.logger, "got new address from federation: {address}");
 
         let address = Address::from_str(&address.to_string())
             .expect("should convert")
@@ -577,6 +596,8 @@ impl<S: MutinyStorage> FederationClient<S> {
             .await
             .expect("just created it");
         self.subscribe_operation(operation, op_id);
+
+        log_trace!(self.logger, "finished calling get_new_address");
 
         Ok(address)
     }
