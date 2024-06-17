@@ -190,6 +190,7 @@ impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
         // any post processing we do after we get the fee rate from the cache
         match confirmation_target {
             ConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee => fee - 250, // helps with rounding errors
+            ConfirmationTarget::MinAllowedAnchorChannelRemoteFee => 250, // just pin to 1 sat/vbyte to prevent force closes
             ConfirmationTarget::AnchorChannelFee => (fee / 2).max(250), // do half the mempool minimum just to prevent force closes
             _ => fee,
         }
@@ -209,7 +210,7 @@ fn num_blocks_from_conf_target(confirmation_target: ConfirmationTarget) -> usize
 
 fn fallback_fee_from_conf_target(confirmation_target: ConfirmationTarget) -> u32 {
     match confirmation_target {
-        ConfirmationTarget::MinAllowedAnchorChannelRemoteFee => 3 * 250,
+        ConfirmationTarget::MinAllowedAnchorChannelRemoteFee => 250,
         ConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee => 3 * 250,
         ConfirmationTarget::ChannelCloseMinimum => 10 * 250,
         ConfirmationTarget::AnchorChannelFee => 10 * 250,
@@ -320,6 +321,16 @@ mod test {
         assert_eq!(
             fee_estimator.get_est_sat_per_1000_weight(ConfirmationTarget::OnChainSweep),
             12_500
+        );
+
+        // test post-processing
+        assert_eq!(
+            fee_estimator
+                .get_est_sat_per_1000_weight(ConfirmationTarget::MinAllowedAnchorChannelRemoteFee),
+            250
+        );
+        assert!(
+            fee_estimator.get_est_sat_per_1000_weight(ConfirmationTarget::AnchorChannelFee) >= 250
         );
     }
 
