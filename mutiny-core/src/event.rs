@@ -524,8 +524,19 @@ impl<S: MutinyStorage> EventHandler<S> {
             } => {
                 // if we still have channel open params, then it was just a failed channel open
                 // we should not persist this as a closed channel and just delete the channel open params
-                if let Ok(Some(_)) = self.persister.get_channel_open_params(user_channel_id) {
-                    let _ = self.persister.delete_channel_open_params(user_channel_id);
+                if let Ok(Some(mut params)) =
+                    self.persister.get_channel_open_params(user_channel_id)
+                {
+                    // Remove the LDK fluff from the error message
+                    let reason_str = reason.to_string().replace(
+                        "Channel closed because counterparty force-closed with message: ",
+                        "",
+                    );
+
+                    params.failure_reason = Some(reason_str);
+                    let _ = self
+                        .persister
+                        .persist_channel_open_params(user_channel_id, params);
                     return;
                 };
 

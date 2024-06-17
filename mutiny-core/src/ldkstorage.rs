@@ -550,6 +550,8 @@ pub(crate) struct ChannelOpenParams {
     pub(crate) labels: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) opening_tx: Option<Transaction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) failure_reason: Option<String>,
 }
 
 impl ChannelOpenParams {
@@ -560,6 +562,7 @@ impl ChannelOpenParams {
             utxos: None,
             labels: None,
             opening_tx: None,
+            failure_reason: None,
         }
     }
 
@@ -574,6 +577,7 @@ impl ChannelOpenParams {
             utxos: Some(utxos),
             labels: None,
             opening_tx: None,
+            failure_reason: None,
         }
     }
 }

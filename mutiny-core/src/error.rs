@@ -95,6 +95,9 @@ pub enum MutinyError {
     /// A channel could not be opened.
     #[error("Failed to create channel.")]
     ChannelCreationFailed,
+    /// A channel could not be opened.
+    #[error("Failed to create channel. {0}")]
+    ChannelCreationFailedWithReason(String),
     /// A channel could not be closed.
     #[error("Failed to close channel.")]
     ChannelClosingFailed,
@@ -237,6 +240,10 @@ impl PartialEq for MutinyError {
             (Self::RoutingFailed, Self::RoutingFailed) => true,
             (Self::PeerInfoParseFailed, Self::PeerInfoParseFailed) => true,
             (Self::ChannelCreationFailed, Self::ChannelCreationFailed) => true,
+            (
+                Self::ChannelCreationFailedWithReason(x),
+                Self::ChannelCreationFailedWithReason(y),
+            ) => x == y,
             (Self::ChannelClosingFailed, Self::ChannelClosingFailed) => true,
             (Self::PersistenceFailed { source }, Self::PersistenceFailed { source: source2 }) => {
                 source == source2
