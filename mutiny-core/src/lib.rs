@@ -96,9 +96,10 @@ use ::nostr::prelude::ZapRequestData;
 use ::nostr::Tag;
 use ::nostr::{EventBuilder, EventId, HttpMethod, JsonUtil, Keys, Kind};
 use async_lock::RwLock;
-use bdk_chain::ConfirmationTime;
+use bdk_chain::{BlockId, ConfirmationTime};
 use bip39::Mnemonic;
 pub use bitcoin;
+use bitcoin::address::NetworkUnchecked;
 use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
 use bitcoin::{bip32::ExtendedPrivKey, Transaction};
 use bitcoin::{hashes::sha256, Network, Txid};
@@ -141,6 +142,7 @@ use uuid::Uuid;
 use web_time::Instant;
 
 use crate::labels::LabelItem;
+use crate::nodemanager::NodeIdentity;
 use crate::nostr::{NostrKeySource, RELAYS};
 #[cfg(test)]
 use mockall::{automock, predicate::*};
@@ -944,22 +946,30 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
 
         log_trace!(logger, "setting up node manager");
         let start = Instant::now();
-        let mut nm_builder = NodeManagerBuilder::new(self.xprivkey, self.storage.clone())
-            .with_config(config.clone());
-        nm_builder.with_logger(logger.clone());
-        nm_builder.with_esplora(esplora.clone());
-        let node_manager = Arc::new(nm_builder.build().await?);
 
-        log_trace!(
-            logger,
-            "NodeManager started, took: {}ms",
-            start.elapsed().as_millis()
-        );
+        let node_manager = if self.storage.get_nodes()?.is_empty() {
+            Arc::new(RwLock::new(None))
+        } else {
+            let mut nm_builder = NodeManagerBuilder::new(self.xprivkey, self.storage.clone())
+                .with_config(config.clone());
+            nm_builder.with_logger(logger.clone());
+            nm_builder.with_esplora(esplora.clone());
 
-        // start syncing node manager
-        log_trace!(logger, "starting node manager sync");
-        NodeManager::start_sync(node_manager.clone());
-        log_trace!(logger, "finished node manager sync");
+            let nm = nm_builder.build().await?;
+
+            let node_manager = Arc::new(RwLock::new(Some(nm)));
+            log_trace!(logger, "starting node manager sync");
+            // start sync
+            NodeManager::start_sync(node_manager.clone(), network, stop.clone(), logger.clone());
+            log_trace!(logger, "finished node manager sync");
+
+            log_trace!(
+                logger,
+                "NodeManager started, took: {}ms",
+                start.elapsed().as_millis()
+            );
+            node_manager
+        };
 
         log_trace!(logger, "creating primal client");
         let primal_client = PrimalClient::new(
@@ -1110,18 +1120,27 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
 
         // populate the activity index
         log_trace!(logger, "populating activity index");
-        let mut activity_index = node_manager
-            .wallet
-            .list_transactions(false)?
-            .into_iter()
-            .map(|t| IndexItem {
-                timestamp: match t.confirmation_time {
-                    ConfirmationTime::Confirmed { time, .. } => Some(time),
-                    ConfirmationTime::Unconfirmed { .. } => None,
-                },
-                key: format!("{ONCHAIN_PREFIX}{}", t.internal_id),
-            })
-            .collect::<Vec<_>>();
+        let mut activity_index = {
+            node_manager
+                .read()
+                .await
+                .as_ref()
+                .map(|nm| {
+                    nm.wallet
+                        .list_transactions(false)
+                        .unwrap()
+                        .into_iter()
+                        .map(|t| IndexItem {
+                            timestamp: match t.confirmation_time {
+                                ConfirmationTime::Confirmed { time, .. } => Some(time),
+                                ConfirmationTime::Unconfirmed { .. } => None,
+                            },
+                            key: format!("{ONCHAIN_PREFIX}{}", t.internal_id),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
 
         // add any transaction details stored from fedimint
         let transaction_details = self
@@ -1223,20 +1242,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             return Ok(mw);
         }
 
-        // if we don't have any nodes, create one
-        log_trace!(logger, "listing nodes");
-        if mw.node_manager.list_nodes().await?.is_empty() {
-            log_trace!(logger, "going to create first node");
-            let nm = mw.node_manager.clone();
-            // spawn in background, this can take a while and we don't want to block
-            utils::spawn(async move {
-                if let Err(e) = nm.new_node().await {
-                    log_error!(nm.logger, "Failed to create first node: {e}");
-                }
-            })
-        };
-        log_trace!(logger, "finished listing nodes");
-
         // start the nostr background process
         log_trace!(logger, "starting nostr");
         mw.start_nostr().await;
@@ -1284,7 +1289,7 @@ pub struct MutinyWallet<S: MutinyStorage> {
     xprivkey: ExtendedPrivKey,
     config: MutinyWalletConfig,
     pub(crate) storage: S,
-    pub node_manager: Arc<NodeManager<S>>,
+    pub node_manager: Arc<RwLock<Option<NodeManager<S>>>>,
     pub nostr: Arc<NostrManager<S, PrimalClient, nostr_sdk::Client>>,
     pub federation_storage: Arc<RwLock<FederationStorage>>,
     pub(crate) federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>,
@@ -1305,19 +1310,33 @@ pub struct MutinyWallet<S: MutinyStorage> {
 
 impl<S: MutinyStorage> MutinyWallet<S> {
     /// Starts up all the nodes again.
-    /// Not needed after [NodeManager]'s `new()` function.
+    /// Not needed after [MutinyWallet]'s `new()` function.
     pub async fn start(&mut self) -> Result<(), MutinyError> {
         log_trace!(self.logger, "calling start");
 
         self.storage.start().await?;
+        self.stop.store(false, Ordering::Relaxed);
+
+        if self.storage.get_nodes()?.is_empty() {
+            return Ok(());
+        }
 
         let mut nm_builder = NodeManagerBuilder::new(self.xprivkey, self.storage.clone())
             .with_config(self.config.clone());
         nm_builder.with_logger(self.logger.clone());
+        let node_manager = nm_builder.build().await?;
 
-        // when we restart, gen a new session id
-        self.node_manager = Arc::new(nm_builder.build().await?);
-        NodeManager::start_sync(self.node_manager.clone());
+        // replace the node manager
+        let mut lock = self.node_manager.write().await;
+        *lock = Some(node_manager);
+
+        // start sync
+        NodeManager::start_sync(
+            self.node_manager.clone(),
+            self.network,
+            self.stop.clone(),
+            self.logger.clone(),
+        );
 
         log_trace!(self.logger, "finished calling start");
         Ok(())
@@ -1500,6 +1519,106 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         log_trace!(self.logger, "finished calling start_nostr");
     }
 
+    /// Creates a node manager with a node and returns the node identity.
+    /// If a node manager already exists, it will return an error.
+    pub async fn create_node_manager(&self) -> Result<NodeIdentity, MutinyError> {
+        log_trace!(self.logger, "calling create_node_manager");
+
+        if self.is_safe_mode() {
+            return Err(MutinyError::NotRunning);
+        }
+
+        let mut lock = self.node_manager.write().await;
+        // if we already have a node manager, return
+        if let Some(node_manager) = lock.as_ref() {
+            // if we don't have a node, we should unarchive the first node
+            // otherwise, we already have a functional node manager
+            let nodes = node_manager.list_nodes().await?;
+            if nodes.is_empty() {
+                return node_manager.unarchive_first_node().await;
+            } else {
+                return Err(MutinyError::AlreadyRunning);
+            }
+        }
+
+        let mut nm_builder = NodeManagerBuilder::new(self.xprivkey, self.storage.clone())
+            .with_config(self.config.clone());
+        nm_builder.with_logger(self.logger.clone());
+        let node_manager = nm_builder.build().await?;
+
+        // create first node
+        let node_identity = node_manager.create_first_node().await?;
+
+        // replace the node manager
+        *lock = Some(node_manager);
+
+        // start sync
+        NodeManager::start_sync(
+            self.node_manager.clone(),
+            self.network,
+            self.stop.clone(),
+            self.logger.clone(),
+        );
+
+        log_trace!(self.logger, "finished calling create_node_manager");
+
+        Ok(node_identity)
+    }
+
+    /// Creates a node manager if we don't have one already.
+    pub async fn create_node_manager_if_needed(&self) -> Result<Option<NodeIdentity>, MutinyError> {
+        match self.create_node_manager().await {
+            Ok(ident) => Ok(Some(ident)),
+            Err(MutinyError::AlreadyRunning) => Ok(None), // this means we already have a node manager
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Removes the node manager from the wallet. If the node manager has any balances,
+    /// this function will fail.
+    pub async fn remove_node_manager(&self) -> Result<(), MutinyError> {
+        log_trace!(self.logger, "calling remove_node_manager");
+        if self.is_safe_mode() {
+            return Err(MutinyError::NotRunning);
+        }
+
+        let mut lock = self.node_manager.write().await;
+        // if we don't have a node manager, return
+        if lock.is_none() {
+            return Ok(());
+        }
+
+        let node_manager = lock.as_ref().expect("should have a node manager");
+
+        // if the node manager is still in use, return an error
+        if !node_manager.is_unused().await? {
+            return Err(MutinyError::InvalidArgumentsError);
+        }
+
+        // archive all nodes
+        // this will verify that each node has no balance and every channel monitor is
+        // safe to be pruned.
+        let nodes = node_manager.list_nodes().await?;
+        for pk in nodes {
+            node_manager.archive_node(pk).await?;
+        }
+
+        // save node storage
+        {
+            let mut node_storage = node_manager.node_storage.read().await.clone();
+            node_storage.version += 1;
+            self.storage.insert_nodes(&node_storage).await?;
+        }
+
+        node_manager.stop().await?;
+
+        *lock = None;
+
+        log_trace!(self.logger, "finished calling remove_node_manager");
+
+        Ok(())
+    }
+
     /// Pays a lightning invoice from a federation (preferred) or node.
     /// An amount should only be provided if the invoice does not have an amount.
     /// Amountless invoices cannot be paid by a federation.
@@ -1586,33 +1705,35 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         // If any balance at all, then fallback to node manager for payment.
         // Take the error from the node manager as the priority.
-        let res = if self
-            .node_manager
-            .nodes
-            .read()
-            .await
-            .iter()
-            .flat_map(|(_, n)| n.channel_manager.list_channels())
-            .map(|c| c.balance_msat)
-            .sum::<u64>()
-            > 0
-        {
-            let res = self
-                .node_manager
-                .pay_invoice(None, inv, amt_sats, labels)
-                .await?;
+        let res = if let Some(node_manager) = self.node_manager.read().await.as_ref() {
+            if node_manager
+                .nodes
+                .read()
+                .await
+                .iter()
+                .flat_map(|(_, n)| n.channel_manager.list_channels())
+                .map(|c| c.balance_msat)
+                .sum::<u64>()
+                > 0
+            {
+                let res = node_manager
+                    .pay_invoice(None, inv, amt_sats, labels)
+                    .await?;
 
-            // spawn a task to remove the pending invoice if it exists
-            let nostr_clone = self.nostr.clone();
-            let payment_hash = *inv.payment_hash();
-            let logger = self.logger.clone();
-            utils::spawn(async move {
-                if let Err(e) = nostr_clone.remove_pending_nwc_invoice(&payment_hash).await {
-                    log_warn!(logger, "Failed to remove pending NWC invoice: {e}");
-                }
-            });
+                // spawn a task to remove the pending invoice if it exists
+                let nostr_clone = self.nostr.clone();
+                let payment_hash = *inv.payment_hash();
+                let logger = self.logger.clone();
+                utils::spawn(async move {
+                    if let Err(e) = nostr_clone.remove_pending_nwc_invoice(&payment_hash).await {
+                        log_warn!(logger, "Failed to remove pending NWC invoice: {e}");
+                    }
+                });
 
-            Ok(res)
+                Ok(res)
+            } else {
+                Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
+            }
         } else {
             Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
         };
@@ -1841,6 +1962,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 (invoice, 0)
             } else {
                 self.node_manager
+                    .read()
+                    .await
+                    .as_ref()
+                    .ok_or(MutinyError::NodeManagerRequired)?
                     .create_invoice(amt, vec![SWAP_LABEL.to_string()])
                     .await?
             };
@@ -1869,6 +1994,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 (invoice, 0)
             } else {
                 self.node_manager
+                    .read()
+                    .await
+                    .as_ref()
+                    .ok_or(MutinyError::NodeManagerRequired)?
                     .create_invoice(amt, vec![SWAP_LABEL.to_string()])
                     .await?
             };
@@ -1926,13 +2055,16 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         // If any balance at all, then fallback to node manager for payment.
         // Take the error from the node manager as the priority.
-        let b = self.node_manager.get_balance().await?;
-        let res = if b.confirmed + b.unconfirmed > 0 {
-            let res = self
-                .node_manager
-                .send_to_address(send_to, amount, labels, fee_rate)
-                .await?;
-            Ok(res)
+        let res = if let Some(node_manager) = self.node_manager.read().await.as_ref() {
+            let b = node_manager.get_balance().await?;
+            if b.confirmed + b.unconfirmed > 0 {
+                let res = node_manager
+                    .send_to_address(send_to, amount, labels, fee_rate)
+                    .await?;
+                Ok(res)
+            } else {
+                Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
+            }
         } else {
             Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
         };
@@ -1981,13 +2113,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             // If federation client is not found, continue to next federation
         }
 
-        let b = self.node_manager.get_balance().await?;
-        let res = if b.confirmed + b.unconfirmed > 0 {
-            let res = self
-                .node_manager
-                .estimate_tx_fee(destination_address, amount, fee_rate)?;
+        let res = if let Some(node_manager) = self.node_manager.read().await.as_ref() {
+            let b = node_manager.get_balance().await?;
+            if b.confirmed + b.unconfirmed > 0 {
+                let res = node_manager.estimate_tx_fee(destination_address, amount, fee_rate)?;
 
-            Ok(res)
+                Ok(res)
+            } else {
+                Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
+            }
         } else {
             Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
         };
@@ -2028,15 +2162,17 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             // If federation client is not found, continue to next federation
         }
 
-        let b = self.node_manager.get_balance().await?;
-        let res = if b.confirmed + b.unconfirmed > 0 {
-            let res = self
-                .node_manager
-                .estimate_sweep_tx_fee(destination_address, fee_rate)?;
+        let res = if let Some(node_manager) = self.node_manager.read().await.as_ref() {
+            let b = node_manager.get_balance().await?;
+            if b.confirmed + b.unconfirmed > 0 {
+                let res = node_manager.estimate_sweep_tx_fee(destination_address, fee_rate)?;
 
-            Ok(res)
+                Ok(res)
+            } else {
+                log_error!(self.logger, "node manager doesn't have a balance");
+                Err(MutinyError::InsufficientBalance)
+            }
         } else {
-            log_error!(self.logger, "node manager doesn't have a balance");
             Err(MutinyError::InsufficientBalance)
         };
         log_trace!(self.logger, "calling estimate_sweep_tx_fee");
@@ -2085,16 +2221,19 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             // If federation client is not found, continue to next federation
         }
 
-        let b = self.node_manager.get_balance().await?;
-        let res = if b.confirmed + b.unconfirmed > 0 {
-            let res = self
-                .node_manager
-                .sweep_wallet(send_to.clone(), labels, fee_rate)
-                .await?;
+        let res = if let Some(node_manager) = self.node_manager.read().await.as_ref() {
+            let b = node_manager.get_balance().await?;
+            if b.confirmed + b.unconfirmed > 0 {
+                let res = node_manager
+                    .sweep_wallet(send_to.clone(), labels, fee_rate)
+                    .await?;
 
-            Ok(res)
+                Ok(res)
+            } else {
+                log_error!(self.logger, "node manager doesn't have a balance");
+                Err(MutinyError::InsufficientBalance)
+            }
         } else {
-            log_error!(self.logger, "node manager doesn't have a balance");
             Err(MutinyError::InsufficientBalance)
         };
         log_trace!(self.logger, "finished calling sweep_wallet");
@@ -2123,12 +2262,13 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         // Fallback to node_manager address creation
-        let Ok(addr) = self.node_manager.get_new_address(labels.clone()) else {
-            return Err(MutinyError::WalletOperationFailed);
-        };
-
-        log_trace!(self.logger, "finished calling create_address");
-        Ok(addr)
+        if let Some(node_manager) = self.node_manager.read().await.as_ref() {
+            let addr = node_manager.get_new_address(labels.clone())?;
+            log_trace!(self.logger, "finished calling create_address");
+            Ok(addr)
+        } else {
+            Err(MutinyError::NodeManagerRequired)
+        }
     }
 
     async fn create_lightning_invoice(
@@ -2154,10 +2294,15 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         // Fallback to node_manager invoice creation if no federation invoice created
-        let (inv, _fee) = self.node_manager.create_invoice(amount, labels).await?;
-
-        log_trace!(self.logger, "finished calling create_lightning_invoice");
-        Ok(inv)
+        let node_manager = self.node_manager.read().await;
+        match node_manager.as_ref() {
+            Some(nm) => {
+                let (inv, _) = nm.create_invoice(amount, labels).await?;
+                log_trace!(self.logger, "finished calling create_lightning_invoice");
+                Ok(inv)
+            }
+            None => Err(MutinyError::NodeManagerRequired),
+        }
     }
 
     /// Gets the current balance of the wallet.
@@ -2167,7 +2312,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     pub async fn get_balance(&self) -> Result<MutinyBalance, MutinyError> {
         log_trace!(self.logger, "calling get_balance");
 
-        let ln_balance = self.node_manager.get_balance().await?;
+        let ln_balance: NodeBalance = match self.node_manager.read().await.as_ref() {
+            Some(nm) => nm.get_balance().await?,
+            None => Default::default(),
+        };
         let federation_balance = self.get_total_federation_balance().await?;
         log_trace!(self.logger, "finished calling get_balance");
 
@@ -2199,7 +2347,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     }
 
     /// Get the sorted activity list for lightning payments, channels, and txs.
-    pub fn get_activity(
+    pub async fn get_activity(
         &self,
         limit: Option<usize>,
         offset: Option<usize>,
@@ -2266,10 +2414,13 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 // convert keys to txid
                 let txid_str = item.key.trim_start_matches(ONCHAIN_PREFIX);
                 let txid: Txid = Txid::from_str(txid_str)?;
-                if let Some(tx_details) = self.node_manager.get_transaction(txid)? {
-                    // make sure it is a relevant transaction
-                    if tx_details.sent != 0 || tx_details.received != 0 {
-                        activities.push(ActivityItem::OnChain(tx_details));
+
+                if let Some(node_manager) = self.node_manager.read().await.as_ref() {
+                    if let Some(tx_details) = node_manager.get_transaction(txid)? {
+                        // make sure it is a relevant transaction
+                        if tx_details.sent != 0 || tx_details.received != 0 {
+                            activities.push(ActivityItem::OnChain(tx_details));
+                        }
                     }
                 }
             } else if item.key.starts_with(TRANSACTION_DETAILS_PREFIX_KEY) {
@@ -2291,7 +2442,10 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(activities)
     }
 
-    pub fn get_transaction(&self, txid: Txid) -> Result<Option<TransactionDetails>, MutinyError> {
+    pub async fn get_transaction(
+        &self,
+        txid: Txid,
+    ) -> Result<Option<TransactionDetails>, MutinyError> {
         log_trace!(self.logger, "calling get_transaction");
 
         // check our local cache/state for fedimint first
@@ -2299,12 +2453,98 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             Some(t) => Ok(Some(t)),
             None => {
                 // fall back to node manager
-                self.node_manager.get_transaction(txid)
+                match self.node_manager.read().await.as_ref() {
+                    Some(node_manager) => node_manager.get_transaction(txid),
+                    None => Ok(None),
+                }
             }
         };
         log_trace!(self.logger, "finished calling get_transaction");
 
         res
+    }
+
+    /// Checks if the given address has any transactions.
+    /// If it does, it returns the details of the first transaction.
+    ///
+    /// This should be used to check if a payment has been made to an address.
+    pub async fn check_address(
+        &self,
+        address: Address<NetworkUnchecked>,
+    ) -> Result<Option<TransactionDetails>, MutinyError> {
+        log_trace!(self.logger, "calling check_address");
+        let address = address.require_network(self.network)?;
+
+        let script = address.payload.script_pubkey();
+        let txs = self.esplora.scripthash_txs(&script, None).await?;
+
+        let details_opt = txs.first().map(|tx| {
+            let received: u64 = tx
+                .vout
+                .iter()
+                .filter(|v| v.scriptpubkey == script)
+                .map(|v| v.value)
+                .sum();
+
+            let confirmation_time = tx
+                .confirmation_time()
+                .map(|c| ConfirmationTime::Confirmed {
+                    height: c.height,
+                    time: c.timestamp,
+                })
+                .unwrap_or(ConfirmationTime::Unconfirmed {
+                    last_seen: utils::now().as_secs(),
+                });
+
+            let address_labels = self.storage.get_address_labels().unwrap_or_default();
+            let labels = address_labels
+                .get(&address.to_string())
+                .cloned()
+                .unwrap_or_default();
+
+            let details = TransactionDetails {
+                transaction: Some(tx.to_tx()),
+                txid: Some(tx.txid),
+                internal_id: tx.txid,
+                received,
+                sent: 0,
+                fee: None,
+                confirmation_time,
+                labels,
+            };
+
+            let block_id = match tx.status.block_hash {
+                Some(hash) => {
+                    let height = tx
+                        .status
+                        .block_height
+                        .expect("block height must be present");
+                    Some(BlockId { hash, height })
+                }
+                None => None,
+            };
+
+            (details, block_id)
+        });
+
+        // if we found a tx we should try to import it into the wallet
+        if let Some((details, block_id)) = details_opt.clone() {
+            let node_manager = self.node_manager.clone();
+            utils::spawn(async move {
+                if let Some(nm) = node_manager.read().await.as_ref() {
+                    let wallet = nm.wallet.clone();
+                    let tx = details.transaction.expect("tx must be present");
+                    wallet
+                        .insert_tx(tx, details.confirmation_time, block_id)
+                        .await
+                        .expect("failed to insert tx");
+                }
+            });
+        }
+
+        log_trace!(self.logger, "finished calling check_address");
+
+        Ok(details_opt.map(|(d, _)| d))
     }
 
     /// Returns all the lightning activity for a given label
@@ -2314,7 +2554,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     ) -> Result<Vec<ActivityItem>, MutinyError> {
         log_trace!(self.logger, "calling get_label_activity");
 
-        let Some(label_item) = self.node_manager.get_label(label)? else {
+        let Some(label_item) = self.storage.get_label(label)? else {
             return Ok(Vec::new());
         };
 
@@ -2833,7 +3073,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         self.stop.store(true, Ordering::Relaxed);
 
-        self.node_manager.stop().await?;
+        if let Some(nm) = self.node_manager.read().await.as_ref() {
+            nm.stop().await?;
+        }
 
         // stop the indexeddb object to close db connection
         if self.storage.connected().unwrap_or(false) {
@@ -2888,10 +3130,13 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     /// This can be useful if you get stuck in a bad state.
     pub async fn reset_onchain_tracker(&mut self) -> Result<(), MutinyError> {
         log_trace!(self.logger, "calling reset_onchain_tracker");
-
-        self.node_manager.reset_onchain_tracker().await?;
-        // sleep for 250ms to give time for the storage to write
-        utils::sleep(250).await;
+        if let Some(node_manager) = self.node_manager.read().await.as_ref() {
+            node_manager.reset_onchain_tracker().await?;
+            // sleep for 250ms to give time for the storage to write
+            sleep(250).await;
+        } else {
+            return Err(MutinyError::NodeManagerRequired);
+        }
 
         self.stop().await?;
 
@@ -2900,10 +3145,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         self.start().await?;
 
-        self.node_manager
-            .wallet
-            .full_sync(FULL_SYNC_STOP_GAP)
-            .await?;
+        if let Some(node_manager) = self.node_manager.read().await.as_ref() {
+            node_manager.wallet.full_sync(FULL_SYNC_STOP_GAP).await?;
+        }
 
         log_trace!(self.logger, "finished calling reset_onchain_tracker");
         Ok(())
@@ -3692,8 +3936,13 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
     }
 
     async fn get_best_block(&self) -> Result<BestBlock, MutinyError> {
-        let node = self.node_manager.get_node_by_key_or_first(None).await?;
-        Ok(node.channel_manager.current_best_block())
+        if let Some(node_manager) = self.node_manager.read().await.as_ref() {
+            let node = node_manager.get_node_by_key_or_first(None).await?;
+            Ok(node.channel_manager.current_best_block())
+        } else {
+            // if we don't have a node manager, just return the genesis block
+            Ok(BestBlock::from_network(self.network))
+        }
     }
 
     async fn lookup_payment(&self, payment_hash: &[u8; 32]) -> Option<MutinyInvoice> {
@@ -4059,7 +4308,7 @@ mod tests {
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
-        assert!(!NodeManager::has_node_manager(storage.clone()));
+        assert!(!NodeManager::is_wallet_present(storage.clone()));
         let config = MutinyWalletConfigBuilder::new(xpriv)
             .with_network(network)
             .build();
@@ -4069,7 +4318,7 @@ mod tests {
             .await
             .expect("mutiny wallet should initialize");
         mw.storage.insert_mnemonic(mnemonic).unwrap();
-        assert!(NodeManager::has_node_manager(storage));
+        assert!(NodeManager::is_wallet_present(storage));
     }
 
     #[test]
@@ -4082,7 +4331,7 @@ mod tests {
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
-        assert!(!NodeManager::has_node_manager(storage.clone()));
+        assert!(!NodeManager::is_wallet_present(storage.clone()));
         let config = MutinyWalletConfigBuilder::new(xpriv)
             .with_network(network)
             .build();
@@ -4092,11 +4341,11 @@ mod tests {
             .await
             .expect("mutiny wallet should initialize");
 
-        let first_seed = mw.node_manager.xprivkey;
+        let first_seed = mw.xprivkey;
 
         assert!(mw.stop().await.is_ok());
         assert!(mw.start().await.is_ok());
-        assert_eq!(first_seed, mw.node_manager.xprivkey);
+        assert_eq!(first_seed, mw.xprivkey);
     }
 
     #[test]
@@ -4105,13 +4354,13 @@ mod tests {
         log!("{}", test_name);
 
         let network = Network::Regtest;
-        let xpriv = ExtendedPrivKey::new_master(network, &[0; 32]).unwrap();
+        let xpriv = ExtendedPrivKey::new_master(network, &[42; 32]).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
 
-        assert!(!NodeManager::has_node_manager(storage.clone()));
+        assert!(!NodeManager::is_wallet_present(storage.clone()));
         let config = MutinyWalletConfigBuilder::new(xpriv)
             .with_network(network)
             .build();
@@ -4121,20 +4370,33 @@ mod tests {
             .await
             .expect("mutiny wallet should initialize");
 
-        // let storage persist
-        sleep(1000).await;
+        let ns = storage.get_nodes().unwrap();
+        assert_eq!(ns.nodes.len(), 0);
+        assert_eq!(ns.version, 0);
 
-        assert_eq!(mw.node_manager.list_nodes().await.unwrap().len(), 1);
+        mw.create_node_manager().await.unwrap();
+        let ns = storage.get_nodes().unwrap();
+        assert_eq!(ns.version, 1);
+        assert_eq!(ns.nodes.len(), 1);
 
-        assert!(mw.node_manager.new_node().await.is_ok());
-        // let storage persist
-        sleep(1000).await;
+        let lock = mw.node_manager.read().await;
+        let nm = lock.as_ref().unwrap();
+        assert_eq!(nm.list_nodes().await.unwrap().len(), 1);
 
-        assert_eq!(mw.node_manager.list_nodes().await.unwrap().len(), 2);
+        nm.new_node().await.unwrap();
+        let ns = storage.get_nodes().unwrap();
+        assert_eq!(ns.nodes.len(), 2);
+
+        assert_eq!(nm.list_nodes().await.unwrap().len(), 2);
+        drop(lock);
 
         assert!(mw.stop().await.is_ok());
+        sleep(1000).await; // give it a second to stop
         assert!(mw.start().await.is_ok());
-        assert_eq!(mw.node_manager.list_nodes().await.unwrap().len(), 2);
+
+        let lock = mw.node_manager.read().await;
+        let nm = lock.as_ref().unwrap();
+        assert_eq!(nm.list_nodes().await.unwrap().len(), 2);
     }
 
     #[test]
@@ -4148,7 +4410,7 @@ mod tests {
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
-        assert!(!NodeManager::has_node_manager(storage.clone()));
+        assert!(!NodeManager::is_wallet_present(storage.clone()));
         let config = MutinyWalletConfigBuilder::new(xpriv)
             .with_network(network)
             .build();
@@ -4157,14 +4419,14 @@ mod tests {
             .build()
             .await
             .expect("mutiny wallet should initialize");
-        let seed = mw.node_manager.xprivkey;
+        let seed = mw.xprivkey;
         assert!(!seed.private_key.secret_bytes().is_empty());
 
         // create a second mw and make sure it has a different seed
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage2 = MemoryStorage::new(Some(pass), Some(cipher), None);
-        assert!(!NodeManager::has_node_manager(storage2.clone()));
+        assert!(!NodeManager::is_wallet_present(storage2.clone()));
         let xpriv2 = ExtendedPrivKey::new_master(network, &[0; 32]).unwrap();
         let config2 = MutinyWalletConfigBuilder::new(xpriv2)
             .with_network(network)
@@ -4174,7 +4436,7 @@ mod tests {
             .build()
             .await
             .expect("mutiny wallet should initialize");
-        let seed2 = mw2.node_manager.xprivkey;
+        let seed2 = mw2.xprivkey;
         assert_ne!(seed, seed2);
 
         // now restore the first seed into the 2nd mutiny node
@@ -4199,7 +4461,7 @@ mod tests {
             .build()
             .await
             .expect("mutiny wallet should initialize");
-        let restored_seed = mw3.node_manager.xprivkey;
+        let restored_seed = mw3.xprivkey;
         assert_eq!(seed, restored_seed);
     }
 
@@ -4215,7 +4477,7 @@ mod tests {
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
-        assert!(!NodeManager::has_node_manager(storage.clone()));
+        assert!(!NodeManager::is_wallet_present(storage.clone()));
         let mut config_builder = MutinyWalletConfigBuilder::new(xpriv).with_network(network);
         config_builder.with_safe_mode();
         let config = config_builder.build();
@@ -4225,12 +4487,9 @@ mod tests {
             .await
             .expect("mutiny wallet should initialize");
         mw.storage.insert_mnemonic(mnemonic).unwrap();
-        assert!(NodeManager::has_node_manager(storage));
+        assert!(NodeManager::is_wallet_present(storage));
 
-        let bip21 = mw.create_bip21(None, vec![]).await.unwrap();
-        assert!(bip21.invoice.is_none());
-
-        let new_node = mw.node_manager.new_node().await;
+        let new_node = mw.create_node_manager().await;
         assert!(new_node.is_err());
     }
 
@@ -4407,18 +4666,11 @@ mod tests {
             .await
             .expect("mutiny wallet should initialize");
 
-        loop {
-            if !mw.node_manager.list_nodes().await.unwrap().is_empty() {
-                break;
-            }
-            sleep(100).await;
-        }
+        mw.create_node_manager().await.unwrap();
+        let lock = mw.node_manager.read().await;
+        let node_manager = lock.as_ref().unwrap();
 
-        let node = mw
-            .node_manager
-            .get_node_by_key_or_first(None)
-            .await
-            .unwrap();
+        let node = node_manager.get_node_by_key_or_first(None).await.unwrap();
 
         let closure: ChannelClosure = ChannelClosure {
             user_channel_id: None,
@@ -4432,7 +4684,7 @@ mod tests {
             .persist_channel_closure(closure_chan_id, closure.clone())
             .unwrap();
 
-        let address = mw.node_manager.get_new_address(vec![]).unwrap();
+        let address = node_manager.get_new_address(vec![]).unwrap();
         let output = TxOut {
             value: 10_000,
             script_pubkey: address.script_pubkey(),
@@ -4443,7 +4695,7 @@ mod tests {
             input: vec![],
             output: vec![output.clone()],
         };
-        mw.node_manager
+        node_manager
             .wallet
             .insert_tx(
                 tx1.clone(),
@@ -4459,7 +4711,7 @@ mod tests {
             input: vec![],
             output: vec![output],
         };
-        mw.node_manager
+        node_manager
             .wallet
             .insert_tx(
                 tx2.clone(),
@@ -4618,30 +4870,35 @@ mod tests {
             },
         ];
 
+        drop(lock);
+
         assert_eq!(vec.len(), expected.len()); // make sure im not dumb
         assert_eq!(vec, expected);
 
-        let activity = mw.get_activity(None, None).unwrap();
+        let activity = mw.get_activity(None, None).await.unwrap();
         assert_eq!(activity.len(), expected.len());
 
-        let with_limit = mw.get_activity(Some(3), None).unwrap();
+        let with_limit = mw.get_activity(Some(3), None).await.unwrap();
         assert_eq!(with_limit.len(), 3);
 
-        let with_offset = mw.get_activity(None, Some(3)).unwrap();
+        let with_offset = mw.get_activity(None, Some(3)).await.unwrap();
         assert_eq!(with_offset.len(), activity.len() - 3);
 
-        let with_both = mw.get_activity(Some(3), Some(3)).unwrap();
+        let with_both = mw.get_activity(Some(3), Some(3)).await.unwrap();
         assert_eq!(with_limit.len(), 3);
         assert_ne!(with_both, with_limit);
 
         // check we handle out of bounds errors
-        let with_limit_oob = mw.get_activity(Some(usize::MAX), None).unwrap();
+        let with_limit_oob = mw.get_activity(Some(usize::MAX), None).await.unwrap();
         assert_eq!(with_limit_oob.len(), expected.len());
-        let with_offset_oob = mw.get_activity(None, Some(usize::MAX)).unwrap();
+        let with_offset_oob = mw.get_activity(None, Some(usize::MAX)).await.unwrap();
         assert!(with_offset_oob.is_empty());
-        let with_offset_oob = mw.get_activity(None, Some(expected.len())).unwrap();
+        let with_offset_oob = mw.get_activity(None, Some(expected.len())).await.unwrap();
         assert!(with_offset_oob.is_empty());
-        let with_both_oob = mw.get_activity(Some(usize::MAX), Some(usize::MAX)).unwrap();
+        let with_both_oob = mw
+            .get_activity(Some(usize::MAX), Some(usize::MAX))
+            .await
+            .unwrap();
         assert!(with_both_oob.is_empty());
 
         // update an inflight payment and make sure it isn't duplicated
@@ -4660,5 +4917,119 @@ mod tests {
             .find(|i| i.key == payment_key(false, &payment_hash4));
         assert!(item.is_some_and(|i| i.timestamp == Some(invoice4.last_update))); // make sure timestamp got updated
         assert_eq!(vec.len(), expected.len()); // make sure no duplicates
+    }
+
+    #[test]
+    async fn test_optional_node_manager() {
+        let test_name = "test_optional_node_manager";
+        log!("{}", test_name);
+
+        let mnemonic = generate_seed(12).unwrap();
+        let network = Network::Regtest;
+        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
+
+        let storage = MemoryStorage::new(None, None, None);
+        let config_builder = MutinyWalletConfigBuilder::new(xpriv).with_network(network);
+        let config = config_builder.build();
+        let mw = MutinyWalletBuilder::new(xpriv, storage.clone())
+            .with_config(config.clone())
+            .build()
+            .await
+            .expect("mutiny wallet should initialize");
+
+        // make sure we can start with no node manager
+        {
+            let lock = mw.node_manager.read().await;
+            assert!(lock.is_none());
+        }
+
+        // create a node manager
+        let ident = mw.create_node_manager().await.unwrap();
+        // verify that we have a node manager
+        {
+            let lock = mw.node_manager.read().await;
+            assert!(lock.is_some());
+            let nodes = lock.as_ref().unwrap().list_nodes().await.unwrap();
+            assert_eq!(nodes.len(), 1);
+            assert_eq!(ident.pubkey, *nodes.first().unwrap());
+        }
+
+        // drop the wallet, when we restart it should start with a node manager
+        mw.stop().await.expect("should stop");
+        drop(mw);
+        let mw = MutinyWalletBuilder::new(xpriv, storage.clone())
+            .with_config(config.clone())
+            .build()
+            .await
+            .expect("mutiny wallet should initialize");
+
+        // we should still have a node manager
+        {
+            let lock = mw.node_manager.read().await;
+            assert!(lock.is_some());
+        }
+
+        // recreate the node manager, should be None because we have one
+        let ident2 = mw.create_node_manager_if_needed().await.unwrap();
+        assert!(ident2.is_none());
+
+        // verify that we get the same node id
+        {
+            let lock = mw.node_manager.read().await;
+            let node_manager = lock.as_ref().unwrap();
+            let nodes = node_manager.list_nodes().await.unwrap();
+            assert_eq!(nodes.len(), 1);
+            assert_eq!(ident.pubkey, *nodes.first().unwrap());
+        }
+
+        // add a balance
+        let tx_amount = 10_000;
+        {
+            let lock = mw.node_manager.read().await;
+            let node_manager = lock.as_ref().unwrap();
+            let address = node_manager.get_new_address(vec![]).unwrap();
+            let output = TxOut {
+                value: tx_amount,
+                script_pubkey: address.script_pubkey(),
+            };
+            let tx1 = Transaction {
+                version: 1,
+                lock_time: LockTime::ZERO,
+                input: vec![],
+                output: vec![output],
+            };
+            node_manager
+                .wallet
+                .insert_tx(tx1, ConfirmationTime::Unconfirmed { last_seen: 0 }, None)
+                .await
+                .unwrap();
+        }
+
+        // now when we drop the wallet and restart it should keep everything
+        mw.stop().await.expect("should stop");
+        drop(mw);
+        let mw = MutinyWalletBuilder::new(xpriv, storage.clone())
+            .with_config(config.clone())
+            .build()
+            .await
+            .expect("mutiny wallet should initialize");
+
+        // verify that we get the same node id
+        {
+            let lock = mw.node_manager.read().await;
+            let node_manager = lock.as_ref().unwrap();
+            assert!(lock.is_some());
+            let nodes = node_manager.list_nodes().await.unwrap();
+            assert_eq!(nodes.len(), 1);
+            assert_eq!(ident.pubkey, *nodes.first().unwrap());
+
+            // we should have the same balance
+            assert_eq!(node_manager.get_wallet_balance().unwrap(), tx_amount);
+        }
+
+        // make sure we only ever made one node at the end of this
+        let node_storage = storage.get_nodes().unwrap();
+        assert_eq!(node_storage.nodes.len(), 1);
+        assert!(node_storage.nodes.contains_key(&ident.uuid));
     }
 }

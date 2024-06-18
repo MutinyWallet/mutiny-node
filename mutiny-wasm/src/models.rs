@@ -559,7 +559,7 @@ impl From<mutiny_core::LnUrlParams> for LnUrlParams {
 
 // This is the NodeIdentity that refer to a specific node
 // Used for public facing identification.
-#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[wasm_bindgen]
 pub struct NodeIdentity {
     uuid: String,

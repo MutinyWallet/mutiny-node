@@ -1,6 +1,6 @@
 use crate::error::MutinyError;
-use crate::nodemanager::NodeManager;
 use crate::storage::MutinyStorage;
+use crate::MutinyWallet;
 use bitcoin::Address;
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
@@ -445,7 +445,7 @@ impl<S: MutinyStorage> LabelStorage for S {
     }
 }
 
-impl<S: MutinyStorage> LabelStorage for NodeManager<S> {
+impl<S: MutinyStorage> LabelStorage for MutinyWallet<S> {
     fn get_address_labels(&self) -> Result<HashMap<String, Vec<String>>, MutinyError> {
         self.storage.get_address_labels()
     }

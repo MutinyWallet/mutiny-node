@@ -6,6 +6,7 @@ Things to test before cutting a release:
 - [ ] Enable diagnostics
 - [ ] Join a fedimint
 - [ ] Leave a fedimint and rejoin
+- [ ] Create self custodial lightning
 - [ ] Receive on lightning
   - [ ] One with fedimint
   - [ ] One that creates a channel
@@ -18,6 +19,8 @@ Things to test before cutting a release:
 - [ ] Send on chain
 - [ ] Swap to lightning
 - [ ] Swap fedimint to lightning
+  - [ ] without self custodial initated
+  - [ ] with self custodial created
 - [ ] Nostr Wallet Connect
   - [ ] Auto approval
   - [ ] Manual approval
@@ -34,6 +37,7 @@ Things to test before cutting a release:
 - [ ] Mutual Close Channel
   - [ ] Known Issue: balance will be double counted until 6 confirmations
 - [ ] Force Close Channel
+- [ ] Wallet with no balances or fedimint takes you to add fedimint screen
 - [ ] Get Mutiny+
 - [ ] Test lightning address payments
 - [ ] Change to Zeus LSP (https://mutinynet-flow.lnolymp.us)

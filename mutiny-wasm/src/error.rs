@@ -177,6 +177,9 @@ pub enum MutinyJsError {
     /// Failed to connect to a federation.
     #[error("Failed to connect to a federation.")]
     FederationConnectionFailed,
+    /// A node manager has not been created yet.
+    #[error("A node manager has not been created yet.")]
+    NodeManagerRequired,
     /// Unknown error.
     #[error("Unknown Error")]
     UnknownError,
@@ -234,6 +237,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::TokenAlreadySpent => MutinyJsError::TokenAlreadySpent,
             MutinyError::FederationRequired => MutinyJsError::FederationRequired,
             MutinyError::FederationConnectionFailed => MutinyJsError::FederationConnectionFailed,
+            MutinyError::NodeManagerRequired => MutinyJsError::NodeManagerRequired,
             MutinyError::Other(_) => MutinyJsError::UnknownError,
             MutinyError::SubscriptionClientNotConfigured => {
                 MutinyJsError::SubscriptionClientNotConfigured
