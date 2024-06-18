@@ -3804,13 +3804,11 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     storage.insert_federations(federation_mutex.clone()).await?;
 
     let federation_id = new_federation.fedimint_client.federation_id();
-    let gateway_fees = new_federation.gateway_fee().await.ok();
 
     let new_federation_identity = get_federation_identity(
         next_federation_uuid.clone(),
         new_federation.fedimint_client.clone(),
         federation_code.clone(),
-        gateway_fees,
         logger.clone(),
     )
     .await;

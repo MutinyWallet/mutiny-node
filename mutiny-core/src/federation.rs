@@ -160,7 +160,6 @@ pub struct FederationIdentity {
     pub federation_name: Option<String>,
     pub federation_expiry_timestamp: Option<String>,
     pub welcome_message: Option<String>,
-    pub gateway_fees: Option<GatewayFees>,
     // undocumented parameters that fedi uses: https://meta.dev.fedibtc.com/meta.json
     pub federation_icon_url: Option<String>,
     pub meta_external_url: Option<String>,
@@ -873,12 +872,10 @@ impl<S: MutinyStorage> FederationClient<S> {
     }
 
     pub async fn get_mutiny_federation_identity(&self) -> FederationIdentity {
-        let gateway_fees = self.gateway_fee().await.ok();
         get_federation_identity(
             self.uuid.clone(),
             self.fedimint_client.clone(),
             self.invite_code.clone(),
-            gateway_fees,
             self.logger.clone(),
         )
         .await
@@ -895,8 +892,6 @@ pub(crate) async fn get_federation_identity(
     uuid: String,
     fedimint_client: ClientHandleArc,
     invite_code: InviteCode,
-    gateway_fees: Option<GatewayFees>,
-
     logger: Arc<MutinyLogger>,
 ) -> FederationIdentity {
     let federation_id = fedimint_client.federation_id();
@@ -950,7 +945,6 @@ pub(crate) async fn get_federation_identity(
             fedimint_client.get_meta("welcome_message"),
             config.as_ref().and_then(|c| c.welcome_message.clone()),
         ),
-        gateway_fees, // Already merged using helper function...
         federation_icon_url: merge_values(
             fedimint_client.get_meta("federation_icon_url"),
             config.as_ref().and_then(|c| c.federation_icon_url.clone()),
