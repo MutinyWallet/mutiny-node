@@ -1874,10 +1874,16 @@ impl<S: MutinyStorage> Node<S> {
                 return Err(MutinyError::NotRunning);
             }
 
-            // We will get a channel closure event if the peer rejects the channel
-            // todo return closure reason to user
-            if let Ok(Some(_closure)) = self.persister.get_channel_closure(user_channel_id) {
-                return Err(MutinyError::ChannelCreationFailed);
+            // We'll set failure reason if the peer rejects the channel
+            if let Some(failure_reason) = self
+                .persister
+                .get_channel_open_params(user_channel_id)?
+                .and_then(|p| p.failure_reason)
+            {
+                log_error!(self.logger, "Channel funding tx failed: {failure_reason}");
+                // can now safely delete the channel open params
+                let _ = self.persister.delete_channel_open_params(user_channel_id);
+                return Err(MutinyError::ChannelCreationFailedWithReason(failure_reason));
             }
 
             let channels = self.channel_manager.list_channels_with_counterparty(pubkey);

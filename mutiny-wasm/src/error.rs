@@ -86,6 +86,9 @@ pub enum MutinyJsError {
     /// A channel could not be opened.
     #[error("Failed to create channel.")]
     ChannelCreationFailed,
+    /// A channel could not be opened.
+    #[error("Failed to create channel. {0}")]
+    ChannelCreationFailedWithReason(String),
     /// A channel could not be closed.
     #[error("Failed to close channel.")]
     ChannelClosingFailed,
@@ -203,6 +206,9 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::RoutingFailed => MutinyJsError::RoutingFailed,
             MutinyError::PeerInfoParseFailed => MutinyJsError::PeerInfoParseFailed,
             MutinyError::ChannelCreationFailed => MutinyJsError::ChannelCreationFailed,
+            MutinyError::ChannelCreationFailedWithReason(x) => {
+                MutinyJsError::ChannelCreationFailedWithReason(x)
+            }
             MutinyError::ChannelClosingFailed => MutinyJsError::ChannelClosingFailed,
             MutinyError::PersistenceFailed { source: _ } => MutinyJsError::PersistenceFailed,
             MutinyError::ReadError { source: _ } => MutinyJsError::ReadError,
