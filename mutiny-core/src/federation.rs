@@ -507,7 +507,7 @@ impl<S: MutinyStorage> FederationClient<S> {
 
         let desc = Description::new(String::new()).expect("empty string is valid");
         let gateway = self.gateway.read().await;
-        let (id, invoice, _) = lightning_module
+        let (id, invoice, preimage) = lightning_module
             .create_bolt11_invoice(
                 Amount::from_sats(amount),
                 Bolt11InvoiceDescription::Direct(&desc),
@@ -524,6 +524,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         let mut stored_payment: MutinyInvoice = invoice.clone().into();
         stored_payment.inbound = inbound;
         stored_payment.labels = labels;
+        stored_payment.preimage = Some(preimage.to_lower_hex_string());
 
         log_trace!(self.logger, "Persisting payment");
         let hash = stored_payment.payment_hash.into_32();
