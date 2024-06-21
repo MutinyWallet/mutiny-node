@@ -1,3 +1,4 @@
+use crate::storage::get_invoice_by_hash;
 use crate::utils::{
     convert_from_fedimint_invoice, convert_to_fedimint_invoice, fetch_with_timeout, now, spawn,
 };
@@ -506,7 +507,7 @@ impl<S: MutinyStorage> FederationClient<S> {
 
         let desc = Description::new(String::new()).expect("empty string is valid");
         let gateway = self.gateway.read().await;
-        let (id, invoice, _) = lightning_module
+        let (id, invoice, preimage) = lightning_module
             .create_bolt11_invoice(
                 Amount::from_sats(amount),
                 Bolt11InvoiceDescription::Direct(&desc),
@@ -523,6 +524,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         let mut stored_payment: MutinyInvoice = invoice.clone().into();
         stored_payment.inbound = inbound;
         stored_payment.labels = labels;
+        stored_payment.preimage = Some(preimage.to_lower_hex_string());
 
         log_trace!(self.logger, "Persisting payment");
         let hash = stored_payment.payment_hash.into_32();
@@ -640,7 +642,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         stored_payment.labels = labels;
         stored_payment.status = HTLCStatus::InFlight;
         let hash = stored_payment.payment_hash.into_32();
-        let payment_info = PaymentInfo::from(stored_payment);
+        let payment_info = PaymentInfo::from(stored_payment.clone());
         persist_payment_info(&self.storage, &hash, &payment_info, inbound)?;
 
         // Subscribe and process outcome based on payment type
@@ -651,8 +653,7 @@ impl<S: MutinyStorage> FederationClient<S> {
                         let o = process_ln_outcome(
                             o,
                             process_pay_state_internal,
-                            invoice.clone(),
-                            inbound,
+                            stored_payment,
                             Some(DEFAULT_PAYMENT_TIMEOUT * 1_000),
                             self.stop.clone(),
                             Arc::clone(&self.logger),
@@ -669,8 +670,7 @@ impl<S: MutinyStorage> FederationClient<S> {
                         let o = process_ln_outcome(
                             o,
                             process_pay_state_ln,
-                            invoice.clone(),
-                            inbound,
+                            stored_payment,
                             Some(DEFAULT_PAYMENT_TIMEOUT * 1_000),
                             self.stop.clone(),
                             Arc::clone(&self.logger),
@@ -1151,15 +1151,23 @@ async fn process_operation_until_timeout<S: MutinyStorage>(
         let updated_invoice = match lightning_meta.variant {
             LightningOperationMetaVariant::Pay(pay_meta) => {
                 let hash = pay_meta.invoice.payment_hash().into_inner();
-                let invoice = convert_from_fedimint_invoice(&pay_meta.invoice);
-                if invoice.payment_hash().into_32() == hash {
+                let bolt11 = convert_from_fedimint_invoice(&pay_meta.invoice);
+                let invoice = match get_invoice_by_hash(bolt11.payment_hash(), &storage, &logger) {
+                    Ok(invoice) => invoice,
+                    Err(_) => {
+                        // if we can't find the invoice, we should just create MutinyInvoice from the bolt11
+                        let mut invoice: MutinyInvoice = bolt11.into();
+                        invoice.inbound = false;
+                        invoice
+                    }
+                };
+                if invoice.payment_hash.into_32() == hash {
                     match lightning_module.subscribe_ln_pay(operation_id).await {
                         Ok(o) => Some(
                             process_ln_outcome(
                                 o,
                                 process_pay_state_ln,
                                 invoice,
-                                false,
                                 timeout,
                                 stop,
                                 logger.clone(),
@@ -1170,7 +1178,7 @@ async fn process_operation_until_timeout<S: MutinyStorage>(
                             log_error!(logger, "Error trying to process stream outcome: {e}");
 
                             // return the latest status of the invoice even if it fails
-                            Some(invoice.into())
+                            Some(invoice)
                         }
                     }
                 } else {
@@ -1179,15 +1187,23 @@ async fn process_operation_until_timeout<S: MutinyStorage>(
             }
             LightningOperationMetaVariant::Receive { invoice, .. } => {
                 let hash = invoice.payment_hash().into_inner();
-                let invoice = convert_from_fedimint_invoice(&invoice);
-                if invoice.payment_hash().into_32() == hash {
+                let bolt11 = convert_from_fedimint_invoice(&invoice);
+                let invoice = match get_invoice_by_hash(bolt11.payment_hash(), &storage, &logger) {
+                    Ok(invoice) => invoice,
+                    Err(_) => {
+                        // if we can't find the invoice, we should just create MutinyInvoice from the bolt11
+                        let mut invoice: MutinyInvoice = bolt11.into();
+                        invoice.inbound = true;
+                        invoice
+                    }
+                };
+                if invoice.payment_hash.into_32() == hash {
                     match lightning_module.subscribe_ln_receive(operation_id).await {
                         Ok(o) => Some(
                             process_ln_outcome(
                                 o,
                                 process_receive_state,
                                 invoice,
-                                true,
                                 timeout,
                                 stop,
                                 logger.clone(),
@@ -1198,7 +1214,7 @@ async fn process_operation_until_timeout<S: MutinyStorage>(
                             log_error!(logger, "Error trying to process stream outcome: {e}");
 
                             // return the latest status of the invoice even if it fails
-                            Some(invoice.into())
+                            Some(invoice)
                         }
                     }
                 } else {
@@ -1330,8 +1346,7 @@ fn process_receive_state(receive_state: LnReceiveState, invoice: &mut MutinyInvo
 async fn process_ln_outcome<U, F>(
     stream_or_outcome: UpdateStreamOrOutcome<U>,
     process_fn: F,
-    invoice: Bolt11Invoice,
-    inbound: bool,
+    mut invoice: MutinyInvoice,
     timeout: Option<u64>,
     stop: Arc<AtomicBool>,
     logger: Arc<MutinyLogger>,
@@ -1347,9 +1362,6 @@ where
         + 'static,
     F: Fn(U, &mut MutinyInvoice),
 {
-    let mut invoice: MutinyInvoice = invoice.into();
-    invoice.inbound = inbound;
-
     match stream_or_outcome {
         UpdateStreamOrOutcome::Outcome(outcome) => {
             invoice.status = outcome.into();
