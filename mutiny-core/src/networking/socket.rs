@@ -59,8 +59,6 @@ pub fn schedule_descriptor_read<P: PeerManager>(
                     if let Some(msg) = msg_option {
                         match msg {
                             Ok(b) => {
-                                log_trace!(logger, "received binary data from websocket: {}", b.len());
-
                                 let read_res = peer_manager.read_event(&mut descriptor, &b);
                                 match read_res {
                                     Ok(_read_bool) => {

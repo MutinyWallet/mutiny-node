@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use futures::stream::SplitStream;
 use futures::{lock::Mutex, stream::SplitSink, SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message, State};
-use lightning::{log_debug, log_trace};
+use lightning::log_debug;
 use lightning::{log_error, util::logger::Logger};
 use std::sync::Arc;
 
@@ -88,9 +88,7 @@ impl Proxy for WsProxy {
         utils::spawn(async move {
             let mut write = cloned_conn.lock().await;
             match write.send(data).await {
-                Ok(_) => {
-                    log_trace!(logger, "sent data down websocket");
-                }
+                Ok(_) => (),
                 Err(e) => {
                     log_error!(logger, "error sending data down websocket: {e}");
                 }
