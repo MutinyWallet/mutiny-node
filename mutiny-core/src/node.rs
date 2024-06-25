@@ -314,7 +314,6 @@ impl<S: MutinyStorage> NodeBuilder<S> {
 
     pub fn log_params(&self, logger: &Arc<MutinyLogger>) {
         log_debug!(logger, "build parameters:");
-        log_debug!(logger, "- xprivkey: {:?}", self.xprivkey);
         log_debug!(logger, "- uuid: {:?}", self.uuid);
         log_debug!(logger, "- node_index: {:?}", self.node_index);
         log_debug!(logger, "- gossip_sync: {:#?}", self.gossip_sync.is_some());
