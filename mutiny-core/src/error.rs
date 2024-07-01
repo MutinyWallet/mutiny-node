@@ -182,6 +182,9 @@ pub enum MutinyError {
     /// Failed to connect to a federation.
     #[error("Failed to connect to a federation.")]
     FederationConnectionFailed,
+    /// Fedimint transaction too large
+    #[error("Error constructing fedimint transaction, try lowering the amount.")]
+    FederationTxTooLarge,
     #[error(transparent)]
     Other(anyhow::Error),
 }
@@ -270,6 +273,7 @@ impl PartialEq for MutinyError {
             (Self::TokenAlreadySpent, Self::TokenAlreadySpent) => true,
             (Self::FederationRequired, Self::FederationRequired) => true,
             (Self::FederationConnectionFailed, Self::FederationConnectionFailed) => true,
+            (Self::FederationTxTooLarge, Self::FederationTxTooLarge) => true,
             (Self::Other(e), Self::Other(e2)) => e.to_string() == e2.to_string(),
             _ => false,
         }
@@ -601,7 +605,13 @@ impl From<anyhow::Error> for MutinyError {
         match e.to_string().as_str() {
             "Insufficient balance" => Self::InsufficientBalance,
             "MissingInvoiceAmount" => Self::BadAmountError,
-            _ => Self::Other(e),
+            "Federation didn't return peg-out fees" => Self::FederationConnectionFailed,
+            "The generated transaction would be rejected by the federation for being too large." => Self::FederationTxTooLarge,
+            str => if str.starts_with("Address isn't compatible with the federation's network") {
+                Self::IncorrectNetwork
+            } else {
+                Self::Other(e)
+            },
         }
     }
 }
