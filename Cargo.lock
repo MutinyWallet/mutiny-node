@@ -991,8 +991,7 @@ checksum = "25cbce373ec4653f1a01a31e8a5e5ec0c622dc27ff9c4e6606eefef5cbbed4a5"
 [[package]]
 name = "fedimint-aead"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6aa38d22aa2ec4a8182f781c9bdd91b899cf9c5f4f5cf4d8470ce72df4499fd"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1004,8 +1003,7 @@ dependencies = [
 [[package]]
 name = "fedimint-bip39"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c550b6f7409a14401d440a9c22f3fbe73726448c0c94410076a18dfa8dcaf882"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "bip39",
  "fedimint-client",
@@ -1016,8 +1014,7 @@ dependencies = [
 [[package]]
 name = "fedimint-bitcoind"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59bd38e6c7ca4c9294660037cbb4c3eaa09c2e4566f90feedcebd56b4a396a27"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1038,8 +1035,7 @@ dependencies = [
 [[package]]
 name = "fedimint-build"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a87d1526d927524a13663e844b6a65a6bf91d619ccdf1ffa122f7ab197d32ec6"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "serde_json",
 ]
@@ -1047,8 +1043,7 @@ dependencies = [
 [[package]]
 name = "fedimint-client"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c291c1f8a74d52181ec996bc1954df91242af134fb690aa0c9b560462b6ffa7"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "anyhow",
  "aquamarine",
@@ -1079,8 +1074,7 @@ dependencies = [
 [[package]]
 name = "fedimint-core"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5664f67aee6ea8b28dc91363d602ee17c6c05f1f36f2f1d0064785e1cf1c3d0e"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "anyhow",
  "async-lock",
@@ -1133,8 +1127,7 @@ dependencies = [
 [[package]]
 name = "fedimint-derive"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c3212a1f0b4f3d7a8b93bc458c9dbc591eabf8342ab44496a26d0201834140a"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "itertools 0.12.1",
  "proc-macro2",
@@ -1145,8 +1138,7 @@ dependencies = [
 [[package]]
 name = "fedimint-derive-secret"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7eecd4ff491a3eae9de9c8a4844febad2af2e414b0100d31fc14b6f6c3c1e0f9"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "anyhow",
  "fedimint-core",
@@ -1159,8 +1151,7 @@ dependencies = [
 [[package]]
 name = "fedimint-hkdf"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2303eedda2fc433b1f6a9969ec3aba0fd40f41e403fd60b7e079cab9a02232a5"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "bitcoin_hashes 0.11.0",
 ]
@@ -1168,8 +1159,7 @@ dependencies = [
 [[package]]
 name = "fedimint-ln-client"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11e2f9a7125f76b26edc719e87b5550b4cec41dcd4f46080f19b3e0b9cb959a1"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "anyhow",
  "aquamarine",
@@ -1203,8 +1193,7 @@ dependencies = [
 [[package]]
 name = "fedimint-ln-common"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd0590df1190cfb2a53c39d2c7eb152c45f77760c2653a2e823b4c10a57c2612"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "anyhow",
  "aquamarine",
@@ -1234,8 +1223,7 @@ dependencies = [
 [[package]]
 name = "fedimint-logging"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a26a4aec2b4da537dad90e76eae070a066e211f11bd1d16c5d84fa16f61cf568"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "anyhow",
  "tracing-subscriber",
@@ -1244,8 +1232,7 @@ dependencies = [
 [[package]]
 name = "fedimint-mint-client"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7bc49a3963e108a9ee34e097d7929496cae14cf3b4e97cc3fb4b0da92e039037"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "anyhow",
  "aquamarine",
@@ -1280,8 +1267,7 @@ dependencies = [
 [[package]]
 name = "fedimint-mint-common"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c40186a21482c8162ddef517692b3547fddc6ab584fb4f9e90a09adf8a331e16"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1305,8 +1291,7 @@ dependencies = [
 [[package]]
 name = "fedimint-tbs"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad90977bc2ca480371aeb395efe35c57ddabad103b10ffe418dd8c068092dd93"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "bitcoin_hashes 0.11.0",
  "bls12_381",
@@ -1343,8 +1328,7 @@ dependencies = [
 [[package]]
 name = "fedimint-wallet-client"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9edc4fcd7f3284fe9d89d7e94fb03d765753a66b46b53e2256de70b65f52c4f3"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "anyhow",
  "aquamarine",
@@ -1375,8 +1359,7 @@ dependencies = [
 [[package]]
 name = "fedimint-wallet-common"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4d8f6767ab717bbc47ffbb2dc3bb7d68ea5d83c48f25fbfe100b6b879406b48"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
 dependencies = [
  "anyhow",
  "async-trait",
