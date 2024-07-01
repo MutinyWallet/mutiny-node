@@ -21,3 +21,12 @@ lightning-rapid-gossip-sync = { git = 'https://github.com/MutinyWallet/rust-ligh
 lightning-background-processor = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "e660e068f6f93b13dc782b2d607795716b48ed15" }
 lightning-transaction-sync = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "e660e068f6f93b13dc782b2d607795716b48ed15" }
 lightning-net-tokio = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "e660e068f6f93b13dc782b2d607795716b48ed15" }
+
+fedimint-client = { git = 'https://github.com/MutinyWallet/fedimint.git', rev = "5721e9389fb41cad88bda755a18acc9e0fbabe47" }
+fedimint-core = { git = 'https://github.com/MutinyWallet/fedimint.git', rev = "5721e9389fb41cad88bda755a18acc9e0fbabe47" }
+fedimint-wallet-client = { git = 'https://github.com/MutinyWallet/fedimint.git', rev = "5721e9389fb41cad88bda755a18acc9e0fbabe47" }
+fedimint-mint-client = { git = 'https://github.com/MutinyWallet/fedimint.git', rev = "5721e9389fb41cad88bda755a18acc9e0fbabe47" }
+fedimint-ln-client = { git = 'https://github.com/MutinyWallet/fedimint.git', rev = "5721e9389fb41cad88bda755a18acc9e0fbabe47" }
+fedimint-bip39 = { git = 'https://github.com/MutinyWallet/fedimint.git', rev = "5721e9389fb41cad88bda755a18acc9e0fbabe47" }
+fedimint-ln-common = { git = 'https://github.com/MutinyWallet/fedimint.git', rev = "5721e9389fb41cad88bda755a18acc9e0fbabe47" }
+fedimint-tbs = { git = 'https://github.com/MutinyWallet/fedimint.git', rev = "5721e9389fb41cad88bda755a18acc9e0fbabe47" }
