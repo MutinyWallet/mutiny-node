@@ -605,8 +605,13 @@ impl From<anyhow::Error> for MutinyError {
         match e.to_string().as_str() {
             "Insufficient balance" => Self::InsufficientBalance,
             "MissingInvoiceAmount" => Self::BadAmountError,
+            "Federation didn't return peg-out fees" => Self::FederationConnectionFailed,
             "The generated transaction would be rejected by the federation for being too large." => Self::FederationTxTooLarge,
-            _ => Self::Other(e),
+            str => if str.starts_with("Address isn't compatible with the federation's network") {
+                Self::IncorrectNetwork
+            } else {
+                Self::Other(e)
+            },
         }
     }
 }
