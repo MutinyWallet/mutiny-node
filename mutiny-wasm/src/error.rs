@@ -177,6 +177,9 @@ pub enum MutinyJsError {
     /// Failed to connect to a federation.
     #[error("Failed to connect to a federation.")]
     FederationConnectionFailed,
+    /// Fedimint transaction too large
+    #[error("Error constructing fedimint transaction, try lowering the amount.")]
+    FederationTxTooLarge,
     /// Unknown error.
     #[error("Unknown Error")]
     UnknownError,
@@ -234,6 +237,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::TokenAlreadySpent => MutinyJsError::TokenAlreadySpent,
             MutinyError::FederationRequired => MutinyJsError::FederationRequired,
             MutinyError::FederationConnectionFailed => MutinyJsError::FederationConnectionFailed,
+            MutinyError::FederationTxTooLarge => MutinyJsError::FederationTxTooLarge,
             MutinyError::Other(_) => MutinyJsError::UnknownError,
             MutinyError::SubscriptionClientNotConfigured => {
                 MutinyJsError::SubscriptionClientNotConfigured
