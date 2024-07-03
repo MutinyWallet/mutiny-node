@@ -1344,6 +1344,11 @@ impl<S: MutinyStorage> NodeManager<S> {
         Ok(peers)
     }
 
+    pub async fn get_configured_lsp(&self) -> Result<Option<LspConfig>, MutinyError> {
+        let node = self.get_node_by_key_or_first(None).await?;
+        Ok(node.node_index().await.lsp)
+    }
+
     /// Changes all the node's LSPs to the given config. If any of the nodes have an active channel with the
     /// current LSP, it will fail to change the LSP.
     ///

@@ -26,7 +26,7 @@ pub mod labels;
 mod ldkstorage;
 pub mod lnurlauth;
 pub mod logging;
-mod lsp;
+pub mod lsp;
 mod messagehandler;
 mod networking;
 mod node;

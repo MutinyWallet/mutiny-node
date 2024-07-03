@@ -277,9 +277,9 @@ fn build_preferred_hubs_set() -> HashSet<NodeId> {
         .collect()
 }
 
-pub(crate) type ProbScorer = ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>;
+pub type ProbScorer = ProbabilisticScorer<Arc<NetworkGraph>, Arc<MutinyLogger>>;
 
-pub(crate) struct HubPreferentialScorer {
+pub struct HubPreferentialScorer {
     inner: ProbScorer,
     preferred_hubs_set: HashSet<NodeId>,
 }
