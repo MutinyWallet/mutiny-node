@@ -47,7 +47,7 @@ use mutiny_core::{
     labels::LabelStorage,
     nodemanager::{create_lsp_config, NodeManager},
 };
-use mutiny_core::{logging::MutinyLogger, nostr::ProfileType};
+use mutiny_core::{logging::MutinyLogger, lsp::LspConfig, nostr::ProfileType};
 use nostr::prelude::Method;
 use nostr::{Keys, ToBech32};
 use std::collections::HashMap;
@@ -761,6 +761,15 @@ impl MutinyWallet {
 
         self.inner.node_manager.change_lsp(lsp_config).await?;
         Ok(())
+    }
+
+    /// Returns the current LSP config
+    pub async fn get_configured_lsp(&self) -> Result<JsValue, MutinyJsError> {
+        match self.inner.node_manager.get_configured_lsp().await? {
+            Some(LspConfig::VoltageFlow(config)) => Ok(JsValue::from_serde(&config)?),
+            Some(LspConfig::Lsps(config)) => Ok(JsValue::from_serde(&config)?),
+            None => Ok(JsValue::NULL),
+        }
     }
 
     /// Attempts to connect to a peer from the selected node.
