@@ -159,6 +159,7 @@ impl<S: MutinyStorage> HermesClient<S> {
         let current_address_check_clone = self.current_address.clone();
         let first_federation = self.get_first_federation().await.clone();
         utils::spawn(async move {
+            let mut count = 1;
             loop {
                 if stop_check_clone.load(Ordering::Relaxed) {
                     break;
@@ -263,7 +264,10 @@ impl<S: MutinyStorage> HermesClient<S> {
                     }
                 };
 
-                utils::sleep(1_000).await;
+                // exponential backoff
+                let sleep_time = std::cmp::min(1_000 * (2_i32.pow(count)), 60_000);
+                utils::sleep(sleep_time).await;
+                count += 1;
             }
         });
 
