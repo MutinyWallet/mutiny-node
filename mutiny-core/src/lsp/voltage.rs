@@ -65,7 +65,7 @@ impl<'de> Deserialize<'de> for VoltageConfig {
 }
 
 #[derive(Clone)]
-pub(crate) struct LspClient {
+pub struct LspClient {
     pub pubkey: PublicKey,
     pub connection_string: String,
     pub url: String,
