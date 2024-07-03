@@ -1482,12 +1482,17 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         let self_clone = self.clone();
         utils::spawn(async move {
             // keep trying until it succeeds
+            let mut count = 1;
             loop {
                 match self_clone.sync_nostr().await {
                     Ok(_) => break,
                     Err(e) => {
                         log_error!(self_clone.logger, "Failed to sync nostr: {e}");
-                        sleep(5_000).await;
+
+                        // exponential backoff
+                        let sleep_time = std::cmp::min(1_000 * (2_i32.pow(count)), 60_000);
+                        sleep(sleep_time).await;
+                        count += 1;
                     }
                 }
 
