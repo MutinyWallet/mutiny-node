@@ -191,7 +191,6 @@ impl<S: MutinyStorage> FeeEstimator for MutinyFeeEstimator<S> {
         match confirmation_target {
             ConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee => fee - 250, // helps with rounding errors
             ConfirmationTarget::MinAllowedAnchorChannelRemoteFee => 250, // just pin to 1 sat/vbyte to prevent force closes
-            ConfirmationTarget::AnchorChannelFee => (fee / 2).max(250), // do half the mempool minimum just to prevent force closes
             _ => fee,
         }
     }
