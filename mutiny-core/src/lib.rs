@@ -1639,7 +1639,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         log_trace!(self.logger, "calling estimate_ln_fee");
 
         let amt = amt_sats
-            .or(inv.and_then(|i| i.amount_milli_satoshis()))
+            .or(inv
+                .and_then(|i| i.amount_milli_satoshis())
+                .map(|a| a / 1_000))
             .ok_or(MutinyError::BadAmountError)?;
 
         // check balances first
