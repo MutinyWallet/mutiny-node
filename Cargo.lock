@@ -991,7 +991,7 @@ checksum = "25cbce373ec4653f1a01a31e8a5e5ec0c622dc27ff9c4e6606eefef5cbbed4a5"
 [[package]]
 name = "fedimint-aead"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1003,7 +1003,7 @@ dependencies = [
 [[package]]
 name = "fedimint-bip39"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "bip39",
  "fedimint-client",
@@ -1014,7 +1014,7 @@ dependencies = [
 [[package]]
 name = "fedimint-bitcoind"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1035,7 +1035,7 @@ dependencies = [
 [[package]]
 name = "fedimint-build"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "serde_json",
 ]
@@ -1043,7 +1043,7 @@ dependencies = [
 [[package]]
 name = "fedimint-client"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "anyhow",
  "aquamarine",
@@ -1074,7 +1074,7 @@ dependencies = [
 [[package]]
 name = "fedimint-core"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "anyhow",
  "async-lock",
@@ -1127,7 +1127,7 @@ dependencies = [
 [[package]]
 name = "fedimint-derive"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "itertools 0.12.1",
  "proc-macro2",
@@ -1138,7 +1138,7 @@ dependencies = [
 [[package]]
 name = "fedimint-derive-secret"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "anyhow",
  "fedimint-core",
@@ -1151,7 +1151,7 @@ dependencies = [
 [[package]]
 name = "fedimint-hkdf"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "bitcoin_hashes 0.11.0",
 ]
@@ -1159,7 +1159,7 @@ dependencies = [
 [[package]]
 name = "fedimint-ln-client"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "anyhow",
  "aquamarine",
@@ -1193,7 +1193,7 @@ dependencies = [
 [[package]]
 name = "fedimint-ln-common"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "anyhow",
  "aquamarine",
@@ -1223,7 +1223,7 @@ dependencies = [
 [[package]]
 name = "fedimint-logging"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "anyhow",
  "tracing-subscriber",
@@ -1232,7 +1232,7 @@ dependencies = [
 [[package]]
 name = "fedimint-mint-client"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "anyhow",
  "aquamarine",
@@ -1267,7 +1267,7 @@ dependencies = [
 [[package]]
 name = "fedimint-mint-common"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1291,7 +1291,7 @@ dependencies = [
 [[package]]
 name = "fedimint-tbs"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "bitcoin_hashes 0.11.0",
  "bls12_381",
@@ -1328,7 +1328,7 @@ dependencies = [
 [[package]]
 name = "fedimint-wallet-client"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "anyhow",
  "aquamarine",
@@ -1359,7 +1359,7 @@ dependencies = [
 [[package]]
 name = "fedimint-wallet-common"
 version = "0.3.0"
-source = "git+https://github.com/MutinyWallet/fedimint.git?rev=5721e9389fb41cad88bda755a18acc9e0fbabe47#5721e9389fb41cad88bda755a18acc9e0fbabe47"
+source = "git+https://github.com/MutinyWallet/fedimint.git?rev=450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf#450d9f6d3b6252ad3d80f2e96717722cbb6dd9cf"
 dependencies = [
  "anyhow",
  "async-trait",
