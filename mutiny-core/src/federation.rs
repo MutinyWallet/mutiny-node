@@ -86,22 +86,25 @@ use std::{
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
-// The maximum amount of operations we try to pull
-// from fedimint when we need to search through
-// their internal list.
+/// The maximum amount of operations we try to pull
+/// from fedimint when we need to search through
+/// their internal list.
 const FEDIMINT_OPERATIONS_LIST_MAX: usize = 100;
 
-// On chain peg in timeout
+/// On chain peg in timeout
 const PEG_IN_TIMEOUT_YEAR: Duration = Duration::from_secs(86400 * 365);
 
+/// For key value storage
 pub const FEDIMINTS_PREFIX_KEY: &str = "fedimints/";
 
 // Default signet/mainnet federation gateway info
+// TODO: Remove these hardcoded gateways and use our improved gateway selection logic
 const SIGNET_GATEWAY: &str = "0256f5ef1d986e9abf559651b7167de28bfd954683cd0f14703be12d1421aedc55";
 const MAINNET_GATEWAY: &str = "025b9f090d3daab012346701f27d1c220d6d290f6b498255cddc492c255532a09d";
 const SIGNET_FEDERATION: &str = "c8d423964c7ad944d30f57359b6e5b260e211dcfdb945140e28d4df51fd572d2";
 const MAINNET_FEDERATION: &str = "c36038cce5a97e3467f03336fa8e7e3410960b81d1865cda2a609f70a8f51efb";
 
+// Translate from Fedimint's internal status to our HTLCStatus
 impl From<LnReceiveState> for HTLCStatus {
     fn from(state: LnReceiveState) -> Self {
         match state {
@@ -143,25 +146,26 @@ impl From<LnPayState> for HTLCStatus {
     }
 }
 
-// This is the FederationStorage object saved to the DB
+/// FederationStorage object saved to the DB
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct FederationStorage {
     pub federations: HashMap<String, FederationIndex>,
     pub version: u32,
 }
 
-// This is the FederationIdentity that refer to a specific federation
-// Used for public facing identification.
+/// FederationIdentity that refers to a specific federation
+/// Used for public facing identification. (What the frontend needs to display a federation to the user)
+/// Constructed via FederationMetaConfig -> FederationMeta -> FederationIdentity
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct FederationIdentity {
     pub uuid: String,
     pub federation_id: FederationId,
     pub invite_code: InviteCode,
-    // https://github.com/fedimint/fedimint/tree/master/docs/meta_fields
+    /// https://github.com/fedimint/fedimint/tree/master/docs/meta_fields
     pub federation_name: Option<String>,
     pub federation_expiry_timestamp: Option<String>,
     pub welcome_message: Option<String>,
-    // undocumented parameters that fedi uses: https://meta.dev.fedibtc.com/meta.json
+    /// undocumented parameters that fedi uses: https://meta.dev.fedibtc.com/meta.json
     pub federation_icon_url: Option<String>,
     pub meta_external_url: Option<String>,
     pub preview_message: Option<String>,
@@ -169,14 +173,15 @@ pub struct FederationIdentity {
     pub popup_countdown_message: Option<String>,
 }
 
+/// Fedi's federation listing format
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct FederationMetaConfig {
     #[serde(flatten)]
     pub federations: std::collections::HashMap<String, FederationMeta>,
 }
 
-// This is the FederationUrlConfig that refer to a specific federation
-// Normal config information that might exist from their URL.
+/// FederationUrlConfig that refer to a specific federation
+/// Normal config information that might exist from their URL.
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq, Debug)]
 pub struct FederationMeta {
     // https://github.com/fedimint/fedimint/tree/master/docs/meta_fields
@@ -194,14 +199,6 @@ pub struct FederationMeta {
     pub tos_url: Option<String>,
     pub popup_end_timestamp: Option<String>,
     pub popup_countdown_message: Option<String>,
-}
-
-#[derive(Default, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Site {
-    pub id: Option<String>,
-    pub url: Option<String>,
-    pub title: Option<String>,
-    pub image_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default)]
@@ -229,6 +226,7 @@ pub struct FedimintBalance {
     pub amount: u64,
 }
 
+// This is for the sake of test mocking
 #[cfg_attr(test, mockall::automock)]
 pub trait FedimintClient {
     async fn claim_external_receive(
@@ -238,6 +236,8 @@ pub trait FedimintClient {
     ) -> Result<(), MutinyError>;
 }
 
+/// FederationClient is Mutiny's main abstraction on top of the fedimint library
+/// We use this object to pay invoices, get addresses, etc.
 pub(crate) struct FederationClient<S: MutinyStorage> {
     pub(crate) uuid: String,
     pub(crate) fedimint_client: ClientHandleArc,
@@ -252,6 +252,8 @@ pub(crate) struct FederationClient<S: MutinyStorage> {
 }
 
 impl<S: MutinyStorage> FederationClient<S> {
+    /// We call this when it's the first time we're joining a federation, and also
+    /// when we're starting up the wallet.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
         uuid: String,
@@ -285,6 +287,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         log_trace!(logger, "Building fedimint client db");
         let secret = create_federation_secret(xprivkey, network)?;
 
+        // Handle if we've joined the federation already
         let fedimint_client = if is_initialized {
             client_builder
                 .open(get_default_client_secret(&secret, &federation_id))
@@ -315,6 +318,7 @@ impl<S: MutinyStorage> FederationClient<S> {
                     MutinyError::FederationConnectionFailed
                 })?
         };
+        // TODO: does this need to be an arc?
         let fedimint_client = Arc::new(fedimint_client);
 
         log_trace!(logger, "Retrieving fedimint wallet client module");
@@ -343,6 +347,9 @@ impl<S: MutinyStorage> FederationClient<S> {
         let client_clone = fedimint_client.clone();
         let gateway_clone = gateway.clone();
         let logger_clone = logger.clone();
+
+        // don't want to block wallet startup with these gateway updates
+        // so we spawn here
         spawn(async move {
             let start = Instant::now();
             // get lock immediately to block other actions until gateway is set
@@ -396,6 +403,9 @@ impl<S: MutinyStorage> FederationClient<S> {
         Ok(federation_client)
     }
 
+    /// The fedimint database has its own representation of transactions, but we need to
+    /// track them in our own database. This checks for unprocessed transactions and
+    /// processes them.
     pub(crate) async fn process_previous_operations(&self) -> Result<(), MutinyError> {
         // look for our internal state pending transactions
         let mut pending_invoices: HashSet<[u8; 32]> = HashSet::new();
@@ -470,6 +480,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         Ok(())
     }
 
+    /// Subscribe to status of actions like invoice creation, pay invoice, on-chain address creation, etc.
     fn subscribe_operation(&self, entry: OperationLogEntry, operation_id: OperationId) {
         subscribe_operation_ext(
             entry,
@@ -482,11 +493,15 @@ impl<S: MutinyStorage> FederationClient<S> {
         );
     }
 
+    /// Get the current gateway fees
     pub(crate) async fn gateway_fee(&self) -> Result<GatewayFees, MutinyError> {
         let gateway = self.gateway.read().await;
         Ok(gateway.as_ref().map(|x| x.fees.into()).unwrap_or_default())
     }
 
+    /// Create a new lightning invoice
+    /// Important limitation: if the FedimintClient hasn't updated the lightning gateways yet, this will
+    /// create an invoice that can only be paid inside to the federation.
     pub(crate) async fn get_invoice(
         &self,
         amount: u64,
@@ -560,6 +575,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         Ok(invoice.into())
     }
 
+    /// Get a new on-chain address
     pub(crate) async fn get_new_address(
         &self,
         labels: Vec<String>,
@@ -619,6 +635,8 @@ impl<S: MutinyStorage> FederationClient<S> {
         )
     }
 
+    /// Pay a lightning invoice
+    /// Important limitation: same as get_invoice
     pub(crate) async fn pay_invoice(
         &self,
         invoice: Bolt11Invoice,
@@ -802,6 +820,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         Err(MutinyError::PaymentTimeout)
     }
 
+    /// Ask the federation for the on chain fee estimate
     pub async fn estimate_tx_fee(
         &self,
         destination_address: bitcoin::Address,
@@ -822,6 +841,7 @@ impl<S: MutinyStorage> FederationClient<S> {
     }
 
     /// Someone received a payment on our behalf, we need to claim it
+    /// This is used for claiming Hermes lightning address payments
     pub async fn claim_external_receive(
         &self,
         secret_key: &SecretKey,
@@ -871,6 +891,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         Ok(())
     }
 
+    /// Get the federation info for displaying to the user
     pub async fn get_mutiny_federation_identity(&self) -> FederationIdentity {
         get_federation_identity(
             self.uuid.clone(),
@@ -881,7 +902,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         .await
     }
 
-    // delete_fedimint_storage is not suggested at the moment due to the lack of easy restores
+    /// WARNING delete_fedimint_storage is not suggested at the moment due to the lack of easy restores
     #[allow(dead_code)]
     pub async fn delete_fedimint_storage(&self) -> Result<(), MutinyError> {
         self.fedimint_storage.delete_store().await
