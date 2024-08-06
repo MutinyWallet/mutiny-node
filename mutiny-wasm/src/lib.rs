@@ -2103,6 +2103,23 @@ impl MutinyWallet {
         Ok(())
     }
 
+    pub async fn resync_federation(&self, federation_id: String) -> Result<(), MutinyJsError> {
+        let federation_id = FederationId::from_str(&federation_id)
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        self.inner.resync_federation(federation_id).await?;
+        Ok(())
+    }
+
+    pub fn get_federation_resync_progress(
+        &self,
+        federation_id: String,
+    ) -> Result<JsValue, MutinyJsError> {
+        let federation_id = FederationId::from_str(&federation_id)
+            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+        let res = self.inner.get_federation_resync_progress(federation_id)?;
+        Ok(JsValue::from_serde(&res)?)
+    }
+
     /// Restore's the mnemonic after deleting the previous state.
     ///
     /// Backup the state beforehand. Does not restore lightning data.
