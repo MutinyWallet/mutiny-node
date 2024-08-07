@@ -43,7 +43,7 @@ pub mod vss;
 #[cfg(test)]
 mod test_utils;
 
-use crate::federation::get_federation_identity;
+use crate::federation::{get_federation_identity, ResyncProgress};
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
@@ -1004,6 +1004,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
                 esplora.clone(),
                 stop.clone(),
                 &logger,
+                self.safe_mode,
             )
             .await?;
             log_debug!(
@@ -2982,6 +2983,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             self.esplora.clone(),
             federation_code,
             self.stop.clone(),
+            self.safe_mode,
         )
         .await;
         log_trace!(self.logger, "finished calling new_federation");
@@ -3109,6 +3111,43 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         log_trace!(self.logger, "finsihed calling get_federation_balances");
         Ok(FederationBalances { balances })
+    }
+
+    pub async fn resync_federation(&self, federation_id: FederationId) -> Result<(), MutinyError> {
+        if !self.safe_mode {
+            // cannot safely run unless in safe mode
+            return Err(MutinyError::AlreadyRunning);
+        }
+
+        let invite_code = self
+            .federation_storage
+            .read()
+            .await
+            .federations
+            .values()
+            .find(|f| f.federation_code.federation_id() == federation_id)
+            .ok_or(MutinyError::NotFound)?
+            .federation_code
+            .clone();
+
+        FederationClient::start_resync(
+            invite_code,
+            self.xprivkey,
+            self.storage.clone(),
+            self.network,
+            self.logger.clone(),
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    pub fn get_federation_resync_progress(
+        &self,
+        federation_id: FederationId,
+    ) -> Result<Option<ResyncProgress>, MutinyError> {
+        let storage_key = format!("resync_state/{federation_id}");
+        self.storage.get_data(storage_key)
     }
 
     /// Starts a background process that will check pending fedimint operations
@@ -3734,6 +3773,7 @@ async fn create_federations<S: MutinyStorage>(
     esplora: Arc<AsyncClient>,
     stop: Arc<AtomicBool>,
     logger: &Arc<MutinyLogger>,
+    safe_mode: bool,
 ) -> Result<Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>, MutinyError> {
     let mut federation_map = HashMap::with_capacity(federation_storage.federations.len());
     for (uuid, federation_index) in federation_storage.federations {
@@ -3746,6 +3786,7 @@ async fn create_federations<S: MutinyStorage>(
             c.network,
             stop.clone(),
             logger.clone(),
+            safe_mode,
         )
         .await?;
 
@@ -3770,6 +3811,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
     esplora: Arc<AsyncClient>,
     federation_code: InviteCode,
     stop: Arc<AtomicBool>,
+    safe_mode: bool,
 ) -> Result<FederationIdentity, MutinyError> {
     // Begin with a mutex lock so that nothing else can
     // save or alter the federation list while it is about to
@@ -3801,6 +3843,7 @@ pub(crate) async fn create_new_federation<S: MutinyStorage>(
         network,
         stop.clone(),
         logger.clone(),
+        safe_mode,
     )
     .await?;
 

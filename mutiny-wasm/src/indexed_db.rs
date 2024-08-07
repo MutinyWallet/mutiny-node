@@ -4,7 +4,7 @@ use bip39::Mnemonic;
 use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
 use lightning::util::logger::Logger;
-use lightning::{log_debug, log_error, log_trace};
+use lightning::{log_debug, log_error, log_info, log_trace};
 use log::error;
 use mutiny_core::blindauth::TokenStorage;
 use mutiny_core::logging::LOGGING_KEY;
@@ -346,11 +346,12 @@ impl IndexedDbStorage {
 
         match vss {
             None => {
+                log_info!(logger, "No VSS configured");
                 let final_map = map.memory.read().unwrap();
                 Ok(final_map.clone())
             }
             Some(vss) => {
-                log_trace!(logger, "Reading from vss");
+                log_info!(logger, "Reading from vss");
                 let start = instant::Instant::now();
                 let keys = vss.list_key_versions(None).await?;
                 let mut futs = Vec::with_capacity(keys.len());

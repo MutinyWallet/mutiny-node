@@ -38,6 +38,7 @@ use fedimint_client::{
 };
 use fedimint_core::bitcoin_migration::bitcoin30_to_bitcoin29_address;
 use fedimint_core::config::ClientConfig;
+use fedimint_core::core::LEGACY_HARDCODED_INSTANCE_ID_MINT;
 use fedimint_core::{
     api::InviteCode,
     config::FederationId,
@@ -141,6 +142,13 @@ impl From<LnPayState> for HTLCStatus {
             LnPayState::UnexpectedError { .. } => HTLCStatus::Failed,
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ResyncProgress {
+    pub total: u32,
+    pub complete: u32,
+    pub done: bool,
 }
 
 // This is the FederationStorage object saved to the DB
@@ -262,6 +270,7 @@ impl<S: MutinyStorage> FederationClient<S> {
         network: Network,
         stop: Arc<AtomicBool>,
         logger: Arc<MutinyLogger>,
+        safe_mode: bool,
     ) -> Result<Self, MutinyError> {
         log_info!(logger, "initializing a new federation client: {uuid}");
 
@@ -281,6 +290,10 @@ impl<S: MutinyStorage> FederationClient<S> {
         client_builder.with_module(LightningClientInit);
 
         client_builder.with_primary_module(1);
+
+        if safe_mode {
+            client_builder.stopped();
+        }
 
         log_trace!(logger, "Building fedimint client db");
         let secret = create_federation_secret(xprivkey, network)?;
@@ -480,6 +493,101 @@ impl<S: MutinyStorage> FederationClient<S> {
             self.stop.clone(),
             self.storage.clone(),
         );
+    }
+
+    /// Starts a resync of the federation
+    pub async fn start_resync(
+        federation_code: InviteCode,
+        xprivkey: ExtendedPrivKey,
+        storage: S,
+        network: Network,
+        logger: Arc<MutinyLogger>,
+    ) -> Result<(), MutinyError> {
+        let federation_id = federation_code.federation_id();
+
+        let storage_key = format!("resync_state/{federation_id}");
+        storage.set_data(storage_key.clone(), ResyncProgress::default(), None)?;
+
+        log_trace!(logger, "Building fedimint client db");
+        let fedimint_storage =
+            FedimintStorage::new(storage.clone(), federation_id.to_string(), logger.clone())
+                .await?;
+        let db = fedimint_storage.clone().into();
+
+        let mut client_builder = fedimint_client::Client::builder(db);
+        client_builder.with_module(WalletClientInit(None));
+        client_builder.with_module(MintClientInit);
+        client_builder.with_module(LightningClientInit);
+
+        client_builder.with_primary_module(1);
+
+        log_trace!(logger, "Building fedimint client db");
+        let secret = create_federation_secret(xprivkey, network)?;
+
+        // need to use a fresh database for resync
+        fedimint_storage.delete_store().await?;
+
+        let config = ClientConfig::download_from_invite_code(&federation_code)
+            .await
+            .map_err(|e| {
+                log_error!(logger, "Could not download federation info: {e}");
+                e
+            })?;
+
+        let fedimint_client = client_builder
+            .recover(
+                get_default_client_secret(&secret, &federation_id),
+                config,
+                None,
+            )
+            .await
+            .map_err(|e| {
+                log_error!(logger, "Could not open federation client: {e}");
+                MutinyError::FederationConnectionFailed
+            })?;
+        let fedimint_client = Arc::new(fedimint_client);
+
+        log_debug!(logger, "Built fedimint resync client");
+
+        spawn(async move {
+            let mut stream = fedimint_client.subscribe_to_recovery_progress();
+
+            while let Some((id, progress)) = stream.next().await {
+                // only can rescan mint client, don't care about sync progress of others
+                if id != LEGACY_HARDCODED_INSTANCE_ID_MINT || progress.is_none() {
+                    continue;
+                }
+
+                log_debug!(logger, "Got recovery progress: {progress:?}");
+
+                // save progress state to storage so frontend can show progress
+                if let Err(e) = storage.set_data(
+                    storage_key.clone(),
+                    ResyncProgress {
+                        total: progress.total,
+                        complete: progress.complete,
+                        done: progress.is_done(),
+                    },
+                    None,
+                ) {
+                    log_error!(logger, "Error saving resync progress: {e}");
+                }
+            }
+
+            log_debug!(logger, "No more progress, waiting for recoveries");
+
+            // wait for all recoveries to complete just to be sure
+            if let Err(e) = fedimint_client.wait_for_all_recoveries().await {
+                log_error!(logger, "Error waiting for recoveries: {e}");
+            }
+
+            // can now delete the progress state
+            if let Err(e) = storage.delete(&[storage_key]) {
+                log_error!(logger, "Error deleting resync progress state: {e}");
+            }
+        });
+
+        Ok(())
     }
 
     pub(crate) async fn gateway_fee(&self) -> Result<GatewayFees, MutinyError> {
