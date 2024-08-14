@@ -4290,8 +4290,8 @@ mod tests {
             parse_npub("npub18s7md9ytv8r240jmag5j037huupk5jnsk94adykeaxtvc6lyftesuw5ydl").unwrap();
         let ben =
             parse_npub("npub1u8lnhlw5usp3t9vmpz60ejpyt649z33hu82wc2hpv6m5xdqmuxhs46turz").unwrap();
-        let tony =
-            parse_npub("npub1t0nyg64g5vwprva52wlcmt7fkdr07v5dr7s35raq9g0xgc0k4xcsedjgqv").unwrap();
+        let jack =
+            parse_npub("npub1sg6plzptd64u62a878hep2kev88swjh3tw00gjsfl8f237lmu63q0uf63m").unwrap();
 
         // create wallet
         let mnemonic = generate_seed(12).unwrap();
@@ -4324,22 +4324,22 @@ mod tests {
         assert!(contact.ln_address.is_some());
         assert!(!contact.name.is_empty());
 
-        // add tony as a contact with incomplete info
+        // add jack as a contact with incomplete info
         let incorrect_name = "incorrect name".to_string();
         let new_contact = Contact {
             name: incorrect_name.clone(),
-            npub: Some(tony),
+            npub: Some(jack),
             ..Default::default()
         };
         let id = mw.storage.create_new_contact(new_contact).unwrap();
 
-        // sync contacts again, tony's contact should be correct
+        // sync contacts again, jack's contact should be correct
         mw.sync_nostr_contacts(npub).await.expect("synced contacts");
 
         let contacts = mw.storage.get_contacts().unwrap();
         assert_eq!(contacts.len(), 2);
         let contact = contacts.get(&id).unwrap();
-        assert_eq!(contact.npub, Some(tony));
+        assert_eq!(contact.npub, Some(jack));
         assert!(contact.image_url.is_some());
         assert!(contact.ln_address.is_some());
         assert_ne!(contact.name, incorrect_name);
