@@ -2,6 +2,8 @@ use crate::keymanager::PhantomKeysManager;
 use crate::messagehandler::MutinyMessageHandler;
 #[cfg(target_arch = "wasm32")]
 use crate::networking::socket::{schedule_descriptor_read, MutinySocketDescriptor};
+#[cfg(target_arch = "wasm32")]
+use crate::networking::ws_socket::WsTcpSocketDescriptor;
 use crate::node::{NetworkGraph, OnionMessenger};
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, fees::MutinyFeeEstimator};
@@ -9,7 +11,7 @@ use crate::{gossip, ldkstorage::PhantomChannelManager, logging::MutinyLogger};
 use crate::{gossip::read_peer_info, node::PubkeyConnectionInfo};
 use bitcoin::key::{Secp256k1, Verification};
 use bitcoin::secp256k1::{PublicKey, Signing};
-use lightning::blinded_path::BlindedPath;
+use lightning::blinded_path::{BlindedPath, IntroductionNode};
 use lightning::events::{MessageSendEvent, MessageSendEventsProvider};
 use lightning::ln::features::{InitFeatures, NodeFeatures};
 use lightning::ln::msgs;
@@ -18,14 +20,10 @@ use lightning::ln::peer_handler::PeerManager as LdkPeerManager;
 use lightning::ln::peer_handler::{APeerManager, PeerHandleError};
 use lightning::onion_message::messenger::{Destination, MessageRouter, OnionMessagePath};
 use lightning::routing::gossip::NodeId;
-use lightning::sign::EntropySource;
 use lightning::util::logger::Logger;
 use lightning::{ln::msgs::SocketAddress, log_warn};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-
-#[cfg(target_arch = "wasm32")]
-use crate::networking::ws_socket::WsTcpSocketDescriptor;
 
 #[cfg(target_arch = "wasm32")]
 use lightning::ln::peer_handler::SocketDescriptor as LdkSocketDescriptor;
@@ -96,7 +94,10 @@ pub(crate) type PeerManagerImpl<S: MutinyStorage> = LdkPeerManager<
 
 impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
     fn get_peer_node_ids(&self) -> Vec<PublicKey> {
-        self.get_peer_node_ids().into_iter().map(|x| x.0).collect()
+        self.list_peers()
+            .into_iter()
+            .map(|x| x.counterparty_node_id)
+            .collect()
     }
 
     fn new_outbound_connection(
@@ -319,7 +320,10 @@ impl MessageRouter for LspMessageRouter {
     ) -> Result<OnionMessagePath, ()> {
         let first_node = match &destination {
             Destination::Node(node_id) => *node_id,
-            Destination::BlindedPath(path) => path.introduction_node_id,
+            Destination::BlindedPath(path) => match path.introduction_node {
+                IntroductionNode::NodeId(node_id) => node_id,
+                IntroductionNode::DirectedShortChannelId(_, _) => return Err(()),
+            },
         };
 
         if peers.contains(&first_node) {
@@ -337,11 +341,10 @@ impl MessageRouter for LspMessageRouter {
         }
     }
 
-    fn create_blinded_paths<ES: EntropySource + ?Sized, T: Signing + Verification>(
+    fn create_blinded_paths<T: Signing + Verification>(
         &self,
-        _recipient: PublicKey,
-        _peers: Vec<PublicKey>,
-        _entropy_source: &ES,
+        _: PublicKey,
+        _: Vec<PublicKey>,
         _secp_ctx: &Secp256k1<T>,
     ) -> Result<Vec<BlindedPath>, ()> {
         // Bolt12 not yet supported

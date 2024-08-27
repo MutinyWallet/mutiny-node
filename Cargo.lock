@@ -2245,12 +2245,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "lightning-background-processor"
-version = "0.0.121"
-source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=e660e068f6f93b13dc782b2d607795716b48ed15#e660e068f6f93b13dc782b2d607795716b48ed15"
+name = "lightning"
+version = "0.0.123"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd92d4aa159374be430c7590e169b4a6c0fb79018f5bc4ea1bffde536384db3"
 dependencies = [
  "bitcoin 0.30.2",
- "lightning 0.0.121",
+ "hex-conservative",
+]
+
+[[package]]
+name = "lightning-background-processor"
+version = "0.0.123"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb1c2c64050e37cee7c3b6b022106523784055ac3ee572d360780a1d6fe8062c"
+dependencies = [
+ "bitcoin 0.30.2",
+ "lightning 0.0.123",
  "lightning-rapid-gossip-sync",
 ]
 
@@ -2279,19 +2290,31 @@ dependencies = [
  "lightning 0.0.121",
  "num-traits",
  "secp256k1 0.27.0",
+]
+
+[[package]]
+name = "lightning-invoice"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26d07d01cf197bf2184b929b7dc94aa70d935aac6df896c256a3a9475b7e9d40"
+dependencies = [
+ "bech32",
+ "bitcoin 0.30.2",
+ "lightning 0.0.123",
+ "secp256k1 0.27.0",
  "serde",
 ]
 
 [[package]]
 name = "lightning-liquidity"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7bd9e9c9209b2fe3c436be50409c7b6636ebc7503a92fe6de01d020c20fd74c0"
+checksum = "3fa6284740f64672f42145de7b0a242beea3821dae1f0eac7949a8f48799c828"
 dependencies = [
  "bitcoin 0.30.2",
  "chrono",
- "lightning 0.0.121",
- "lightning-invoice 0.29.0",
+ "lightning 0.0.123",
+ "lightning-invoice 0.31.0",
  "serde",
  "serde_json",
 ]
@@ -2308,23 +2331,25 @@ dependencies = [
 
 [[package]]
 name = "lightning-rapid-gossip-sync"
-version = "0.0.121"
-source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=e660e068f6f93b13dc782b2d607795716b48ed15#e660e068f6f93b13dc782b2d607795716b48ed15"
+version = "0.0.123"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d861b0f0cd5f8fe8c63760023c4fd4fd32c384881b41780b62ced2a8a619f91"
 dependencies = [
  "bitcoin 0.30.2",
- "lightning 0.0.121",
+ "lightning 0.0.123",
 ]
 
 [[package]]
 name = "lightning-transaction-sync"
-version = "0.0.121"
-source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=e660e068f6f93b13dc782b2d607795716b48ed15#e660e068f6f93b13dc782b2d607795716b48ed15"
+version = "0.0.123"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04c1e88eece28f19b5834fb5aefceabc5d143cfda2dfa9a32f73e66f4d0c84ed"
 dependencies = [
  "bdk-macros",
  "bitcoin 0.30.2",
  "esplora-client 0.6.0",
  "futures",
- "lightning 0.0.121",
+ "lightning 0.0.123",
 ]
 
 [[package]]
@@ -2574,9 +2599,9 @@ dependencies = [
  "itertools 0.11.0",
  "js-sys",
  "jwt-compact",
- "lightning 0.0.121",
+ "lightning 0.0.123",
  "lightning-background-processor",
- "lightning-invoice 0.29.0",
+ "lightning-invoice 0.31.0",
  "lightning-liquidity",
  "lightning-net-tokio",
  "lightning-rapid-gossip-sync",
@@ -2621,8 +2646,8 @@ dependencies = [
  "hex-conservative",
  "instant",
  "js-sys",
- "lightning 0.0.121",
- "lightning-invoice 0.29.0",
+ "lightning 0.0.123",
+ "lightning-invoice 0.31.0",
  "lnurl-rs",
  "log",
  "moksha-core",
@@ -4906,3 +4931,18 @@ dependencies = [
  "quote",
  "syn 2.0.48",
 ]
+
+[[patch.unused]]
+name = "lightning-background-processor"
+version = "0.0.121"
+source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=e660e068f6f93b13dc782b2d607795716b48ed15#e660e068f6f93b13dc782b2d607795716b48ed15"
+
+[[patch.unused]]
+name = "lightning-rapid-gossip-sync"
+version = "0.0.121"
+source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=e660e068f6f93b13dc782b2d607795716b48ed15#e660e068f6f93b13dc782b2d607795716b48ed15"
+
+[[patch.unused]]
+name = "lightning-transaction-sync"
+version = "0.0.121"
+source = "git+https://github.com/MutinyWallet/rust-lightning.git?rev=e660e068f6f93b13dc782b2d607795716b48ed15#e660e068f6f93b13dc782b2d607795716b48ed15"

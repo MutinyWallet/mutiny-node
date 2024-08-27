@@ -22,6 +22,7 @@ use crate::{
 use crate::{gossip::*, scorer::HubPreferentialScorer};
 use crate::{
     node::NodeBuilder,
+    peermanager::PeerManager,
     storage::{MutinyStorage, DEVICE_ID_KEY, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY},
 };
 use anyhow::anyhow;
@@ -1873,7 +1874,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         // get peers we are connected to
         let connected_peers: Vec<PublicKey> = nodes
             .iter()
-            .flat_map(|(_, n)| n.peer_manager.get_peer_node_ids().into_iter().map(|x| x.0))
+            .flat_map(|(_, n)| n.peer_manager.get_peer_node_ids())
             .collect();
 
         // correctly set is_connected

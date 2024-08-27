@@ -254,12 +254,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                     return;
                 }
 
-                if let Some(payment_preimage) = match purpose {
-                    PaymentPurpose::InvoicePayment {
-                        payment_preimage, ..
-                    } => payment_preimage,
-                    PaymentPurpose::SpontaneousPayment(preimage) => Some(preimage),
-                } {
+                if let Some(payment_preimage) = purpose.preimage() {
                     self.channel_manager.claim_funds(payment_preimage);
                 } else {
                     log_error!(self.logger, "ERROR: No payment preimage found");
@@ -276,12 +271,22 @@ impl<S: MutinyStorage> EventHandler<S> {
                 log_debug!(self.logger, "EVENT: PaymentClaimed claimed payment from payment hash {} of {} millisatoshis ({sender_intended_total_msat:?} intended)  from {} htlcs", payment_hash, amount_msat, htlcs.len());
 
                 let (payment_preimage, payment_secret) = match purpose {
-                    PaymentPurpose::InvoicePayment {
+                    PaymentPurpose::Bolt11InvoicePayment {
                         payment_preimage,
                         payment_secret,
                         ..
                     } => (payment_preimage, Some(payment_secret)),
                     PaymentPurpose::SpontaneousPayment(preimage) => (Some(preimage), None),
+                    PaymentPurpose::Bolt12OfferPayment {
+                        payment_preimage,
+                        payment_secret,
+                        ..
+                    } => (payment_preimage, Some(payment_secret)),
+                    PaymentPurpose::Bolt12RefundPayment {
+                        payment_preimage,
+                        payment_secret,
+                        ..
+                    } => (payment_preimage, Some(payment_secret)),
                 };
                 match read_payment_info(
                     &self.persister.storage,
@@ -654,7 +659,7 @@ impl<S: MutinyStorage> EventHandler<S> {
         // e.g. high-latency mix networks and some CoinJoin implementations, have
         // better privacy.
         // Logic copied from core: https://github.com/bitcoin/bitcoin/blob/1d4846a8443be901b8a5deb0e357481af22838d0/src/wallet/spend.cpp#L936
-        let mut height = self.channel_manager.current_best_block().height();
+        let mut height = self.channel_manager.current_best_block().height;
 
         let mut rand = [0u8; 4];
         getrandom::getrandom(&mut rand).unwrap();

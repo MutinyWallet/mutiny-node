@@ -20,7 +20,7 @@ use lightning::log_warn;
 use lightning::offers::invoice::UnsignedBolt12Invoice;
 use lightning::offers::invoice_request::UnsignedInvoiceRequest;
 use lightning::sign::{
-    EntropySource, InMemorySigner, KeyMaterial, NodeSigner,
+    EntropySource, InMemorySigner, KeyMaterial, NodeSigner, OutputSpender,
     PhantomKeysManager as LdkPhantomKeysManager, Recipient, SignerProvider,
     SpendableOutputDescriptor,
 };

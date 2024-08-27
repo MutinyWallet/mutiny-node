@@ -527,8 +527,8 @@ impl NostrWalletConnect {
                 pubkey: "02cae09cf2c8842ace44068a5bf3117a494ebbf69a99e79712483c36f97cdb7b54"
                     .to_string(),
                 network: network.to_string(),
-                block_height: block.height(),
-                block_hash: block.block_hash().to_string(),
+                block_height: block.height,
+                block_hash: block.block_hash.to_string(),
                 methods: self
                     .profile
                     .available_commands()

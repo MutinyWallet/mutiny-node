@@ -1,6 +1,7 @@
 use crate::lsp::{InvoiceRequest, LspConfig};
 use crate::nodemanager::ChannelClosure;
 use crate::peermanager::LspMessageRouter;
+use crate::peermanager::PeerManager;
 use crate::storage::MutinyStorage;
 use crate::utils::get_monitor_version;
 use crate::{
@@ -39,12 +40,13 @@ use core::time::Duration;
 use esplora_client::AsyncClient;
 use futures_util::lock::Mutex;
 use hex_conservative::DisplayHex;
+use lightning::blinded_path::EmptyNodeIdLookUp;
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
 use lightning::ln::channelmanager::ChannelDetails;
 use lightning::ln::PaymentSecret;
 use lightning::onion_message::messenger::OnionMessenger as LdkOnionMessenger;
 use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
-use lightning::sign::{EntropySource, InMemorySigner, NodeSigner, Recipient};
+use lightning::sign::{InMemorySigner, NodeSigner, Recipient};
 use lightning::util::config::MaxDustHTLCExposure;
 use lightning::util::ser::Writeable;
 use lightning::{
@@ -112,6 +114,7 @@ pub(crate) type OnionMessenger<S: MutinyStorage> = LdkOnionMessenger<
     Arc<PhantomKeysManager<S>>,
     Arc<PhantomKeysManager<S>>,
     Arc<MutinyLogger>,
+    Arc<EmptyNodeIdLookUp>,
     Arc<LspMessageRouter>,
     Arc<PhantomChannelManager<S>>,
     IgnoringMessageHandler,
@@ -139,9 +142,10 @@ pub(crate) type ChainMonitor<S: MutinyStorage> = chainmonitor::ChainMonitor<
     Arc<MutinyNodePersister<S>>,
 >;
 
-pub(crate) type Router = DefaultRouter<
+pub(crate) type Router<S: MutinyStorage> = DefaultRouter<
     Arc<NetworkGraph>,
     Arc<MutinyLogger>,
+    Arc<PhantomKeysManager<S>>,
     Arc<utils::Mutex<HubPreferentialScorer>>,
     ProbabilisticScoringFeeParameters,
     HubPreferentialScorer,
@@ -446,10 +450,10 @@ impl<S: MutinyStorage> NodeBuilder<S> {
 
         let network_graph = gossip_sync.network_graph().clone();
 
-        let router: Arc<Router> = Arc::new(DefaultRouter::new(
+        let router: Arc<Router<S>> = Arc::new(DefaultRouter::new(
             network_graph,
             logger.clone(),
-            keys_manager.get_secure_random_bytes(),
+            keys_manager.clone(),
             scorer.clone(),
             scoring_params(),
         ));
@@ -544,6 +548,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             keys_manager.clone(),
             keys_manager.clone(),
             logger.clone(),
+            Arc::new(EmptyNodeIdLookUp {}),
             message_router,
             channel_manager.clone(),
             IgnoringMessageHandler {},
@@ -941,11 +946,11 @@ impl<S: MutinyStorage> NodeBuilder<S> {
 									{
 										log_error!(retry_logger, "Error notifying chain monitor of channel monitor update: {e:?}");
 									} else {
-                                        log_debug!(
+										log_debug!(
                                             retry_logger,
                                             "notified channel monitor updated: {funding_txo:?}"
                                         );
-                                    }
+									}
 								}
 							}
 							Err(e) => log_error!(
@@ -2407,7 +2412,7 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                 .filter(|(n, _)| {
                     !current_connections
                         .iter()
-                        .any(|(c, _)| &NodeId::from_pubkey(c) == n)
+                        .any(|c| &NodeId::from_pubkey(c) == n)
                 })
                 .collect();
 

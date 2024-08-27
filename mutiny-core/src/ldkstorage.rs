@@ -30,7 +30,7 @@ use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
 use lightning::{
     chain::chainmonitor::{MonitorUpdateId, Persist},
-    log_trace,
+    log_info, log_trace,
 };
 use lightning::{
     chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate},
@@ -56,7 +56,7 @@ pub(crate) type PhantomChannelManager<S: MutinyStorage> = LdkChannelManager<
     Arc<PhantomKeysManager<S>>,
     Arc<PhantomKeysManager<S>>,
     Arc<MutinyFeeEstimator<S>>,
-    Arc<Router>,
+    Arc<Router<S>>,
     Arc<MutinyLogger>,
 >;
 
@@ -211,7 +211,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
         mutiny_logger: Arc<MutinyLogger>,
         keys_manager: Arc<PhantomKeysManager<S>>,
-        router: Arc<Router>,
+        router: Arc<Router<S>>,
         channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
         esplora: &AsyncClient,
     ) -> Result<ReadChannelManager<S>, MutinyError> {
@@ -296,7 +296,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
         mutiny_logger: Arc<MutinyLogger>,
         keys_manager: Arc<PhantomKeysManager<S>>,
-        router: Arc<Router>,
+        router: Arc<Router<S>>,
         mut channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
     ) -> Result<ReadChannelManager<S>, MutinyError> {
         log_debug!(mutiny_logger, "Parsing channel manager");
@@ -346,7 +346,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
         fee_estimator: Arc<MutinyFeeEstimator<S>>,
         mutiny_logger: Arc<MutinyLogger>,
         keys_manager: Arc<PhantomKeysManager<S>>,
-        router: Arc<Router>,
+        router: Arc<Router<S>>,
         channel_monitors: Vec<(BlockHash, ChannelMonitor<InMemorySigner>)>,
         esplora: &AsyncClient,
     ) -> Result<ReadChannelManager<S>, MutinyError> {
@@ -585,20 +585,14 @@ impl ChannelOpenParams {
 impl<S: MutinyStorage>
     Persister<
         '_,
-        Arc<ChainMonitor<S>>,
-        Arc<MutinyChain<S>>,
-        Arc<PhantomKeysManager<S>>,
-        Arc<PhantomKeysManager<S>>,
-        Arc<PhantomKeysManager<S>>,
-        Arc<MutinyFeeEstimator<S>>,
-        Arc<Router>,
+        Arc<PhantomChannelManager<S>>,
         Arc<MutinyLogger>,
         utils::Mutex<HubPreferentialScorer>,
     > for MutinyNodePersister<S>
 {
     fn persist_manager(
         &self,
-        channel_manager: &PhantomChannelManager<S>,
+        channel_manager: &Arc<PhantomChannelManager<S>>,
     ) -> Result<(), lightning::io::Error> {
         let old = self.manager_version.fetch_add(1, Ordering::SeqCst);
         let version = old + 1;
@@ -606,7 +600,7 @@ impl<S: MutinyStorage>
 
         let value = VersionedValue {
             version,
-            value: serde_json::to_value(channel_manager.encode().to_lower_hex_string()).unwrap(),
+            value: serde_json::to_value(channel_manager.encode().to_lower_hex_string())?,
         };
 
         self.storage
@@ -680,6 +674,13 @@ impl<S: MutinyStorage> Persist<InMemorySigner> for MutinyNodePersister<S> {
         };
 
         self.init_persist_monitor(key, monitor, version, update_id)
+    }
+
+    fn archive_persisted_channel(&self, channel_funding_outpoint: OutPoint) {
+        log_info!(
+            self.logger,
+            "Channel is safe to archive: {channel_funding_outpoint}"
+        );
     }
 }
 

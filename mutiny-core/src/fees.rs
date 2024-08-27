@@ -204,6 +204,7 @@ fn num_blocks_from_conf_target(confirmation_target: ConfirmationTarget) -> usize
         ConfirmationTarget::ChannelCloseMinimum => 1008,
         ConfirmationTarget::NonAnchorChannelFee => 6,
         ConfirmationTarget::OnChainSweep => 1,
+        ConfirmationTarget::OutputSpendingFee => 6,
     }
 }
 
@@ -215,6 +216,7 @@ fn fallback_fee_from_conf_target(confirmation_target: ConfirmationTarget) -> u32
         ConfirmationTarget::AnchorChannelFee => 10 * 250,
         ConfirmationTarget::NonAnchorChannelFee => 20 * 250,
         ConfirmationTarget::OnChainSweep => 50 * 250,
+        ConfirmationTarget::OutputSpendingFee => 10 * 250,
     }
 }
 
