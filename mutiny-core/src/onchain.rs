@@ -13,6 +13,7 @@ use bdk_chain::indexed_tx_graph::Indexer;
 use bdk_esplora::EsploraAsyncExt;
 use bitcoin::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::consensus::serialize;
+use bitcoin::constants::genesis_block;
 use bitcoin::psbt::{Input, PartiallySignedTransaction};
 use bitcoin::{Address, Network, OutPoint, ScriptBuf, Transaction, Txid};
 use esplora_client::AsyncClient;
@@ -60,6 +61,13 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         let (receive_descriptor_template, change_descriptor_template) =
             get_tr_descriptors_for_extended_key(xprivkey, network, account_number)?;
 
+        // hack for bdk bug
+        let wallet_network = if network == Network::Testnet4 {
+            Network::Testnet
+        } else {
+            network
+        };
+
         // if we have a keychain set, load the wallet, otherwise create one
         let load_wallet_res = Wallet::load(
             receive_descriptor_template.clone(),
@@ -70,22 +78,30 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             Ok(wallet) => wallet,
             Err(bdk::wallet::LoadError::NotInitialized) => {
                 // we don't have a bdk wallet, create one
-                Wallet::new(
+                let genesis_hash = genesis_block(network).block_hash();
+                Wallet::new_with_genesis_hash(
                     receive_descriptor_template,
                     Some(change_descriptor_template),
                     OnChainStorage(db.clone()),
-                    network,
-                )?
+                    wallet_network,
+                    genesis_hash,
+                )
+                .map_err(|e| {
+                    log_error!(logger, "Error creating wallet: {e}");
+                    MutinyError::WalletOperationFailed
+                })?
             }
             Err(bdk::wallet::LoadError::Load(_)) => {
                 // failed to read storage, means we have old encoding and need to delete and re-init wallet
                 db.delete(&[KEYCHAIN_STORE_KEY])?;
                 db.set_data(NEED_FULL_SYNC_KEY.to_string(), true, None)?;
-                Wallet::new(
+                let genesis_hash = genesis_block(network).block_hash();
+                Wallet::new_with_genesis_hash(
                     receive_descriptor_template,
                     Some(change_descriptor_template),
                     OnChainStorage(db.clone()),
-                    network,
+                    wallet_network,
+                    genesis_hash,
                 )?
             }
             Err(e) => {
@@ -749,6 +765,7 @@ pub(crate) fn coin_type_from_network(network: Network) -> u32 {
     match network {
         Network::Bitcoin => 0,
         Network::Testnet => 1,
+        Network::Testnet4 => 1,
         Network::Signet => 1,
         Network::Regtest => 1,
         net => panic!("Got unknown network: {net}!"),
@@ -762,6 +779,7 @@ pub(crate) fn get_esplora_url(network: Network, user_provided_url: Option<String
         match network {
             Network::Bitcoin => "https://mutiny.mempool.space/api",
             Network::Testnet => "https://mempool.space/testnet/api",
+            Network::Testnet4 => "https://mempool.space/testnet4/api",
             Network::Signet => "https://mutinynet.com/api",
             Network::Regtest => "http://localhost:3003",
             net => panic!("Got unknown network: {net}!"),

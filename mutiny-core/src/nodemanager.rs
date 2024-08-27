@@ -587,7 +587,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         // sync every second on regtest, this makes testing easier
         let sync_interval_secs = match nm.network {
-            Network::Bitcoin | Network::Testnet | Network::Signet => 60,
+            Network::Bitcoin | Network::Testnet | Network::Testnet4 | Network::Signet => 60,
             Network::Regtest => 1,
             net => unreachable!("Unknown network: {net}"),
         };

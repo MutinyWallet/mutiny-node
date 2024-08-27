@@ -502,6 +502,7 @@ pub(crate) fn get_rgs_url(
             Network::Signet => Some(format!(
                 "https://rgs.mutinynet.com/snapshot/{last_sync_time}"
             )),
+            Network::Testnet4 => None,
             Network::Regtest => None,
             net => unreachable!("Unknown network {net}!"),
         }

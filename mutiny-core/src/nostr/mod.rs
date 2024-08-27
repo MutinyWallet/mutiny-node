@@ -689,10 +689,10 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
 
                 // check if we're already following
                 if tags.iter().any(|tag| {
-                    matches!(tag, Tag::PublicKey { public_key, uppercase: false, .. } if *public_key == npub)
-                }) {
-                    return Ok(());
-                }
+					matches!(tag, Tag::PublicKey { public_key, uppercase: false, .. } if *public_key == npub)
+				}) {
+					return Ok(());
+				}
 
                 tags.push(Tag::public_key(npub));
                 EventBuilder::new(Kind::ContactList, content, tags)
@@ -763,8 +763,8 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
                 };
 
                 tags.retain(|tag| {
-                    !matches!(tag, Tag::PublicKey { public_key, uppercase: false, .. } if *public_key == npub)
-                });
+					!matches!(tag, Tag::PublicKey { public_key, uppercase: false, .. } if *public_key == npub)
+				});
 
                 // check if we actually removed a tag,
                 // if not then we weren't following them
@@ -2427,6 +2427,7 @@ fn network_to_string(network: Network) -> &'static str {
     match network {
         Network::Bitcoin => "mainnet",
         Network::Testnet => "testnet",
+        Network::Testnet4 => "testnet4",
         Network::Signet => "signet",
         Network::Regtest => "regtest",
         net => unreachable!("Unknown network {net}!"),

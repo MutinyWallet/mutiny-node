@@ -29,7 +29,7 @@ pub(crate) fn min_lightning_amount(network: Network, is_lsps: bool) -> u64 {
     }
     match network {
         Network::Bitcoin => 100_000,
-        Network::Testnet | Network::Signet | Network::Regtest => 10_000,
+        Network::Testnet | Network::Testnet4 | Network::Signet | Network::Regtest => 10_000,
         net => unreachable!("Unknown network {net}!"),
     }
 }

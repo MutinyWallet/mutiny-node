@@ -16,7 +16,7 @@ lnurl-rs = { version = "0.4.0", default-features = false, features = ["async", "
 
 cfg-if = "1.0.0"
 bip39 = { version = "2.0.0" }
-bitcoin = { version = "0.30.2", default-features = false, features = ["std", "serde", "secp-recovery", "rand"] }
+bitcoin = { git = "https://github.com/benthecarman/rust-bitcoin.git", branch = "testnet4-30-2", features = ["std", "serde", "secp-recovery", "rand"] }
 bdk = { version = "=1.0.0-alpha.5" }
 bdk_esplora = { version = "=0.7.0", default-features = false, features = ["std", "async-https"] }
 bdk_chain = { version = "=0.9.0", features = ["std"] }

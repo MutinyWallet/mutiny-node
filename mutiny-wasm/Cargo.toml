@@ -2,7 +2,7 @@ cargo-features = ["per-package-target"]
 
 [package]
 name = "mutiny-wasm"
-version = "1.7.13"
+version = "1.7.14"
 edition = "2021"
 authors = ["Tony Giorgio <tony@mutinywallet.com>", "benthecarman <ben@mutinywallet.com>"]
 forced-target = "wasm32-unknown-unknown"
@@ -25,7 +25,7 @@ wasm-bindgen-futures = "0.4.38"
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
 base64 = "0.13.1"
-bitcoin = { version = "0.30.2", default-features = false, features = ["std", "serde", "secp-recovery", "rand"] }
+bitcoin = { git = "https://github.com/benthecarman/rust-bitcoin.git", branch = "testnet4-30-2", default-features = false, features = ["std", "serde", "secp-recovery", "rand"] }
 lightning = { version = "0.0.121", default-features = false, features = ["std"] }
 lightning-invoice = { version = "0.29.0" }
 thiserror = "1.0"
