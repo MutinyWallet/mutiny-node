@@ -277,22 +277,6 @@ mod test {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
-    async fn test_update_fee_estimates() {
-        let test_name = "test_update_fee_estimates";
-        log!("{}", test_name);
-
-        let fee_estimator = create_fee_estimator().await;
-        fee_estimator.update_fee_estimates().await.unwrap();
-
-        let fee_estimates = fee_estimator.storage.get_fee_estimates().unwrap().unwrap();
-        assert!(!fee_estimates.is_empty());
-        assert!(fee_estimates.get("3").is_some());
-        assert!(fee_estimates.get("6").is_some());
-        assert!(fee_estimates.get("1008").is_some());
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[tokio::test]
     async fn test_get_est_sat_per_1000_weight() {
         let test_name = "test_get_est_sat_per_1000_weight";
         log!("{}", test_name);

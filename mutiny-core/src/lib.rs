@@ -10,16 +10,13 @@
 extern crate core;
 
 pub mod auth;
-pub mod blindauth;
-mod cashu;
 mod chain;
 pub mod encrypt;
 pub mod error;
 pub mod event;
-pub mod federation;
 mod fees;
 mod gossip;
-mod hermes;
+// mod hermes;
 mod key;
 mod keymanager;
 pub mod labels;
@@ -43,22 +40,17 @@ pub mod vss;
 #[cfg(test)]
 mod test_utils;
 
-use crate::federation::{get_federation_identity, ResyncProgress};
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
 use crate::utils::spawn;
-use crate::{auth::MutinyAuthClient, hermes::HermesClient, logging::MutinyLogger};
-use crate::{blindauth::BlindAuthClient, cashu::CashuHttpClient};
+use crate::{auth::MutinyAuthClient, logging::MutinyLogger};
 use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{
     event::{HTLCStatus, MillisatAmount, PaymentInfo},
     onchain::FULL_SYNC_STOP_GAP,
 };
 use crate::{
-    federation::{
-        FederationClient, FederationIdentity, FederationIndex, FederationStorage, GatewayFees,
-    },
     labels::{get_contact_key, Contact, LabelStorage},
     nodemanager::NodeBalance,
 };
@@ -95,7 +87,7 @@ use ::nostr::prelude::ZapRequestData;
 #[cfg(target_arch = "wasm32")]
 use ::nostr::Tag;
 use ::nostr::{EventBuilder, EventId, HttpMethod, JsonUtil, Keys, Kind};
-use async_lock::RwLock;
+
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
 pub use bitcoin;
@@ -103,9 +95,6 @@ use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
 use bitcoin::{bip32::ExtendedPrivKey, Transaction};
 use bitcoin::{hashes::sha256, Network, Txid};
 use bitcoin::{hashes::Hash, Address};
-use esplora_client::AsyncClient;
-pub use fedimint_core;
-use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::{pin_mut, select, FutureExt};
 use futures_util::join;
 use futures_util::lock::Mutex;
@@ -119,11 +108,6 @@ use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 pub use lightning_invoice;
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::{lnurl::LnUrl, AsyncClient as LnUrlClient, LnUrlResponse, Response};
-use moksha_core::primitives::{
-    CurrencyUnit, PostMeltBolt11Request, PostMeltBolt11Response, PostMeltQuoteBolt11Request,
-    PostMeltQuoteBolt11Response,
-};
-use moksha_core::token::TokenV3;
 pub use nostr_sdk;
 use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
 use reqwest::multipart::{Form, Part};
@@ -148,8 +132,6 @@ use mockall::{automock, predicate::*};
 pub const DEVICE_LOCK_INTERVAL_SECS: u64 = 30;
 const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
-const SWAP_LABEL: &str = "SWAP";
-const MELT_CASHU_TOKEN: &str = "Cashu Token Melt";
 const DUST_LIMIT: u64 = 546;
 
 #[cfg_attr(test, automock)]
@@ -194,31 +176,18 @@ pub struct MutinyBalance {
     pub confirmed: u64,
     pub unconfirmed: u64,
     pub lightning: u64,
-    pub federation: u64,
     pub force_close: u64,
 }
 
 impl MutinyBalance {
-    fn new(ln_balance: NodeBalance, federation_balance: u64) -> Self {
+    fn new(ln_balance: NodeBalance) -> Self {
         Self {
             confirmed: ln_balance.confirmed,
             unconfirmed: ln_balance.unconfirmed,
             lightning: ln_balance.lightning,
-            federation: federation_balance,
             force_close: ln_balance.force_close,
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
-pub struct FederationBalance {
-    pub identity: FederationIdentity,
-    pub balance: u64,
-}
-
-#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
-pub struct FederationBalances {
-    pub balances: Vec<FederationBalance>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -582,7 +551,7 @@ pub struct FedimintSweepResult {
 }
 
 pub struct MutinyWalletConfigBuilder {
-    xprivkey: ExtendedPrivKey,
+    // xprivkey: ExtendedPrivKey,
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: Option<String>,
     network: Option<Network>,
@@ -630,9 +599,9 @@ impl Ord for DirectMessage {
 }
 
 impl MutinyWalletConfigBuilder {
-    pub fn new(xprivkey: ExtendedPrivKey) -> MutinyWalletConfigBuilder {
+    pub fn new(_xprivkey: ExtendedPrivKey) -> MutinyWalletConfigBuilder {
         MutinyWalletConfigBuilder {
-            xprivkey,
+            // xprivkey,
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr: None,
             network: None,
@@ -730,7 +699,7 @@ impl MutinyWalletConfigBuilder {
         let network = self.network.expect("network is required");
 
         MutinyWalletConfig {
-            xprivkey: self.xprivkey,
+            // xprivkey: self.xprivkey,
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr: self.websocket_proxy_addr,
             network,
@@ -755,7 +724,7 @@ impl MutinyWalletConfigBuilder {
 
 #[derive(Clone)]
 pub struct MutinyWalletConfig {
-    xprivkey: ExtendedPrivKey,
+    // xprivkey: ExtendedPrivKey,
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: Option<String>,
     network: Network,
@@ -991,34 +960,15 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         #[cfg(not(test))]
         nostr.connect().await?;
 
-        // create federation module if any exist
-        log_trace!(logger, "creating federation modules");
-        let federation_storage = self.storage.get_federations()?;
-        let federations = if !federation_storage.federations.is_empty() {
-            let start = Instant::now();
-            log_trace!(logger, "Building Federations");
-            let result = create_federations(
-                federation_storage.clone(),
-                &config,
-                self.storage.clone(),
-                esplora.clone(),
-                stop.clone(),
-                &logger,
-                self.safe_mode,
-            )
-            .await?;
-            log_debug!(
-                logger,
-                "Federations started, took: {}ms",
-                start.elapsed().as_millis()
-            );
-            result
-        } else {
-            Arc::new(RwLock::new(HashMap::new()))
-        };
-        let federation_storage = Arc::new(RwLock::new(federation_storage));
-        log_trace!(logger, "finished creating federation modules");
+        //         esplora.clone(),
+        //         stop.clone(),
+        //         &logger,
+        //         self.safe_mode,
+        //     )
+        //     .await?;
 
+        //     result
+        // } else {
         if !self.skip_hodl_invoices {
             log_warn!(
                 logger,
@@ -1062,52 +1012,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             None
         };
         log_trace!(logger, "finished creating subscription client");
-
-        // Blind auth client, only usable if we have an auth client
-        log_trace!(logger, "creating blind auth client");
-        let blind_auth_client = if let Some(auth_client) = self.auth_client.clone() {
-            if let Some(blind_auth_url) = self.blind_auth_url {
-                let s = Arc::new(BlindAuthClient::new(
-                    self.xprivkey,
-                    auth_client,
-                    network,
-                    blind_auth_url,
-                    &self.storage,
-                    logger.clone(),
-                )?);
-                Some(s)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        log_trace!(logger, "finished creating blind auth client");
-
-        // Hermes client, only usable if we have the blind auth client
-        log_trace!(logger, "creating hermes client");
-        let hermes_client = if let Some(blind_auth_client) = blind_auth_client.clone() {
-            if let Some(hermes_url) = self.hermes_url {
-                let s = Arc::new(
-                    HermesClient::new(
-                        self.xprivkey,
-                        hermes_url,
-                        federations.clone(),
-                        blind_auth_client,
-                        &self.storage,
-                        logger.clone(),
-                        stop.clone(),
-                    )
-                    .await?,
-                );
-                Some(s)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        log_trace!(logger, "finished creating hermes client");
 
         // populate the activity index
         log_trace!(logger, "populating activity index");
@@ -1201,20 +1105,15 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             storage: self.storage,
             node_manager,
             nostr,
-            federation_storage,
-            federations,
             lnurl_client,
             subscription_client,
-            blind_auth_client,
-            hermes_client,
-            esplora,
+            // esplora,
             auth,
             stop,
             logger: logger.clone(),
             network,
             skip_hodl_invoices: self.skip_hodl_invoices,
             safe_mode: self.safe_mode,
-            cashu_client: CashuHttpClient::new(),
             bitcoin_price_cache: Arc::new(Mutex::new(price_cache)),
         };
         log_trace!(logger, "finished creating mutiny wallet");
@@ -1242,16 +1141,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         log_trace!(logger, "starting nostr");
         mw.start_nostr().await;
         log_trace!(logger, "finished starting nostr");
-
-        // start the federation background processor
-        log_trace!(logger, "starting fedimint background checker");
-        mw.start_fedimint_background_checker().await;
-        log_trace!(logger, "finished starting fedimint background checker");
-
-        // start the blind auth fetching process
-        log_trace!(logger, "checking blind tokens");
-        mw.check_blind_tokens();
-        log_trace!(logger, "finsihed checking blind tokens");
 
         // start the hermes background process
         // get profile key if we have it, we need this to decrypt private zaps
@@ -1287,20 +1176,15 @@ pub struct MutinyWallet<S: MutinyStorage> {
     pub(crate) storage: S,
     pub node_manager: Arc<NodeManager<S>>,
     pub nostr: Arc<NostrManager<S, PrimalClient, nostr_sdk::Client>>,
-    pub federation_storage: Arc<RwLock<FederationStorage>>,
-    pub(crate) federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>,
     lnurl_client: Arc<LnUrlClient>,
     auth: AuthManager,
     subscription_client: Option<Arc<MutinySubscriptionClient>>,
-    blind_auth_client: Option<Arc<BlindAuthClient<S>>>,
-    hermes_client: Option<Arc<HermesClient<S>>>,
-    esplora: Arc<AsyncClient>,
+    // esplora: Arc<AsyncClient>,
     pub stop: Arc<AtomicBool>,
     pub logger: Arc<MutinyLogger>,
     network: Network,
     skip_hodl_invoices: bool,
     safe_mode: bool,
-    cashu_client: CashuHttpClient,
     bitcoin_price_cache: Arc<Mutex<HashMap<String, (f32, Duration)>>>,
 }
 
@@ -1528,7 +1412,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         }
 
         // Check the amount specified in the invoice, we need one to make the payment
-        let send_msat = inv
+        let _send_msat = inv
             .amount_milli_satoshis()
             .or(amt_sats.map(|x| x * 1_000))
             .ok_or(MutinyError::InvoiceInvalid)?;
@@ -1536,59 +1420,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // set labels now, need to set it before in case the payment times out
         self.storage
             .set_invoice_labels(inv.clone(), labels.clone())?;
-
-        // Try each federation first
-        let federation_ids = self.list_federation_ids().await?;
-        let mut last_federation_error = None;
-        for federation_id in federation_ids {
-            if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
-                // Check if the federation has enough balance
-                let balance = fedimint_client.get_balance().await?;
-                if balance >= send_msat / 1_000 {
-                    // Try to pay the invoice using the federation
-                    let payment_result = fedimint_client
-                        .pay_invoice(inv.clone(), labels.clone())
-                        .await;
-                    match payment_result {
-                        Ok(r) => {
-                            // spawn a task to remove the pending invoice if it exists
-                            let nostr_clone = self.nostr.clone();
-                            let payment_hash = *inv.payment_hash();
-                            let logger = self.logger.clone();
-                            utils::spawn(async move {
-                                if let Err(e) =
-                                    nostr_clone.remove_pending_nwc_invoice(&payment_hash).await
-                                {
-                                    log_warn!(logger, "Failed to remove pending NWC invoice: {e}");
-                                }
-                            });
-                            log_trace!(self.logger, "finished calling pay_invoice");
-                            return Ok(r);
-                        }
-                        Err(e) => match e {
-                            MutinyError::PaymentTimeout => {
-                                log_trace!(self.logger, "finished calling pay_invoice");
-                                return Err(e);
-                            }
-                            MutinyError::RoutingFailed => {
-                                log_debug!(
-                                    self.logger,
-                                    "could not make payment through federation: {e}"
-                                );
-                                last_federation_error = Some(e);
-                                continue;
-                            }
-                            _ => {
-                                log_warn!(self.logger, "unhandled error: {e}");
-                                last_federation_error = Some(e);
-                            }
-                        },
-                    }
-                }
-                // If payment fails or invoice amount is None or balance is not sufficient, continue to next federation
-            }
-            // If federation client is not found, continue to next federation
-        }
 
         // If any balance at all, then fallback to node manager for payment.
         // Take the error from the node manager as the priority.
@@ -1620,7 +1451,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
             Ok(res)
         } else {
-            Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
+            Err(MutinyError::InsufficientBalance)
         };
         log_trace!(self.logger, "finished calling pay_invoice");
 
@@ -1647,36 +1478,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         // check balances first
         let total_balances = self.get_balance().await?;
-        if total_balances.federation > amt {
-            let federation_ids = self.list_federation_ids().await?;
-            for federation_id in federation_ids {
-                // Check if the federation has enough balance
-                if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
-                    let current_balance = fedimint_client.get_balance().await?;
-                    log_info!(
-                        self.logger,
-                        "current fedimint client balance: {}",
-                        current_balance
-                    );
-
-                    let fees = fedimint_client.gateway_fee().await?;
-                    let max_spendable = max_spendable_amount(current_balance, &fees)
-                        .map_or(Err(MutinyError::InsufficientBalance), Ok)?;
-
-                    if max_spendable >= amt {
-                        let prop_fee_msat =
-                            (amt as f64 * 1_000.0 * fees.proportional_millionths as f64)
-                                / 1_000_000.0;
-
-                        let total_fee = fees.base_msat as f64 + prop_fee_msat;
-                        log_trace!(self.logger, "finished calling estimate_ln_fee");
-
-                        return Ok(Some((total_fee / 1_000.0).floor() as u64));
-                    }
-                }
-            }
-        }
-        log_trace!(self.logger, "finished calling estimate_ln_fee");
 
         if total_balances.lightning > amt {
             // TODO try something to try to get lightning fee
@@ -1743,157 +1544,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         })
     }
 
-    pub async fn sweep_federation_balance_to_invoice(
-        &self,
-        from_federation_id: Option<FederationId>,
-        bolt_11: Bolt11Invoice,
-    ) -> Result<FedimintSweepResult, MutinyError> {
-        log_trace!(self.logger, "calling sweep_federation_balance_to_invoice");
-
-        // invoice must have an amount
-        if bolt_11.amount_milli_satoshis().is_none() {
-            return Err(MutinyError::BadAmountError);
-        }
-
-        let federation_ids = self.list_federation_ids().await?;
-        if federation_ids.is_empty() {
-            return Err(MutinyError::NotFound);
-        }
-        let from_federation_id = from_federation_id.unwrap_or(federation_ids[0]);
-        let federation_lock = self.federations.read().await;
-        let from_fedimint_client = federation_lock
-            .get(&from_federation_id)
-            .ok_or(MutinyError::NotFound)?;
-
-        let labels = vec![SWAP_LABEL.to_string()];
-
-        // If no amount, figure out the amount to send over
-        let current_balance = from_fedimint_client.get_balance().await?;
-        log_debug!(
-            self.logger,
-            "current fedimint client balance: {}",
-            current_balance
-        );
-
-        self.storage
-            .set_invoice_labels(bolt_11.clone(), labels.clone())?;
-        let pay_result = from_fedimint_client
-            .pay_invoice(bolt_11.clone(), labels)
-            .await?;
-
-        let remaining_balance = from_fedimint_client.get_balance().await?;
-        if remaining_balance > 0 {
-            // there was a remainder when there shouldn't have been
-            // for now just log this, it is probably just a millisat/1 sat difference
-            log_warn!(
-                self.logger,
-                "remaining fedimint balance: {remaining_balance}"
-            );
-        }
-
-        let outgoing_fee = pay_result.fees_paid.unwrap_or(0);
-        let incoming_fee = self
-            .get_invoice(&bolt_11)
-            .await
-            .ok()
-            .and_then(|i| i.fees_paid)
-            .unwrap_or(0);
-
-        let total_fees = outgoing_fee + incoming_fee;
-        log_trace!(
-            self.logger,
-            "finished calling sweep_federation_balance_to_invoice"
-        );
-
-        Ok(FedimintSweepResult {
-            amount: bolt_11.amount_milli_satoshis().unwrap_or_default() / 1_000,
-            fees: Some(total_fees),
-        })
-    }
-
-    /// Estimate the fee before trying to sweep from federation
-    pub async fn create_sweep_federation_invoice(
-        &self,
-        amount: Option<u64>,
-        from_federation_id: Option<FederationId>,
-        to_federation_id: Option<FederationId>,
-    ) -> Result<MutinyInvoice, MutinyError> {
-        log_trace!(self.logger, "calling create_sweep_federation_invoice");
-
-        if let Some(0) = amount {
-            return Err(MutinyError::BadAmountError);
-        }
-
-        let federation_ids = self.list_federation_ids().await?;
-        if federation_ids.is_empty() {
-            return Err(MutinyError::NotFound);
-        }
-
-        let from_federation_id = from_federation_id.unwrap_or(federation_ids[0]);
-        let federation_lock = self.federations.read().await;
-        let fedimint_client = federation_lock
-            .get(&from_federation_id)
-            .ok_or(MutinyError::NotFound)?;
-        let to_federation_client = match to_federation_id {
-            Some(f) => Some(federation_lock.get(&f).ok_or(MutinyError::NotFound)?),
-            None => None,
-        };
-        let fees = fedimint_client.gateway_fee().await?;
-
-        let res = if let Some(amt) = amount {
-            // if the user provided amount, this is easy
-            let (mut invoice, incoming_fee) = if let Some(fed_client) = to_federation_client {
-                let invoice = fed_client
-                    .get_invoice(amt, vec![SWAP_LABEL.to_string()])
-                    .await?;
-                (invoice, 0)
-            } else {
-                self.node_manager
-                    .create_invoice(amt, vec![SWAP_LABEL.to_string()])
-                    .await?
-            };
-
-            let outgoing_fee =
-                (calc_routing_fee_msat(amt as f64 * 1_000.0, &fees) / 1_000.0).floor() as u64;
-
-            invoice.fees_paid = Some(incoming_fee + outgoing_fee);
-            Ok(invoice)
-        } else {
-            // If no amount, figure out the amount to send over
-            let current_balance = fedimint_client.get_balance().await?;
-            log_debug!(
-                self.logger,
-                "current fedimint client balance: {current_balance}"
-            );
-
-            let amt = max_spendable_amount(current_balance, &fees)
-                .ok_or(MutinyError::InsufficientBalance)?;
-            log_debug!(self.logger, "max spendable: {amt}");
-
-            let (mut invoice, incoming_fee) = if let Some(fed_client) = to_federation_client {
-                let invoice = fed_client
-                    .get_invoice(amt, vec![SWAP_LABEL.to_string()])
-                    .await?;
-                (invoice, 0)
-            } else {
-                self.node_manager
-                    .create_invoice(amt, vec![SWAP_LABEL.to_string()])
-                    .await?
-            };
-
-            let outgoing_fee = current_balance - amt;
-
-            invoice.fees_paid = Some(incoming_fee + outgoing_fee);
-            Ok(invoice)
-        };
-        log_trace!(
-            self.logger,
-            "finished calling create_sweep_federation_invoice"
-        );
-
-        res
-    }
-
     pub async fn send_to_address(
         &self,
         send_to: Address,
@@ -1902,35 +1552,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
         log_trace!(self.logger, "calling send_to_address");
-
-        // Try each federation first
-        let federation_ids = self.list_federation_ids().await?;
-        let mut last_federation_error = None;
-        for federation_id in federation_ids {
-            if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
-                // Check if the federation has enough balance
-                let balance = fedimint_client.get_balance().await?;
-                if balance >= amount / 1_000 {
-                    match fedimint_client
-                        .send_onchain(send_to.clone(), amount, labels.clone())
-                        .await
-                    {
-                        Ok(t) => {
-                            return Ok(t);
-                        }
-                        Err(e) => match e {
-                            MutinyError::PaymentTimeout => return Err(e),
-                            _ => {
-                                log_warn!(self.logger, "unhandled error: {e}");
-                                last_federation_error = Some(e);
-                            }
-                        },
-                    }
-                }
-                // If payment fails or balance is not sufficient, continue to next federation
-            }
-            // If federation client is not found, continue to next federation
-        }
 
         // If any balance at all, then fallback to node manager for payment.
         // Take the error from the node manager as the priority.
@@ -1942,7 +1563,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 .await?;
             Ok(res)
         } else {
-            Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
+            Err(MutinyError::InsufficientBalance)
         };
         log_trace!(self.logger, "finished calling send_to_address");
 
@@ -1963,32 +1584,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             return Err(MutinyError::WalletOperationFailed);
         }
 
-        // Try each federation first
-        let federation_ids = self.list_federation_ids().await?;
-        let mut last_federation_error = None;
-        for federation_id in federation_ids {
-            if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
-                // Check if the federation has enough balance
-                let balance = fedimint_client.get_balance().await?;
-                if balance >= amount / 1_000 {
-                    match fedimint_client
-                        .estimate_tx_fee(destination_address.clone(), amount)
-                        .await
-                    {
-                        Ok(t) => {
-                            return Ok(t);
-                        }
-                        Err(e) => {
-                            log_warn!(self.logger, "error estimating fedimint fee: {e}");
-                            last_federation_error = Some(e);
-                        }
-                    }
-                }
-                // If estimation fails or balance is not sufficient, continue to next federation
-            }
-            // If federation client is not found, continue to next federation
-        }
-
         let b = self.node_manager.get_balance().await?;
         let res = if b.confirmed + b.unconfirmed > 0 {
             let res = self
@@ -1997,57 +1592,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
             Ok(res)
         } else {
-            Err(last_federation_error.unwrap_or(MutinyError::InsufficientBalance))
-        };
-        log_trace!(self.logger, "finished calling estimate_tx_fee");
-
-        res
-    }
-
-    /// Estimates the onchain fee for a transaction sweep our on-chain balance
-    /// to the given address. If the fedimint has a balance, sweep that first.
-    /// Do not sweep the on chain wallet unless that is empty.
-    ///
-    /// The fee rate is in sat/vbyte.
-    pub async fn estimate_sweep_tx_fee(
-        &self,
-        destination_address: Address,
-        fee_rate: Option<f32>,
-    ) -> Result<u64, MutinyError> {
-        log_trace!(self.logger, "calling estimate_sweep_tx_fee");
-
-        // Try each federation first
-        let federation_ids = self.list_federation_ids().await?;
-        for federation_id in federation_ids {
-            if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
-                // Check if the federation has enough balance
-                let balance = fedimint_client.get_balance().await?;
-                match fedimint_client
-                    .estimate_tx_fee(destination_address.clone(), balance)
-                    .await
-                {
-                    Ok(t) => {
-                        return Ok(t);
-                    }
-                    Err(e) => return Err(e),
-                }
-                // If estimation fails or balance is not sufficient, continue to next federation
-            }
-            // If federation client is not found, continue to next federation
-        }
-
-        let b = self.node_manager.get_balance().await?;
-        let res = if b.confirmed + b.unconfirmed > 0 {
-            let res = self
-                .node_manager
-                .estimate_sweep_tx_fee(destination_address, fee_rate)?;
-
-            Ok(res)
-        } else {
-            log_error!(self.logger, "node manager doesn't have a balance");
             Err(MutinyError::InsufficientBalance)
         };
-        log_trace!(self.logger, "calling estimate_sweep_tx_fee");
+        log_trace!(self.logger, "finished calling estimate_tx_fee");
 
         res
     }
@@ -2063,35 +1610,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         fee_rate: Option<f32>,
     ) -> Result<Txid, MutinyError> {
         log_trace!(self.logger, "calling sweep_wallet");
-
-        // Try each federation first
-        let federation_ids = self.list_federation_ids().await?;
-        for federation_id in federation_ids {
-            if let Some(fedimint_client) = self.federations.read().await.get(&federation_id) {
-                // Check if the federation has enough balance
-                let balance = fedimint_client.get_balance().await?;
-                match fedimint_client
-                    .estimate_tx_fee(send_to.clone(), balance)
-                    .await
-                {
-                    Ok(f) => {
-                        match fedimint_client
-                            .send_onchain(send_to.clone(), balance - f, labels)
-                            .await
-                        {
-                            Ok(t) => return Ok(t),
-                            Err(e) => {
-                                log_error!(self.logger, "error sending the fedimint balance");
-                                return Err(e);
-                            }
-                        }
-                    }
-                    Err(e) => return Err(e),
-                }
-                // If payment fails or balance is not sufficient, continue to next federation
-            }
-            // If federation client is not found, continue to next federation
-        }
 
         let b = self.node_manager.get_balance().await?;
         let res = if b.confirmed + b.unconfirmed > 0 {
@@ -2116,20 +1634,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     ) -> Result<bitcoin::Address, MutinyError> {
         log_trace!(self.logger, "calling create_address");
 
-        // Attempt to create federation invoice if available
-        let federation_ids = self.list_federation_ids().await?;
-        if !federation_ids.is_empty() {
-            let federation_id = &federation_ids[0];
-            let fedimint_client = self.federations.read().await.get(federation_id).cloned();
-
-            if let Some(client) = fedimint_client {
-                if let Ok(addr) = client.get_new_address(labels.clone()).await {
-                    self.storage.set_address_labels(addr.clone(), labels)?;
-                    return Ok(addr);
-                }
-            }
-        }
-
         // Fallback to node_manager address creation
         let Ok(addr) = self.node_manager.get_new_address(labels.clone()) else {
             return Err(MutinyError::WalletOperationFailed);
@@ -2146,22 +1650,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
     ) -> Result<MutinyInvoice, MutinyError> {
         log_trace!(self.logger, "calling create_lightning_invoice");
 
-        // Attempt to create federation invoice if available
-        let federation_ids = self.list_federation_ids().await?;
-        if !federation_ids.is_empty() {
-            let federation_id = &federation_ids[0];
-            let fedimint_client = self.federations.read().await.get(federation_id).cloned();
-
-            if let Some(client) = fedimint_client {
-                if let Ok(inv) = client.get_invoice(amount, labels.clone()).await {
-                    self.storage
-                        .set_invoice_labels(inv.bolt11.clone().expect("just created"), labels)?;
-                    return Ok(inv);
-                }
-            }
-        }
-
-        // Fallback to node_manager invoice creation if no federation invoice created
         let (inv, _fee) = self.node_manager.create_invoice(amount, labels).await?;
 
         log_trace!(self.logger, "finished calling create_lightning_invoice");
@@ -2176,10 +1664,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         log_trace!(self.logger, "calling get_balance");
 
         let ln_balance = self.node_manager.get_balance().await?;
-        let federation_balance = self.get_total_federation_balance().await?;
-        log_trace!(self.logger, "finished calling get_balance");
 
-        Ok(MutinyBalance::new(ln_balance, federation_balance))
+        Ok(MutinyBalance::new(ln_balance))
     }
 
     fn get_invoice_internal(
@@ -2520,7 +2006,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
             // FIXME: switch the subscription from disabled to enabled if it was disabled
 
-            self.check_blind_tokens();
+            // self.check_blind_tokens();
 
             Ok(())
         } else {
@@ -2965,237 +2451,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(res)
     }
 
-    /// Adds a new federation based on its federation code
-    pub async fn new_federation(
-        &mut self,
-        federation_code: InviteCode,
-    ) -> Result<FederationIdentity, MutinyError> {
-        log_trace!(self.logger, "calling new_federation");
-
-        let res = create_new_federation(
-            self.xprivkey,
-            self.storage.clone(),
-            self.network,
-            self.logger.clone(),
-            self.federation_storage.clone(),
-            self.federations.clone(),
-            self.hermes_client.clone(),
-            self.esplora.clone(),
-            federation_code,
-            self.stop.clone(),
-            self.safe_mode,
-        )
-        .await;
-        log_trace!(self.logger, "finished calling new_federation");
-
-        res
-    }
-
-    /// Lists the federation id's of the federation clients in the manager.
-    pub async fn list_federations(&self) -> Result<Vec<FederationIdentity>, MutinyError> {
-        log_trace!(self.logger, "calling list_federations");
-
-        let federations = self.federations.read().await;
-        let mut federation_identities = Vec::new();
-        for f in federations.iter() {
-            let i = f.1.get_mutiny_federation_identity().await;
-            federation_identities.push(i);
-        }
-
-        log_trace!(self.logger, "finished calling list_federations");
-        Ok(federation_identities)
-    }
-
-    /// Lists the federation id's of the federation clients in the manager.
-    pub async fn list_federation_ids(&self) -> Result<Vec<FederationId>, MutinyError> {
-        log_trace!(self.logger, "calling list_federation_ids");
-
-        let federations = self.federations.read().await;
-        let federation_identities = federations
-            .iter()
-            .map(|(_, n)| n.fedimint_client.federation_id())
-            .collect();
-
-        log_trace!(self.logger, "finished calling list_federation_ids");
-        Ok(federation_identities)
-    }
-
-    /// Removes a federation by removing it from the user's federation list.
-    pub async fn remove_federation(&self, federation_id: FederationId) -> Result<(), MutinyError> {
-        log_trace!(self.logger, "calling remove_federation");
-
-        let mut federations_guard = self.federations.write().await;
-
-        if let Some(fedimint_client) = federations_guard.get(&federation_id) {
-            let uuid = &fedimint_client.uuid;
-
-            let mut federation_storage_guard = self.federation_storage.write().await;
-
-            if federation_storage_guard.federations.contains_key(uuid) {
-                federation_storage_guard.federations.remove(uuid);
-                federation_storage_guard.version += 1;
-                self.storage
-                    .insert_federations(federation_storage_guard.clone())
-                    .await?;
-                // TODO in the future, delete user's fedimint storage too
-                // for now keep it in case they restore the federation again
-                // fedimint_client.delete_fedimint_storage().await?;
-                federations_guard.remove(&federation_id);
-            } else {
-                return Err(MutinyError::NotFound);
-            }
-        } else {
-            return Err(MutinyError::NotFound);
-        }
-
-        // update hermes to change the federation
-        if let Some(h) = self.hermes_client.as_ref() {
-            match federations_guard.values().next() {
-                None => {
-                    log_debug!(self.logger, "No federations left, disabling hermes zaps");
-                    match h.disable_zaps().await {
-                        Ok(_) => (),
-                        Err(e) => {
-                            log_error!(self.logger, "could not disable hermes zaps: {e}")
-                        }
-                    }
-                }
-                Some(f) => {
-                    if let Err(e) = h.change_federation_info(&f.invite_code).await {
-                        log_error!(self.logger, "could not change hermes federation: {e}")
-                    }
-                }
-            }
-        }
-        log_trace!(self.logger, "finshed calling remove_federation");
-
-        Ok(())
-    }
-
-    pub async fn get_total_federation_balance(&self) -> Result<u64, MutinyError> {
-        log_trace!(self.logger, "calling get_total_federation_balance");
-
-        let federation_ids = self.list_federation_ids().await?;
-        let mut total_balance = 0;
-
-        let federations = self.federations.read().await;
-        for fed_id in federation_ids {
-            let balance = federations
-                .get(&fed_id)
-                .ok_or(MutinyError::NotFound)?
-                .get_balance()
-                .await?;
-
-            total_balance += balance;
-        }
-
-        log_trace!(self.logger, "finsihed calling get_total_federation_balance");
-        Ok(total_balance)
-    }
-
-    pub async fn get_federation_balances(&self) -> Result<FederationBalances, MutinyError> {
-        log_trace!(self.logger, "calling get_federation_balances");
-
-        let federation_lock = self.federations.read().await;
-
-        let federation_ids = self.list_federation_ids().await?;
-        let mut balances = Vec::with_capacity(federation_ids.len());
-        for fed_id in federation_ids {
-            let fedimint_client = federation_lock.get(&fed_id).ok_or(MutinyError::NotFound)?;
-
-            let balance = fedimint_client.get_balance().await?;
-            let identity = fedimint_client.get_mutiny_federation_identity().await;
-
-            balances.push(FederationBalance { identity, balance });
-        }
-
-        log_trace!(self.logger, "finsihed calling get_federation_balances");
-        Ok(FederationBalances { balances })
-    }
-
-    pub async fn resync_federation(&self, federation_id: FederationId) -> Result<(), MutinyError> {
-        if !self.safe_mode {
-            // cannot safely run unless in safe mode
-            return Err(MutinyError::AlreadyRunning);
-        }
-
-        let invite_code = self
-            .federation_storage
-            .read()
-            .await
-            .federations
-            .values()
-            .find(|f| f.federation_code.federation_id() == federation_id)
-            .ok_or(MutinyError::NotFound)?
-            .federation_code
-            .clone();
-
-        FederationClient::start_resync(
-            invite_code,
-            self.xprivkey,
-            self.storage.clone(),
-            self.network,
-            self.logger.clone(),
-        )
-        .await?;
-
-        Ok(())
-    }
-
-    pub fn get_federation_resync_progress(
-        &self,
-        federation_id: FederationId,
-    ) -> Result<Option<ResyncProgress>, MutinyError> {
-        let storage_key = format!("resync_state/{federation_id}");
-        self.storage.get_data(storage_key)
-    }
-
-    /// Starts a background process that will check pending fedimint operations
-    pub(crate) async fn start_fedimint_background_checker(&self) {
-        log_trace!(self.logger, "calling start_fedimint_background_checker");
-
-        let logger = self.logger.clone();
-        let self_clone = self.clone();
-        utils::spawn(async move {
-            let federation_lock = self_clone.federations.read().await;
-
-            match self_clone.list_federation_ids().await {
-                Ok(federation_ids) => {
-                    for fed_id in federation_ids {
-                        match federation_lock.get(&fed_id) {
-                            Some(fedimint_client) => {
-                                let _ = fedimint_client
-                                    .process_previous_operations()
-                                    .await
-                                    .map_err(|e| {
-                                        log_error!(
-                                            logger,
-                                            "error checking previous operations: {e}"
-                                        )
-                                    });
-                            }
-                            None => {
-                                log_error!(
-                                    logger,
-                                    "could not get a federation from the lock: {}",
-                                    fed_id
-                                )
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    log_error!(logger, "could not list federations: {e}")
-                }
-            }
-        });
-
-        log_trace!(
-            self.logger,
-            "finsihed calling start_fedimint_background_checker"
-        );
-    }
-
     /// Calls upon a LNURL to get the parameters for it.
     /// This contains what kind of LNURL it is (pay, withdrawal, auth, etc).
     // todo revamp LnUrlParams to be well designed
@@ -3446,160 +2701,81 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         self.safe_mode
     }
 
-    /// Calls upon a Cashu mint and redeems/melts the token.
-    pub async fn melt_cashu_token(
-        &self,
-        token_v3: TokenV3,
-    ) -> Result<Vec<MutinyInvoice>, MutinyError> {
-        log_trace!(self.logger, "calling melt_cashu_token");
-
-        let mut invoices: Vec<MutinyInvoice> = Vec::with_capacity(token_v3.tokens.len());
-
-        for token in token_v3.tokens {
-            let mint_url = match token.mint {
-                Some(url) => url,
-                None => return Err(MutinyError::EmptyMintURLError),
-            };
-
-            let total_proofs_amount = token.proofs.total_amount();
-            let mut invoice_pct = 0.99;
-            // create invoice for 1% less than proofs amount
-            let mut invoice_amount = total_proofs_amount as f64 * invoice_pct;
-            let mut mutiny_invoice: MutinyInvoice;
-            let mut mutiny_invoice_str: Bolt11Invoice;
-            let mut melt_quote_res: PostMeltQuoteBolt11Response;
-
-            loop {
-                mutiny_invoice = self
-                    .create_invoice(invoice_amount as u64, vec![MELT_CASHU_TOKEN.to_string()])
-                    .await?;
-
-                mutiny_invoice_str = mutiny_invoice
-                    .bolt11
-                    .clone()
-                    .expect("The invoice should have BOLT11");
-
-                let quote_request = PostMeltQuoteBolt11Request {
-                    request: mutiny_invoice_str.to_string(),
-                    unit: CurrencyUnit::Sat,
-                };
-
-                melt_quote_res = self
-                    .cashu_client
-                    .post_melt_quote_bolt11(&mint_url, quote_request)
-                    .await?;
-
-                if melt_quote_res.amount + melt_quote_res.fee_reserve > total_proofs_amount {
-                    // if invoice created was too big, lower amount
-                    invoice_pct -= 0.01;
-                    invoice_amount *= invoice_pct;
-                } else {
-                    break;
-                }
-            }
-
-            let melt_request = PostMeltBolt11Request {
-                quote: melt_quote_res.quote,
-                inputs: token.proofs,
-                outputs: vec![],
-            };
-
-            let post_melt_bolt11_response: PostMeltBolt11Response = self
-                .cashu_client
-                .post_melt_bolt11(&mint_url, melt_request)
-                .await?;
-
-            if post_melt_bolt11_response.paid {
-                mutiny_invoice = self.get_invoice(&mutiny_invoice_str).await?;
-                invoices.push(mutiny_invoice);
-            }
-        }
-        log_trace!(self.logger, "finished calling melt_cashu_token");
-
-        Ok(invoices)
+    // FIXME
+    pub async fn check_available_lnurl_name(&self, _name: String) -> Result<bool, MutinyError> {
+        Err(MutinyError::NotFound)
     }
 
-    pub async fn check_available_lnurl_name(&self, name: String) -> Result<bool, MutinyError> {
-        log_trace!(self.logger, "calling check_available_lnurl_name");
+    pub async fn reserve_lnurl_name(&self, _name: String) -> Result<(), MutinyError> {
+        // log_trace!(self.logger, "calling reserve_lnurl_name");
 
-        let res = if let Some(hermes_client) = self.hermes_client.clone() {
-            Ok(hermes_client.check_available_name(name).await?)
-        } else {
-            Err(MutinyError::NotFound)
-        };
-        log_trace!(self.logger, "calling check_available_lnurl_name");
+        // let res = if let Some(hermes_client) = self.hermes_client.clone() {
+        //     Ok(hermes_client.reserve_name(name).await?)
+        // } else {
+        //     Err(MutinyError::NotFound)
+        // };
+        // log_trace!(self.logger, "calling reserve_lnurl_name");
 
-        res
-    }
-
-    pub async fn reserve_lnurl_name(&self, name: String) -> Result<(), MutinyError> {
-        log_trace!(self.logger, "calling reserve_lnurl_name");
-
-        let res = if let Some(hermes_client) = self.hermes_client.clone() {
-            Ok(hermes_client.reserve_name(name).await?)
-        } else {
-            Err(MutinyError::NotFound)
-        };
-        log_trace!(self.logger, "calling reserve_lnurl_name");
-
-        res
+        // res
+        Err(MutinyError::NotFound)
     }
 
     pub async fn check_lnurl_name(&self) -> Result<Option<String>, MutinyError> {
-        log_trace!(self.logger, "calling check_lnurl_name");
+        // log_trace!(self.logger, "calling check_lnurl_name");
 
-        let res = if let Some(hermes_client) = self.hermes_client.as_ref() {
-            hermes_client.check_username().await
-        } else {
-            Err(MutinyError::NotFound)
-        };
-        log_trace!(self.logger, "finished calling check_lnurl_name");
+        // let res = if let Some(hermes_client) = self.hermes_client.as_ref() {
+        //     hermes_client.check_username().await
+        // } else {
+        //     Err(MutinyError::NotFound)
+        // };
+        // log_trace!(self.logger, "finished calling check_lnurl_name");
 
-        res
+        // res
+        Err(MutinyError::NotFound)
     }
 
     /// Starts up the hermes client if available
-    pub async fn start_hermes(&self, profile_key: Option<Keys>) -> Result<(), MutinyError> {
-        log_trace!(self.logger, "calling start_hermes");
+    pub async fn start_hermes(&self, _profile_key: Option<Keys>) -> Result<(), MutinyError> {
+        // log_trace!(self.logger, "calling start_hermes");
 
-        if let Some(hermes_client) = self.hermes_client.as_ref() {
-            hermes_client.start(profile_key).await?
-        }
+        // if let Some(hermes_client) = self.hermes_client.as_ref() {
+        //     hermes_client.start(profile_key).await?
+        // }
 
-        log_trace!(self.logger, "finished calling start_hermes");
+        // log_trace!(self.logger, "finished calling start_hermes");
         Ok(())
     }
 
-    /// Checks available blind tokens
-    /// Only needs to be ran once successfully on startup
-    pub fn check_blind_tokens(&self) {
-        log_trace!(self.logger, "calling check_blind_tokens");
+    // /// Checks available blind tokens
+    // /// Only needs to be ran once successfully on startup
+    // pub fn check_blind_tokens(&self) {
+    //     log_trace!(self.logger, "calling check_blind_tokens");
 
-        if let Some(blind_auth_client) = self.blind_auth_client.clone() {
-            let logger = self.logger.clone();
-            let stop = self.stop.clone();
-            utils::spawn(async move {
-                loop {
-                    if stop.load(Ordering::Relaxed) {
-                        break;
-                    };
+    //     if let Some(blind_auth_client) = self.blind_auth_client.clone() {
+    //         let logger = self.logger.clone();
+    //         let stop = self.stop.clone();
+    //         utils::spawn(async move {
+    //             loop {
+    //                 if stop.load(Ordering::Relaxed) {
+    //                     break;
+    //                 };
 
-                    match blind_auth_client.redeem_available_tokens().await {
-                        Ok(_) => {
-                            log_debug!(logger, "checked available tokens");
-                            break;
-                        }
-                        Err(e) => {
-                            log_error!(logger, "error checking redeeming available tokens: {e}")
-                        }
-                    }
+    //                 match blind_auth_client.redeem_available_tokens().await {
+    //                     Ok(_) => {
+    //                         log_debug!(logger, "checked available tokens");
+    //                         break;
+    //                     }
+    //                     Err(e) => {
+    //                         log_error!(logger, "error checking redeeming available tokens: {e}")
+    //                     }
+    //                 }
 
-                    sleep(10_000).await;
-                }
-            });
-        }
-        log_trace!(self.logger, "finished calling check_blind_tokens");
-    }
+    //                 sleep(10_000).await;
+    //             }
+    //         });
+    //     }
+    //     log_trace!(self.logger, "finished calling check_blind_tokens");
+    // }
 
     /// Gets the current bitcoin price in USD.
     pub async fn get_bitcoin_price(&self, fiat: Option<String>) -> Result<f32, MutinyError> {
@@ -3766,123 +2942,22 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
     }
 }
 
-async fn create_federations<S: MutinyStorage>(
-    federation_storage: FederationStorage,
-    c: &MutinyWalletConfig,
-    storage: S,
-    esplora: Arc<AsyncClient>,
-    stop: Arc<AtomicBool>,
-    logger: &Arc<MutinyLogger>,
-    safe_mode: bool,
-) -> Result<Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>, MutinyError> {
-    let mut federation_map = HashMap::with_capacity(federation_storage.federations.len());
-    for (uuid, federation_index) in federation_storage.federations {
-        let federation = FederationClient::new(
-            uuid,
-            federation_index.federation_code,
-            c.xprivkey,
-            storage.clone(),
-            esplora.clone(),
-            c.network,
-            stop.clone(),
-            logger.clone(),
-            safe_mode,
-        )
-        .await?;
+//     esplora: Arc<AsyncClient>,
+//     stop: Arc<AtomicBool>,
 
-        let id = federation.fedimint_client.federation_id();
+//             esplora.clone(),
+//             c.network,
+//             stop.clone(),
+//             logger.clone(),
+//             safe_mode,
+//         )
 
-        federation_map.insert(id, Arc::new(federation));
-    }
-    let federations = Arc::new(RwLock::new(federation_map));
-    Ok(federations)
-}
-
-// This will create a new federation and returns the Federation ID of the client created.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn create_new_federation<S: MutinyStorage>(
-    xprivkey: ExtendedPrivKey,
-    storage: S,
-    network: Network,
-    logger: Arc<MutinyLogger>,
-    federation_storage: Arc<RwLock<FederationStorage>>,
-    federations: Arc<RwLock<HashMap<FederationId, Arc<FederationClient<S>>>>>,
-    hermes_client: Option<Arc<HermesClient<S>>>,
-    esplora: Arc<AsyncClient>,
-    federation_code: InviteCode,
-    stop: Arc<AtomicBool>,
-    safe_mode: bool,
-) -> Result<FederationIdentity, MutinyError> {
-    // Begin with a mutex lock so that nothing else can
-    // save or alter the federation list while it is about to
-    // be saved.
-    let mut federation_mutex = federation_storage.write().await;
-
-    // Check if the federation already exists
-    if federation_mutex
-        .federations
-        .values()
-        .any(|federation| federation.federation_code == federation_code)
-    {
-        return Err(MutinyError::InvalidArgumentsError);
-    }
-
-    // Create and save a new federation
-    let next_federation_uuid = Uuid::new_v4().to_string();
-    let next_federation = FederationIndex {
-        federation_code: federation_code.clone(),
-    };
-
-    // now create the federation process and init it
-    let new_federation = FederationClient::new(
-        next_federation_uuid.clone(),
-        federation_code.clone(),
-        xprivkey,
-        storage.clone(),
-        esplora,
-        network,
-        stop.clone(),
-        logger.clone(),
-        safe_mode,
-    )
-    .await?;
-
-    federation_mutex
-        .federations
-        .insert(next_federation_uuid.clone(), next_federation.clone());
-    federation_mutex.version += 1;
-    storage.insert_federations(federation_mutex.clone()).await?;
-
-    let federation_id = new_federation.fedimint_client.federation_id();
-
-    let new_federation_identity = get_federation_identity(
-        next_federation_uuid.clone(),
-        new_federation.fedimint_client.clone(),
-        federation_code.clone(),
-        logger.clone(),
-    )
-    .await;
-
-    federations
-        .write()
-        .await
-        .insert(federation_id, Arc::new(new_federation));
-
-    // change the federation with hermes, if available
-    if let Some(h) = hermes_client {
-        match h
-            .change_federation_info(&new_federation_identity.invite_code)
-            .await
-        {
-            Ok(_) => (),
-            Err(e) => {
-                log_error!(logger, "could not change hermes federation: {e}")
-            }
-        }
-    }
-
-    Ok(new_federation_identity)
-}
+//         esplora,
+//         network,
+//         stop.clone(),
+//         logger.clone(),
+//         safe_mode,
+//     )
 
 #[derive(Deserialize, Clone, Copy, Debug)]
 struct BitcoinPriceResponse {
@@ -3896,168 +2971,164 @@ struct NostrBuildResult {
     data: Vec<Value>,
 }
 
-// max amount that can be spent through a gateway
-fn max_spendable_amount(current_balance_sat: u64, routing_fees: &GatewayFees) -> Option<u64> {
-    let current_balance_msat = current_balance_sat as f64 * 1_000.0;
+// // max amount that can be spent through a gateway
+// fn max_spendable_amount(current_balance_sat: u64, routing_fees: &GatewayFees) -> Option<u64> {
+//     let current_balance_msat = current_balance_sat as f64 * 1_000.0;
 
-    // proportional fee on the current balance
-    let base_and_prop_fee_msat = calc_routing_fee_msat(current_balance_msat, routing_fees);
+//     // proportional fee on the current balance
+//     let base_and_prop_fee_msat = calc_routing_fee_msat(current_balance_msat, routing_fees);
 
-    // The max balance considering the maximum possible proportional fee.
-    // This gives us a baseline to start checking the fees from. In the case that the fee is 1%
-    // The real maximum balance will be somewhere between our current balance and 99% of our
-    // balance.
-    let initial_max = current_balance_msat - base_and_prop_fee_msat;
+//     // The max balance considering the maximum possible proportional fee.
+//     // This gives us a baseline to start checking the fees from. In the case that the fee is 1%
+//     // The real maximum balance will be somewhere between our current balance and 99% of our
+//     // balance.
+//     let initial_max = current_balance_msat - base_and_prop_fee_msat;
 
-    // if the fee would make the amount go negative, then there is not a possible amount to spend
-    if initial_max <= 0.0 {
-        return None;
-    }
+//     // if the fee would make the amount go negative, then there is not a possible amount to spend
+//     if initial_max <= 0.0 {
+//         return None;
+//     }
 
-    // if the initial balance and initial maximum is basically the same, then that's it
-    // this is basically only ever the case if there's not really any fee involved
-    if current_balance_msat - initial_max < 1.0 {
-        return Some((initial_max / 1_000.0).floor() as u64);
-    }
+//     // if the initial balance and initial maximum is basically the same, then that's it
+//     // this is basically only ever the case if there's not really any fee involved
+//     if current_balance_msat - initial_max < 1.0 {
+//         return Some((initial_max / 1_000.0).floor() as u64);
+//     }
 
-    // keep trying until we hit our balance or find the max amount
-    let mut new_max = initial_max;
-    while new_max < current_balance_msat {
-        // we increment by one and check the fees for it
-        let new_check = new_max + 1.0;
+//     // keep trying until we hit our balance or find the max amount
+//     let mut new_max = initial_max;
+//     while new_max < current_balance_msat {
+//         // we increment by one and check the fees for it
+//         let new_check = new_max + 1.0;
 
-        // check the new spendable balance amount plus base fees plus new proportional fee
-        let new_amt = new_check + calc_routing_fee_msat(new_check, routing_fees);
-        if current_balance_msat - new_amt <= 0.0 {
-            // since we are incrementing from a minimum spendable amount,
-            // if we overshot our total balance then the last max is the highest
-            return Some((new_max / 1_000.0).floor() as u64);
-        }
+//         // check the new spendable balance amount plus base fees plus new proportional fee
+//         let new_amt = new_check + calc_routing_fee_msat(new_check, routing_fees);
+//         if current_balance_msat - new_amt <= 0.0 {
+//             // since we are incrementing from a minimum spendable amount,
+//             // if we overshot our total balance then the last max is the highest
+//             return Some((new_max / 1_000.0).floor() as u64);
+//         }
 
-        // this is the new spendable maximum
-        new_max += 1.0;
-    }
+//         // this is the new spendable maximum
+//         new_max += 1.0;
+//     }
 
-    Some((new_max / 1_000.0).floor() as u64)
-}
+//     Some((new_max / 1_000.0).floor() as u64)
+// }
 
-fn calc_routing_fee_msat(amt_msat: f64, routing_fees: &GatewayFees) -> f64 {
-    let prop_fee_msat = (amt_msat * routing_fees.proportional_millionths as f64) / 1_000_000.0;
-    routing_fees.base_msat as f64 + prop_fee_msat
-}
+// fn calc_routing_fee_msat(amt_msat: f64, routing_fees: &GatewayFees) -> f64 {
+//     let prop_fee_msat = (amt_msat * routing_fees.proportional_millionths as f64) / 1_000_000.0;
+//     routing_fees.base_msat as f64 + prop_fee_msat
+// }
 
-#[cfg(test)]
-fn max_routing_fee_amount() {
-    let initial_budget = 1;
-    let routing_fees = GatewayFees {
-        base_msat: 10_000,
-        proportional_millionths: 0,
-    };
-    assert_eq!(None, max_spendable_amount(initial_budget, &routing_fees));
+// #[cfg(test)]
+// fn max_routing_fee_amount() {
+//     let initial_budget = 1;
+//     let routing_fees = GatewayFees {
+//         base_msat: 10_000,
+//         proportional_millionths: 0,
+//     };
+//     assert_eq!(None, max_spendable_amount(initial_budget, &routing_fees));
 
-    // only a percentage fee
-    let initial_budget = 100;
-    let routing_fees = GatewayFees {
-        base_msat: 0,
-        proportional_millionths: 0,
-    };
-    assert_eq!(
-        Some(100),
-        max_spendable_amount(initial_budget, &routing_fees)
-    );
+//     // only a percentage fee
+//     let initial_budget = 100;
+//     let routing_fees = GatewayFees {
+//         base_msat: 0,
+//         proportional_millionths: 0,
+//     };
+//     assert_eq!(
+//         Some(100),
+//         max_spendable_amount(initial_budget, &routing_fees)
+//     );
 
-    let initial_budget = 100;
-    let routing_fees = GatewayFees {
-        base_msat: 0,
-        proportional_millionths: 10_000,
-    };
-    assert_eq!(
-        Some(99),
-        max_spendable_amount(initial_budget, &routing_fees)
-    );
+//     let initial_budget = 100;
+//     let routing_fees = GatewayFees {
+//         base_msat: 0,
+//         proportional_millionths: 10_000,
+//     };
+//     assert_eq!(
+//         Some(99),
+//         max_spendable_amount(initial_budget, &routing_fees)
+//     );
 
-    let initial_budget = 100;
-    let routing_fees = GatewayFees {
-        base_msat: 0,
-        proportional_millionths: 100_000,
-    };
-    assert_eq!(
-        Some(90),
-        max_spendable_amount(initial_budget, &routing_fees)
-    );
+//     let initial_budget = 100;
+//     let routing_fees = GatewayFees {
+//         base_msat: 0,
+//         proportional_millionths: 100_000,
+//     };
+//     assert_eq!(
+//         Some(90),
+//         max_spendable_amount(initial_budget, &routing_fees)
+//     );
 
-    let initial_budget = 101_000;
-    let routing_fees = GatewayFees {
-        base_msat: 0,
-        proportional_millionths: 100_000,
-    };
-    assert_eq!(
-        Some(91_818),
-        max_spendable_amount(initial_budget, &routing_fees)
-    );
+//     let initial_budget = 101_000;
+//     let routing_fees = GatewayFees {
+//         base_msat: 0,
+//         proportional_millionths: 100_000,
+//     };
+//     assert_eq!(
+//         Some(91_818),
+//         max_spendable_amount(initial_budget, &routing_fees)
+//     );
 
-    let initial_budget = 101;
-    let routing_fees = GatewayFees {
-        base_msat: 0,
-        proportional_millionths: 100_000,
-    };
-    assert_eq!(
-        Some(91),
-        max_spendable_amount(initial_budget, &routing_fees)
-    );
+//     let initial_budget = 101;
+//     let routing_fees = GatewayFees {
+//         base_msat: 0,
+//         proportional_millionths: 100_000,
+//     };
+//     assert_eq!(
+//         Some(91),
+//         max_spendable_amount(initial_budget, &routing_fees)
+//     );
 
-    // same tests but with a base fee
-    let initial_budget = 100;
-    let routing_fees = GatewayFees {
-        base_msat: 1_000,
-        proportional_millionths: 0,
-    };
-    assert_eq!(
-        Some(99),
-        max_spendable_amount(initial_budget, &routing_fees)
-    );
+//     // same tests but with a base fee
+//     let initial_budget = 100;
+//     let routing_fees = GatewayFees {
+//         base_msat: 1_000,
+//         proportional_millionths: 0,
+//     };
+//     assert_eq!(
+//         Some(99),
+//         max_spendable_amount(initial_budget, &routing_fees)
+//     );
 
-    let initial_budget = 100;
-    let routing_fees = GatewayFees {
-        base_msat: 1_000,
-        proportional_millionths: 10_000,
-    };
-    assert_eq!(
-        Some(98),
-        max_spendable_amount(initial_budget, &routing_fees)
-    );
+//     let initial_budget = 100;
+//     let routing_fees = GatewayFees {
+//         base_msat: 1_000,
+//         proportional_millionths: 10_000,
+//     };
+//     assert_eq!(
+//         Some(98),
+//         max_spendable_amount(initial_budget, &routing_fees)
+//     );
 
-    let initial_budget = 100;
-    let routing_fees = GatewayFees {
-        base_msat: 1_000,
-        proportional_millionths: 100_000,
-    };
-    assert_eq!(
-        Some(89),
-        max_spendable_amount(initial_budget, &routing_fees)
-    );
+//     let initial_budget = 100;
+//     let routing_fees = GatewayFees {
+//         base_msat: 1_000,
+//         proportional_millionths: 100_000,
+//     };
+//     assert_eq!(
+//         Some(89),
+//         max_spendable_amount(initial_budget, &routing_fees)
+//     );
 
-    let initial_budget = 101;
-    let routing_fees = GatewayFees {
-        base_msat: 1_000,
-        proportional_millionths: 100_000,
-    };
-    assert_eq!(
-        Some(90),
-        max_spendable_amount(initial_budget, &routing_fees)
-    );
-}
+//     let initial_budget = 101;
+//     let routing_fees = GatewayFees {
+//         base_msat: 1_000,
+//         proportional_millionths: 100_000,
+//     };
+//     assert_eq!(
+//         Some(90),
+//         max_spendable_amount(initial_budget, &routing_fees)
+//     );
+// }
 
-#[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
-mod tests {
-    use super::*;
+// #[cfg(test)]
+// #[cfg(not(target_arch = "wasm32"))]
+// mod tests {
+//     use super::*;
 
-    #[test]
-    fn test_max_routing_fee_amount() {
-        max_routing_fee_amount();
-    }
-}
+// }
 
 #[cfg(test)]
 #[cfg(target_arch = "wasm32")]
@@ -4067,8 +3138,8 @@ mod tests {
         PAYMENT_OUTBOUND_PREFIX_KEY,
     };
     use crate::{
-        encrypt::encryption_key_from_pass, generate_seed, max_routing_fee_amount,
-        nodemanager::NodeManager, MutinyWallet, MutinyWalletBuilder, MutinyWalletConfigBuilder,
+        encrypt::encryption_key_from_pass, generate_seed, nodemanager::NodeManager, MutinyWallet,
+        MutinyWalletBuilder, MutinyWalletConfigBuilder,
     };
     use crate::{
         event::{HTLCStatus, MillisatAmount, PaymentInfo},
@@ -4435,11 +3506,6 @@ mod tests {
         assert_ne!(follows, first_follows);
         assert!(!follows.is_empty());
         assert!(profile.name.is_some());
-    }
-
-    #[test]
-    fn test_max_routing_fee_amount() {
-        max_routing_fee_amount();
     }
 
     #[test]

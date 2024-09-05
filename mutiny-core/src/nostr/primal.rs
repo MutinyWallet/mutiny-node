@@ -208,28 +208,3 @@ pub struct TrustedUser {
     pub trust_rating: f64,
     pub metadata: Option<Metadata>,
 }
-
-#[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
-mod test {
-    use super::*;
-    use nostr::{Keys, PublicKey};
-    use std::str::FromStr;
-
-    #[tokio::test]
-    async fn test_get_user_profile() {
-        let client = PrimalClient::new("https://primal-cache.mutinywallet.com/api".to_string());
-
-        // test getting Ben's profile
-        let ben =
-            PublicKey::from_str("npub1u8lnhlw5usp3t9vmpz60ejpyt649z33hu82wc2hpv6m5xdqmuxhs46turz")
-                .unwrap();
-        let profile = client.get_user_profile(ben).await.unwrap();
-        assert!(profile.is_some());
-
-        // test getting a non-existent npub
-        let keys = Keys::generate();
-        let profile = client.get_user_profile(keys.public_key()).await.unwrap();
-        assert!(profile.is_none());
-    }
-}

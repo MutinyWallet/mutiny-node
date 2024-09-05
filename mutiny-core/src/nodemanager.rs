@@ -818,18 +818,18 @@ impl<S: MutinyStorage> NodeManager<S> {
         res
     }
 
-    /// Estimates the onchain fee for a transaction sweep our on-chain balance
-    /// to the given address.
-    ///
-    /// The fee rate is in sat/vbyte.
-    pub(crate) fn estimate_sweep_tx_fee(
-        &self,
-        destination_address: Address,
-        fee_rate: Option<f32>,
-    ) -> Result<u64, MutinyError> {
-        self.wallet
-            .estimate_sweep_tx_fee(destination_address.script_pubkey(), fee_rate)
-    }
+    // /// Estimates the onchain fee for a transaction sweep our on-chain balance
+    // /// to the given address.
+    // ///
+    // /// The fee rate is in sat/vbyte.
+    // pub(crate) fn estimate_sweep_tx_fee(
+    //     &self,
+    //     destination_address: Address,
+    //     fee_rate: Option<f32>,
+    // ) -> Result<u64, MutinyError> {
+    //     self.wallet
+    //         .estimate_sweep_tx_fee(destination_address.script_pubkey(), fee_rate)
+    // }
 
     /// Estimates the onchain fee for a opening a lightning channel.
     /// The amount is in satoshis and the fee rate is in sat/vbyte.

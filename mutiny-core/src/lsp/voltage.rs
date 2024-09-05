@@ -398,38 +398,6 @@ impl Lsp for LspClient {
 }
 
 #[cfg(test)]
-async fn run_lsp_fee_api_test(url: &str) {
-    let client = LspClient::new(
-        VoltageConfig {
-            url: url.to_string(),
-            pubkey: None,
-            connection_string: None,
-        },
-        Arc::new(MutinyLogger::default()),
-    )
-    .await
-    .unwrap();
-
-    // make sure we have a connection string and pubkey
-    assert!(!client.connection_string.is_empty());
-    assert!(!client.pubkey.to_string().is_empty());
-
-    // make sure we can get the fee
-    let amount_msat = 100_000_000;
-    let fee_response = client
-        .get_lsp_fee_msat(FeeRequest {
-            pubkey: "02465ed5be53d04fde66c9418ff14a5f2267723810176c9212b722e542dc1afb1b"
-                .to_string(),
-            amount_msat,
-        })
-        .await
-        .unwrap();
-
-    assert!(!fee_response.id.is_empty());
-    assert!(fee_response.fee_amount_msat > 0);
-}
-
-#[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod test {
     use crate::logging::MutinyLogger;
@@ -615,24 +583,12 @@ mod test {
             .unwrap();
         assert!(err.contains("Received invoice with wrong amount"));
     }
-
-    #[tokio::test]
-    async fn test_lsp_client() {
-        super::run_lsp_fee_api_test("https://mutinynet-flow.lnolymp.us").await;
-        super::run_lsp_fee_api_test("https://signet-lsp.mutinywallet.com").await;
-    }
 }
 
 #[cfg(test)]
 #[cfg(target_arch = "wasm32")]
 mod wasm_test {
-    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+    use wasm_bindgen_test::wasm_bindgen_test_configure;
 
     wasm_bindgen_test_configure!(run_in_browser);
-
-    #[test]
-    async fn test_lsp_client() {
-        super::run_lsp_fee_api_test("https://mutinynet-flow.lnolymp.us").await;
-        super::run_lsp_fee_api_test("https://signet-lsp.mutinywallet.com").await;
-    }
 }

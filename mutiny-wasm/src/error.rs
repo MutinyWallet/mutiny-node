@@ -171,15 +171,6 @@ pub enum MutinyJsError {
     /// Token already spent.
     #[error("Token has been already spent.")]
     TokenAlreadySpent,
-    /// Federation required.
-    #[error("A federation is required")]
-    FederationRequired,
-    /// Failed to connect to a federation.
-    #[error("Failed to connect to a federation.")]
-    FederationConnectionFailed,
-    /// Fedimint transaction too large
-    #[error("Error constructing fedimint transaction, try lowering the amount.")]
-    FederationTxTooLarge,
     /// Unknown error.
     #[error("Unknown Error")]
     UnknownError,
@@ -235,9 +226,6 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::CashuMintError => MutinyJsError::CashuMintError,
             MutinyError::EmptyMintURLError => MutinyJsError::EmptyMintURLError,
             MutinyError::TokenAlreadySpent => MutinyJsError::TokenAlreadySpent,
-            MutinyError::FederationRequired => MutinyJsError::FederationRequired,
-            MutinyError::FederationConnectionFailed => MutinyJsError::FederationConnectionFailed,
-            MutinyError::FederationTxTooLarge => MutinyJsError::FederationTxTooLarge,
             MutinyError::Other(_) => MutinyJsError::UnknownError,
             MutinyError::SubscriptionClientNotConfigured => {
                 MutinyJsError::SubscriptionClientNotConfigured
@@ -309,12 +297,6 @@ impl From<bitcoin::secp256k1::Error> for MutinyJsError {
 impl From<serde_json::error::Error> for MutinyJsError {
     fn from(_e: serde_json::error::Error) -> Self {
         Self::WasmBindgenError
-    }
-}
-
-impl From<moksha_core::error::MokshaCoreError> for MutinyJsError {
-    fn from(e: moksha_core::error::MokshaCoreError) -> Self {
-        e.into()
     }
 }
 

@@ -1,10 +1,9 @@
+use crate::logging::MutinyLogger;
 use crate::nodemanager::{ChannelClosure, NodeStorage};
 use crate::utils::{now, spawn};
 use crate::vss::{MutinyVssClient, VssKeyValueItem};
-use crate::{blindauth::TokenStorage, logging::MutinyLogger};
 use crate::{
     encrypt::{decrypt_with_password, encrypt, encryption_key_from_pass, Cipher},
-    federation::FederationStorage,
     DEVICE_LOCK_INTERVAL_SECS,
 };
 use crate::{
@@ -18,7 +17,7 @@ use async_trait::async_trait;
 use bdk::chain::{Append, PersistBackend};
 use bip39::Mnemonic;
 use bitcoin::{secp256k1::ThirtyTwoByteHash, Txid};
-use fedimint_ln_common::bitcoin::hashes::hex::ToHex;
+// use fedimint_ln_common::bitcoin::hashes::hex::ToHex;
 use futures_util::lock::Mutex;
 use hex_conservative::*;
 use lightning::{ln::PaymentHash, util::logger::Logger};
@@ -35,7 +34,6 @@ pub const KEYCHAIN_STORE_KEY: &str = "bdk_keychain";
 pub const MNEMONIC_KEY: &str = "mnemonic";
 pub(crate) const NEED_FULL_SYNC_KEY: &str = "needs_full_sync";
 pub const NODES_KEY: &str = "nodes";
-pub const FEDERATIONS_KEY: &str = "federations";
 pub const SERVICE_TOKENS: &str = "service_tokens";
 const FEE_ESTIMATES_KEY: &str = "fee_estimates";
 pub const BITCOIN_PRICE_CACHE_KEY: &str = "bitcoin_price_cache";
@@ -481,38 +479,6 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
             .await
     }
 
-    /// Gets the federation indexes from storage
-    fn get_federations(&self) -> Result<FederationStorage, MutinyError> {
-        let res: Option<FederationStorage> = self.get_data(FEDERATIONS_KEY)?;
-        match res {
-            Some(f) => Ok(f),
-            None => Ok(FederationStorage::default()),
-        }
-    }
-
-    /// Inserts the federation indexes into storage
-    async fn insert_federations(&self, federations: FederationStorage) -> Result<(), MutinyError> {
-        let version = Some(federations.version);
-        self.set_data_async(FEDERATIONS_KEY.to_string(), federations, version)
-            .await
-    }
-
-    /// Gets the token storage
-    fn get_token_storage(&self) -> Result<TokenStorage, MutinyError> {
-        let res: Option<TokenStorage> = self.get_data(SERVICE_TOKENS)?;
-        match res {
-            Some(f) => Ok(f),
-            None => Ok(TokenStorage::default()),
-        }
-    }
-
-    /// Inserts the tokens into storage
-    async fn insert_token_storage(&self, tokens: TokenStorage) -> Result<(), MutinyError> {
-        let version = Some(tokens.version);
-        self.set_data_async(SERVICE_TOKENS.to_string(), tokens, version)
-            .await
-    }
-
     /// Get the current fee estimates from storage
     /// The key is block target, the value is the fee in satoshis per byte
     fn get_fee_estimates(&self) -> Result<Option<HashMap<String, f64>>, MutinyError> {
@@ -885,12 +851,13 @@ impl MutinyStorage for () {
 
 pub(crate) fn transaction_details_key(internal_id: Txid) -> String {
     format!(
-        "{}{}",
+        "{}{:x}",
         TRANSACTION_DETAILS_PREFIX_KEY,
-        internal_id.to_raw_hash().to_hex(),
+        internal_id.to_raw_hash(),
     )
 }
 
+#[allow(dead_code)]
 pub(crate) fn persist_transaction_details<S: MutinyStorage>(
     storage: &S,
     transaction_details: &TransactionDetails,
@@ -926,6 +893,7 @@ pub(crate) fn persist_transaction_details<S: MutinyStorage>(
     Ok(())
 }
 
+#[allow(dead_code)]
 // Deletes the transaction detail and removes the pending index if it exists
 pub(crate) fn delete_transaction_details<S: MutinyStorage>(
     storage: &S,

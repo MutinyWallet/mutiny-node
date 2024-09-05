@@ -22,15 +22,13 @@ use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, Network, OutPoint, Txid};
-use fedimint_core::{api::InviteCode, config::FederationId};
 use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
 use hex_conservative::DisplayHex;
-use lightning::{log_error, log_info, log_warn, routing::gossip::NodeId, util::logger::Logger};
+use lightning::{log_info, log_warn, routing::gossip::NodeId, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
-use moksha_core::token::TokenV3;
 use mutiny_core::auth::MutinyAuthClient;
 use mutiny_core::lnurlauth::AuthManager;
 use mutiny_core::nostr::nip49::NIP49URI;
@@ -605,19 +603,6 @@ impl MutinyWallet {
         Ok(self.inner.estimate_tx_fee(addr, amount, fee_rate).await?)
     }
 
-    /// Estimates the onchain fee for a transaction sweep our on-chain balance
-    /// to the given address.
-    ///
-    /// The fee rate is in sat/vbyte.
-    pub async fn estimate_sweep_tx_fee(
-        &self,
-        destination_address: String,
-        fee_rate: Option<f32>,
-    ) -> Result<u64, MutinyJsError> {
-        let addr = Address::from_str(&destination_address)?.assume_checked();
-        Ok(self.inner.estimate_sweep_tx_fee(addr, fee_rate).await?)
-    }
-
     /// Estimates the onchain fee for a opening a lightning channel.
     /// The amount is in satoshis and the fee rate is in sat/vbyte.
     pub fn estimate_channel_open_fee(
@@ -937,18 +922,6 @@ impl MutinyWallet {
         Ok(self.inner.lnurl_withdraw(&lnurl, amount_sats).await?)
     }
 
-    /// Calls upon a Cash mint and melts the token from it.
-    #[wasm_bindgen]
-    pub async fn melt_cashu_token(
-        &self,
-        maybe_token: String,
-    ) -> Result<JsValue /* Vec<MutinyInvoice> */, MutinyJsError> {
-        let token = TokenV3::deserialize(maybe_token)?;
-        let result = self.inner.melt_cashu_token(token).await?;
-        let invoices: Vec<MutinyInvoice> = result.into_iter().map(|i| i.into()).collect();
-        Ok(JsValue::from_serde(&invoices)?)
-    }
-
     /// Authenticates with a LNURL-auth for the given profile.
     #[wasm_bindgen]
     pub async fn lnurl_auth(&self, lnurl: String) -> Result<(), MutinyJsError> {
@@ -1052,56 +1025,6 @@ impl MutinyWallet {
             .inner
             .node_manager
             .sweep_all_to_channel(to_pubkey)
-            .await?
-            .into())
-    }
-
-    /// Sweep the federation balance into a lightning channel
-    pub async fn sweep_federation_balance_to_invoice(
-        &self,
-        from_federation_id: Option<String>,
-        bolt_11: String,
-    ) -> Result<FedimintSweepResult, MutinyJsError> {
-        let from_federation_id = match from_federation_id {
-            Some(f) => {
-                Some(FederationId::from_str(&f).map_err(|_| MutinyJsError::InvalidArgumentsError)?)
-            }
-            None => None,
-        };
-
-        let bolt_11 = Bolt11Invoice::from_str(&bolt_11)?;
-
-        Ok(self
-            .inner
-            .sweep_federation_balance_to_invoice(from_federation_id, bolt_11)
-            .await?
-            .into())
-    }
-
-    /// Estimate the fee before trying to sweep from federation
-    pub async fn create_sweep_federation_invoice(
-        &self,
-        amount: Option<u64>,
-        from_federation_id: Option<String>,
-        to_federation_id: Option<String>,
-    ) -> Result<MutinyInvoice, MutinyJsError> {
-        let from_federation_id = match from_federation_id {
-            Some(f) => {
-                Some(FederationId::from_str(&f).map_err(|_| MutinyJsError::InvalidArgumentsError)?)
-            }
-            None => None,
-        };
-
-        let to_federation_id = match to_federation_id {
-            Some(f) => {
-                Some(FederationId::from_str(&f).map_err(|_| MutinyJsError::InvalidArgumentsError)?)
-            }
-            None => None,
-        };
-
-        Ok(self
-            .inner
-            .create_sweep_federation_invoice(amount, from_federation_id, to_federation_id)
             .await?
             .into())
     }
@@ -1213,107 +1136,6 @@ impl MutinyWallet {
         }
 
         Ok(JsValue::from_serde(&activity)?)
-    }
-
-    /// Adds a new federation based on its federation code
-    #[wasm_bindgen]
-    pub async fn new_federation(
-        &mut self,
-        federation_code: String,
-    ) -> Result<FederationIdentity, MutinyJsError> {
-        Ok(self
-            .inner
-            .new_federation(InviteCode::from_str(&federation_code).map_err(|e| {
-                log_error!(
-                    self.inner.logger,
-                    "Error parsing federation code ({federation_code}): {e}"
-                );
-                MutinyJsError::InvalidArgumentsError
-            })?)
-            .await?
-            .into())
-    }
-
-    /// Lists the federation id's of the federation clients in the manager.
-    #[wasm_bindgen]
-    pub async fn list_federations(
-        &self,
-    ) -> Result<JsValue /* Vec<FederationIdentity> */, MutinyJsError> {
-        Ok(JsValue::from_serde(&self.inner.list_federations().await?)?)
-    }
-
-    /// Removes a federation by setting its archived status to true, based on the FederationId.
-    #[wasm_bindgen]
-    pub async fn remove_federation(&self, federation_id: String) -> Result<(), MutinyJsError> {
-        Ok(self
-            .inner
-            .remove_federation(
-                FederationId::from_str(&federation_id)
-                    .map_err(|_| MutinyJsError::InvalidArgumentsError)?,
-            )
-            .await?)
-    }
-
-    /// Gets the current balances of each federation.
-    #[wasm_bindgen]
-    pub async fn get_federation_balances(&self) -> Result<FederationBalances, MutinyJsError> {
-        Ok(self.inner.get_federation_balances().await?.into())
-    }
-
-    /// Creates a recommendation event for a federation
-    pub async fn recommend_federation(
-        &self,
-        invite_code: String,
-        review: Option<String>,
-    ) -> Result<String, MutinyJsError> {
-        let invite_code =
-            InviteCode::from_str(&invite_code).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        let event_id = self
-            .inner
-            .nostr
-            .recommend_federation(&invite_code, self.inner.get_network(), review.as_deref())
-            .await?;
-        Ok(event_id.to_hex())
-    }
-
-    /// Checks if we have recommended the given federation
-    pub async fn has_recommended_federation(
-        &self,
-        federation_id: String,
-    ) -> Result<bool, MutinyJsError> {
-        let federation_id = FederationId::from_str(&federation_id)
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        Ok(self
-            .inner
-            .nostr
-            .has_recommended_federation(&federation_id)
-            .await?)
-    }
-
-    /// Creates a delete event for a federation recommendation
-    pub async fn delete_federation_recommendation(
-        &self,
-        federation_id: String,
-    ) -> Result<(), MutinyJsError> {
-        let federation_id = FederationId::from_str(&federation_id)
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        Ok(self
-            .inner
-            .nostr
-            .delete_federation_recommendation(&federation_id)
-            .await?)
-    }
-
-    /// Queries our relays for federation announcements
-    pub async fn discover_federations(
-        &self,
-    ) -> Result<JsValue /* Vec<NostrDiscoveredFedimint> */, MutinyJsError> {
-        let federations = self
-            .inner
-            .nostr
-            .discover_federations(self.inner.get_network())
-            .await?;
-        Ok(JsValue::from_serde(&federations)?)
     }
 
     pub fn get_address_labels(
@@ -2101,23 +1923,6 @@ impl MutinyWallet {
     pub async fn delete_all(&self) -> Result<(), MutinyJsError> {
         self.inner.delete_all().await?;
         Ok(())
-    }
-
-    pub async fn resync_federation(&self, federation_id: String) -> Result<(), MutinyJsError> {
-        let federation_id = FederationId::from_str(&federation_id)
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        self.inner.resync_federation(federation_id).await?;
-        Ok(())
-    }
-
-    pub fn get_federation_resync_progress(
-        &self,
-        federation_id: String,
-    ) -> Result<JsValue, MutinyJsError> {
-        let federation_id = FederationId::from_str(&federation_id)
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        let res = self.inner.get_federation_resync_progress(federation_id)?;
-        Ok(JsValue::from_serde(&res)?)
     }
 
     /// Restore's the mnemonic after deleting the previous state.

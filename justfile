@@ -18,7 +18,7 @@ publish:
 
 [macos]
 test:
-    cargo test -p mutiny-core --target=aarch64-apple-darwin
+    cargo test -p mutiny-core --target=aarch64-apple-darwin --locked
     WASM_BINDGEN_TEST_TIMEOUT=120 wasm-pack test --headless --chrome ./mutiny-core
     WASM_BINDGEN_TEST_TIMEOUT=120 wasm-pack test --headless --chrome ./mutiny-wasm
 

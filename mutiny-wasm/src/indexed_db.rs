@@ -6,8 +6,9 @@ use gloo_utils::format::JsValueSerdeExt;
 use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info, log_trace};
 use log::error;
-use mutiny_core::blindauth::TokenStorage;
+use mutiny_core::logging::MutinyLogger;
 use mutiny_core::logging::LOGGING_KEY;
+use mutiny_core::nodemanager::NodeStorage;
 use mutiny_core::storage::*;
 use mutiny_core::vss::*;
 use mutiny_core::*;
@@ -15,8 +16,6 @@ use mutiny_core::{
     encrypt::Cipher,
     error::{MutinyError, MutinyStorageError},
 };
-use mutiny_core::{federation::FederationStorage, logging::MutinyLogger};
-use mutiny_core::{federation::FEDIMINTS_PREFIX_KEY, nodemanager::NodeStorage};
 use rexie::{ObjectStore, Rexie, TransactionMode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -410,25 +409,6 @@ impl IndexedDbStorage {
                     }
                 }
             }
-            FEDERATIONS_KEY => {
-                // we can get version from federation storage, so we should compare
-                match current.get_data::<FederationStorage>(&kv.key)? {
-                    Some(local) => {
-                        if local.version < kv.version {
-                            let obj = vss.get_object(&kv.key).await?;
-                            if serde_json::from_value::<FederationStorage>(obj.value.clone())
-                                .is_ok()
-                            {
-                                return Ok(Some((kv.key, obj.value)));
-                            }
-                        }
-                    }
-                    None => {
-                        let obj = vss.get_object(&kv.key).await?;
-                        return Ok(Some((kv.key, obj.value)));
-                    }
-                }
-            }
             DEVICE_LOCK_KEY => {
                 // we can get version from device lock, so we should compare
                 match current.get_data::<DeviceLock>(&kv.key)? {
@@ -448,21 +428,8 @@ impl IndexedDbStorage {
                 }
             }
             SERVICE_TOKENS => {
-                // we can get version from TokenStorage, so we should compare
-                match current.get_data::<TokenStorage>(&kv.key)? {
-                    Some(token_storage) => {
-                        if token_storage.version < kv.version {
-                            let obj = vss.get_object(&kv.key).await?;
-                            if serde_json::from_value::<TokenStorage>(obj.value.clone()).is_ok() {
-                                return Ok(Some((kv.key, obj.value)));
-                            }
-                        }
-                    }
-                    None => {
-                        let obj = vss.get_object(&kv.key).await?;
-                        return Ok(Some((kv.key, obj.value)));
-                    }
-                }
+                let obj = vss.get_object(&kv.key).await?;
+                return Ok(Some((kv.key, obj.value)));
             }
             key => {
                 if key.starts_with(MONITORS_PREFIX_KEY) {
@@ -492,35 +459,6 @@ impl IndexedDbStorage {
                     }
                 } else if key.starts_with(CHANNEL_MANAGER_KEY) {
                     // we can get versions from channel manager, so we should compare
-                    match current.get_data::<VersionedValue>(&kv.key)? {
-                        Some(local) => {
-                            if local.version < kv.version {
-                                let obj = vss.get_object(&kv.key).await?;
-                                if serde_json::from_value::<VersionedValue>(obj.value.clone())
-                                    .is_ok()
-                                {
-                                    return Ok(Some((kv.key, obj.value)));
-                                }
-                            } else {
-                                log_debug!(
-                                    logger,
-                                    "Skipping vss key {} with version {}, current version is {}",
-                                    kv.key,
-                                    kv.version,
-                                    local.version
-                                );
-                                return Ok(None);
-                            }
-                        }
-                        None => {
-                            let obj = vss.get_object(&kv.key).await?;
-                            if serde_json::from_value::<VersionedValue>(obj.value.clone()).is_ok() {
-                                return Ok(Some((kv.key, obj.value)));
-                            }
-                        }
-                    }
-                } else if key.starts_with(FEDIMINTS_PREFIX_KEY) {
-                    // we can get versions from each fedimint, so we should compare
                     match current.get_data::<VersionedValue>(&kv.key)? {
                         Some(local) => {
                             if local.version < kv.version {

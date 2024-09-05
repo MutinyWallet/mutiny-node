@@ -1,25 +1,22 @@
-use crate::federation::FederationMetaConfig;
 use crate::labels::Contact;
 use crate::logging::MutinyLogger;
 use crate::nostr::client::NostrClient;
 use crate::nostr::nip49::{NIP49BudgetPeriod, NIP49URI};
 use crate::nostr::nwc::{
-    check_valid_nwc_invoice, BudgetPeriod, BudgetedSpendingConditions, NostrWalletConnect,
-    NwcProfile, NwcProfileTag, PendingNwcInvoice, Profile, SingleUseSpendingConditions,
-    SpendingConditions, PENDING_NWC_EVENTS_KEY,
+    BudgetPeriod, BudgetedSpendingConditions, NostrWalletConnect, NwcProfile, NwcProfileTag,
+    PendingNwcInvoice, Profile, SingleUseSpendingConditions, SpendingConditions,
+    PENDING_NWC_EVENTS_KEY,
 };
 use crate::nostr::primal::PrimalApi;
 use crate::storage::{update_nostr_contact_list, MutinyStorage, NOSTR_CONTACT_LIST};
-use crate::utils::fetch_with_timeout;
+
 use crate::{error::MutinyError, utils::get_random_bip32_child_index};
 use crate::{labels::LabelStorage, InvoiceHandler};
 use crate::{utils, HTLCStatus};
 use bitcoin::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{Secp256k1, Signing};
-use bitcoin::{hashes::hex::FromHex, secp256k1::ThirtyTwoByteHash, Network};
-use fedimint_core::api::InviteCode;
-use fedimint_core::config::{ClientConfig, FederationId};
+use bitcoin::{hashes::hex::FromHex, secp256k1::ThirtyTwoByteHash};
 use futures::{pin_mut, select, FutureExt};
 use futures_util::lock::Mutex;
 use lightning::util::logger::Logger;
@@ -27,11 +24,11 @@ use lightning::{log_debug, log_error, log_info, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lnurl::LnUrl;
 use nostr::nips::nip47::*;
-use nostr::prelude::{Coordinate, EventIdOrCoordinate};
+
 use nostr::{
     nips::nip04::{decrypt, encrypt},
-    Alphabet, Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Metadata, SecretKey,
-    SingleLetterTag, Tag, TagKind, Timestamp,
+    Event, EventBuilder, EventId, Filter, JsonUtil, Keys, Kind, Metadata, SecretKey, Tag,
+    Timestamp,
 };
 use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
 use serde::{Deserialize, Serialize};
@@ -49,14 +46,8 @@ pub(crate) mod primal;
 
 const PROFILE_ACCOUNT_INDEX: u32 = 0;
 const NWC_ACCOUNT_INDEX: u32 = 1;
-pub(crate) const SERVICE_ACCOUNT_INDEX: u32 = 2;
-
-pub(crate) const HERMES_CHAIN_INDEX: u32 = 0;
 
 const USER_NWC_PROFILE_START_INDEX: u32 = 1000;
-
-/// The number of trusted users we query for mint recommendations
-const NUM_TRUSTED_USERS: u32 = 1_000;
 
 const NWC_STORAGE_KEY: &str = "nwc_profiles";
 
@@ -178,10 +169,6 @@ pub struct NostrManager<S: MutinyStorage, P: PrimalApi, C: NostrClient> {
 /// A fedimint we discovered on nostr
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NostrDiscoveredFedimint {
-    /// Invite Code to join the federation
-    pub invite_codes: Vec<InviteCode>,
-    /// The federation id
-    pub id: FederationId,
     /// Pubkey of the nostr event
     pub pubkey: Option<nostr::PublicKey>,
     /// Event id of the nostr event
@@ -219,59 +206,6 @@ impl Ord for NostrDiscoveredFedimint {
 }
 
 impl NostrDiscoveredFedimint {
-    /// If this fedimint doesn't have metadata, try to fetch it from the first invite code
-    pub async fn try_fetch_metadata(&mut self) {
-        if self.metadata.is_none() && !self.invite_codes.is_empty() {
-            let code = self.invite_codes.first().unwrap();
-            if let Ok(config) = ClientConfig::download_from_invite_code(code).await {
-                // need to handle this case where the meta_external_url is set and we fetch it externally
-                let external = config.global.meta.get("meta_external_url");
-                match external {
-                    Some(url) => {
-                        let http_client = reqwest::Client::new();
-                        let request = http_client.request(reqwest::Method::GET, url);
-
-                        if let Ok(r) = fetch_with_timeout(
-                            &http_client,
-                            request.build().expect("should build req"),
-                        )
-                        .await
-                        {
-                            if let Ok(config) = r.json::<FederationMetaConfig>().await {
-                                let config = config.federations.get(&self.id.to_string()).cloned();
-                                self.expire_timestamp = config.as_ref().and_then(|f| {
-                                    f.federation_expiry_timestamp
-                                        .clone()
-                                        .and_then(|t| t.parse().ok())
-                                });
-                                let metadata = config.map(|f| Metadata {
-                                    name: f.federation_name.clone(),
-                                    display_name: f.federation_name,
-                                    picture: f.federation_icon_url,
-                                    ..Default::default()
-                                });
-                                self.metadata = metadata;
-                            }
-                        }
-                    }
-                    None => {
-                        self.metadata = Some(Metadata {
-                            name: config.global.meta.get("federation_name").cloned(),
-                            display_name: config.global.meta.get("federation_name").cloned(),
-                            picture: config.global.meta.get("federation_icon_url").cloned(),
-                            ..Default::default()
-                        });
-                        self.expire_timestamp = config
-                            .global
-                            .meta
-                            .get("expire_timestamp")
-                            .and_then(|s| s.parse().ok());
-                    }
-                };
-            }
-        }
-    }
-
     pub fn merge(&mut self, other: &Self) {
         // merge metadata
         if let Some(other) = other.metadata.as_ref() {
@@ -307,15 +241,15 @@ impl NostrDiscoveredFedimint {
             }
         }
 
-        // merge invite codes
-        let mut invite_codes = self.invite_codes.clone();
-        for other_invite_code in other.invite_codes.iter() {
-            if !invite_codes.contains(other_invite_code) {
-                invite_codes.push(other_invite_code.clone());
-            }
-        }
+        // // merge invite codes
+        // let mut invite_codes = self.invite_codes.clone();
+        // for other_invite_code in other.invite_codes.iter() {
+        //     if !invite_codes.contains(other_invite_code) {
+        //         invite_codes.push(other_invite_code.clone());
+        //     }
+        // }
 
-        self.invite_codes = invite_codes;
+        // self.invite_codes = invite_codes;
 
         // merge expire_timestamp
         if let Some(other) = other.expire_timestamp {
@@ -1549,7 +1483,7 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
     pub async fn handle_direct_message(
         &self,
         event: Event,
-        invoice_handler: &impl InvoiceHandler,
+        _invoice_handler: &impl InvoiceHandler,
     ) -> anyhow::Result<()> {
         if event.kind != Kind::EncryptedDirectMessage {
             anyhow::bail!("Not a direct message");
@@ -1587,31 +1521,31 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
         for word in decrypted.split_whitespace() {
             // ignore word if too short
             if word.len() > 15 {
-                let invoice_request_param = match bitcoin_waila::PaymentParams::from_str(word) {
-                    // if not an invoice, go to next word in dm
-                    Ok(param) => match param.invoice() {
-                        Some(invoice) => PayInvoiceRequestParams {
-                            id: None,
-                            invoice: invoice.to_string(),
-                            amount: None,
-                        },
-                        None => continue,
-                    },
-                    Err(_) => continue,
-                };
+                // let invoice_request_param = match bitcoin_waila::PaymentParams::from_str(word) {
+                //     // if not an invoice, go to next word in dm
+                //     Ok(param) => match param.invoice() {
+                //         Some(invoice) => PayInvoiceRequestParams {
+                //             id: None,
+                //             invoice: invoice.to_string(),
+                //             amount: None,
+                //         },
+                //         None => continue,
+                //     },
+                //     Err(_) => continue,
+                // };
 
                 // handle it like a pay invoice NWC request, to see if it is valid
-                let invoice: Bolt11Invoice =
-                    match check_valid_nwc_invoice(&invoice_request_param, invoice_handler).await {
-                        Ok(Some(invoice)) => invoice,
-                        Ok(None) => return Ok(()),
-                        Err(msg) => {
-                            log_debug!(self.logger, "Not adding DM'd invoice: {msg}");
-                            return Ok(());
-                        }
-                    };
-                self.save_pending_nwc_invoice(None, event.id, event.pubkey, invoice, None)
-                    .await?;
+                // let invoice: Bolt11Invoice =
+                //     match check_valid_nwc_invoice(&invoice_request_param, invoice_handler).await {
+                //         Ok(Some(invoice)) => invoice,
+                //         Ok(None) => return Ok(()),
+                //         Err(msg) => {
+                //             log_debug!(self.logger, "Not adding DM'd invoice: {msg}");
+                //             return Ok(());
+                //         }
+                //     };
+                // self.save_pending_nwc_invoice(None, event.id, event.pubkey, invoice, None)
+                //     .await?;
 
                 return Ok(());
             }
@@ -1915,400 +1849,6 @@ impl<S: MutinyStorage, P: PrimalApi, C: NostrClient> NostrManager<S, P, C> {
         Ok(event_id)
     }
 
-    /// Creates a recommendation event for a federation
-    pub(crate) async fn create_recommend_federation_event(
-        &self,
-        invite_code: &InviteCode,
-        network: Network,
-        review: Option<&str>,
-    ) -> Result<Event, MutinyError> {
-        let kind = Kind::from(38000);
-
-        // properly tag the event as a federation with the federation id
-        let d_tag = Tag::Identifier(invite_code.federation_id().to_string());
-        let k_tag = Tag::Generic(
-            TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::K)),
-            vec!["38173".to_string()],
-        );
-
-        // tag the network
-        let n_tag = Tag::Generic(
-            TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::N)),
-            vec![network_to_string(network).to_string()],
-        );
-
-        // tag the federation invite code
-        let invite_code_tag = Tag::Generic(
-            TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::U)),
-            vec![invite_code.to_string()],
-        );
-
-        // todo tag the federation announcement event, to do so we need to have the pubkey of the federation
-
-        let builder = EventBuilder::new(
-            kind,
-            review.unwrap_or_default(),
-            [d_tag, k_tag, invite_code_tag, n_tag],
-        );
-
-        Ok(self.client.sign_event_builder(builder).await?)
-    }
-
-    /// Creates a recommendation event for a federation
-    pub async fn recommend_federation(
-        &self,
-        invite_code: &InviteCode,
-        network: Network,
-        review: Option<&str>,
-    ) -> Result<EventId, MutinyError> {
-        let event = self
-            .create_recommend_federation_event(invite_code, network, review)
-            .await?;
-        let event_id = self.client.send_event(event).await?;
-        Ok(event_id)
-    }
-
-    /// Gets the recommendation events for a federation created by our npub
-    async fn get_my_recommendation_events(
-        &self,
-        federation_id: &FederationId,
-    ) -> Result<Vec<Event>, MutinyError> {
-        let pk = self.get_npub().await;
-        let filter = Filter::new()
-            .author(pk)
-            .kind(Kind::from(38000))
-            .identifier(federation_id.to_string())
-            .limit(1);
-
-        let events = self.client.get_events_of(vec![filter], None).await?;
-        Ok(events)
-    }
-
-    /// Checks if we have recommended the given federation
-    pub async fn has_recommended_federation(
-        &self,
-        federation_id: &FederationId,
-    ) -> Result<bool, MutinyError> {
-        self.get_my_recommendation_events(federation_id)
-            .await
-            .map(|events| !events.is_empty())
-    }
-
-    /// Creates a delete event for a federation recommendation
-    pub async fn delete_federation_recommendation(
-        &self,
-        federation_id: &FederationId,
-    ) -> Result<(), MutinyError> {
-        let pk = self.get_npub().await;
-        // create coordinate to delete the events
-        let coord = Coordinate::new(Kind::from(38000), pk).identifier(federation_id.to_string());
-        // also refer to event id of the recommendation event for better guarantee
-        let events = self.get_my_recommendation_events(federation_id).await?;
-
-        let mut event_ids: Vec<EventIdOrCoordinate> =
-            events.into_iter().map(|e| e.id.into()).collect();
-        event_ids.push(coord.into());
-        let builder = EventBuilder::delete(event_ids);
-
-        self.client.send_event_builder(builder).await?;
-
-        Ok(())
-    }
-
-    /// Queries our relays for federation announcements
-    pub async fn discover_federations(
-        &self,
-        network: Network,
-    ) -> Result<Vec<NostrDiscoveredFedimint>, MutinyError> {
-        // get contacts by npub
-        let npubs: HashMap<nostr::PublicKey, Contact> = self
-            .storage
-            .get_contacts()?
-            .into_iter()
-            .filter_map(|(_, c)| c.npub.map(|npub| (npub, c)))
-            .collect();
-
-        // our contacts might not have recommendation events, so pull in trusted users as well
-        let primal_trusted_users: HashMap<nostr::PublicKey, Contact> = match self
-            .primal_client
-            .get_trusted_users(NUM_TRUSTED_USERS)
-            .await
-        {
-            Ok(trusted) => {
-                trusted
-                    .into_iter()
-                    .flat_map(|user| {
-                        // skip if we already have this contact
-                        if npubs.contains_key(&user.pubkey) {
-                            return None;
-                        }
-                        // create a dummy contact from the metadata if available
-                        let dummy_contact = match user.metadata {
-                            Some(metadata) => Contact::create_from_metadata(user.pubkey, metadata),
-                            None => Contact {
-                                npub: Some(user.pubkey),
-                                ..Default::default()
-                            },
-                        };
-                        Some((user.pubkey, dummy_contact))
-                    })
-                    .collect()
-            }
-            Err(e) => {
-                // if we fail to get trusted users, log the error and continue
-                // we don't want to fail the entire function because of this
-                // we'll just have less recommendations
-                log_error!(self.logger, "Failed to get trusted users: {e}");
-                HashMap::new()
-            }
-        };
-
-        let network_str = network_to_string(network);
-
-        // filter for finding mint announcements
-        let mints = Filter::new().kind(Kind::from(38173));
-        // filter for finding federation recommendations from contacts
-        let contacts_recommendations = Filter::new()
-            .kind(Kind::from(38000))
-            .custom_tag(SingleLetterTag::lowercase(Alphabet::K), ["38173"])
-            .authors(npubs.keys().copied());
-        // filter for finding federation recommendations from trusted people
-        let trusted_recommendations = Filter::new()
-            .kind(Kind::from(38000))
-            .custom_tag(SingleLetterTag::lowercase(Alphabet::K), ["38173"])
-            .authors(primal_trusted_users.keys().copied());
-        // filter for finding federation recommendations from random people
-        let recommendations = Filter::new()
-            .kind(Kind::from(38000))
-            .custom_tag(SingleLetterTag::lowercase(Alphabet::K), ["38173"])
-            .limit(NUM_TRUSTED_USERS as usize);
-
-        // fetch events
-        let events = self
-            .client
-            .get_events_of(
-                vec![
-                    mints,
-                    contacts_recommendations,
-                    trusted_recommendations,
-                    recommendations,
-                ],
-                Some(Duration::from_secs(5)),
-            )
-            .await?;
-
-        let mut mints: HashMap<FederationId, NostrDiscoveredFedimint> = HashMap::new();
-
-        for event in events.iter() {
-            // only process federation announcements
-            if event.kind != Kind::from(38173) {
-                continue;
-            }
-
-            let network_tag = event.tags.iter().find_map(|tag| {
-                if tag.kind() == TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::N)) {
-                    Some(tag.as_vec().get(1).cloned().unwrap_or_default())
-                } else {
-                    None
-                }
-            });
-
-            // if the network tag is missing, we assume it is on mainnet
-            let network_tag = network_tag
-                .as_deref()
-                .unwrap_or(network_to_string(Network::Bitcoin));
-            // skip if the network doesn't match
-            if network_tag != network_str {
-                continue;
-            }
-
-            let federation_id = event.tags.iter().find_map(|tag| {
-                if let Tag::Identifier(id) = tag {
-                    FederationId::from_str(id).ok()
-                } else {
-                    None
-                }
-            });
-
-            let federation_id = match federation_id {
-                Some(id) => id,
-                None => continue,
-            };
-
-            let invite_codes: Vec<InviteCode> = event
-                .tags
-                .iter()
-                .filter_map(|tag| parse_invite_code_from_tag(tag, &federation_id))
-                .collect();
-
-            // if we have no invite codes left, skip
-            if !invite_codes.is_empty() {
-                // try to parse the metadata if available, it's okay if it fails
-                // todo could lookup kind 0 of the federation to get the metadata as well
-                let metadata = serde_json::from_str(&event.content).ok();
-                let mint = NostrDiscoveredFedimint {
-                    invite_codes,
-                    id: federation_id,
-                    pubkey: Some(event.pubkey),
-                    event_id: Some(event.id),
-                    created_at: Some(event.created_at.as_u64()),
-                    metadata,
-                    recommendations: vec![], // we'll add these in the next step
-                    expire_timestamp: None,
-                };
-
-                match mints.get_mut(&federation_id) {
-                    Some(m) => {
-                        // if we already have a mint for this federation, merge the two
-                        m.merge(&mint);
-                    }
-                    None => {
-                        mints.insert(federation_id, mint);
-                    }
-                }
-            }
-        }
-
-        // add on contact recommendations to mints
-        for event in events {
-            // only process federation recommendations
-            if !is_federation_recommendation_event(&event) {
-                log_warn!(self.logger, "Skipping event: {}", event.id);
-                continue;
-            }
-
-            // try to get the contact from our npubs, otherwise use the primal trusted users
-            let contact = match npubs.get(&event.pubkey) {
-                Some(contact) => contact.clone(),
-                None => match primal_trusted_users.get(&event.pubkey).cloned() {
-                    Some(contact) => contact,
-                    None => {
-                        // if we don't have the contact, skip
-                        // this could be a spam account that we shouldn't trust
-                        continue;
-                    }
-                },
-            };
-
-            let network_tag = event.tags.iter().find_map(|tag| {
-                if tag.kind() == TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::N)) {
-                    Some(tag.as_vec().get(1).cloned().unwrap_or_default())
-                } else {
-                    None
-                }
-            });
-
-            // if the network tag is missing, we assume it is on mainnet
-            let network_tag = network_tag
-                .as_deref()
-                .unwrap_or(network_to_string(Network::Bitcoin));
-            // skip if the network doesn't match
-            if network_tag != network_str {
-                continue;
-            }
-
-            let federation_id = event.tags.iter().find_map(|tag| {
-                if let Tag::Identifier(id) = tag {
-                    FederationId::from_str(id).ok()
-                } else {
-                    None
-                }
-            });
-
-            // if we don't have the federation id, skip
-            let federation_id = match federation_id {
-                Some(id) => id,
-                None => continue,
-            };
-
-            let invite_codes = event
-                .tags
-                .iter()
-                .filter_map(|tag| parse_invite_code_from_tag(tag, &federation_id))
-                .collect::<Vec<_>>();
-
-            // todo read `a` tag recommendations as well
-
-            match mints.iter_mut().find(|(_, m)| m.id == federation_id) {
-                Some((_id, mint)) => {
-                    mint.recommendations.push(contact);
-                }
-                None => {
-                    // if we don't have the mint announcement
-                    // Add to list with the contact as the recommendation
-                    // Only if we have invite codes
-                    if !invite_codes.is_empty() {
-                        let mint = NostrDiscoveredFedimint {
-                            invite_codes,
-                            id: federation_id,
-                            pubkey: None,
-                            event_id: None,
-                            created_at: None,
-                            metadata: None,
-                            recommendations: vec![contact],
-                            expire_timestamp: None,
-                        };
-                        mints.insert(federation_id, mint);
-                    }
-                }
-            }
-        }
-
-        // sort the recommendations by whether they are contacts or not and if they have an image
-        for (_, mint) in mints.iter_mut() {
-            mint.recommendations.sort_by(|a, b| {
-                let a_is_contact = a
-                    .npub
-                    .map(|npub| npubs.contains_key(&npub))
-                    .unwrap_or(false);
-                let b_is_contact = b
-                    .npub
-                    .map(|npub| npubs.contains_key(&npub))
-                    .unwrap_or(false);
-
-                if a_is_contact && !b_is_contact {
-                    std::cmp::Ordering::Less
-                } else if !a_is_contact && b_is_contact {
-                    std::cmp::Ordering::Greater
-                } else {
-                    let a_has_image = a.image_url.is_some();
-                    let b_has_image = b.image_url.is_some();
-                    if a_has_image && !b_has_image {
-                        std::cmp::Ordering::Less
-                    } else if !a_has_image && b_has_image {
-                        std::cmp::Ordering::Greater
-                    } else {
-                        // finally sort by npub if all else is equal
-                        a.npub.cmp(&b.npub)
-                    }
-                }
-            });
-            mint.recommendations.dedup_by(|a, b| a.npub == b.npub);
-        }
-
-        // sort mints by most recommended then by oldest
-        let mut mints: Vec<NostrDiscoveredFedimint> = mints.into_values().collect();
-        mints.sort();
-
-        // try to get federation info from client config if not in event
-        // todo this currently retries which takes forever with bad mints, need to wait for next release of fedimint
-        // let futures = mints
-        //     .iter_mut()
-        //     .map(|mint| mint.try_fetch_metadata())
-        //     .collect::<Vec<_>>();
-        // join_all(futures).await;
-
-        // remove mints that expire within the 30 days and ones we couldn't fetch metadata for
-        // let days_30_from_now = utils::now() + Duration::from_secs(86_400 * 30);
-        // mints.retain(|m| {
-        //     m.metadata.is_some()
-        //         && (m.expire_timestamp.is_none()
-        //             || m.expire_timestamp.unwrap() > days_30_from_now.as_secs())
-        // });
-
-        Ok(mints)
-    }
-
     /// Creates a new NostrManager
     pub async fn from_mnemonic(
         xprivkey: ExtendedPrivKey,
@@ -2423,50 +1963,22 @@ fn get_next_nwc_index(
     Ok((name, index, child_key_index))
 }
 
-fn network_to_string(network: Network) -> &'static str {
-    match network {
-        Network::Bitcoin => "mainnet",
-        Network::Testnet => "testnet",
-        Network::Signet => "signet",
-        Network::Regtest => "regtest",
-        net => unreachable!("Unknown network {net}!"),
-    }
-}
-
-fn parse_invite_code_from_tag(
-    tag: &Tag,
-    expected_federation_id: &FederationId,
-) -> Option<InviteCode> {
-    let code = if let Tag::AbsoluteURL(code) = tag {
-        InviteCode::from_str(&code.to_string()).ok()
-    } else {
-        // tag might have `fedimint` element, try to parse that as well
-        let vec = tag.as_vec();
-        if vec.len() == 3 && vec[0] == "u" && vec[2] == "fedimint" {
-            InviteCode::from_str(&vec[1]).ok()
-        } else {
-            None
-        }
-    };
-
-    // remove any invite codes that point to different federation
-    code.filter(|c| c.federation_id() == *expected_federation_id)
-}
-
-fn is_federation_recommendation_event(event: &Event) -> bool {
-    event.kind == Kind::from(38000)
-        && event.tags.iter().any(|tag| {
-            tag.kind() == TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::K))
-                && tag.as_vec().get(1).is_some_and(|x| x == "38173")
-        })
-}
+// fn network_to_string(network: Network) -> &'static str {
+//     match network {
+//         Network::Bitcoin => "mainnet",
+//         Network::Testnet => "testnet",
+//         Network::Signet => "signet",
+//         Network::Regtest => "regtest",
+//         net => unreachable!("Unknown network {net}!"),
+//     }
+// }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod test {
     use super::*;
     use crate::nostr::client::MockNostrClient;
-    use crate::nostr::primal::{MockPrimalApi, TrustedUser};
+    use crate::nostr::primal::MockPrimalApi;
     use crate::storage::MemoryStorage;
     use crate::utils::now;
     use crate::MockInvoiceHandler;
@@ -2478,13 +1990,10 @@ mod test {
     use lightning::ln::PaymentSecret;
     use lightning_invoice::{Bolt11Invoice, Currency, InvoiceBuilder};
     use mockall::predicate::eq;
-    use nostr::prelude::rand;
-    use nostr::prelude::rand::prelude::SliceRandom;
     use nostr::SubscriptionId;
     use std::str::FromStr;
 
     const EXPIRED_INVOICE: &str = "lnbc923720n1pj9nr6zpp5xmvlq2u5253htn52mflh2e6gn7pk5ht0d4qyhc62fadytccxw7hqhp5l4s6qwh57a7cwr7zrcz706qx0qy4eykcpr8m8dwz08hqf362egfscqzzsxqzfvsp5pr7yjvcn4ggrf6fq090zey0yvf8nqvdh2kq7fue0s0gnm69evy6s9qyyssqjyq0fwjr22eeg08xvmz88307yqu8tqqdjpycmermks822fpqyxgshj8hvnl9mkh6srclnxx0uf4ugfq43d66ak3rrz4dqcqd23vxwpsqf7dmhm";
-    const INVITE_CODE: &str = "fed11qgqzc2nhwden5te0vejkg6tdd9h8gepwvejkg6tdd9h8garhduhx6at5d9h8jmn9wshxxmmd9uqqzgxg6s3evnr6m9zdxr6hxkdkukexpcs3mn7mj3g5pc5dfh63l4tj6g9zk4er";
 
     async fn create_nostr_manager() -> NostrManager<MemoryStorage, MockPrimalApi, MockNostrClient> {
         let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
@@ -2595,33 +2104,33 @@ mod test {
         let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
         assert!(pending.is_empty());
 
-        // valid invoice dm should be added
-        let dm = EventBuilder::encrypted_direct_msg(
-            &user,
-            nostr_keys.public_key(),
-            invoice.to_string(),
-            None,
-        )
-        .unwrap()
-        .to_event(&user)
-        .unwrap();
-        block_on(nostr_manager.handle_direct_message(dm, &inv_handler)).unwrap();
-        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
-        assert!(!pending.is_empty());
+        // // valid invoice dm should be added
+        // let dm = EventBuilder::encrypted_direct_msg(
+        //     &user,
+        //     nostr_keys.public_key(),
+        //     invoice.to_string(),
+        //     None,
+        // )
+        // .unwrap()
+        // .to_event(&user)
+        // .unwrap();
+        // block_on(nostr_manager.handle_direct_message(dm, &inv_handler)).unwrap();
+        // let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        // assert!(!pending.is_empty());
 
-        // valid invoice in dm along with message should be added
-        let dm = EventBuilder::encrypted_direct_msg(
-            &user,
-            nostr_keys.public_key(),
-            format!("invoice for you to pay {}", invoice),
-            None,
-        )
-        .unwrap()
-        .to_event(&user)
-        .unwrap();
-        block_on(nostr_manager.handle_direct_message(dm, &inv_handler)).unwrap();
-        let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
-        assert!(!pending.is_empty())
+        // // valid invoice in dm along with message should be added
+        // let dm = EventBuilder::encrypted_direct_msg(
+        //     &user,
+        //     nostr_keys.public_key(),
+        //     format!("invoice for you to pay {}", invoice),
+        //     None,
+        // )
+        // .unwrap()
+        // .to_event(&user)
+        // .unwrap();
+        // block_on(nostr_manager.handle_direct_message(dm, &inv_handler)).unwrap();
+        // let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
+        // assert!(!pending.is_empty())
     }
 
     #[tokio::test]
@@ -2949,259 +2458,6 @@ mod test {
 
         let pending = nostr_manager.get_pending_nwc_invoices().unwrap();
         assert_eq!(pending.len(), 0);
-    }
-
-    #[test]
-    fn test_sort_discovered_federations() {
-        let most_recommendations_newer = NostrDiscoveredFedimint {
-            invite_codes: vec![],
-            id: FederationId::dummy(),
-            pubkey: None,
-            event_id: None,
-            created_at: Some(200),
-            metadata: None,
-            recommendations: vec![Contact::default(), Contact::default()],
-            expire_timestamp: None,
-        };
-
-        let most_recommendations = NostrDiscoveredFedimint {
-            invite_codes: vec![],
-            id: FederationId::dummy(),
-            pubkey: None,
-            event_id: None,
-            created_at: Some(100),
-            metadata: None,
-            recommendations: vec![Contact::default(), Contact::default()],
-            expire_timestamp: None,
-        };
-
-        let one_recommendation = NostrDiscoveredFedimint {
-            invite_codes: vec![],
-            id: FederationId::dummy(),
-            pubkey: None,
-            event_id: None,
-            created_at: Some(100),
-            metadata: None,
-            recommendations: vec![Contact::default()],
-            expire_timestamp: None,
-        };
-
-        let one_recommendation_no_time = NostrDiscoveredFedimint {
-            invite_codes: vec![],
-            id: FederationId::dummy(),
-            pubkey: None,
-            event_id: None,
-            created_at: None,
-            metadata: None,
-            recommendations: vec![Contact::default()],
-            expire_timestamp: None,
-        };
-
-        let no_recommendations = NostrDiscoveredFedimint {
-            invite_codes: vec![],
-            id: FederationId::dummy(),
-            pubkey: None,
-            event_id: None,
-            created_at: Some(100),
-            metadata: None,
-            recommendations: vec![],
-            expire_timestamp: None,
-        };
-
-        let no_recommendations_or_time = NostrDiscoveredFedimint {
-            invite_codes: vec![],
-            id: FederationId::dummy(),
-            pubkey: None,
-            event_id: None,
-            created_at: None,
-            metadata: None,
-            recommendations: vec![],
-            expire_timestamp: None,
-        };
-
-        let mut vec = vec![
-            most_recommendations_newer.clone(),
-            most_recommendations.clone(),
-            one_recommendation.clone(),
-            one_recommendation_no_time.clone(),
-            no_recommendations.clone(),
-            no_recommendations_or_time.clone(),
-        ];
-        // randomize then sort
-        vec.shuffle(&mut rand::thread_rng());
-        vec.sort();
-
-        let expected = vec![
-            most_recommendations,
-            most_recommendations_newer,
-            one_recommendation,
-            one_recommendation_no_time,
-            no_recommendations,
-            no_recommendations_or_time,
-        ];
-
-        assert_eq!(vec, expected);
-    }
-
-    #[tokio::test]
-    async fn test_is_federation_recommendation_event() {
-        let keys = Keys::generate();
-
-        // kind 0 is not a recommendation event
-        let kind0 = EventBuilder::metadata(&Default::default())
-            .to_event(&keys)
-            .unwrap();
-        assert!(!is_federation_recommendation_event(&kind0));
-
-        // kind 38000 without k tag is a recommendation event for something else
-        let no_k = EventBuilder::new(Kind::Custom(38000), "", [])
-            .to_event(&keys)
-            .unwrap();
-        assert!(!is_federation_recommendation_event(&no_k));
-
-        // kind 38000 with correct k tag is a recommendation event
-        let k_tag = Tag::Generic(
-            TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::K)),
-            vec!["38173".to_string()],
-        );
-        let with_k = EventBuilder::new(Kind::Custom(38000), "", [k_tag])
-            .to_event(&keys)
-            .unwrap();
-        assert!(is_federation_recommendation_event(&with_k));
-
-        // test nostr manager creates a valid one
-        #[allow(unused_mut)] // need this because of mockall
-        let mut nostr_manager = create_nostr_manager().await;
-        let invite_code = InviteCode::from_str(INVITE_CODE).unwrap();
-
-        nostr_manager
-            .client
-            .expect_sign_event_builder()
-            .once()
-            .returning(|builder| Ok(builder.to_event(&Keys::generate()).unwrap()));
-
-        let event = nostr_manager
-            .create_recommend_federation_event(&invite_code, Network::Signet, None)
-            .await
-            .unwrap();
-
-        assert!(is_federation_recommendation_event(&event));
-    }
-
-    #[tokio::test]
-    async fn test_discover_federations() {
-        let npub = nostr::PublicKey::from_hex(
-            "e1ff3bfdd4e40315959b08b4fcc8245eaa514637e1d4ec2ae166b743341be1af",
-        )
-        .unwrap();
-
-        // manually make NostrManager so we can use a real nostr client to get real events
-        let mut nostr_manager = NostrManager::from_mnemonic(
-            ExtendedPrivKey::new_master(Network::Bitcoin, &[]).unwrap(),
-            NostrKeySource::Derived,
-            MemoryStorage::new(None, None, None),
-            MockPrimalApi::new(),
-            Client::default(),
-            Arc::new(MutinyLogger::default()),
-            Arc::new(AtomicBool::new(false)),
-        )
-        .await
-        .unwrap();
-
-        nostr_manager
-            .primal_client
-            .expect_get_trusted_users()
-            .return_once(move |_| {
-                Ok(vec![TrustedUser {
-                    pubkey: npub,
-                    trust_rating: 1.0,
-                    metadata: Some(
-                        Metadata::default()
-                            .name("Ben")
-                            .picture(Url::from_str("https://example.com").unwrap()),
-                    ),
-                }])
-            });
-        // need to connect to relays
-        nostr_manager.connect().await.unwrap();
-
-        let federations = nostr_manager
-            .discover_federations(Network::Signet)
-            .await
-            .unwrap();
-
-        let mutinynet = federations
-            .iter()
-            .find(|f| {
-                f.id == FederationId::from_str(
-                    "c8d423964c7ad944d30f57359b6e5b260e211dcfdb945140e28d4df51fd572d2",
-                )
-                .unwrap()
-            })
-            .unwrap();
-
-        // has the invite code
-        assert_eq!(mutinynet.invite_codes.len(), 1);
-        assert_eq!(
-            mutinynet.invite_codes.first(),
-            Some(&InviteCode::from_str(INVITE_CODE).unwrap())
-        );
-        // check we found the actual federation announcement
-        assert!(mutinynet.created_at.is_some());
-        assert!(mutinynet.pubkey.is_some());
-        assert!(mutinynet.event_id.is_some());
-        assert!(mutinynet.metadata.is_some());
-
-        // verify we find some recommendations
-        assert!(!mutinynet.recommendations.is_empty());
-        // find ben's recommendation
-        let ben = mutinynet
-            .recommendations
-            .iter()
-            .find(|c| c.npub.is_some_and(|n| n == npub))
-            .unwrap();
-
-        // make sure it fills out the contact
-        assert!(ben.image_url.is_some());
-        assert!(!ben.name.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_create_recommendation_event() {
-        let mut nostr_manager = create_nostr_manager().await;
-        nostr_manager
-            .client
-            .expect_sign_event_builder()
-            .once()
-            .returning(|b| Ok(b.to_event(&Keys::generate()).unwrap()));
-
-        let invite_code = InviteCode::from_str(INVITE_CODE).unwrap();
-        let event = nostr_manager
-            .create_recommend_federation_event(&invite_code, Network::Signet, None)
-            .await
-            .unwrap();
-
-        assert!(event.verify().is_ok());
-        assert_eq!(event.kind, Kind::from(38000));
-        assert_eq!(event.tags.len(), 4);
-
-        // find the correct tags
-        assert!(event
-            .tags
-            .iter()
-            .any(|t| t.as_vec() == vec!["k".to_string(), "38173".to_string()]));
-        assert!(event
-            .tags
-            .iter()
-            .any(|t| t.as_vec() == vec!["d".to_string(), invite_code.federation_id().to_string()]));
-        assert!(event
-            .tags
-            .iter()
-            .any(|t| t.as_vec() == vec!["n".to_string(), "signet".to_string()]));
-        assert!(event
-            .tags
-            .iter()
-            .any(|t| t.as_vec() == vec!["u".to_string(), INVITE_CODE.to_string()]));
     }
 
     #[tokio::test]
