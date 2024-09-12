@@ -406,30 +406,42 @@ impl<S: MutinyStorage> EventHandler<S> {
                     Err(e) => log_debug!(self.logger, "EVENT: OpenChannelRequest error: {e:?}"),
                 };
 
-                let lsp_pubkey = match self.lsp_client {
-                    Some(ref lsp) => Some(lsp.get_lsp_pubkey().await),
-                    None => None,
-                };
+                // TODO: Based on the matching result of the LSP pubkey, decide whether to open a 0-confirmation channel.
+                // let lsp_pubkey = match self.lsp_client {
+                //     Some(ref lsp) => Some(lsp.get_lsp_pubkey().await),
+                //     None => None,
+                // };
 
-                if lsp_pubkey.as_ref() != Some(&counterparty_node_id) {
-                    // did not match the lsp pubkey, normal open
-                    let result = self.channel_manager.accept_inbound_channel(
+                // accept 0 conf by default
+                let result = self
+                    .channel_manager
+                    .accept_inbound_channel_from_trusted_peer_0conf(
                         &temporary_channel_id,
                         &counterparty_node_id,
                         internal_channel_id,
                     );
-                    log_result(result);
-                } else {
-                    // matched lsp pubkey, accept 0 conf
-                    let result = self
-                        .channel_manager
-                        .accept_inbound_channel_from_trusted_peer_0conf(
-                            &temporary_channel_id,
-                            &counterparty_node_id,
-                            internal_channel_id,
-                        );
-                    log_result(result);
-                }
+                log_result(result);
+
+                // TODO: Based on the matching result of the LSP pubkey, decide whether to open a 0-confirmation channel.
+                // if lsp_pubkey.as_ref() != Some(&counterparty_node_id) {
+                //     // did not match the lsp pubkey, normal open
+                //     let result = self.channel_manager.accept_inbound_channel(
+                //         &temporary_channel_id,
+                //         &counterparty_node_id,
+                //         internal_channel_id,
+                //     );
+                //     log_result(result);
+                // } else {
+                // matched lsp pubkey, accept 0 conf
+                // let result = self
+                //     .channel_manager
+                //     .accept_inbound_channel_from_trusted_peer_0conf(
+                //         &temporary_channel_id,
+                //         &counterparty_node_id,
+                //         internal_channel_id,
+                //     );
+                // log_result(result);
+                // }
             }
             Event::PaymentPathSuccessful { .. } => {
                 log_debug!(self.logger, "EVENT: PaymentPathSuccessful, ignored");
