@@ -1038,19 +1038,34 @@ impl MutinyWallet {
     /// This should only be used if the channel will never actually be opened.
     ///
     /// If both force and abandon are true, an error will be returned.
+    /// The address must match the network and the network: "bitcoin", "testnet", "signet"t, "regtest"
     #[wasm_bindgen]
     pub async fn close_channel(
         &self,
         outpoint: String,
+        address: String,
+        network: Option<String>,
         force: bool,
         abandon: bool,
     ) -> Result<(), MutinyJsError> {
         let outpoint: OutPoint =
             OutPoint::from_str(&outpoint).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
+
+        let network = if let Some(net) = network {
+            Network::from_str(&net).map_err(|_| MutinyJsError::InvalidAddressNetworkError)?
+        } else {
+            Network::Bitcoin
+        };
+        let address =
+            Address::from_str(&address).map_err(|_| MutinyJsError::InvalidAddressNetworkError)?;
+        let address = address
+            .require_network(network)
+            .map_err(|_| MutinyJsError::InvalidAddressNetworkError)
+            .ok();
         Ok(self
             .inner
             .node_manager
-            .close_channel(&outpoint, None, force, abandon)
+            .close_channel(&outpoint, address, force, abandon)
             .await?)
     }
 

@@ -147,6 +147,9 @@ pub enum MutinyJsError {
     /// Invalid Arguments were given
     #[error("Invalid Arguments were given")]
     InvalidArgumentsError,
+    /// Invalid BTC Address or Network was given
+    #[error("Invalid BTC Address or Network was given")]
+    InvalidAddressNetworkError,
     /// Incorrect password entered.
     #[error("Incorrect password entered.")]
     IncorrectPassword,
