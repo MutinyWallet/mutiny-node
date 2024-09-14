@@ -1038,7 +1038,7 @@ impl MutinyWallet {
     /// This should only be used if the channel will never actually be opened.
     ///
     /// If both force and abandon are true, an error will be returned.
-    /// The address must match the network and the network: "bitcoin", "testnet", "signet"t, "regtest"
+    /// The address must match the network and the network: "bitcoin", "testnet", "signet", "regtest"
     #[wasm_bindgen]
     pub async fn close_channel(
         &self,
