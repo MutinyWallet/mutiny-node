@@ -1,17 +1,17 @@
 pack:
-    wasm-pack build ./mutiny-wasm --weak-refs --target web --scope mutinywallet
+    wasm-pack build ./mutiny-wasm --weak-refs --target web --scope nervina-labs
 
 link:
-    wasm-pack build ./mutiny-wasm --dev --weak-refs --target web --scope mutinywallet && cd mutiny-wasm/pkg && pnpm link --global
+    wasm-pack build ./mutiny-wasm --dev --weak-refs --target web --scope nervina-labs && cd mutiny-wasm/pkg && pnpm link --global
 
 login:
-    wasm-pack login --scope=@mutinywallet
+    wasm-pack login --scope=@nervina-labs
 
 dev: 
-    wasm-pack build ./mutiny-wasm --dev --weak-refs --target web --scope mutinywallet
+    wasm-pack build ./mutiny-wasm --dev --weak-refs --target web --scope nervina-labs
 
 release:
-    wasm-pack build ./mutiny-wasm --release --weak-refs --target web --scope mutinywallet
+    wasm-pack build ./mutiny-wasm --release --weak-refs --target web --scope nervina-labs
 
 publish:
     wasm-pack publish --access public -t web
