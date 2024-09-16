@@ -6,6 +6,8 @@ members = [
     "mutiny-wasm",
 ]
 
+exclude = ["mutiny-server"]
+
 
 # Tell `rustc` to optimize for small code size.
 [profile.release.package.mutiny-core]
