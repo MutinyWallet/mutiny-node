@@ -1044,9 +1044,9 @@ impl MutinyWallet {
         &self,
         outpoint: String,
         address: String,
-        network: Option<String>,
         force: bool,
         abandon: bool,
+        network: Option<String>,
     ) -> Result<(), MutinyJsError> {
         let outpoint: OutPoint =
             OutPoint::from_str(&outpoint).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
