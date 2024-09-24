@@ -120,7 +120,7 @@ struct ErrorResponse {
     message: String,
 }
 
-const GET_INFO_PATH: &str = "/api/v1/info";
+const GET_INFO_PATH: &str = "/api/v1/ln/node_info";
 const PROPOSAL_PATH: &str = "/api/v1/proposal";
 const FEE_PATH: &str = "/api/v1/fee";
 
