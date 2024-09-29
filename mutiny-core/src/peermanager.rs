@@ -9,7 +9,7 @@ use crate::{gossip, ldkstorage::PhantomChannelManager, logging::MutinyLogger};
 use crate::{gossip::read_peer_info, node::PubkeyConnectionInfo};
 use bitcoin::key::{Secp256k1, Verification};
 use bitcoin::secp256k1::{PublicKey, Signing};
-use lightning::blinded_path::BlindedPath;
+use lightning::blinded_path::message::BlindedMessagePath;
 use lightning::events::{MessageSendEvent, MessageSendEventsProvider};
 use lightning::ln::features::{InitFeatures, NodeFeatures};
 use lightning::ln::msgs;
@@ -343,7 +343,7 @@ impl MessageRouter for LspMessageRouter {
         _peers: Vec<PublicKey>,
         _entropy_source: &ES,
         _secp_ctx: &Secp256k1<T>,
-    ) -> Result<Vec<BlindedPath>, ()> {
+    ) -> Result<Vec<BlindedMessagePath>, ()> {
         // Bolt12 not yet supported
         Err(())
     }

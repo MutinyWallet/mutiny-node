@@ -13,11 +13,3 @@ opt-level = "z"
 
 [profile.release.package.mutiny-wasm]
 opt-level = "z"
-
-[patch.crates-io]
-lightning = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "e660e068f6f93b13dc782b2d607795716b48ed15" }
-lightning-invoice = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "e660e068f6f93b13dc782b2d607795716b48ed15" }
-lightning-rapid-gossip-sync = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "e660e068f6f93b13dc782b2d607795716b48ed15" }
-lightning-background-processor = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "e660e068f6f93b13dc782b2d607795716b48ed15" }
-lightning-transaction-sync = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "e660e068f6f93b13dc782b2d607795716b48ed15" }
-lightning-net-tokio = { git = 'https://github.com/MutinyWallet/rust-lightning.git', rev = "e660e068f6f93b13dc782b2d607795716b48ed15" }

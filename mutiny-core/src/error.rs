@@ -166,6 +166,8 @@ pub enum MutinyError {
     /// Token already spent.
     #[error("Token has been already spent.")]
     TokenAlreadySpent,
+    #[error("Message Packet size exceeded")]
+    PacketSizeExceeded,
     #[error(transparent)]
     Other(anyhow::Error),
 }

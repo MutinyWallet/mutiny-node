@@ -35,12 +35,13 @@ use bitcoin::bip32::ExtendedPrivKey;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::secp256k1::ThirtyTwoByteHash;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint};
+use lightning::ln::channel_state::ChannelDetails;
 use core::time::Duration;
 use esplora_client::AsyncClient;
 use futures_util::lock::Mutex;
 use hex_conservative::DisplayHex;
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
-use lightning::ln::channelmanager::ChannelDetails;
+use lightning::ln::channelmanager::{ChannelManager};
 use lightning::ln::PaymentSecret;
 use lightning::onion_message::messenger::OnionMessenger as LdkOnionMessenger;
 use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
@@ -71,8 +72,10 @@ use lightning::{
     util::config::ChannelConfig,
 };
 use lightning_background_processor::process_events_async;
+use lightning::ln::invoice_utils::{
+    create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice
+};
 use lightning_invoice::{
-    utils::{create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice},
     Bolt11Invoice,
 };
 use lightning_liquidity::lsps2::client::LSPS2ClientConfig;
@@ -112,8 +115,10 @@ pub(crate) type OnionMessenger<S: MutinyStorage> = LdkOnionMessenger<
     Arc<PhantomKeysManager<S>>,
     Arc<PhantomKeysManager<S>>,
     Arc<MutinyLogger>,
+    Arc<PhantomChannelManager<S>>,
     Arc<LspMessageRouter>,
     Arc<PhantomChannelManager<S>>,
+    IgnoringMessageHandler,
     IgnoringMessageHandler,
 >;
 
@@ -139,9 +144,10 @@ pub(crate) type ChainMonitor<S: MutinyStorage> = chainmonitor::ChainMonitor<
     Arc<MutinyNodePersister<S>>,
 >;
 
-pub(crate) type Router = DefaultRouter<
+pub(crate) type Router<S: MutinyStorage> = DefaultRouter<
     Arc<NetworkGraph>,
     Arc<MutinyLogger>,
+    Arc<PhantomKeysManager<S>>,
     Arc<utils::Mutex<HubPreferentialScorer>>,
     ProbabilisticScoringFeeParameters,
     HubPreferentialScorer,
@@ -547,6 +553,8 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             message_router,
             channel_manager.clone(),
             IgnoringMessageHandler {},
+            channel_manager.clone(),
+            IgnoringMessageHandler {},
         ));
 
         let route_handler = Arc::new(GossipMessageHandler {
@@ -561,7 +569,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
         let ln_msg_handler = MessageHandler {
             chan_handler: channel_manager.clone(),
             route_handler,
-            onion_message_handler,
+            onion_message_handler: onion_message_handler.clone(),
             custom_message_handler: Arc::new(MutinyMessageHandler {
                 liquidity: liquidity.clone(),
             }),
@@ -782,6 +790,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                     |e| ev.handle_event(e),
                     background_chain_monitor.clone(),
                     background_processor_channel_manager.clone(),
+                    None,
                     gs,
                     background_processor_peer_manager.clone(),
                     background_processor_logger.clone(),
@@ -2178,6 +2187,7 @@ fn map_sending_failure(
         }
         RetryableSendFailure::PaymentExpired => MutinyError::InvoiceExpired,
         RetryableSendFailure::DuplicatePayment => MutinyError::NonUniquePaymentHash,
+        RetryableSendFailure::OnionPacketSizeExceeded => MutinyError::PacketSizeExceeded,
     }
 }
 
@@ -2528,7 +2538,7 @@ pub(crate) fn default_user_config(accept_underpaying_htlcs: bool) -> UserConfig 
         },
         channel_handshake_config: ChannelHandshakeConfig {
             minimum_depth: 1,
-            announced_channel: false,
+            announce_for_forwarding: false,
             negotiate_scid_privacy: true,
             commit_upfront_shutdown_pubkey: false,
             negotiate_anchors_zero_fee_htlc_tx: true, // enable anchor channels
