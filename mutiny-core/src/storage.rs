@@ -604,6 +604,21 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
             .await
     }
 
+    async fn release_device_lock(&self) -> Result<(), MutinyError> {
+        let device = self.get_device_id()?;
+        if let Some(lock) = self.get_device_lock()? {
+            if lock.is_locked(&device) {
+                return Err(MutinyError::AlreadyRunning);
+            }
+        }
+
+        let time = 0;
+        let lock = DeviceLock { time, device };
+        let version = now().as_secs() as u32;
+        self.set_data_async(DEVICE_LOCK_KEY.to_string(), lock, Some(version))
+            .await
+    }
+
     async fn fetch_device_lock(&self) -> Result<Option<DeviceLock>, MutinyError>;
 }
 
