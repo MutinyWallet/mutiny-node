@@ -28,7 +28,7 @@ mod messagehandler;
 mod networking;
 mod node;
 pub mod nodemanager;
-pub mod nostr;
+// pub mod nostr;
 mod onchain;
 mod peermanager;
 pub mod scorer;
@@ -40,54 +40,35 @@ pub mod vss;
 #[cfg(test)]
 mod test_utils;
 
+use crate::error::MutinyError;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
+use crate::lnurlauth::AuthManager;
+use crate::nodemanager::NodeManager;
+use crate::storage::get_invoice_by_hash;
+use crate::utils::sleep;
 use crate::utils::spawn;
 use crate::{auth::MutinyAuthClient, logging::MutinyLogger};
-use crate::{error::MutinyError, nostr::ReservedProfile};
 use crate::{
     event::{HTLCStatus, MillisatAmount, PaymentInfo},
     onchain::FULL_SYNC_STOP_GAP,
 };
-use crate::{
-    labels::{get_contact_key, Contact, LabelStorage},
-    nodemanager::NodeBalance,
-};
+use crate::{labels::LabelStorage, nodemanager::NodeBalance};
 use crate::{
     lnurlauth::make_lnurl_auth_connection,
     nodemanager::{ChannelClosure, MutinyBip21RawMaterials},
 };
-use crate::{lnurlauth::AuthManager, nostr::MUTINY_PLUS_SUBSCRIPTION_LABEL};
 use crate::{logging::LOGGING_KEY, nodemanager::NodeManagerBuilder};
-use crate::{nodemanager::NodeManager, nostr::ProfileType};
-use crate::{
-    nostr::nwc::{BudgetPeriod, BudgetedSpendingConditions, NwcProfileTag, SpendingConditions},
-    subscription::MutinySubscriptionClient,
-};
-use crate::{
-    nostr::primal::{PrimalApi, PrimalClient},
-    storage::get_invoice_by_hash,
-};
-use crate::{nostr::NostrManager, utils::sleep};
 use crate::{
     onchain::get_esplora_url,
     storage::{
         get_payment_hash_from_key, get_transaction_details, list_payment_info,
-        persist_payment_info, update_nostr_contact_list, IndexItem, MutinyStorage, DEVICE_ID_KEY,
-        EXPECTED_NETWORK_KEY, NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX, PAYMENT_INBOUND_PREFIX_KEY,
-        PAYMENT_OUTBOUND_PREFIX_KEY, SUBSCRIPTION_TIMESTAMP, TRANSACTION_DETAILS_PREFIX_KEY,
+        persist_payment_info, IndexItem, MutinyStorage, DEVICE_ID_KEY, EXPECTED_NETWORK_KEY,
+        NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX, PAYMENT_INBOUND_PREFIX_KEY,
+        PAYMENT_OUTBOUND_PREFIX_KEY, TRANSACTION_DETAILS_PREFIX_KEY,
     },
 };
-use ::nostr::nips::nip47::Method;
-use ::nostr::nips::nip57;
-#[cfg(target_arch = "wasm32")]
-use ::nostr::prelude::rand::rngs::OsRng;
-use ::nostr::prelude::ZapRequestData;
-#[cfg(target_arch = "wasm32")]
-use ::nostr::Tag;
-use ::nostr::{EventBuilder, EventId, HttpMethod, JsonUtil, Keys, Kind};
-
 use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
 pub use bitcoin;
@@ -95,8 +76,7 @@ use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
 use bitcoin::{bip32::ExtendedPrivKey, Transaction};
 use bitcoin::{hashes::sha256, Network, Txid};
 use bitcoin::{hashes::Hash, Address};
-use futures::{pin_mut, select, FutureExt};
-use futures_util::join;
+
 use futures_util::lock::Mutex;
 use hex_conservative::{DisplayHex, FromHex};
 use itertools::Itertools;
@@ -108,11 +88,9 @@ use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 pub use lightning_invoice;
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
 use lnurl::{lnurl::LnUrl, AsyncClient as LnUrlClient, LnUrlResponse, Response};
-pub use nostr_sdk;
-use nostr_sdk::{Client, NostrSigner, RelayPoolNotification};
-use reqwest::multipart::{Form, Part};
+
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -120,12 +98,10 @@ use std::time::Duration;
 use std::time::Instant;
 use std::{collections::HashMap, sync::atomic::AtomicBool};
 use std::{str::FromStr, sync::atomic::Ordering};
-use uuid::Uuid;
+
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
-use crate::labels::LabelItem;
-use crate::nostr::{NostrKeySource, RELAYS};
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 
@@ -158,17 +134,6 @@ pub struct LnUrlParams {
     pub max: u64,
     pub min: u64,
     pub tag: String,
-}
-
-/// Plan is a subscription plan for Mutiny+
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Plan {
-    /// The ID of the internal plan.
-    /// Used for subscribing to specific one.
-    pub id: u8,
-
-    /// The amount in sats for the plan.
-    pub amount_sat: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -563,39 +528,12 @@ pub struct MutinyWalletConfigBuilder {
     auth_client: Option<Arc<MutinyAuthClient>>,
     subscription_url: Option<String>,
     scorer_url: Option<String>,
-    primal_url: Option<String>,
     blind_auth_url: Option<String>,
     hermes_url: Option<String>,
     do_not_connect_peers: bool,
     skip_device_lock: bool,
     pub safe_mode: bool,
     skip_hodl_invoices: bool,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct DirectMessage {
-    pub from: ::nostr::PublicKey,
-    pub to: ::nostr::PublicKey,
-    pub message: String,
-    pub date: u64,
-    pub event_id: EventId,
-}
-
-impl PartialOrd for DirectMessage {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for DirectMessage {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        // order by date, then the message, the keys
-        self.date
-            .cmp(&other.date)
-            .then_with(|| self.message.cmp(&other.message))
-            .then_with(|| self.from.cmp(&other.from))
-            .then_with(|| self.to.cmp(&other.to))
-    }
 }
 
 impl MutinyWalletConfigBuilder {
@@ -613,7 +551,6 @@ impl MutinyWalletConfigBuilder {
             auth_client: None,
             subscription_url: None,
             scorer_url: None,
-            primal_url: None,
             blind_auth_url: None,
             hermes_url: None,
             do_not_connect_peers: false,
@@ -666,10 +603,6 @@ impl MutinyWalletConfigBuilder {
         self.scorer_url = Some(scorer_url);
     }
 
-    pub fn with_primal_url(&mut self, primal_url: String) {
-        self.primal_url = Some(primal_url);
-    }
-
     pub fn with_blind_auth_url(&mut self, blind_auth_url: String) {
         self.blind_auth_url = Some(blind_auth_url);
     }
@@ -711,7 +644,6 @@ impl MutinyWalletConfigBuilder {
             auth_client: self.auth_client,
             subscription_url: self.subscription_url,
             scorer_url: self.scorer_url,
-            primal_url: self.primal_url,
             blind_auth_url: self.blind_auth_url,
             hermes_url: self.hermes_url,
             do_not_connect_peers: self.do_not_connect_peers,
@@ -736,7 +668,6 @@ pub struct MutinyWalletConfig {
     auth_client: Option<Arc<MutinyAuthClient>>,
     subscription_url: Option<String>,
     scorer_url: Option<String>,
-    primal_url: Option<String>,
     blind_auth_url: Option<String>,
     hermes_url: Option<String>,
     do_not_connect_peers: bool,
@@ -747,7 +678,6 @@ pub struct MutinyWalletConfig {
 
 pub struct MutinyWalletBuilder<S: MutinyStorage> {
     xprivkey: ExtendedPrivKey,
-    nostr_key_source: NostrKeySource,
     storage: S,
     config: Option<MutinyWalletConfig>,
     session_id: Option<String>,
@@ -767,7 +697,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         MutinyWalletBuilder::<S> {
             xprivkey,
             storage,
-            nostr_key_source: NostrKeySource::Derived,
             config: None,
             session_id: None,
             network: None,
@@ -818,10 +747,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
 
     pub fn with_hermes_url(&mut self, hermes_url: String) {
         self.hermes_url = Some(hermes_url);
-    }
-
-    pub fn with_nostr_key_source(&mut self, key_source: NostrKeySource) {
-        self.nostr_key_source = key_source;
     }
 
     pub fn do_not_connect_peers(&mut self) {
@@ -933,45 +858,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         NodeManager::start_sync(node_manager.clone());
         log_trace!(logger, "finished node manager sync");
 
-        log_trace!(logger, "creating primal client");
-        let primal_client = PrimalClient::new(
-            config
-                .primal_url
-                .clone()
-                .unwrap_or("https://primal-cache.mutinywallet.com/api".to_string()),
-        );
-        log_trace!(logger, "finished creating primal client");
-
-        // create nostr manager
-        log_trace!(logger, "creating nostr client");
-        let client = Client::default();
-        let nostr = Arc::new(
-            NostrManager::from_mnemonic(
-                self.xprivkey,
-                self.nostr_key_source,
-                self.storage.clone(),
-                primal_client,
-                client,
-                logger.clone(),
-                stop.clone(),
-            )
-            .await?,
-        );
-        log_trace!(logger, "finished creating nostr client");
-
-        // connect to relays when not in tests
-        #[cfg(not(test))]
-        nostr.connect().await?;
-
-        //         esplora.clone(),
-        //         stop.clone(),
-        //         &logger,
-        //         self.safe_mode,
-        //     )
-        //     .await?;
-
-        //     result
-        // } else {
         if !self.skip_hodl_invoices {
             log_warn!(
                 logger,
@@ -997,24 +883,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             AuthManager::new(self.xprivkey)?
         };
         log_trace!(logger, "finished creating auth manager");
-
-        // Subscription client, only usable if we have an auth client
-        log_trace!(logger, "creating subscription client");
-        let subscription_client = if let Some(auth_client) = self.auth_client.clone() {
-            if let Some(subscription_url) = self.subscription_url {
-                let s = Arc::new(MutinySubscriptionClient::new(
-                    auth_client,
-                    subscription_url,
-                    logger.clone(),
-                ));
-                Some(s)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        log_trace!(logger, "finished creating subscription client");
 
         // populate the activity index
         log_trace!(logger, "populating activity index");
@@ -1107,9 +975,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             config,
             storage: self.storage,
             node_manager,
-            nostr,
             lnurl_client,
-            subscription_client,
             // esplora,
             auth,
             stop,
@@ -1140,25 +1006,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         };
         log_trace!(logger, "finished listing nodes");
 
-        // start the nostr background process
-        log_trace!(logger, "starting nostr");
-        mw.start_nostr().await;
-        log_trace!(logger, "finished starting nostr");
-
-        // start the hermes background process
-        // get profile key if we have it, we need this to decrypt private zaps
-        log_trace!(logger, "getting nostr profile key");
-        let profile_key = match &mw.nostr.nostr_keys.read().await.signer {
-            NostrSigner::Keys(keys) => Some(keys.clone()),
-            #[cfg(target_arch = "wasm32")]
-            NostrSigner::NIP07(_) => None,
-        };
-        log_trace!(logger, "finished getting nostr profile key");
-
-        log_trace!(logger, "starting hermes");
-        mw.start_hermes(profile_key).await?;
-        log_trace!(logger, "finished starting hermes");
-
         log_info!(
             mw.logger,
             "Final setup took {}ms",
@@ -1178,10 +1025,8 @@ pub struct MutinyWallet<S: MutinyStorage> {
     config: MutinyWalletConfig,
     pub(crate) storage: S,
     pub node_manager: Arc<NodeManager<S>>,
-    pub nostr: Arc<NostrManager<S, PrimalClient, nostr_sdk::Client>>,
     lnurl_client: Arc<LnUrlClient>,
     auth: AuthManager,
-    subscription_client: Option<Arc<MutinySubscriptionClient>>,
     // esplora: Arc<AsyncClient>,
     pub stop: Arc<AtomicBool>,
     pub logger: Arc<MutinyLogger>,
@@ -1209,188 +1054,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
 
         log_trace!(self.logger, "finished calling start");
         Ok(())
-    }
-
-    /// Starts a background process that will watch for nostr events
-    pub(crate) async fn start_nostr(&self) {
-        log_trace!(self.logger, "calling start_nostr");
-
-        // spawn thread to fetch nostr events for NWC, DMs, etc.
-        let nostr = self.nostr.clone();
-        let logger = self.logger.clone();
-        let stop = self.stop.clone();
-        let self_clone = self.clone();
-        utils::spawn(async move {
-            loop {
-                if stop.load(Ordering::Relaxed) {
-                    break;
-                };
-
-                // if we have no filters, then wait 10 seconds and see if we do again
-                let mut last_filters = nostr.get_filters().await.unwrap_or_default();
-                if last_filters.is_empty() {
-                    utils::sleep(10_000).await;
-                    continue;
-                }
-
-                // clear in-active profiles, we used to have disabled and archived profiles
-                // but now we just delete profiles
-                if let Err(e) = nostr.remove_inactive_profiles() {
-                    log_warn!(logger, "Failed to clear in-active NWC profiles: {e}");
-                }
-
-                // if a single-use profile's payment was successful in the background,
-                // we can safely clear it now
-                if let Err(e) = nostr
-                    .clear_successful_single_use_profiles(&self_clone)
-                    .await
-                {
-                    log_warn!(logger, "Failed to clear in-active NWC profiles: {e}");
-                }
-
-                if let Err(e) = nostr.clear_invalid_nwc_invoices(&self_clone).await {
-                    log_warn!(logger, "Failed to clear invalid NWC invoices: {e}");
-                }
-
-                let client = nostr_sdk::Client::default();
-
-                client
-                    .add_relays(nostr.get_relays())
-                    .await
-                    .expect("Failed to add relays");
-                client.connect().await;
-
-                client.subscribe(last_filters.clone(), None).await;
-
-                // handle NWC requests
-                let mut notifications = client.notifications();
-
-                let mut next_filter_check = crate::utils::now().as_secs() + 5;
-                loop {
-                    let read_fut = notifications.recv().fuse();
-                    let delay_fut = Box::pin(utils::sleep(1_000)).fuse();
-
-                    // Determine the time for filter check.
-                    // Since delay runs every second, needs to allow for filter check to run too
-                    let current_time = crate::utils::now().as_secs();
-                    let time_until_next_filter_check =
-                        (next_filter_check.saturating_sub(current_time)) * 1_000;
-                    let filter_check_fut = Box::pin(utils::sleep(
-                        time_until_next_filter_check.try_into().unwrap(),
-                    ))
-                    .fuse();
-
-                    pin_mut!(read_fut, delay_fut, filter_check_fut);
-                    select! {
-                        notification = read_fut => {
-                            match notification {
-                                Ok(RelayPoolNotification::Event { event, .. }) => {
-                                    if event.verify().is_ok() {
-                                        match event.kind {
-                                            Kind::WalletConnectRequest => {
-                                                match nostr.handle_nwc_request(*event, &self_clone).await {
-                                                    Ok(Some(event)) => {
-                                                        if let Err(e) = client.send_event(event).await {
-                                                            log_warn!(logger, "Error sending NWC event: {e}");
-                                                        }
-                                                    }
-                                                    Ok(None) => {} // no response
-                                                    Err(e) => {
-                                                        log_error!(logger, "Error handling NWC request: {e}");
-                                                    }
-                                                }
-                                            }
-                                            Kind::EncryptedDirectMessage => {
-                                                if let Err(e) = nostr.handle_direct_message(*event, &self_clone).await {
-                                                        log_error!(logger, "Error handling dm: {e}");
-                                                }
-                                            }
-                                            Kind::ContactList => {
-                                                let event_pk = event.pubkey;
-                                                match update_nostr_contact_list(&nostr.storage, *event) {
-                                                    Err(e) =>log_error!(logger, "Error handling contact list: {e}"),
-                                                    Ok(true) => {
-                                                        log_debug!(logger, "Got new contact list, syncing...");
-
-                                                        // sync in background so we don't block processing other events
-                                                        let self_clone = self_clone.clone();
-                                                        utils::spawn(async move {
-                                                            match self_clone.sync_nostr_contacts(event_pk).await {
-                                                                Err(e) => log_error!(self_clone.logger, "Failed to sync nostr: {e}"),
-                                                                Ok(_) => log_debug!(self_clone.logger, "Successfully synced nostr contacts"),
-                                                            }
-                                                        });
-                                                    }
-                                                    Ok(false) => log_debug!(logger, "Got older contact list, ignoring..."),
-                                                }
-                                            }
-                                            kind => {
-                                                // ignore federation announcement events
-                                                if kind.as_u64() != 38000 && kind.as_u64() != 38173 {
-                                                    log_warn!(logger, "Received unexpected note of kind {kind}");
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
-                                Ok(RelayPoolNotification::Message { .. }) => {}, // ignore messages
-                                Ok(RelayPoolNotification::Shutdown) => break, // if we disconnect, we restart to reconnect
-                                Ok(RelayPoolNotification::Stop) => {}, // Currently unused
-                                Ok(RelayPoolNotification::RelayStatus { .. }) => {}, // Currently unused
-                                Err(_) => break, // if we are erroring we should reconnect
-                            }
-                        }
-                        _ = delay_fut => {
-                            if stop.load(Ordering::Relaxed) {
-                                break;
-                            }
-                        }
-                        _ = filter_check_fut => {
-                            // Check if the filters have changed
-                            if let Ok(current_filters) = nostr.get_filters().await {
-                                if !utils::compare_filters_vec(&current_filters, &last_filters) {
-                                    log_debug!(logger, "subscribing to new nwc filters");
-                                    client.subscribe(current_filters.clone(), None).await;
-                                    last_filters = current_filters;
-                                }
-                            }
-                            // Set the time for the next filter check
-                            next_filter_check = crate::utils::now().as_secs() + 5;
-                        }
-                    }
-                }
-
-                if let Err(e) = client.disconnect().await {
-                    log_warn!(logger, "Error disconnecting from relays: {e}");
-                }
-            }
-        });
-
-        // spawn thread to sync nostr profile and contacts
-        let self_clone = self.clone();
-        utils::spawn(async move {
-            // keep trying until it succeeds
-            let mut count = 1;
-            loop {
-                match self_clone.sync_nostr().await {
-                    Ok(_) => break,
-                    Err(e) => {
-                        log_error!(self_clone.logger, "Failed to sync nostr: {e}");
-
-                        // exponential backoff
-                        let sleep_time = std::cmp::min(1_000 * (2_i32.pow(count)), 60_000);
-                        sleep(sleep_time).await;
-                        count += 1;
-                    }
-                }
-
-                if self_clone.stop.load(Ordering::Relaxed) {
-                    break;
-                };
-            }
-        });
-
-        log_trace!(self.logger, "finished calling start_nostr");
     }
 
     /// Pays a lightning invoice from a federation (preferred) or node.
@@ -1441,16 +1104,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
                 .node_manager
                 .pay_invoice(None, inv, amt_sats, labels)
                 .await?;
-
-            // spawn a task to remove the pending invoice if it exists
-            let nostr_clone = self.nostr.clone();
-            let payment_hash = *inv.payment_hash();
-            let logger = self.logger.clone();
-            utils::spawn(async move {
-                if let Err(e) = nostr_clone.remove_pending_nwc_invoice(&payment_hash).await {
-                    log_warn!(logger, "Failed to remove pending NWC invoice: {e}");
-                }
-            });
 
             Ok(res)
         } else {
@@ -1921,408 +1574,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         res
     }
 
-    /// Checks whether or not the user is subscribed to Mutiny+.
-    /// Submits a NWC string to keep the subscription active if not expired.
-    ///
-    /// Returns None if there's no subscription at all.
-    /// Returns Some(u64) for their unix expiration timestamp, which may be in the
-    /// past or in the future, depending on whether or not it is currently active.
-    pub async fn check_subscribed(&self) -> Result<Option<u64>, MutinyError> {
-        log_trace!(self.logger, "calling check_subscribed");
-
-        let res = if let Some(ref subscription_client) = self.subscription_client {
-            let now = utils::now().as_secs();
-            match self.storage.get_data::<u64>(SUBSCRIPTION_TIMESTAMP) {
-                Ok(Some(timestamp)) if timestamp > now => {
-                    // if we have a timestamp and it is in the future, we are subscribed
-                    // make sure we have a NWC profile, this needs to be done in case
-                    // the subscription was created outside the app.
-                    self.ensure_mutiny_nwc_profile(subscription_client, true)
-                        .await?;
-                    Ok(Some(timestamp))
-                }
-                _ => {
-                    // if we don't have a timestamp or it is in the past, check with the server
-                    let time = subscription_client.check_subscribed().await?;
-                    // if we are subscribed, save the timestamp
-                    if let Some(time) = time.filter(|t| *t > now) {
-                        self.storage
-                            .set_data(SUBSCRIPTION_TIMESTAMP.to_string(), time, None)?;
-                    }
-                    Ok(time)
-                }
-            }
-        } else {
-            Ok(None)
-        };
-        log_trace!(self.logger, "finished calling check_subscribed");
-
-        res
-    }
-
-    /// Gets the subscription plans for Mutiny+ subscriptions
-    pub async fn get_subscription_plans(&self) -> Result<Vec<Plan>, MutinyError> {
-        log_trace!(self.logger, "calling get_subscription_plans");
-
-        let res = if let Some(subscription_client) = self.subscription_client.clone() {
-            Ok(subscription_client.get_plans().await?)
-        } else {
-            Ok(vec![])
-        };
-        log_trace!(self.logger, "finished calling get_subscription_plans");
-
-        res
-    }
-
-    /// Subscribes to a Mutiny+ plan with a specific plan id.
-    ///
-    /// Returns a lightning invoice so that the plan can be paid for to start it.
-    pub async fn subscribe_to_plan(&self, id: u8) -> Result<MutinyInvoice, MutinyError> {
-        log_trace!(self.logger, "calling subscribe_to_plan");
-
-        let res = if let Some(subscription_client) = self.subscription_client.clone() {
-            Ok(Bolt11Invoice::from_str(&subscription_client.subscribe_to_plan(id).await?)?.into())
-        } else {
-            Err(MutinyError::SubscriptionClientNotConfigured)
-        };
-        log_trace!(self.logger, "finished calling subscribe_to_plan");
-
-        res
-    }
-
-    /// Pay the subscription invoice. This will post a NWC automatically afterwards.
-    pub async fn pay_subscription_invoice(
-        &self,
-        inv: &Bolt11Invoice,
-        autopay: bool,
-    ) -> Result<(), MutinyError> {
-        log_trace!(self.logger, "calling pay_subscription_invoice");
-
-        let res = if let Some(subscription_client) = self.subscription_client.as_ref() {
-            // TODO if this times out, we should make the next part happen in EventManager
-            self.pay_invoice(inv, None, vec![MUTINY_PLUS_SUBSCRIPTION_LABEL.to_string()])
-                .await?;
-
-            // now submit the NWC string if never created before
-            self.ensure_mutiny_nwc_profile(subscription_client, autopay)
-                .await?;
-
-            // FIXME: switch the subscription from disabled to enabled if it was disabled
-
-            // self.check_blind_tokens();
-
-            Ok(())
-        } else {
-            Err(MutinyError::SubscriptionClientNotConfigured)
-        };
-        log_trace!(self.logger, "finished calling pay_subscription_invoice");
-
-        res
-    }
-
-    async fn ensure_mutiny_nwc_profile(
-        &self,
-        subscription_client: &MutinySubscriptionClient,
-        autopay: bool,
-    ) -> Result<(), MutinyError> {
-        let nwc_profiles = self.nostr.profiles();
-        let reserved_profile_index = ReservedProfile::MutinySubscription.info().1;
-        let profile_opt = nwc_profiles
-            .iter()
-            .find(|profile| profile.index == reserved_profile_index);
-
-        if profile_opt.is_none() {
-            log_debug!(self.logger, "Did not find a mutiny+ nwc profile");
-            // profile with the reserved index does not exist, create a new one
-            let nwc = if autopay {
-                self.nostr
-                    .create_new_nwc_profile(
-                        ProfileType::Reserved(ReservedProfile::MutinySubscription),
-                        SpendingConditions::Budget(BudgetedSpendingConditions {
-                            budget: 21_000,
-                            single_max: None,
-                            payments: vec![],
-                            period: BudgetPeriod::Month,
-                        }),
-                        NwcProfileTag::Subscription,
-                        vec![Method::PayInvoice], // subscription only needs pay invoice
-                    )
-                    .await?
-                    .nwc_uri
-            } else {
-                self.nostr
-                    .create_new_nwc_profile(
-                        ProfileType::Reserved(ReservedProfile::MutinySubscription),
-                        SpendingConditions::RequireApproval,
-                        NwcProfileTag::Subscription,
-                        vec![Method::PayInvoice], // subscription only needs pay invoice
-                    )
-                    .await?
-                    .nwc_uri
-            };
-
-            if let Some(nwc) = nwc {
-                // only should have to submit the NWC if never created locally before
-                subscription_client.submit_nwc(nwc).await?;
-            }
-        }
-
-        // check if we have a contact, if not create one
-        match self.storage.get_contact(MUTINY_PLUS_SUBSCRIPTION_LABEL)? {
-            Some(_) => {}
-            None => {
-                let key = get_contact_key(MUTINY_PLUS_SUBSCRIPTION_LABEL);
-                let contact = Contact {
-                    name: MUTINY_PLUS_SUBSCRIPTION_LABEL.to_string(),
-                    npub: None,
-                    ln_address: None,
-                    lnurl: None,
-                    image_url: Some("https://void.cat/d/CZPXhnwjqRhULSjPJ3sXTE.webp".to_string()),
-                    last_used: utils::now().as_secs(),
-                };
-                self.storage.set_data(key, contact, None)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Uploads a profile pic to nostr.build and returns the uploaded file's URL
-    pub async fn upload_profile_pic(&self, image_bytes: Vec<u8>) -> Result<String, MutinyError> {
-        log_trace!(self.logger, "calling upload_profile_pic");
-
-        let client = reqwest::Client::new();
-        let hash = sha256::Hash::hash(&image_bytes);
-        let form = Form::new().part("fileToUpload", Part::bytes(image_bytes));
-
-        let url = "https://nostr.build/api/v2/upload/profile";
-
-        let nip98 = ::nostr::nips::nip98::HttpData {
-            url: url.into(),
-            method: HttpMethod::POST,
-            payload: Some(hash),
-        };
-        let event_builder = EventBuilder::http_auth(nip98);
-        let event = self.nostr.client.sign_event_builder(event_builder).await?;
-
-        let res: NostrBuildResult = client
-            .post(url)
-            .multipart(form)
-            .header(
-                "Authorization",
-                format!("Nostr {}", base64::encode(event.as_json().as_bytes())),
-            )
-            .send()
-            .await
-            .map_err(|e| {
-                log_error!(
-                    self.logger,
-                    "Error sending request uploading profile picture: {e}"
-                );
-                MutinyError::NostrError
-            })?
-            .json()
-            .await
-            .map_err(|e| {
-                log_error!(
-                    self.logger,
-                    "Error parsing response uploading profile picture: {e}"
-                );
-                MutinyError::NostrError
-            })?;
-
-        if res.status != "success" {
-            log_error!(
-                self.logger,
-                "Error uploading profile picture: {}",
-                res.message
-            );
-            return Err(MutinyError::NostrError);
-        }
-        log_trace!(self.logger, "finished calling upload_profile_pic");
-
-        // get url from response body
-        if let Some(value) = res.data.first() {
-            return value
-                .get("url")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .ok_or(MutinyError::NostrError);
-        }
-
-        Err(MutinyError::NostrError)
-    }
-
-    /// Change our active nostr keys to the given keys
-    pub async fn change_nostr_keys(
-        &self,
-        keys: Option<Keys>,
-        #[cfg(target_arch = "wasm32")] extension_pk: Option<::nostr::PublicKey>,
-    ) -> Result<::nostr::PublicKey, MutinyError> {
-        log_trace!(self.logger, "calling change_nostr_keys");
-
-        #[cfg(target_arch = "wasm32")]
-        let source = utils::build_nostr_key_source(keys, extension_pk)?;
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let source = utils::build_nostr_key_source(keys)?;
-
-        let new_pk = self.nostr.change_nostr_keys(source, self.xprivkey).await?;
-
-        // re-sync nostr profile data
-        self.sync_nostr().await?;
-
-        log_trace!(self.logger, "finished calling change_nostr_keys");
-        Ok(new_pk)
-    }
-
-    /// Syncs all of our nostr data from the configured primal instance
-    pub async fn sync_nostr(&self) -> Result<(), MutinyError> {
-        log_trace!(self.logger, "calling sync_nostr");
-
-        let npub = self.nostr.get_npub().await;
-        let contacts_fut = self.sync_nostr_contacts(npub);
-        let profile_fut = self.sync_nostr_profile();
-
-        // join futures and handle result
-        let (contacts_res, profile_res) = join!(contacts_fut, profile_fut);
-        contacts_res?;
-        profile_res?;
-
-        log_trace!(self.logger, "finished calling sync_nostr");
-        Ok(())
-    }
-
-    /// Fetches our latest nostr profile from primal and saves to storage
-    async fn sync_nostr_profile(&self) -> Result<(), MutinyError> {
-        let npub = self.nostr.get_npub().await;
-        if let Some(metadata) = self.nostr.primal_client.get_user_profile(npub).await? {
-            self.storage.set_nostr_profile(&metadata)?;
-        }
-
-        Ok(())
-    }
-
-    /// Get contacts from the given npub and sync them to the wallet
-    pub async fn sync_nostr_contacts(&self, npub: ::nostr::PublicKey) -> Result<(), MutinyError> {
-        log_trace!(self.logger, "calling sync_nostr_contacts");
-
-        let (contact_list, mut metadata) =
-            self.nostr.primal_client.get_nostr_contacts(npub).await?;
-
-        // update contact list event in storage
-        if let Some(event) = contact_list {
-            update_nostr_contact_list(&self.storage, event)?;
-        }
-
-        let contacts = self.storage.get_contacts()?;
-
-        // get contacts that weren't in our npub contacts list
-        let missing_pks: Vec<::nostr::PublicKey> = contacts
-            .iter()
-            .filter_map(|(_, c)| {
-                if c.npub.is_some_and(|n| metadata.get(&n).is_none()) {
-                    c.npub
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if !missing_pks.is_empty() {
-            let missing_metadata = self
-                .nostr
-                .primal_client
-                .get_user_profiles(missing_pks)
-                .await?;
-            metadata.extend(missing_metadata);
-        }
-
-        let mut updated_contacts: Vec<(String, Value)> =
-            Vec::with_capacity(contacts.len() + metadata.len());
-
-        for (id, contact) in contacts {
-            if let Some(npub) = contact.npub {
-                if let Some(meta) = metadata.get(&npub) {
-                    let updated = contact.update_with_metadata(meta.clone());
-                    metadata.remove(&npub);
-                    updated_contacts.push((get_contact_key(id), serde_json::to_value(updated)?));
-                }
-            }
-        }
-
-        for (npub, meta) in metadata {
-            let contact = Contact::create_from_metadata(npub, meta);
-
-            if contact.name.is_empty() {
-                log_debug!(
-                    self.logger,
-                    "Skipping creating contact with no name: {npub}"
-                );
-                continue;
-            }
-
-            // generate a uuid, this will be the "label" that we use to store the contact
-            let id = Uuid::new_v4().to_string();
-            let key = get_contact_key(&id);
-            updated_contacts.push((key, serde_json::to_value(contact)?));
-
-            let key = labels::get_label_item_key(&id);
-            let label_item = LabelItem::default();
-            updated_contacts.push((key, serde_json::to_value(label_item)?));
-        }
-
-        self.storage.set(updated_contacts)?;
-        log_trace!(self.logger, "finished calling sync_nostr_contacts");
-
-        Ok(())
-    }
-
-    /// Get dm conversation between us and given npub
-    /// Returns a vector of messages sorted by newest first
-    pub async fn get_dm_conversation(
-        &self,
-        npub: ::nostr::PublicKey,
-        limit: u64,
-        until: Option<u64>,
-        since: Option<u64>,
-    ) -> Result<Vec<DirectMessage>, MutinyError> {
-        log_trace!(self.logger, "calling get_dm_conversation");
-
-        let self_key = self.nostr.get_npub().await;
-        let events = self
-            .nostr
-            .primal_client
-            .get_dm_conversation(npub, self_key, limit, until, since)
-            .await?;
-
-        let mut messages = Vec::with_capacity(events.len());
-        for event in events {
-            if event.verify().is_err() {
-                continue;
-            }
-
-            // if decryption fails, skip this message, just a bad dm
-            if let Ok(message) = self.nostr.decrypt_dm(npub, &event.content).await {
-                let to = if event.pubkey == npub { self_key } else { npub };
-                let dm = DirectMessage {
-                    from: event.pubkey,
-                    to,
-                    message,
-                    date: event.created_at.as_u64(),
-                    event_id: event.id,
-                };
-                messages.push(dm);
-            }
-        }
-
-        // sort messages, newest first
-        messages.sort_by(|a, b| b.cmp(a));
-
-        log_trace!(self.logger, "finished calling get_dm_conversation");
-        Ok(messages)
-    }
-
     /// Stops all of the nodes and background processes.
     /// Returns after node has been stopped.
     pub async fn stop(&self) -> Result<(), MutinyError> {
@@ -2499,7 +1750,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         &self,
         lnurl: &LnUrl,
         amount_sats: u64,
-        zap_npub: Option<::nostr::PublicKey>,
         mut labels: Vec<String>,
         comment: Option<String>,
         privacy_level: PrivacyLevel,
@@ -2512,100 +1762,9 @@ impl<S: MutinyStorage> MutinyWallet<S> {
             LnUrlResponse::LnUrlPayResponse(pay) => {
                 let msats = amount_sats * 1000;
 
-                // if user's npub is given, do an anon zap
-                let (zap_request, comment) = match zap_npub {
-                    Some(zap_npub) => {
-                        let data = ZapRequestData {
-                            public_key: zap_npub,
-                            relays: RELAYS.iter().map(|r| (*r).into()).collect(),
-                            message: comment.unwrap_or_default(),
-                            amount: Some(msats),
-                            lnurl: Some(lnurl.encode()),
-                            event_id: None,
-                            event_coordinate: None,
-                        };
-
-                        let event = match privacy_level {
-                            PrivacyLevel::Public => {
-                                self.nostr
-                                    .nostr_keys
-                                    .read()
-                                    .await
-                                    .signer
-                                    .sign_event_builder(EventBuilder::public_zap_request(data))
-                                    .await?
-                            }
-                            PrivacyLevel::Private => {
-                                // if we have access to the keys, use those
-                                // otherwise need to implement ourselves to use with NIP-07
-                                let signer = &self.nostr.nostr_keys.read().await.signer;
-                                match signer {
-                                    NostrSigner::Keys(keys) => {
-                                        nip57::private_zap_request(data, keys)?
-                                    }
-                                    #[cfg(target_arch = "wasm32")]
-                                    NostrSigner::NIP07(_) => {
-                                        // Generate encryption key
-                                        // Since we are not doing deterministically, we will
-                                        // not be able to decrypt this ourself in the future.
-                                        // Unsure of how to best do this without access to the actual secret.
-                                        // Everything is saved locally in Mutiny so not the end of the world,
-                                        // however clients like Damus won't detect our own private zaps
-                                        // that we sent.
-                                        let private_zap_keys: Keys = Keys::generate();
-
-                                        let mut tags: Vec<Tag> =
-                                            vec![Tag::public_key(data.public_key)];
-                                        if let Some(event_id) = data.event_id {
-                                            tags.push(Tag::event(event_id));
-                                        }
-                                        let msg_builder = EventBuilder::new(
-                                            Kind::ZapPrivateMessage,
-                                            &data.message,
-                                            tags,
-                                        );
-                                        let msg = signer.sign_event_builder(msg_builder).await?;
-                                        let created_at = msg.created_at;
-                                        let msg: String = nip57::encrypt_private_zap_message(
-                                            &mut OsRng,
-                                            private_zap_keys.secret_key().expect("just generated"),
-                                            &data.public_key,
-                                            msg.as_json(),
-                                        )?;
-
-                                        // Create final zap event
-                                        let mut tags: Vec<Tag> = data.into();
-                                        tags.push(Tag::Anon { msg: Some(msg) });
-                                        EventBuilder::new(Kind::ZapRequest, "", tags)
-                                            .custom_created_at(created_at)
-                                            .to_event(&private_zap_keys)?
-                                    }
-                                }
-                            }
-                            PrivacyLevel::Anonymous => nip57::anonymous_zap_request(data)?,
-                            PrivacyLevel::NotAvailable => {
-                                // a zap npub with the privacy level NotAvailable
-                                // is invalid
-                                return Err(MutinyError::InvalidArgumentsError);
-                            }
-                        };
-
-                        (Some(event.as_json()), None)
-                    }
-                    None => {
-                        // PrivacyLevel only applicable to zaps, without
-                        // a zap npub we cannot do a zap
-                        if privacy_level != PrivacyLevel::NotAvailable {
-                            return Err(MutinyError::InvalidArgumentsError);
-                        }
-
-                        (None, comment.filter(|c| !c.is_empty()))
-                    }
-                };
-
                 let invoice = self
                     .lnurl_client
-                    .get_invoice(&pay, msats, zap_request, comment.as_deref())
+                    .get_invoice(&pay, msats, None, comment.as_deref())
                     .await?;
 
                 let invoice = Bolt11Invoice::from_str(invoice.invoice())?;
@@ -2736,49 +1895,6 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         // res
         Err(MutinyError::NotFound)
     }
-
-    /// Starts up the hermes client if available
-    pub async fn start_hermes(&self, _profile_key: Option<Keys>) -> Result<(), MutinyError> {
-        // log_trace!(self.logger, "calling start_hermes");
-
-        // if let Some(hermes_client) = self.hermes_client.as_ref() {
-        //     hermes_client.start(profile_key).await?
-        // }
-
-        // log_trace!(self.logger, "finished calling start_hermes");
-        Ok(())
-    }
-
-    // /// Checks available blind tokens
-    // /// Only needs to be ran once successfully on startup
-    // pub fn check_blind_tokens(&self) {
-    //     log_trace!(self.logger, "calling check_blind_tokens");
-
-    //     if let Some(blind_auth_client) = self.blind_auth_client.clone() {
-    //         let logger = self.logger.clone();
-    //         let stop = self.stop.clone();
-    //         utils::spawn(async move {
-    //             loop {
-    //                 if stop.load(Ordering::Relaxed) {
-    //                     break;
-    //                 };
-
-    //                 match blind_auth_client.redeem_available_tokens().await {
-    //                     Ok(_) => {
-    //                         log_debug!(logger, "checked available tokens");
-    //                         break;
-    //                     }
-    //                     Err(e) => {
-    //                         log_error!(logger, "error checking redeeming available tokens: {e}")
-    //                     }
-    //                 }
-
-    //                 sleep(10_000).await;
-    //             }
-    //         });
-    //     }
-    //     log_trace!(self.logger, "finished calling check_blind_tokens");
-    // }
 
     /// Gets the current bitcoin price in USD.
     pub async fn get_bitcoin_price(&self, fiat: Option<String>) -> Result<f32, MutinyError> {
@@ -2965,13 +2081,6 @@ impl<S: MutinyStorage> InvoiceHandler for MutinyWallet<S> {
 #[derive(Deserialize, Clone, Copy, Debug)]
 struct BitcoinPriceResponse {
     pub price: f32,
-}
-
-#[derive(Deserialize)]
-struct NostrBuildResult {
-    status: String,
-    message: String,
-    data: Vec<Value>,
 }
 
 // // max amount that can be spent through a gateway
@@ -3163,10 +2272,7 @@ mod tests {
 
     use crate::test_utils::*;
 
-    use crate::labels::{Contact, LabelStorage};
-    use crate::nostr::NostrKeySource;
-    use crate::utils::{now, parse_npub, sleep};
-    use nostr::{Keys, Metadata};
+    use crate::utils::{now, sleep};
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -3356,159 +2462,6 @@ mod tests {
 
         let new_node = mw.node_manager.new_node().await;
         assert!(new_node.is_err());
-    }
-
-    #[test]
-    async fn sync_nostr_contacts() {
-        let npub =
-            parse_npub("npub18s7md9ytv8r240jmag5j037huupk5jnsk94adykeaxtvc6lyftesuw5ydl").unwrap();
-        let ben =
-            parse_npub("npub1u8lnhlw5usp3t9vmpz60ejpyt649z33hu82wc2hpv6m5xdqmuxhs46turz").unwrap();
-        let jack =
-            parse_npub("npub1sg6plzptd64u62a878hep2kev88swjh3tw00gjsfl8f237lmu63q0uf63m").unwrap();
-
-        // create wallet
-        let mnemonic = generate_seed(12).unwrap();
-        let network = Network::Regtest;
-        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
-        let storage = MemoryStorage::new(None, None, None);
-        let config = MutinyWalletConfigBuilder::new(xpriv)
-            .with_network(network)
-            .build();
-        let mw = MutinyWalletBuilder::new(xpriv, storage.clone())
-            .with_config(config)
-            .build()
-            .await
-            .expect("mutiny wallet should initialize");
-
-        // sync contacts
-        mw.sync_nostr_contacts(npub).await.expect("synced contacts");
-
-        // first sync should yield just ben's contact
-        let contacts = mw
-            .storage
-            .get_contacts()
-            .unwrap()
-            .into_values()
-            .collect::<Vec<_>>();
-        assert_eq!(contacts.len(), 1);
-        let contact = contacts.first().unwrap();
-        assert_eq!(contact.npub, Some(ben));
-        assert!(contact.image_url.is_some());
-        assert!(contact.ln_address.is_some());
-        assert!(!contact.name.is_empty());
-
-        // add jack as a contact with incomplete info
-        let incorrect_name = "incorrect name".to_string();
-        let new_contact = Contact {
-            name: incorrect_name.clone(),
-            npub: Some(jack),
-            ..Default::default()
-        };
-        let id = mw.storage.create_new_contact(new_contact).unwrap();
-
-        // sync contacts again, jack's contact should be correct
-        mw.sync_nostr_contacts(npub).await.expect("synced contacts");
-
-        let contacts = mw.storage.get_contacts().unwrap();
-        assert_eq!(contacts.len(), 2);
-        let contact = contacts.get(&id).unwrap();
-        assert_eq!(contact.npub, Some(jack));
-        assert!(contact.image_url.is_some());
-        assert!(contact.ln_address.is_some());
-        assert_ne!(contact.name, incorrect_name);
-    }
-
-    #[test]
-    async fn get_dm_conversation_test() {
-        // test nsec I made and sent dms to
-        let nsec =
-            Keys::parse("nsec1w2cy7vmq8urw9ae6wjaujrmztndad7e65hja52zk0c9x4yxgk0xsfuqk6s").unwrap();
-        let npub =
-            parse_npub("npub18s7md9ytv8r240jmag5j037huupk5jnsk94adykeaxtvc6lyftesuw5ydl").unwrap();
-
-        // create wallet
-        let mnemonic = generate_seed(12).unwrap();
-        let network = Network::Regtest;
-        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
-        let storage = MemoryStorage::new(None, None, None);
-        let config = MutinyWalletConfigBuilder::new(xpriv)
-            .with_network(network)
-            .build();
-        let mut mw = MutinyWalletBuilder::new(xpriv, storage.clone()).with_config(config);
-        mw.with_nostr_key_source(NostrKeySource::Imported(nsec));
-        let mw = mw.build().await.expect("mutiny wallet should initialize");
-
-        // get messages
-        let limit = 5;
-        let messages = mw
-            .get_dm_conversation(npub, limit, None, None)
-            .await
-            .unwrap();
-
-        assert_eq!(messages.len(), 5);
-
-        // get next messages
-        let limit = 2;
-        let util = messages.iter().min_by_key(|m| m.date).unwrap().date - 1;
-        let next = mw
-            .get_dm_conversation(npub, limit, Some(util), None)
-            .await
-            .unwrap();
-
-        // check that we got different messages
-        assert_eq!(next.len(), 2);
-        assert!(next.iter().all(|m| !messages.contains(m)));
-
-        // test check for future messages, should be empty
-        let since = messages.iter().max_by_key(|m| m.date).unwrap().date + 1;
-        let future_msgs = mw
-            .get_dm_conversation(npub, limit, None, Some(since))
-            .await
-            .unwrap();
-
-        assert!(future_msgs.is_empty());
-    }
-
-    #[test]
-    async fn test_change_nostr_keys() {
-        // create fresh wallet
-        let mnemonic = generate_seed(12).unwrap();
-        let network = Network::Regtest;
-        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
-        let storage = MemoryStorage::new(None, None, None);
-        let config = MutinyWalletConfigBuilder::new(xpriv)
-            .with_network(network)
-            .build();
-        let mw = MutinyWalletBuilder::new(xpriv, storage.clone())
-            .with_config(config)
-            .build()
-            .await
-            .expect("mutiny wallet should initialize");
-
-        let first_npub = mw.nostr.get_npub().await;
-        let first_profile = mw.nostr.get_profile().unwrap();
-        let first_follows = mw.nostr.get_follow_list().unwrap();
-        assert_eq!(first_profile, Metadata::default());
-        assert!(first_profile.name.is_none());
-        assert!(first_follows.is_empty());
-
-        // change signer, can just use npub for test
-        let ben =
-            parse_npub("npub1u8lnhlw5usp3t9vmpz60ejpyt649z33hu82wc2hpv6m5xdqmuxhs46turz").unwrap();
-        mw.change_nostr_keys(Some(Keys::from_public_key(ben)), None)
-            .await
-            .unwrap();
-
-        // check that we have all new data
-        let npub = mw.nostr.get_npub().await;
-        let profile = mw.nostr.get_profile().unwrap();
-        let follows = mw.nostr.get_follow_list().unwrap();
-        assert_ne!(npub, first_npub);
-        assert_ne!(profile, first_profile);
-        assert_ne!(follows, first_follows);
-        assert!(!follows.is_empty());
-        assert!(profile.name.is_some());
     }
 
     #[test]

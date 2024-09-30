@@ -11,7 +11,6 @@ pub mod error;
 mod indexed_db;
 mod models;
 mod utils;
-pub mod waila;
 
 use crate::error::MutinyJsError;
 use crate::indexed_db::IndexedDbStorage;
@@ -24,31 +23,26 @@ use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, Network, OutPoint, Txid};
 use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
-use hex_conservative::DisplayHex;
+
 use lightning::{log_info, log_warn, routing::gossip::NodeId, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
-use lnurl::lightning_address::LightningAddress;
+
 use lnurl::lnurl::LnUrl;
 use mutiny_core::auth::MutinyAuthClient;
 use mutiny_core::lnurlauth::AuthManager;
-use mutiny_core::nostr::nip49::NIP49URI;
-use mutiny_core::nostr::nwc::{BudgetedSpendingConditions, NwcProfileTag, SpendingConditions};
-use mutiny_core::nostr::NostrKeySource;
 use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
-use mutiny_core::utils::{now, parse_npub, parse_npub_or_nip05, sleep, spawn};
+use mutiny_core::utils::{sleep, spawn};
 use mutiny_core::vss::MutinyVssClient;
+use mutiny_core::MutinyWalletBuilder;
 use mutiny_core::{
     encrypt::encryption_key_from_pass, InvoiceHandler, MutinyWalletConfigBuilder, PrivacyLevel,
 };
-use mutiny_core::{labels::Contact, MutinyWalletBuilder};
 use mutiny_core::{
     labels::LabelStorage,
     nodemanager::{create_lsp_config, NodeManager},
 };
-use mutiny_core::{logging::MutinyLogger, lsp::LspConfig, nostr::ProfileType};
-use nostr::prelude::Method;
-use nostr::{Keys, ToBech32};
-use std::collections::HashMap;
+use mutiny_core::{logging::MutinyLogger, lsp::LspConfig};
+
 use std::str::FromStr;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
@@ -182,9 +176,9 @@ impl MutinyWallet {
         skip_device_lock: Option<bool>,
         safe_mode: Option<bool>,
         skip_hodl_invoices: Option<bool>,
-        nsec_override: Option<String>,
-        nip_07_key: Option<String>,
-        primal_url: Option<String>,
+        _nsec_override: Option<String>,
+        _nip_07_key: Option<String>,
+        _primal_url: Option<String>,
         blind_auth_url: Option<String>,
         hermes_url: Option<String>,
     ) -> Result<MutinyWallet, MutinyJsError> {
@@ -293,9 +287,6 @@ impl MutinyWallet {
         if let Some(url) = scorer_url {
             config_builder.with_scorer_url(url);
         }
-        if let Some(url) = primal_url {
-            config_builder.with_primal_url(url);
-        }
         if let Some(url) = blind_auth_url {
             config_builder.with_blind_auth_url(url);
         }
@@ -318,14 +309,6 @@ impl MutinyWallet {
 
         let mut mw_builder = MutinyWalletBuilder::new(xprivkey, storage).with_config(config);
         mw_builder.with_session_id(logger.session_id.clone());
-        if let Some(nsec) = nsec_override {
-            let keys = Keys::parse(nsec).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-            mw_builder.with_nostr_key_source(NostrKeySource::Imported(keys));
-        }
-        if let Some(key) = nip_07_key {
-            let npub = parse_npub(&key)?;
-            mw_builder.with_nostr_key_source(NostrKeySource::Extension(npub));
-        }
         let inner = mw_builder.build().await?;
 
         Ok(MutinyWallet { mnemonic, inner })
@@ -426,51 +409,6 @@ impl MutinyWallet {
         self.mnemonic.to_string()
     }
 
-    /// Returns the user's npub
-    #[wasm_bindgen]
-    pub async fn get_npub(&self) -> String {
-        self.inner
-            .nostr
-            .get_npub()
-            .await
-            .to_bech32()
-            .expect("bech32")
-    }
-
-    /// Export the user's nostr secret key if available
-    #[wasm_bindgen]
-    pub async fn export_nsec(&self) -> Option<String> {
-        self.inner
-            .nostr
-            .export_nsec()
-            .await
-            .map(|s| s.to_bech32().expect("bech32"))
-    }
-
-    /// Change our active nostr keys to the given nsec
-    #[wasm_bindgen]
-    pub async fn change_nostr_keys(
-        &self,
-        nsec: Option<String>,
-        extension_pk: Option<String>,
-    ) -> Result<String, MutinyJsError> {
-        let nsec = nsec
-            .map(|n| Keys::parse(n).map_err(|_| MutinyJsError::InvalidArgumentsError))
-            .transpose()?;
-
-        let extension_pk = extension_pk.map(|p| parse_npub(&p)).transpose()?;
-
-        if nsec.is_some() && extension_pk.is_some() {
-            return Err(MutinyJsError::InvalidArgumentsError);
-        }
-
-        Ok(self
-            .inner
-            .change_nostr_keys(nsec, extension_pk)
-            .await
-            .map(|pk| pk.to_bech32().expect("bech32"))?)
-    }
-
     /// Returns the network of the wallet.
     #[wasm_bindgen]
     pub fn get_network(&self) -> String {
@@ -548,25 +486,6 @@ impl MutinyWallet {
         Ok(self
             .inner
             .send_to_address(send_to, amount, labels, fee_rate)
-            .await?
-            .to_string())
-    }
-
-    #[wasm_bindgen]
-    pub async fn send_payjoin(
-        &self,
-        payjoin_uri: String,
-        amount: u64, /* override the uri amount if desired */
-        labels: Vec<String>,
-        fee_rate: Option<f32>,
-    ) -> Result<String, MutinyJsError> {
-        // I know walia parses `pj=` and `pjos=` but payjoin::Uri parses the whole bip21 uri
-        let pj_uri = payjoin::Uri::try_from(payjoin_uri.as_str())
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        Ok(self
-            .inner
-            .node_manager
-            .send_payjoin(pj_uri, amount, labels, fee_rate)
             .await?
             .to_string())
     }
@@ -878,17 +797,11 @@ impl MutinyWallet {
         &self,
         lnurl: String,
         amount_sats: u64,
-        zap_npub: Option<String>,
         labels: Vec<String>,
         comment: Option<String>,
         privacy_level: Option<String>,
     ) -> Result<MutinyInvoice, MutinyJsError> {
         let lnurl = LnUrl::from_str(&lnurl)?;
-
-        let zap_npub = match zap_npub.filter(|z| !z.is_empty()) {
-            Some(z) => Some(parse_npub(&z)?),
-            None => None,
-        };
 
         let privacy_level = privacy_level
             .as_deref()
@@ -898,14 +811,7 @@ impl MutinyWallet {
 
         Ok(self
             .inner
-            .lnurl_pay(
-                &lnurl,
-                amount_sats,
-                zap_npub,
-                labels,
-                comment,
-                privacy_level,
-            )
+            .lnurl_pay(&lnurl, amount_sats, labels, comment, privacy_level)
             .await?
             .into())
     }
@@ -1085,74 +991,6 @@ impl MutinyWallet {
         )?)
     }
 
-    /// Returns all the on-chain and lightning activity from the wallet.
-    #[wasm_bindgen]
-    pub async fn get_activity(
-        &self,
-        limit: Option<usize>,
-        offset: Option<usize>,
-    ) -> Result<JsValue /* Vec<ActivityItem> */, MutinyJsError> {
-        // get activity from the node manager
-        let activity = self.inner.get_activity(limit, offset)?;
-        let mut activity: Vec<ActivityItem> = activity.into_iter().map(|a| a.into()).collect();
-
-        // add contacts to the activity
-        let contacts = self.inner.node_manager.get_contacts()?;
-        let follows = self.inner.nostr.get_follow_list()?;
-        for a in activity.iter_mut() {
-            // find labels that have a contact and add them to the item
-            for label in a.labels.iter() {
-                if let Some(contact) = contacts.get(label) {
-                    let is_followed = contact
-                        .npub
-                        .as_ref()
-                        .map(|n| follows.contains(n))
-                        .unwrap_or(false);
-                    a.contacts
-                        .push(TagItem::from(label.clone(), contact.clone(), is_followed));
-                }
-            }
-            // remove labels that have a contact to prevent duplicates
-            a.labels.retain(|l| !contacts.contains_key(l));
-        }
-
-        Ok(JsValue::from_serde(&activity)?)
-    }
-
-    /// Returns all the on-chain and lightning activity for a given label
-    #[wasm_bindgen]
-    pub async fn get_label_activity(
-        &self,
-        label: String,
-    ) -> Result<JsValue /* Vec<ActivityItem> */, MutinyJsError> {
-        // get activity from the node manager
-        let activity = self.inner.get_label_activity(&label).await?;
-        let mut activity: Vec<ActivityItem> = activity.into_iter().map(|a| a.into()).collect();
-
-        // add contact to the activity item it has one, otherwise return the activity list
-        let contact = match self.inner.node_manager.get_contact(&label)? {
-            Some(contact) => contact,
-            None => return Ok(JsValue::from_serde(&activity)?),
-        };
-
-        let follows = self.inner.nostr.get_follow_list()?;
-        let is_followed = contact
-            .npub
-            .as_ref()
-            .map(|n| follows.contains(n))
-            .unwrap_or(false);
-
-        // if we have a contact, add it to the activity item, remove it as a label
-        // This is the same as we do in get_activity
-        for a in activity.iter_mut() {
-            a.contacts
-                .push(TagItem::from(label.clone(), contact.clone(), is_followed));
-            a.labels.retain(|l| l != &label);
-        }
-
-        Ok(JsValue::from_serde(&activity)?)
-    }
-
     pub fn get_address_labels(
         &self,
     ) -> Result<JsValue /* Map<Address, Vec<String>> */, MutinyJsError> {
@@ -1199,201 +1037,6 @@ impl MutinyWallet {
             .set_invoice_labels(invoice, labels)?)
     }
 
-    pub async fn get_contacts(&self) -> Result<JsValue /* Map<String, TagItem>*/, MutinyJsError> {
-        let follows = self.inner.nostr.get_follow_list()?;
-        Ok(JsValue::from_serde(
-            &self
-                .inner
-                .node_manager
-                .get_contacts()?
-                .into_iter()
-                .map(|(id, c)| {
-                    let is_followed = c
-                        .npub
-                        .as_ref()
-                        .map(|n| follows.contains(n))
-                        .unwrap_or(false);
-                    (id.clone(), TagItem::from(id, c, is_followed))
-                })
-                .collect::<HashMap<String, TagItem>>(),
-        )?)
-    }
-
-    /// Gets all contacts sorted by last used
-    pub async fn get_contacts_sorted(&self) -> Result<JsValue /* Vec<TagItem>*/, MutinyJsError> {
-        let follows = self.inner.nostr.get_follow_list()?;
-        let mut contacts: Vec<TagItem> = self
-            .inner
-            .node_manager
-            .get_contacts()?
-            .into_iter()
-            .map(|(id, c)| {
-                let is_followed = c
-                    .npub
-                    .as_ref()
-                    .map(|n| follows.contains(n))
-                    .unwrap_or(false);
-                TagItem::from(id, c, is_followed)
-            })
-            .collect();
-
-        contacts.sort();
-
-        Ok(JsValue::from_serde(&contacts)?)
-    }
-
-    /// Get the contacts that are followed by the user sorted by last used
-    pub async fn get_follows_sorted(&self) -> Result<JsValue /* Vec<TagItem>*/, MutinyJsError> {
-        let follows = self.inner.nostr.get_follow_list()?;
-        let mut contacts: Vec<TagItem> = self
-            .inner
-            .node_manager
-            .get_contacts()?
-            .into_iter()
-            .flat_map(|(id, c)| {
-                let is_followed = c
-                    .npub
-                    .as_ref()
-                    .map(|n| follows.contains(n))
-                    .unwrap_or(false);
-                if is_followed {
-                    Some(TagItem::from(id, c, is_followed))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        contacts.sort();
-
-        Ok(JsValue::from_serde(&contacts)?)
-    }
-
-    pub fn get_tag_item(&self, label: String) -> Result<Option<TagItem>, MutinyJsError> {
-        match self.inner.node_manager.get_contact(&label)? {
-            Some(contact) => {
-                let follows = self.inner.nostr.get_follow_list()?;
-                let is_followed = contact
-                    .npub
-                    .as_ref()
-                    .map(|n| follows.contains(n))
-                    .unwrap_or(false);
-                Ok(Some(TagItem::from(label, contact, is_followed)))
-            }
-            None => Ok(None),
-        }
-    }
-
-    /// Create a new contact from an existing label and returns the new identifying label
-    pub fn create_contact_from_label(
-        &self,
-        label: String,
-        name: String,
-        npub: Option<String>,
-        ln_address: Option<String>,
-        lnurl: Option<String>,
-        image_url: Option<String>,
-    ) -> Result<String, MutinyJsError> {
-        let contact = Contact {
-            name,
-            npub: npub.map(|n| parse_npub(&n)).transpose()?,
-            ln_address: ln_address
-                .map(|l| LightningAddress::from_str(&l))
-                .transpose()?,
-            lnurl: lnurl.map(|l| LnUrl::from_str(&l)).transpose()?,
-            image_url,
-            last_used: now().as_secs(),
-        };
-
-        Ok(self
-            .inner
-            .node_manager
-            .create_contact_from_label(label, contact)?)
-    }
-
-    pub fn create_new_contact(
-        &self,
-        name: String,
-        npub: Option<String>,
-        ln_address: Option<String>,
-        lnurl: Option<String>,
-        image_url: Option<String>,
-    ) -> Result<String, MutinyJsError> {
-        let contact = Contact {
-            name,
-            npub: npub.map(|n| parse_npub(&n)).transpose()?,
-            ln_address: ln_address
-                .map(|l| LightningAddress::from_str(&l))
-                .transpose()?,
-            lnurl: lnurl.map(|l| LnUrl::from_str(&l)).transpose()?,
-            image_url,
-            last_used: now().as_secs(),
-        };
-        Ok(self.inner.node_manager.create_new_contact(contact)?)
-    }
-
-    pub fn delete_contact(&self, id: String) -> Result<(), MutinyJsError> {
-        Ok(self.inner.node_manager.delete_contact(id)?)
-    }
-
-    pub fn edit_contact(
-        &self,
-        id: String,
-        name: String,
-        npub: Option<String>,
-        ln_address: Option<String>,
-        lnurl: Option<String>,
-        image_url: Option<String>,
-    ) -> Result<(), MutinyJsError> {
-        let contact = Contact {
-            name,
-            npub: npub.map(|n| parse_npub(&n)).transpose()?,
-            ln_address: ln_address
-                .map(|l| LightningAddress::from_str(&l))
-                .transpose()?,
-            lnurl: lnurl.map(|l| LnUrl::from_str(&l)).transpose()?,
-            image_url,
-            last_used: now().as_secs(),
-        };
-
-        Ok(self.inner.node_manager.edit_contact(id, contact)?)
-    }
-
-    pub async fn get_contact_for_npub(
-        &self,
-        npub: String,
-    ) -> Result<Option<TagItem>, MutinyJsError> {
-        let npub = parse_npub(&npub)?;
-        let contact = self.inner.node_manager.get_contact_for_npub(npub)?;
-
-        match contact {
-            Some((id, c)) => {
-                let follows = self.inner.nostr.get_follow_list()?;
-                let is_followed = c
-                    .npub
-                    .as_ref()
-                    .map(|n| follows.contains(n))
-                    .unwrap_or(false);
-                Ok(Some(TagItem::from(id, c, is_followed)))
-            }
-            None => Ok(None),
-        }
-    }
-
-    pub fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyJsError> {
-        let mut tags: Vec<TagItem> = self
-            .inner
-            .node_manager
-            .get_tag_items()?
-            .into_iter()
-            .map(|t| t.into())
-            .collect();
-
-        tags.sort();
-
-        Ok(tags)
-    }
-
     /// Gets the current bitcoin price in chosen Fiat.
     #[wasm_bindgen]
     pub async fn get_bitcoin_price(&self, fiat: Option<String>) -> Result<f32, MutinyJsError> {
@@ -1405,471 +1048,6 @@ impl MutinyWallet {
     pub async fn get_logs() -> Result<JsValue /* Option<Vec<String>> */, MutinyJsError> {
         let logs = IndexedDbStorage::get_logs().await?;
         Ok(JsValue::from_serde(&logs)?)
-    }
-
-    /// Get nostr wallet connect profiles
-    #[wasm_bindgen]
-    pub fn get_nwc_profiles(&self) -> Result<Vec<NwcProfile>, MutinyJsError> {
-        let profiles = self.inner.nostr.profiles();
-        let p = profiles
-            .into_iter()
-            .map(models::NwcProfile::from)
-            .collect::<Vec<_>>();
-        Ok(p)
-    }
-
-    /// Create a nostr wallet connect profile
-    #[wasm_bindgen]
-    pub async fn create_nwc_profile(
-        &self,
-        name: String,
-        commands: Option<Vec<String>>,
-    ) -> Result<models::NwcProfile, MutinyJsError> {
-        let commands = match commands {
-            None => vec![
-                Method::PayInvoice,
-                Method::GetInfo,
-                Method::GetBalance,
-                Method::LookupInvoice,
-                Method::MakeInvoice,
-            ],
-            Some(strs) => strs
-                .into_iter()
-                .map(|s| Method::from_str(&s))
-                .collect::<Result<_, _>>()
-                .map_err(|_| MutinyJsError::InvalidArgumentsError)?,
-        };
-        Ok(self
-            .inner
-            .nostr
-            .create_new_nwc_profile(
-                ProfileType::Normal { name },
-                SpendingConditions::default(),
-                NwcProfileTag::General,
-                commands,
-            )
-            .await?
-            .into())
-    }
-
-    /// Create a budgeted nostr wallet connect profile
-    #[wasm_bindgen]
-    pub async fn create_budget_nwc_profile(
-        &self,
-        name: String,
-        budget: u64,
-        period: BudgetPeriod,
-        single_max: Option<u64>,
-        commands: Option<Vec<String>>,
-    ) -> Result<models::NwcProfile, MutinyJsError> {
-        let commands = match commands {
-            None => vec![
-                Method::PayInvoice,
-                Method::GetInfo,
-                Method::GetBalance,
-                Method::LookupInvoice,
-                Method::MakeInvoice,
-            ],
-            Some(strs) => strs
-                .into_iter()
-                .map(|s| Method::from_str(&s))
-                .collect::<Result<_, _>>()
-                .map_err(|_| MutinyJsError::InvalidArgumentsError)?,
-        };
-        let budget = BudgetedSpendingConditions {
-            budget,
-            period: period.into(),
-            payments: vec![],
-            single_max,
-        };
-        let sp = SpendingConditions::Budget(budget);
-
-        Ok(self
-            .inner
-            .nostr
-            .create_new_nwc_profile(
-                ProfileType::Normal { name },
-                sp,
-                NwcProfileTag::General,
-                commands,
-            )
-            .await?
-            .into())
-    }
-
-    /// Approves a nostr wallet auth request.
-    /// Creates a new NWC profile and saves to storage.
-    /// This will also broadcast the info event to the relay.
-    pub async fn approve_nostr_wallet_auth(
-        &self,
-        name: String,
-        uri: String,
-    ) -> Result<NwcProfile, MutinyJsError> {
-        let uri = NIP49URI::from_str(&uri).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        log::info!("Approving NWC auth request: {uri}");
-        let profile = self
-            .inner
-            .nostr
-            .approve_nostr_wallet_auth(
-                ProfileType::Normal { name },
-                uri,
-                None,
-                NwcProfileTag::General,
-            )
-            .await?;
-
-        Ok(profile.into())
-    }
-
-    /// Approves a nostr wallet auth request.
-    /// Creates a new NWC profile and saves to storage.
-    /// This will also broadcast the info event to the relay.
-    pub async fn approve_nostr_wallet_auth_with_budget(
-        &self,
-        name: String,
-        uri: String,
-        budget: u64,
-        period: BudgetPeriod,
-    ) -> Result<NwcProfile, MutinyJsError> {
-        let uri = NIP49URI::from_str(&uri).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        log::info!("Approving NWC auth request: {uri}");
-
-        let budget = BudgetedSpendingConditions {
-            budget,
-            period: period.into(),
-            payments: vec![],
-            single_max: None,
-        };
-
-        let profile = self
-            .inner
-            .nostr
-            .approve_nostr_wallet_auth(
-                ProfileType::Normal { name },
-                uri,
-                Some(budget),
-                NwcProfileTag::General,
-            )
-            .await?;
-
-        Ok(profile.into())
-    }
-
-    /// Deletes a nostr wallet connect profile
-    #[wasm_bindgen]
-    pub async fn delete_nwc_profile(&self, profile_index: u32) -> Result<(), MutinyJsError> {
-        Ok(self.inner.nostr.delete_nwc_profile(profile_index)?)
-    }
-
-    /// Set budget for a NWC Profile
-    #[wasm_bindgen]
-    pub async fn set_nwc_profile_budget(
-        &self,
-        profile_index: u32,
-        budget_sats: u64,
-        period: BudgetPeriod,
-        single_max_sats: Option<u64>,
-    ) -> Result<models::NwcProfile, MutinyJsError> {
-        Ok(self
-            .inner
-            .nostr
-            .set_nwc_profile_budget(profile_index, budget_sats, period.into(), single_max_sats)?
-            .into())
-    }
-
-    /// Require approval for a NWC Profile
-    #[wasm_bindgen]
-    pub async fn set_nwc_profile_require_approval(
-        &self,
-        profile_index: u32,
-    ) -> Result<models::NwcProfile, MutinyJsError> {
-        let mut profile = self.inner.nostr.get_nwc_profile(profile_index)?;
-        profile.spending_conditions = SpendingConditions::RequireApproval;
-        Ok(self.inner.nostr.edit_nwc_profile(profile)?.into())
-    }
-
-    /// Finds a nostr wallet connect profile by index
-    #[wasm_bindgen]
-    pub async fn get_nwc_profile(&self, index: u32) -> Result<models::NwcProfile, MutinyJsError> {
-        Ok(self.inner.nostr.get_nwc_profile(index)?.into())
-    }
-
-    /// Create a single use nostr wallet connect profile
-    #[wasm_bindgen]
-    pub async fn create_single_use_nwc(
-        &self,
-        name: String,
-        amount_sats: u64,
-    ) -> Result<models::NwcProfile, MutinyJsError> {
-        Ok(self
-            .inner
-            .nostr
-            .create_single_use_nwc(name, amount_sats)
-            .await?
-            .into())
-    }
-
-    /// Create a single use nostr wallet connect profile
-    #[wasm_bindgen]
-    pub async fn claim_single_use_nwc(
-        &self,
-        amount_sats: u64,
-        nwc_uri: String,
-    ) -> Result<Option<String>, MutinyJsError> {
-        Ok(self
-            .inner
-            .nostr
-            .claim_single_use_nwc(amount_sats, &nwc_uri, &self.inner)
-            .await?
-            .map(|r| r.message))
-    }
-
-    /// Get nostr wallet connect URI
-    #[wasm_bindgen]
-    pub fn get_nwc_uri(&self, index: u32) -> Result<Option<String>, MutinyJsError> {
-        match self.inner.nostr.get_nwc_uri(index) {
-            Ok(uri) => Ok(uri.map(|u| u.to_string())),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// Lists all pending NWC invoices
-    pub fn get_pending_nwc_invoices(&self) -> Result<Vec<PendingNwcInvoice>, MutinyJsError> {
-        let pending = self.inner.nostr.get_pending_nwc_invoices()?;
-
-        if pending.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let profiles = self.inner.nostr.profiles();
-
-        let pending: Vec<PendingNwcInvoice> = pending
-            .into_iter()
-            .flat_map(|inv| match inv.index {
-                Some(index) => profiles
-                    .iter()
-                    .find(|p| p.index == index)
-                    .map(|p| (inv, Some(p.name.clone())).into()),
-                None => Some((inv, None).into()),
-            })
-            .collect();
-
-        Ok(pending)
-    }
-
-    /// Approves an invoice and sends the payment
-    pub async fn approve_invoice(&self, hash: String) -> Result<(), MutinyJsError> {
-        self.inner
-            .nostr
-            .approve_invoice(hash.parse()?, &self.inner)
-            .await?;
-
-        Ok(())
-    }
-
-    /// Removes an invoice from the pending list, will also remove expired invoices
-    pub async fn deny_invoice(&self, hash: String) -> Result<(), MutinyJsError> {
-        let hash: sha256::Hash = hash
-            .parse()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        self.inner.nostr.deny_invoice(hash).await?;
-
-        Ok(())
-    }
-
-    /// Removes all invoices from the pending list
-    #[wasm_bindgen]
-    pub async fn deny_all_pending_nwc(&self) -> Result<(), MutinyJsError> {
-        self.inner.nostr.deny_all_pending_nwc().await?;
-
-        Ok(())
-    }
-
-    /// Checks whether or not the user is subscribed to Mutiny+.
-    /// Submits a NWC string to keep the subscription active if not expired.
-    ///
-    /// Returns None if there's no subscription at all.
-    /// Returns Some(u64) for their unix expiration timestamp, which may be in the
-    /// past or in the future, depending on whether or not it is currently active.
-    #[wasm_bindgen]
-    pub async fn check_subscribed(&self) -> Result<Option<u64>, MutinyJsError> {
-        Ok(self.inner.check_subscribed().await?)
-    }
-
-    /// Gets the subscription plans for Mutiny+ subscriptions
-    #[wasm_bindgen]
-    pub async fn get_subscription_plans(&self) -> Result<JsValue /* Vec<Plan> */, MutinyJsError> {
-        let plans = self.inner.get_subscription_plans().await?;
-
-        Ok(JsValue::from_serde(&plans)?)
-    }
-
-    /// Subscribes to a Mutiny+ plan with a specific plan id.
-    ///
-    /// Returns a lightning invoice so that the plan can be paid for to start it.
-    #[wasm_bindgen]
-    pub async fn subscribe_to_plan(&self, id: u8) -> Result<MutinyInvoice, MutinyJsError> {
-        Ok(self.inner.subscribe_to_plan(id).await?.into())
-    }
-
-    /// Pay the subscription invoice. This will post a NWC automatically afterwards.
-    pub async fn pay_subscription_invoice(
-        &self,
-        invoice_str: String,
-        autopay: bool,
-    ) -> Result<(), MutinyJsError> {
-        let invoice = Bolt11Invoice::from_str(&invoice_str)?;
-        self.inner
-            .pay_subscription_invoice(&invoice, autopay)
-            .await?;
-        Ok(())
-    }
-
-    /// Returns the user's nostr profile data
-    #[wasm_bindgen]
-    pub fn get_nostr_profile(&self) -> Result<JsValue, MutinyJsError> {
-        let profile = self.inner.nostr.get_profile()?;
-        Ok(JsValue::from_serde(&profile)?)
-    }
-
-    /// This should only be called when the user is setting up a new profile
-    /// never for an existing profile
-    pub async fn setup_new_profile(
-        &self,
-        name: Option<String>,
-        img_url: Option<String>,
-        lnurl: Option<String>,
-        nip05: Option<String>,
-    ) -> Result<JsValue, MutinyJsError> {
-        let img_url = img_url
-            .map(|i| nostr::Url::from_str(&i))
-            .transpose()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-
-        let lnurl = lnurl
-            .map(|l| {
-                LightningAddress::from_str(&l)
-                    .map(|a| a.lnurl())
-                    .or(LnUrl::from_str(&l))
-            })
-            .transpose()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-
-        let profile = self
-            .inner
-            .nostr
-            .setup_new_profile(name, img_url, lnurl, nip05)
-            .await?;
-        Ok(JsValue::from_serde(&profile)?)
-    }
-
-    /// Sets the user's nostr profile data
-    #[wasm_bindgen]
-    pub async fn edit_nostr_profile(
-        &self,
-        name: Option<String>,
-        img_url: Option<String>,
-        lnurl: Option<String>,
-        nip05: Option<String>,
-    ) -> Result<JsValue, MutinyJsError> {
-        let img_url = img_url
-            .map(|i| nostr::Url::from_str(&i))
-            .transpose()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-
-        let lnurl = lnurl
-            .map(|l| {
-                LightningAddress::from_str(&l)
-                    .map(|a| a.lnurl())
-                    .or(LnUrl::from_str(&l))
-            })
-            .transpose()
-            .map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-
-        let profile = self
-            .inner
-            .nostr
-            .edit_profile(name, img_url, lnurl, nip05)
-            .await?;
-        Ok(JsValue::from_serde(&profile)?)
-    }
-
-    /// Sets the user's nostr profile data to a "deleted" state
-    #[wasm_bindgen]
-    pub async fn delete_profile(&self) -> Result<JsValue, MutinyJsError> {
-        let profile = self.inner.nostr.delete_profile().await?;
-        Ok(JsValue::from_serde(&profile)?)
-    }
-
-    /// Syncs all of our nostr data from the configured primal instance
-    pub async fn sync_nostr(&self) -> Result<(), MutinyJsError> {
-        self.inner.sync_nostr().await?;
-        Ok(())
-    }
-
-    /// Get contacts from the given npub and sync them to the wallet
-    pub async fn sync_nostr_contacts(&self, npub_str: String) -> Result<(), MutinyJsError> {
-        let npub = parse_npub_or_nip05(&npub_str).await?;
-        self.inner.sync_nostr_contacts(npub).await?;
-        Ok(())
-    }
-
-    /// Gets the list of npubs we're following
-    pub async fn get_follow_list(
-        &self,
-    ) -> Result<JsValue /* Vec<nostr::PublicKey> */, MutinyJsError> {
-        let list = self.inner.nostr.get_follow_list()?;
-        let npubs: Vec<String> = list
-            .into_iter()
-            .map(|n| n.to_bech32().expect("bech32"))
-            .collect();
-        Ok(JsValue::from_serde(&npubs)?)
-    }
-
-    /// Follows the npub on nostr if we're not already following
-    pub async fn follow_npub(&self, npub: String) -> Result<(), MutinyJsError> {
-        let npub = parse_npub(&npub)?;
-        Ok(self.inner.nostr.follow_npub(npub).await?)
-    }
-
-    /// Unfollows the npub on nostr if we're following them
-    ///
-    /// Returns true if we were following them before
-    pub async fn unfollow_npub(&self, npub: String) -> Result<(), MutinyJsError> {
-        let npub = parse_npub(&npub)?;
-        Ok(self.inner.nostr.unfollow_npub(npub).await?)
-    }
-
-    /// Get dm conversation between us and given npub
-    /// Returns a vector of messages sorted by newest first
-    pub async fn get_dm_conversation(
-        &self,
-        npub: String,
-        limit: u64,
-        until: Option<u64>,
-        since: Option<u64>,
-    ) -> Result<JsValue /* Vec<DirectMessage> */, MutinyJsError> {
-        let npub = parse_npub(&npub)?;
-        let vec = self
-            .inner
-            .get_dm_conversation(npub, limit, until, since)
-            .await?;
-
-        let dms: Vec<DirectMessage> = vec.into_iter().map(|i| i.into()).collect();
-        Ok(JsValue::from_serde(&dms)?)
-    }
-
-    /// Sends a DM to the given npub
-    pub async fn send_dm(&self, npub: String, message: String) -> Result<String, MutinyJsError> {
-        let npub = parse_npub(&npub)?;
-        let event_id = self.inner.nostr.send_dm(npub, message).await?;
-        Ok(event_id.to_hex())
-    }
-
-    /// Uploads a profile pic to nostr.build and returns the uploaded file's URL
-    pub async fn upload_profile_pic(&self, img_base64: String) -> Result<String, MutinyJsError> {
-        let bytes = base64::decode(&img_base64)?;
-        Ok(self.inner.upload_profile_pic(bytes).await?)
     }
 
     /// Checks if a given LNURL name is available
@@ -1995,27 +1173,6 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub fn convert_sats_to_btc(sats: u64) -> f64 {
         bitcoin::Amount::from_sat(sats).to_btc()
-    }
-
-    /// Convert an npub string to a hex string
-    #[wasm_bindgen]
-    pub async fn nsec_to_npub(nsec: String) -> Result<String, MutinyJsError> {
-        let nsec = Keys::parse(nsec).map_err(|_| MutinyJsError::InvalidArgumentsError)?;
-        Ok(nsec.public_key().to_bech32().expect("bech32"))
-    }
-
-    /// Convert an npub string to a hex string
-    #[wasm_bindgen]
-    pub async fn npub_to_hexpub(npub: String) -> Result<String, MutinyJsError> {
-        let npub = parse_npub_or_nip05(&npub).await?;
-        Ok(npub.serialize().to_lower_hex_string())
-    }
-
-    /// Convert an hex string to a npub string
-    #[wasm_bindgen]
-    pub async fn hexpub_to_npub(npub: String) -> Result<String, MutinyJsError> {
-        let npub = parse_npub_or_nip05(&npub).await?;
-        Ok(npub.to_bech32().expect("bech32"))
     }
 
     /// If the invoice is from a node that gives hodl invoices

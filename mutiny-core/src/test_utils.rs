@@ -37,33 +37,6 @@ pub async fn create_vss_client() -> MutinyVssClient {
     )
 }
 
-pub fn create_nwc_request(nwc: &NostrWalletConnectURI, invoice: String) -> Event {
-    let req = Request {
-        method: Method::PayInvoice,
-        params: RequestParams::PayInvoice(PayInvoiceRequestParams {
-            id: None,
-            invoice,
-            amount: None,
-        }),
-    };
-
-    sign_nwc_request(nwc, req)
-}
-
-pub fn sign_nwc_request(nwc: &NostrWalletConnectURI, req: Request) -> Event {
-    let encrypted = encrypt(&nwc.secret, &nwc.public_key, req.as_json()).unwrap();
-    let p_tag = Tag::PublicKey {
-        public_key: nwc.public_key,
-        relay_url: None,
-        alias: None,
-        uppercase: false,
-    };
-
-    EventBuilder::new(Kind::WalletConnectRequest, encrypted, [p_tag])
-        .to_event(&Keys::new(nwc.secret.clone()))
-        .unwrap()
-}
-
 pub(crate) async fn create_mutiny_wallet<S: MutinyStorage>(storage: S) -> MutinyWallet<S> {
     let network = Network::Regtest;
     let xpriv = ExtendedPrivKey::new_master(network, &[0; 32]).unwrap();
@@ -209,10 +182,6 @@ use lightning_invoice::{Bolt11Invoice, InvoiceBuilder};
 use lightning_transaction_sync::EsploraSyncClient;
 #[allow(unused_imports)]
 pub(crate) use log;
-use nostr::nips::nip04::encrypt;
-use nostr::nips::nip47::*;
-use nostr::prelude::NostrWalletConnectURI;
-use nostr::{Event, EventBuilder, JsonUtil, Keys, Kind, Tag};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use uuid::Uuid;

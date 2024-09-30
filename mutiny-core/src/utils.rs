@@ -1,6 +1,5 @@
 use crate::error::MutinyError;
-use crate::nostr::NostrKeySource;
-use bitcoin::key::XOnlyPublicKey;
+
 use bitcoin::Network;
 use core::cell::{RefCell, RefMut};
 use core::ops::{Deref, DerefMut};
@@ -14,12 +13,7 @@ use lightning::routing::scoring::{LockableScore, ScoreLookUp, ScoreUpdate};
 use lightning::util::ser::Writeable;
 use lightning::util::ser::Writer;
 use lightning_invoice::Bolt11Invoice;
-use nostr::nips::nip05;
-use nostr::{Event, Filter, FromBech32, JsonUtil, Keys, Kind, Metadata};
 use reqwest::Client;
-use serde_json::Value;
-use std::collections::{HashMap, HashSet};
-use std::str::FromStr;
 
 pub const FETCH_TIMEOUT: i32 = 30_000;
 
@@ -93,26 +87,6 @@ pub fn get_random_bip32_child_index() -> u32 {
     // Restrict to [0, 2^31 - 1]
     let max_value = 2u32.pow(31) - 1;
     random_value % (max_value + 1)
-}
-
-pub(crate) fn build_nostr_key_source(
-    keys: Option<Keys>,
-    #[cfg(target_arch = "wasm32")] extension_pk: Option<::nostr::PublicKey>,
-) -> Result<NostrKeySource, MutinyError> {
-    #[cfg(target_arch = "wasm32")]
-    if keys.is_some() && extension_pk.is_some() {
-        return Err(MutinyError::InvalidArgumentsError);
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    if let Some(pk) = extension_pk {
-        return Ok(NostrKeySource::Extension(pk));
-    }
-
-    match keys {
-        None => Ok(NostrKeySource::Derived),
-        Some(keys) => Ok(NostrKeySource::Imported(keys)),
-    }
 }
 
 pub type LockResult<Guard> = Result<Guard, ()>;
@@ -209,75 +183,6 @@ where
     F: future::Future<Output = ()> + Send + 'static,
 {
     tokio::spawn(future);
-}
-
-pub(crate) fn parse_profile_metadata(data: Vec<Value>) -> HashMap<nostr::PublicKey, Metadata> {
-    data.into_iter()
-        .filter_map(|v| {
-            Event::from_value(v)
-                .ok()
-                .and_then(|e| Metadata::from_json(&e.content).ok().map(|m| (e.pubkey, m)))
-        })
-        .collect()
-}
-
-pub fn parse_npub(str: &str) -> Result<nostr::PublicKey, MutinyError> {
-    match XOnlyPublicKey::from_str(str) {
-        Ok(x) => Ok(x.into()),
-        Err(_) => Ok(nostr::PublicKey::from_bech32(str)?),
-    }
-}
-
-pub async fn parse_npub_or_nip05(str: &str) -> Result<nostr::PublicKey, MutinyError> {
-    match XOnlyPublicKey::from_str(str) {
-        Ok(x) => Ok(x.into()),
-        Err(_) => match nostr::PublicKey::from_bech32(str) {
-            Ok(x) => Ok(x),
-            Err(_) => {
-                let profile = nip05::get_profile(str, None).await?;
-                Ok(profile.public_key)
-            }
-        },
-    }
-}
-
-/// Compares a list of filters and checks if they are effectively equal
-/// The main thing we do not care about is the timestamps
-pub fn compare_filters_vec(a: &[Filter], b: &[Filter]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-
-    // compare that we have all the same kinds
-    let agg_kinds_a: HashSet<Kind> = a
-        .iter()
-        .flat_map(|i| i.kinds.clone().unwrap_or_default())
-        .collect();
-    let agg_kinds_b: HashSet<Kind> = b
-        .iter()
-        .flat_map(|i| i.kinds.clone().unwrap_or_default())
-        .collect();
-
-    if agg_kinds_a != agg_kinds_b {
-        return false;
-    }
-
-    // compare same authors
-    let agg_authors_a: HashSet<nostr::PublicKey> = a
-        .iter()
-        .flat_map(|i| i.authors.clone().unwrap_or_default())
-        .collect();
-    let agg_authors_b: HashSet<nostr::PublicKey> = b
-        .iter()
-        .flat_map(|i| i.authors.clone().unwrap_or_default())
-        .collect();
-
-    if agg_authors_a != agg_authors_b {
-        return false;
-    }
-
-    // if we have the same authors and kinds they are effectively the same filters to us
-    true
 }
 
 /// Returns the version of a channel monitor from a serialized version

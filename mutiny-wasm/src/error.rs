@@ -236,9 +236,6 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::InvalidArgumentsError => MutinyJsError::InvalidArgumentsError,
             MutinyError::LspAmountTooHighError => MutinyJsError::LspAmountTooHighError,
             MutinyError::NetworkMismatch => MutinyJsError::NetworkMismatch,
-            MutinyError::PayjoinConfigError => MutinyJsError::PayjoinConfigError,
-            MutinyError::PayjoinCreateRequest => MutinyJsError::PayjoinCreateRequest,
-            MutinyError::PayjoinResponse(e) => MutinyJsError::PayjoinResponse(e.to_string()),
         }
     }
 }
@@ -270,12 +267,6 @@ impl From<bitcoin::address::Error> for MutinyJsError {
 impl From<lnurl::Error> for MutinyJsError {
     fn from(e: lnurl::Error) -> Self {
         MutinyError::from(e).into()
-    }
-}
-
-impl From<nostr::nips::nip19::Error> for MutinyJsError {
-    fn from(_: nostr::nips::nip19::Error) -> Self {
-        Self::InvalidArgumentsError
     }
 }
 

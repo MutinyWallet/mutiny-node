@@ -27,12 +27,12 @@ use crate::{
 use anyhow::anyhow;
 use async_lock::RwLock;
 use bdk::chain::{BlockId, ConfirmationTime};
-use bdk::{wallet::AddressIndex, FeeRate, LocalOutput};
+use bdk::{wallet::AddressIndex, LocalOutput};
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::bip32::ExtendedPrivKey;
 use bitcoin::blockdata::script;
 use bitcoin::hashes::hex::FromHex;
-use bitcoin::psbt::PartiallySignedTransaction;
+
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use esplora_client::{AsyncClient, Builder};
@@ -49,13 +49,11 @@ use lightning::util::logger::*;
 use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 use lightning_invoice::Bolt11Invoice;
 use lightning_transaction_sync::EsploraSyncClient;
-use payjoin::Uri;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cmp::max;
-use std::io::Cursor;
-use std::str::FromStr;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -686,84 +684,6 @@ impl<S: MutinyStorage> NodeManager<S> {
             "Could not get wallet lock to get wallet balance"
         );
         Err(MutinyError::WalletOperationFailed)
-    }
-
-    pub async fn send_payjoin(
-        &self,
-        uri: Uri<'_, NetworkUnchecked>,
-        amount: u64,
-        labels: Vec<String>,
-        fee_rate: Option<f32>,
-    ) -> Result<Txid, MutinyError> {
-        log_trace!(self.logger, "calling send_payjoin");
-
-        let uri = uri
-            .require_network(self.network)
-            .map_err(|_| MutinyError::IncorrectNetwork)?;
-        let address = uri.address.clone();
-        let original_psbt = self.wallet.create_signed_psbt(address, amount, fee_rate)?;
-
-        let fee_rate = if let Some(rate) = fee_rate {
-            FeeRate::from_sat_per_vb(rate)
-        } else {
-            let sat_per_kwu = self.fee_estimator.get_normal_fee_rate();
-            FeeRate::from_sat_per_kwu(sat_per_kwu as f32)
-        };
-        let fee_rate = payjoin::bitcoin::FeeRate::from_sat_per_kwu(fee_rate.sat_per_kwu() as u64);
-        let original_psbt = payjoin::bitcoin::psbt::PartiallySignedTransaction::from_str(
-            &original_psbt.to_string(),
-        )
-        .map_err(|_| MutinyError::WalletOperationFailed)?;
-        log_debug!(self.logger, "Creating payjoin request");
-        let (req, ctx) =
-            payjoin::send::RequestBuilder::from_psbt_and_uri(original_psbt.clone(), uri)
-                .unwrap()
-                .build_recommended(fee_rate)
-                .map_err(|_| MutinyError::PayjoinCreateRequest)?
-                .extract_v1()?;
-
-        let client = Client::builder()
-            .build()
-            .map_err(|e| MutinyError::Other(e.into()))?;
-
-        log_debug!(self.logger, "Sending payjoin request");
-        let res = client
-            .post(req.url)
-            .body(req.body)
-            .header("Content-Type", "text/plain")
-            .send()
-            .await
-            .map_err(|_| MutinyError::PayjoinCreateRequest)?
-            .bytes()
-            .await
-            .map_err(|_| MutinyError::PayjoinCreateRequest)?;
-
-        let mut cursor = Cursor::new(res.to_vec());
-
-        log_debug!(self.logger, "Processing payjoin response");
-        let proposal_psbt = ctx.process_response(&mut cursor).map_err(|e| {
-            // unrecognized error contents may only appear in debug logs and will not Display
-            log_debug!(self.logger, "Payjoin response error: {:?}", e);
-            e
-        })?;
-
-        // convert to pdk types
-        let original_psbt = PartiallySignedTransaction::from_str(&original_psbt.to_string())
-            .map_err(|_| MutinyError::PayjoinConfigError)?;
-        let proposal_psbt = PartiallySignedTransaction::from_str(&proposal_psbt.to_string())
-            .map_err(|_| MutinyError::PayjoinConfigError)?;
-
-        log_debug!(self.logger, "Sending payjoin..");
-        let tx = self
-            .wallet
-            .send_payjoin(original_psbt, proposal_psbt, labels)
-            .await?;
-        let txid = tx.txid();
-        self.broadcast_transaction(tx).await?;
-        log_debug!(self.logger, "Payjoin broadcast! TXID: {txid}");
-
-        log_trace!(self.logger, "finished calling send_payjoin");
-        Ok(txid)
     }
 
     /// Sends an on-chain transaction to the given address.

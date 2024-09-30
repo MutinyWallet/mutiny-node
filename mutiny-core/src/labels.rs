@@ -5,11 +5,10 @@ use bitcoin::Address;
 use lightning_invoice::Bolt11Invoice;
 use lnurl::lightning_address::LightningAddress;
 use lnurl::lnurl::LnUrl;
-use nostr::Metadata;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::str::FromStr;
+
 use uuid::Uuid;
 
 const ADDRESS_LABELS_MAP_KEY: &str = "address_labels";
@@ -31,8 +30,6 @@ pub struct LabelItem {
 pub struct Contact {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub npub: Option<nostr::PublicKey>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub ln_address: Option<LightningAddress>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lnurl: Option<LnUrl>,
@@ -42,40 +39,6 @@ pub struct Contact {
 }
 
 impl Contact {
-    /// Update the contact with metadata from their Nostr profile
-    pub fn update_with_metadata(mut self, metadata: Metadata) -> Self {
-        self.name = metadata
-            .display_name
-            .filter(|n| !n.is_empty())
-            .or(metadata.name.filter(|n| !n.is_empty()))
-            .unwrap_or(self.name);
-
-        let ln_address = metadata
-            .lud16
-            .and_then(|lud16| LightningAddress::from_str(&lud16).ok());
-        self.ln_address = ln_address.or(self.ln_address);
-
-        let lnurl = metadata
-            .lud06
-            .and_then(|lud06| LnUrl::from_str(&lud06).ok());
-        self.lnurl = lnurl.or(self.lnurl);
-
-        self.image_url = metadata
-            .picture
-            .filter(|p| !p.is_empty())
-            .or(self.image_url);
-
-        self
-    }
-
-    pub fn create_from_metadata(npub: nostr::PublicKey, metadata: Metadata) -> Self {
-        let init = Self {
-            npub: Some(npub),
-            ..Default::default()
-        };
-        init.update_with_metadata(metadata)
-    }
-
     /// Checks if the contact has the given lnurl as either a lnurl or a lightning address
     pub fn has_lnurl(&self, lnurl: &LnUrl) -> bool {
         if self.lnurl.as_ref().is_some_and(|l| l == lnurl) {
@@ -151,20 +114,6 @@ pub trait LabelStorage {
         for (id, contact) in contacts {
             if contact.has_lnurl(lnurl) {
                 return Ok(Some(id));
-            }
-        }
-        Ok(None)
-    }
-    /// Finds a contact that has the given npub
-    fn get_contact_for_npub(
-        &self,
-        npub: nostr::PublicKey,
-    ) -> Result<Option<(String, Contact)>, MutinyError> {
-        // todo this is not efficient, we should have a map of npub to contact
-        let contacts = self.get_contacts()?;
-        for (id, contact) in contacts {
-            if contact.npub == Some(npub) {
-                return Ok(Some((id, contact)));
             }
         }
         Ok(None)
@@ -596,7 +545,6 @@ mod tests {
             Uuid::new_v4().to_string(),
             Contact {
                 name: "Satoshi Nakamoto".to_string(),
-                npub: None,
                 ln_address: None,
                 lnurl: None,
                 image_url: None,
@@ -607,7 +555,6 @@ mod tests {
             Uuid::new_v4().to_string(),
             Contact {
                 name: "Hal Finney".to_string(),
-                npub: None,
                 ln_address: None,
                 lnurl: None,
                 image_url: None,
@@ -618,7 +565,6 @@ mod tests {
             Uuid::new_v4().to_string(),
             Contact {
                 name: "Nick Szabo".to_string(),
-                npub: None,
                 ln_address: None,
                 lnurl: None,
                 image_url: None,
@@ -771,7 +717,6 @@ mod tests {
 
         let contact = Contact {
             name: "Satoshi Nakamoto".to_string(),
-            npub: None,
             ln_address: None,
             lnurl: None,
             image_url: None,
@@ -792,7 +737,6 @@ mod tests {
 
         let contact = Contact {
             name: "Satoshi Nakamoto".to_string(),
-            npub: None,
             ln_address: None,
             lnurl: None,
             image_url: None,
@@ -817,7 +761,6 @@ mod tests {
 
         let contact = Contact {
             name: "Satoshi Nakamoto".to_string(),
-            npub: None,
             ln_address: None,
             lnurl: None,
             image_url: None,

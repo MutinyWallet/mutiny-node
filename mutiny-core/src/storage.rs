@@ -22,7 +22,6 @@ use futures_util::lock::Mutex;
 use hex_conservative::*;
 use lightning::{ln::PaymentHash, util::logger::Logger};
 use lightning::{log_error, log_trace};
-use nostr::{Event, Kind, Metadata};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
@@ -559,22 +558,6 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
         }
     }
 
-    fn get_nostr_profile(&self) -> Result<Option<Metadata>, MutinyError> {
-        self.get_data(NOSTR_PROFILE_METADATA)
-    }
-
-    fn set_nostr_profile(&self, metadata: &Metadata) -> Result<(), MutinyError> {
-        self.set_data(NOSTR_PROFILE_METADATA.to_string(), metadata, None)
-    }
-
-    fn delete_nostr_caches(&self) -> Result<(), MutinyError> {
-        self.delete(&[
-            NOSTR_PROFILE_METADATA,
-            LAST_DM_SYNC_TIME_KEY,
-            NOSTR_CONTACT_LIST,
-        ])
-    }
-
     fn get_device_id(&self) -> Result<String, MutinyError> {
         match self.get_data(DEVICE_ID_KEY)? {
             Some(id) => Ok(id),
@@ -1070,34 +1053,6 @@ pub(crate) fn list_payment_info<S: MutinyStorage>(
             (PaymentHash(hash), value)
         })
         .collect())
-}
-
-/// Update the contact list in storage, chooses the event that is newer
-/// If the event is older than the one in storage, it will be ignored
-///
-/// Returns true if the event was updated
-pub(crate) fn update_nostr_contact_list<S: MutinyStorage>(
-    storage: &S,
-    contact_list_event: Event,
-) -> Result<bool, MutinyError> {
-    if contact_list_event.kind != Kind::ContactList {
-        return Err(MutinyError::InvalidArgumentsError);
-    }
-
-    // if the event is for the same key and is older than the one in storage
-    // if it is a different key, always save it, that means the user has imported an nsec
-    // otherwise ignore it
-    match storage.get_data::<Event>(NOSTR_CONTACT_LIST) {
-        Ok(Some(event))
-            if event.created_at > contact_list_event.created_at
-                && contact_list_event.pubkey == event.pubkey =>
-        {
-            Ok(false)
-        }
-        _ => storage
-            .set_data(NOSTR_CONTACT_LIST.to_string(), contact_list_event, None)
-            .map(|_| true),
-    }
 }
 
 #[derive(Clone)]

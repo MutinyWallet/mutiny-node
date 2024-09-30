@@ -9,7 +9,6 @@ use lightning_invoice::ParseOrSemanticError;
 use lightning_rapid_gossip_sync::GraphSyncError;
 use lightning_transaction_sync::TxSyncError;
 use log::error;
-use nostr::nips::nip05;
 use std::string::FromUtf8Error;
 use thiserror::Error;
 
@@ -158,15 +157,6 @@ pub enum MutinyError {
     /// Cannot change password to the same password
     #[error("Cannot change password to the same password.")]
     SamePassword,
-    /// Payjoin request creation failed.
-    #[error("Failed to create payjoin request.")]
-    PayjoinCreateRequest,
-    /// Payjoin request failed.
-    #[error("Payjoin response error: {0}")]
-    PayjoinResponse(payjoin::send::ResponseError),
-    /// Payjoin configuration error
-    #[error("Payjoin configuration failed.")]
-    PayjoinConfigError,
     /// Error calling Cashu Mint
     #[error("Error calling Cashu Mint.")]
     CashuMintError,
@@ -516,73 +506,6 @@ impl From<BuildFeeBumpError> for MutinyError {
 impl From<SignerError> for MutinyError {
     fn from(_: SignerError) -> Self {
         Self::WalletOperationFailed
-    }
-}
-
-impl From<nostr_sdk::client::Error> for MutinyError {
-    fn from(_e: nostr_sdk::client::Error) -> Self {
-        Self::NostrError
-    }
-}
-
-impl From<nostr::nips::nip04::Error> for MutinyError {
-    fn from(_e: nostr::nips::nip04::Error) -> Self {
-        Self::NostrError
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-impl From<nostr::nips::nip07::Error> for MutinyError {
-    fn from(_e: nostr::nips::nip07::Error) -> Self {
-        Self::Nip07Extension
-    }
-}
-
-impl From<nostr::nips::nip57::Error> for MutinyError {
-    fn from(_e: nostr::nips::nip57::Error) -> Self {
-        Self::NostrError
-    }
-}
-
-impl From<nip05::Error> for MutinyError {
-    fn from(e: nip05::Error) -> Self {
-        match e {
-            nip05::Error::InvalidFormat => Self::InvalidArgumentsError,
-            nip05::Error::ImpossibleToVerify => Self::NostrError,
-            nip05::Error::Reqwest(_) => Self::NostrError,
-            nip05::Error::Json(_) => Self::NostrError,
-            nip05::Error::Keys(_) => Self::NostrError,
-        }
-    }
-}
-
-impl From<nostr::nips::nip19::Error> for MutinyError {
-    fn from(_e: nostr::nips::nip19::Error) -> Self {
-        Self::InvalidArgumentsError
-    }
-}
-
-impl From<nostr::event::builder::Error> for MutinyError {
-    fn from(_e: nostr::event::builder::Error) -> Self {
-        Self::NostrError
-    }
-}
-
-impl From<nostr_sdk::signer::Error> for MutinyError {
-    fn from(_e: nostr_sdk::signer::Error) -> Self {
-        Self::NostrError
-    }
-}
-
-impl From<payjoin::send::CreateRequestError> for MutinyError {
-    fn from(_e: payjoin::send::CreateRequestError) -> Self {
-        Self::PayjoinCreateRequest
-    }
-}
-
-impl From<payjoin::send::ResponseError> for MutinyError {
-    fn from(e: payjoin::send::ResponseError) -> Self {
-        Self::PayjoinResponse(e)
     }
 }
 
