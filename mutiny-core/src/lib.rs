@@ -895,6 +895,9 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         spawn(async move {
             loop {
                 if stop_clone.load(Ordering::Relaxed) {
+                    if let Err(e) = storage_clone.release_device_lock().await {
+                        log_error!(logger_clone, "Error releasing device lock: {e}");
+                    }
                     break;
                 }
                 sleep((DEVICE_LOCK_INTERVAL_SECS * 1_000) as i32).await;
