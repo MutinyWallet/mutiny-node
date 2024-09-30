@@ -21,7 +21,7 @@ use bitcoin::{secp256k1::ThirtyTwoByteHash, Txid};
 use futures_util::lock::Mutex;
 use hex_conservative::*;
 use lightning::{ln::PaymentHash, util::logger::Logger};
-use lightning::{log_error, log_trace};
+use lightning::{log_debug, log_error, log_trace};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
@@ -573,10 +573,12 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
         self.get_data(DEVICE_LOCK_KEY)
     }
 
-    async fn set_device_lock(&self) -> Result<(), MutinyError> {
+    async fn set_device_lock(&self, logger: &MutinyLogger) -> Result<(), MutinyError> {
         let device = self.get_device_id()?;
         if let Some(lock) = self.get_device_lock()? {
             if lock.is_locked(&device) {
+                log_debug!(logger, "current device is {}", device);
+                log_debug!(logger, "locked device is {}", lock.device);
                 return Err(MutinyError::AlreadyRunning);
             }
         }
@@ -587,10 +589,12 @@ pub trait MutinyStorage: Clone + Sized + Send + Sync + 'static {
             .await
     }
 
-    async fn release_device_lock(&self) -> Result<(), MutinyError> {
+    async fn release_device_lock(&self, logger: &MutinyLogger) -> Result<(), MutinyError> {
         let device = self.get_device_id()?;
         if let Some(lock) = self.get_device_lock()? {
             if lock.is_locked(&device) {
+                log_debug!(logger, "current device is {}", device);
+                log_debug!(logger, "locked device is {}", lock.device);
                 return Err(MutinyError::AlreadyRunning);
             }
         }
@@ -1097,8 +1101,10 @@ pub(crate) fn get_payment_hash_from_key<'a>(key: &'a str, prefix: &str) -> &'a s
 mod tests {
     use crate::test_utils::*;
     use crate::utils::sleep;
+    use crate::MutinyLogger;
     use crate::{encrypt::encryption_key_from_pass, storage::MemoryStorage};
     use crate::{keymanager, storage::MutinyStorage};
+    use std::sync::Arc;
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -1143,11 +1149,13 @@ mod tests {
         let storage = MemoryStorage::new(None, None, Some(vss.clone()));
         storage.load_from_vss().await.unwrap();
 
+        let logger = Arc::new(MutinyLogger::default());
+
         let id = storage.get_device_id().unwrap();
         let lock = storage.get_device_lock().unwrap();
         assert_eq!(None, lock);
 
-        storage.set_device_lock().await.unwrap();
+        storage.set_device_lock(&logger).await.unwrap();
         // sleep 1 second to make sure it writes to VSS
         sleep(1_000).await;
 
@@ -1160,7 +1168,7 @@ mod tests {
         assert_eq!(lock.unwrap().device, id);
 
         // make sure we can set lock again, should work because same device id
-        storage.set_device_lock().await.unwrap();
+        storage.set_device_lock(&logger).await.unwrap();
         // sleep 1 second to make sure it writes to VSS
         sleep(1_000).await;
 
@@ -1182,7 +1190,7 @@ mod tests {
         assert_eq!(lock.unwrap().device, id);
 
         assert_eq!(
-            storage.set_device_lock().await,
+            storage.set_device_lock(&logger).await,
             Err(crate::MutinyError::AlreadyRunning)
         );
     }

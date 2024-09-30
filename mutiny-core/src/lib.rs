@@ -105,7 +105,7 @@ use web_time::Instant;
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 
-pub const DEVICE_LOCK_INTERVAL_SECS: u64 = 30;
+pub const DEVICE_LOCK_INTERVAL_SECS: u64 = 5;
 const BITCOIN_PRICE_CACHE_SEC: u64 = 300;
 const DEFAULT_PAYMENT_TIMEOUT: u64 = 30;
 const DUST_LIMIT: u64 = 546;
@@ -803,7 +803,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             if let Some(lock) = self.storage.get_device_lock()? {
                 log_info!(logger, "Current device lock: {lock:?}");
             }
-            self.storage.set_device_lock().await?;
+            self.storage.set_device_lock(&logger).await?;
             log_trace!(
                 logger,
                 "Device lock set: took {}ms",
@@ -820,15 +820,16 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         spawn(async move {
             loop {
                 if stop_clone.load(Ordering::Relaxed) {
-                    if let Err(e) = storage_clone.release_device_lock().await {
+                    log_debug!(logger_clone, "stopping claim device lock");
+                    if let Err(e) = storage_clone.release_device_lock(&logger_clone).await {
                         log_error!(logger_clone, "Error releasing device lock: {e}");
                     }
                     break;
                 }
-                sleep((DEVICE_LOCK_INTERVAL_SECS * 1_000) as i32).await;
-                if let Err(e) = storage_clone.set_device_lock().await {
+                if let Err(e) = storage_clone.set_device_lock(&logger_clone).await {
                     log_error!(logger_clone, "Error setting device lock: {e}");
                 }
+                sleep((DEVICE_LOCK_INTERVAL_SECS * 1_000) as i32).await;
             }
         });
         log_trace!(logger, "finished spawning claim device lock");
