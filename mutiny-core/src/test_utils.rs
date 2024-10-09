@@ -193,7 +193,6 @@ use crate::onchain::{get_esplora_url, OnChainWallet};
 use crate::scorer::{HubPreferentialScorer, ProbScorer};
 use crate::storage::MutinyStorage;
 use crate::utils::{now, Mutex};
-use crate::vss::MutinyVssClient;
 use crate::MutinyWallet;
 use crate::{chain::MutinyChain, MutinyWalletBuilder};
 use crate::{fees::MutinyFeeEstimator, MutinyWalletConfigBuilder};

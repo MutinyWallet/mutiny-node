@@ -284,7 +284,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                 amount_msat,
                 htlcs,
                 sender_intended_total_msat,
-                onion_fields,
+                onion_fields: _,
             } => {
                 log_debug!(self.logger, "EVENT: PaymentClaimed claimed payment from payment hash {} of {} millisatoshis ({sender_intended_total_msat:?} intended)  from {} htlcs", payment_hash, amount_msat, htlcs.len());
 
@@ -631,28 +631,18 @@ impl<S: MutinyStorage> EventHandler<S> {
             }
             Event::FundingTxBroadcastSafe {
                 channel_id,
-                user_channel_id,
-                funding_txo,
                 counterparty_node_id,
-                former_temporary_channel_id,
+                ..
             } => {
                 log_debug!(
                     self.logger,
                     "EVENT: FundingTxBroadcastSafe: {counterparty_node_id:?}/{channel_id}"
                 );
             }
-            Event::InvoiceReceived {
-                payment_id,
-                invoice,
-                context,
-                responder,
-            } => {
+            Event::InvoiceReceived { payment_id, .. } => {
                 log_debug!(self.logger, "EVENT: InvoiceReceived: {payment_id}");
             }
-            Event::OnionMessageIntercepted {
-                peer_node_id,
-                message,
-            } => {
+            Event::OnionMessageIntercepted { peer_node_id, .. } => {
                 log_debug!(
                     self.logger,
                     "EVENT: OnionMessageIntercepted: {peer_node_id}"

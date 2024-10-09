@@ -76,15 +76,15 @@ impl<S: MutinyStorage> CustomMessageHandler for MutinyMessageHandler<S> {
 
     fn peer_connected(
         &self,
-        their_node_id: &PublicKey,
-        msg: &lightning::ln::msgs::Init,
-        inbound: bool,
+        _their_node_id: &PublicKey,
+        _msg: &lightning::ln::msgs::Init,
+        _inbound: bool,
     ) -> Result<(), ()> {
         // ignore
         Ok(())
     }
 
-    fn peer_disconnected(&self, their_node_id: &PublicKey) {
+    fn peer_disconnected(&self, _their_node_id: &PublicKey) {
         // ignore
     }
 }

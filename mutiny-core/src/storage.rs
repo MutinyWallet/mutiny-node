@@ -18,7 +18,7 @@ use bdk_chain::Merge;
 use bdk_wallet::ChangeSet;
 use bip39::Mnemonic;
 use bitcoin::hashes::Hash;
-use bitcoin::{secp256k1::ThirtyTwoByteHash, Txid};
+use bitcoin::Txid;
 // use fedimint_ln_common::bitcoin::hashes::hex::ToHex;
 use futures_util::lock::Mutex;
 use hex_conservative::*;
@@ -1127,11 +1127,10 @@ pub(crate) fn get_payment_hash_from_key<'a>(key: &'a str, prefix: &str) -> &'a s
 #[cfg(test)]
 mod tests {
     use crate::test_utils::*;
-    use crate::utils::sleep;
-    use crate::MutinyLogger;
+
     use crate::{encrypt::encryption_key_from_pass, storage::MemoryStorage};
     use crate::{keymanager, storage::MutinyStorage};
-    use std::sync::Arc;
+
     use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
 
     wasm_bindgen_test_configure!(run_in_browser);

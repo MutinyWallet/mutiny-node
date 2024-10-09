@@ -7,6 +7,7 @@ use std::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use futures::lock::Mutex;
 
+#[allow(dead_code)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait SimpleWebSocket {

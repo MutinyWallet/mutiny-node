@@ -134,7 +134,7 @@ impl<S: MutinyStorage> NodeSigner for PhantomKeysManager<S> {
         invoice: &RawBolt11Invoice,
         recipient: Recipient,
     ) -> Result<RecoverableSignature, ()> {
-        self.inner.sign_invoice(&invoice, recipient)
+        self.inner.sign_invoice(invoice, recipient)
     }
 
     fn sign_bolt12_invoice_request(

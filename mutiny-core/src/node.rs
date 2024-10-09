@@ -32,7 +32,6 @@ use crate::{messagehandler::MutinyMessageHandler, storage::read_payment_info};
 use anyhow::{anyhow, Context};
 use bitcoin::bip32::Xpriv;
 use bitcoin::hashes::sha256::Hash as Sha256;
-use bitcoin::secp256k1::ThirtyTwoByteHash;
 use bitcoin::{hashes::Hash, secp256k1::PublicKey, FeeRate, Network, OutPoint};
 use core::time::Duration;
 use esplora_client::AsyncClient;
@@ -40,14 +39,13 @@ use futures_util::lock::Mutex;
 use hex_conservative::DisplayHex;
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
 use lightning::ln::channel_state::ChannelDetails;
-use lightning::ln::channelmanager::ChannelManager;
 use lightning::ln::invoice_utils::{
     create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice,
 };
 use lightning::ln::PaymentSecret;
 use lightning::onion_message::messenger::OnionMessenger as LdkOnionMessenger;
 use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
-use lightning::sign::{EntropySource, InMemorySigner, NodeSigner, Recipient};
+use lightning::sign::{InMemorySigner, NodeSigner, Recipient};
 use lightning::util::config::MaxDustHTLCExposure;
 use lightning::util::ser::Writeable;
 use lightning::{
@@ -1520,11 +1518,17 @@ impl<S: MutinyStorage> Node<S> {
 
         // check if we have enough balance to send
         let channels = self.channel_manager.list_channels();
-        if channels
-            .iter()
-            // only consider channels that are confirmed
-            .filter(|c| c.is_channel_ready)
-            .map(|c| c.balance_msat)
+        if self
+            .chain_monitor
+            .get_claimable_balances(
+                &channels
+                    .iter()
+                    // only consider channels that are confirmed
+                    .filter(|c| !c.is_channel_ready)
+                    .collect::<Vec<_>>(),
+            )
+            .into_iter()
+            .map(|b| b.claimable_amount_satoshis())
             .sum::<u64>()
             < send_msats
         {
@@ -1594,6 +1598,12 @@ impl<S: MutinyStorage> Node<S> {
                 log_error!(self.logger, "failed to make payment: {error:?}");
                 // call list channels to see what our channels are
                 let current_channels = self.channel_manager.list_channels();
+                let claimable_balance = self
+                    .chain_monitor
+                    .get_claimable_balances(&[])
+                    .into_iter()
+                    .map(|b| b.claimable_amount_satoshis())
+                    .sum();
                 log_debug!(
                     self.logger,
                     "current channel details: {:?}",
@@ -1603,7 +1613,12 @@ impl<S: MutinyStorage> Node<S> {
                 payment_info.status = HTLCStatus::Failed;
                 persist_payment_info(&self.persister.storage, &payment_hash, &payment_info, false)?;
 
-                Err(map_sending_failure(error, amt_msat, &current_channels))
+                Err(map_sending_failure(
+                    error,
+                    amt_msat,
+                    &current_channels,
+                    claimable_balance,
+                ))
             }
         };
         log_trace!(self.logger, "finished calling init_invoice_payment");
@@ -1728,11 +1743,17 @@ impl<S: MutinyStorage> Node<S> {
 
         // check if we have enough balance to send
         let channels = self.channel_manager.list_channels();
-        if channels
-            .iter()
-            // only consider channels that are confirmed
-            .filter(|c| c.is_channel_ready)
-            .map(|c| c.balance_msat)
+        if self
+            .chain_monitor
+            .get_claimable_balances(
+                &channels
+                    .iter()
+                    // only consider channels that are confirmed
+                    .filter(|c| !c.is_channel_ready)
+                    .collect::<Vec<_>>(),
+            )
+            .into_iter()
+            .map(|b| b.claimable_amount_satoshis())
             .sum::<u64>()
             < amt_msats
         {
@@ -1829,7 +1850,18 @@ impl<S: MutinyStorage> Node<S> {
                     false,
                 )?;
                 let current_channels = self.channel_manager.list_channels();
-                Err(map_sending_failure(error, amt_msats, &current_channels))
+                let claimable_balance = self
+                    .chain_monitor
+                    .get_claimable_balances(&[])
+                    .into_iter()
+                    .map(|b| b.claimable_amount_satoshis())
+                    .sum();
+                Err(map_sending_failure(
+                    error,
+                    amt_msats,
+                    &current_channels,
+                    claimable_balance,
+                ))
             }
         };
         log_trace!(self.logger, "finished calling init_keysend_payment");
@@ -2150,14 +2182,14 @@ fn map_sending_failure(
     error: RetryableSendFailure,
     amt_msat: u64,
     current_channels: &[ChannelDetails],
+    claimable_balance: u64,
 ) -> MutinyError {
     // If the payment failed because of a route not found, check if the amount was
     // valid and return the correct error
     match error {
         RetryableSendFailure::RouteNotFound => {
             // If the amount was greater than our balance, return an InsufficientBalance error
-            let ln_balance: u64 = current_channels.iter().map(|c| c.balance_msat).sum();
-            if amt_msat > ln_balance {
+            if amt_msat > claimable_balance {
                 return MutinyError::InsufficientBalance;
             }
 
@@ -2168,7 +2200,7 @@ fn map_sending_failure(
                 .flat_map(|c| c.unspendable_punishment_reserve)
                 .sum::<u64>()
                 * 1_000; // multiply by 1k to convert to msat
-            if ln_balance - reserved_amt < amt_msat {
+            if claimable_balance - reserved_amt < amt_msat {
                 return MutinyError::ReserveAmountError;
             }
 

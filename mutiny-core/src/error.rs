@@ -1,5 +1,4 @@
 use aes::cipher::block_padding::UnpadError;
-use anyhow::anyhow;
 use bdk_wallet::error::BuildFeeBumpError;
 use bdk_wallet::signer::SignerError;
 use bdk_wallet::tx_builder::AddUtxoError;
@@ -336,7 +335,7 @@ impl From<bdk_wallet::LoadError> for MutinyError {
             bdk_wallet::LoadError::MissingGenesis => Self::WalletOperationFailed,
             bdk_wallet::LoadError::MissingNetwork => Self::WalletOperationFailed,
             bdk_wallet::LoadError::MissingDescriptor(_keychain_kind) => Self::WalletOperationFailed,
-            bdk_wallet::LoadError::Mismatch(load_mismatch) => Self::WalletSyncError,
+            bdk_wallet::LoadError::Mismatch(_load_mismatch) => Self::WalletSyncError,
         }
     }
 }

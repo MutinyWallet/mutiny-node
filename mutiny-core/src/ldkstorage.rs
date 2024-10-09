@@ -3,14 +3,14 @@ use crate::fees::MutinyFeeEstimator;
 use crate::gossip::PROB_SCORER_KEY;
 use crate::keymanager::PhantomKeysManager;
 use crate::logging::MutinyLogger;
+use crate::node::Router;
 use crate::node::{default_user_config, ChainMonitor};
-use crate::node::{NetworkGraph, Router};
 use crate::nodemanager::ChannelClosure;
 use crate::storage::{IndexItem, MutinyStorage, VersionedValue};
 use crate::utils;
 use crate::utils::{sleep, spawn};
 use crate::{chain::MutinyChain, scorer::HubPreferentialScorer};
-use anyhow::{anyhow, Chain};
+use anyhow::anyhow;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::Network;
 use bitcoin::{BlockHash, Transaction};
@@ -22,13 +22,11 @@ use lightning::chain::transaction::OutPoint;
 use lightning::chain::{BestBlock, ChannelMonitorUpdateStatus};
 use lightning::io::Cursor;
 use lightning::ln::channelmanager::{
-    self, AChannelManager, ChainParameters, ChannelManager as LdkChannelManager,
-    ChannelManagerReadArgs,
+    self, ChainParameters, ChannelManager as LdkChannelManager, ChannelManagerReadArgs,
 };
-use lightning::routing::scoring::WriteableScore;
 use lightning::sign::{InMemorySigner, SpendableOutputDescriptor};
 use lightning::util::logger::Logger;
-use lightning::util::persist::{KVStore, Persister};
+use lightning::util::persist::Persister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
 use lightning::{chain::chainmonitor::Persist, log_trace};
 use lightning::{
@@ -609,7 +607,7 @@ impl<'a, S: MutinyStorage>
 
     fn persist_graph(
         &self,
-        network_graph: &lightning::routing::gossip::NetworkGraph<Arc<MutinyLogger>>,
+        _network_graph: &lightning::routing::gossip::NetworkGraph<Arc<MutinyLogger>>,
     ) -> Result<(), lightning::io::Error> {
         Ok(())
     }
@@ -676,7 +674,7 @@ impl<S: MutinyStorage> Persist<InMemorySigner> for MutinyNodePersister<S> {
         self.init_persist_monitor(key, monitor, version, update_id)
     }
 
-    fn archive_persisted_channel(&self, channel_funding_outpoint: OutPoint) {
+    fn archive_persisted_channel(&self, _channel_funding_outpoint: OutPoint) {
         // TODO
     }
 }
@@ -713,6 +711,7 @@ pub(crate) async fn persist_monitor(
 mod test {
     use crate::{
         event::PaymentInfo,
+        node::NetworkGraph,
         storage::{list_payment_info, MemoryStorage},
         PrivacyLevel,
     };
@@ -730,7 +729,7 @@ mod test {
     use bitcoin::{bip32::Xpriv, TxOut};
     use esplora_client::Builder;
     use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
-    use lightning::sign::EntropySource;
+
     use lightning::{ln::PaymentHash, routing::router::DefaultRouter};
     use lightning_transaction_sync::EsploraSyncClient;
     use std::str::FromStr;

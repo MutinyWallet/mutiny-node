@@ -33,9 +33,8 @@ use bitcoin::address::NetworkUnchecked;
 use bitcoin::bip32::Xpriv;
 use bitcoin::blockdata::script;
 use bitcoin::hashes::hex::FromHex;
-use bitcoin::psbt::Psbt;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::{Address, FeeRate, Network, OutPoint, Transaction, Txid};
+use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
 use esplora_client::{AsyncClient, Builder};
 use futures::future::join_all;
 use hex_conservative::DisplayHex;
@@ -483,7 +482,6 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             #[cfg(target_arch = "wasm32")]
             websocket_proxy_addr,
             user_rgs_url: c.user_rgs_url,
-            scorer_url: c.scorer_url,
             esplora,
             lsp_config,
             logger,
@@ -510,7 +508,6 @@ pub struct NodeManager<S: MutinyStorage> {
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
     user_rgs_url: Option<String>,
-    scorer_url: Option<String>,
     esplora: Arc<AsyncClient>,
     pub(crate) wallet: Arc<OnChainWallet<S>>,
     gossip_sync: Arc<RapidGossipSync>,
@@ -969,9 +966,13 @@ impl<S: MutinyStorage> NodeManager<S> {
         let nodes = self.nodes.read().await;
         let lightning_msats: u64 = nodes
             .iter()
-            .flat_map(|(_, n)| n.channel_manager.list_channels())
-            .map(|c| c.balance_msat)
-            .sum();
+            .flat_map(|(_, n)| {
+                n.chain_monitor
+                    .get_claimable_balances(&[])
+                    .into_iter()
+                    .map(|b| b.claimable_amount_satoshis())
+            })
+            .sum::<u64>();
 
         // get the amount in limbo from force closes
         let force_close: u64 = nodes
@@ -2029,7 +2030,7 @@ mod tests {
     use bdk_chain::ConfirmationTime;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::hashes::{sha256, Hash};
-    use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
+    use bitcoin::secp256k1::PublicKey;
     use bitcoin::{absolute, Network, Transaction, TxOut, Txid};
     use bitcoin::{bip32::Xpriv, transaction::Version, Amount};
     use hex_conservative::DisplayHex;
@@ -2166,17 +2167,17 @@ mod tests {
 
         let txs = nm.list_onchain().expect("should list onchain txs");
         let tx_opt = nm
-            .get_transaction(fake_tx.txid())
+            .get_transaction(fake_tx.compute_txid())
             .expect("should get transaction");
 
         assert_eq!(txs.len(), 1);
         let tx = &txs[0];
-        assert_eq!(tx.txid, Some(fake_tx.txid()));
+        assert_eq!(tx.txid, Some(fake_tx.compute_txid()));
         assert_eq!(tx.labels, labels);
 
         assert!(tx_opt.is_some());
         let tx = tx_opt.unwrap();
-        assert_eq!(tx.txid, Some(fake_tx.txid()));
+        assert_eq!(tx.txid, Some(fake_tx.compute_txid()));
         assert_eq!(tx.labels, labels);
     }
 

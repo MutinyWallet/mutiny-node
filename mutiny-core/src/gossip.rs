@@ -11,7 +11,6 @@ use lightning::util::logger::Logger;
 use lightning::util::ser::ReadableArgs;
 use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 use reqwest::Client;
-use reqwest::{Method, Url};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;

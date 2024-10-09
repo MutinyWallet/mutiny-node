@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use bdk_chain::spk_client::{
-    FullScanRequest, FullScanRequestBuilder, FullScanResult, SyncRequestBuilder, SyncResult,
+    FullScanRequestBuilder, FullScanResult, SyncRequestBuilder, SyncResult,
 };
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -52,7 +52,7 @@ pub struct OnChainWallet<S: MutinyStorage> {
 impl<S: MutinyStorage> OnChainWallet<S> {
     pub fn new(
         xprivkey: Xpriv,
-        mut db: S,
+        db: S,
         network: Network,
         esplora: Arc<AsyncClient>,
         fees: Arc<MutinyFeeEstimator<S>>,
@@ -117,7 +117,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
     }
 
     pub async fn broadcast_transaction(&self, tx: Transaction) -> Result<(), MutinyError> {
-        let txid = tx.txid();
+        let txid = tx.compute_txid();
         log_info!(self.logger, "Broadcasting transaction: {txid}");
         log_debug!(self.logger, "Transaction: {}", serialize(&tx).as_hex());
 
@@ -206,12 +206,12 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             self.storage.delete(&[NEED_FULL_SYNC_KEY])?;
         }
         // get first wallet lock that only needs to read
-        let (spks, txids, chain, prev_tip) = {
+        let (spks, txids) = {
             if let Ok(wallet) = self.wallet.try_read() {
                 let spk_vec = wallet
                     .spk_index()
                     .unused_spks()
-                    .map(|(_, v)| ScriptBuf::from(v))
+                    .map(|(_, v)| v)
                     .collect::<Vec<_>>();
 
                 let chain = wallet.local_chain();
@@ -224,12 +224,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                     .map(|canonical_tx| canonical_tx.tx_node.txid)
                     .collect::<Vec<Txid>>();
 
-                (
-                    spk_vec,
-                    unconfirmed_txids,
-                    chain.clone(),
-                    wallet.latest_checkpoint(),
-                )
+                (spk_vec, unconfirmed_txids)
             } else {
                 log_error!(self.logger, "Could not get wallet lock to sync");
                 return Err(MutinyError::WalletOperationFailed);
@@ -266,13 +261,9 @@ impl<S: MutinyStorage> OnChainWallet<S> {
 
     pub async fn full_sync(&self, gap: usize) -> Result<(), MutinyError> {
         // get first wallet lock that only needs to read
-        let (spks, prev_tip, chain) = {
+        let spks = {
             if let Ok(wallet) = self.wallet.try_read() {
-                (
-                    wallet.all_unbounded_spk_iters(),
-                    wallet.latest_checkpoint(),
-                    wallet.local_chain().clone(),
-                )
+                wallet.all_unbounded_spk_iters()
             } else {
                 log_error!(self.logger, "Could not get wallet lock to sync");
                 return Err(MutinyError::WalletOperationFailed);
@@ -316,7 +307,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         position: ConfirmationTime,
         block_id: Option<BlockId>,
     ) -> Result<(), MutinyError> {
-        let txid = tx.txid();
+        let txid = tx.compute_txid();
         match position {
             ConfirmationTime::Confirmed { .. } => {
                 // if the transaction is confirmed and we have the block id,
@@ -558,7 +549,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         self.label_psbt(&psbt, labels)?;
 
         let raw_transaction = psbt.extract_tx()?;
-        let txid = raw_transaction.txid();
+        let txid = raw_transaction.compute_txid();
 
         self.broadcast_transaction(raw_transaction).await?;
         log_debug!(self.logger, "Transaction broadcast! TXID: {txid}");
@@ -656,7 +647,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         self.label_psbt(&psbt, labels)?;
 
         let raw_transaction = psbt.extract_tx()?;
-        let txid = raw_transaction.txid();
+        let txid = raw_transaction.compute_txid();
 
         self.broadcast_transaction(raw_transaction).await?;
         log_debug!(self.logger, "Transaction broadcast! TXID: {txid}");
@@ -731,7 +722,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             psbt.extract_tx()?
         };
 
-        let txid = tx.txid();
+        let txid = tx.compute_txid();
 
         self.broadcast_transaction(tx).await?;
         log_debug!(self.logger, "Fee bump Transaction broadcast! TXID: {txid}");

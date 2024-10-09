@@ -1,5 +1,5 @@
 use bitcoin::hashes::Hash;
-use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
+use bitcoin::secp256k1::PublicKey;
 use bitcoin::OutPoint;
 use gloo_utils::format::JsValueSerdeExt;
 use hex_conservative::DisplayHex;

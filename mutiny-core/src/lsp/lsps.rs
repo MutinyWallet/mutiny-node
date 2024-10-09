@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use bitcoin::hashes::{sha256, Hash};
-use bitcoin::secp256k1::{PublicKey, Secp256k1, ThirtyTwoByteHash};
+use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::Network;
 use futures::channel::oneshot;
 use lightning::ln::channelmanager::MIN_FINAL_CLTV_EXPIRY_DELTA;

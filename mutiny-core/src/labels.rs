@@ -341,7 +341,7 @@ impl<S: MutinyStorage> LabelStorage for S {
         let mut labels = self.get_labels()?;
 
         // filter out labels that have a contact
-        labels.retain(|label, _| contacts.get(label).is_none());
+        labels.retain(|label, _| !contacts.contains_key(label));
 
         // Convert the labels into tag items
         tag_items.extend(
@@ -742,7 +742,7 @@ mod tests {
         let result = storage.get_contact(&id).unwrap();
         assert!(result.is_none());
         let contacts = storage.get_contacts().unwrap();
-        assert!(contacts.get(&id).is_none());
+        assert!(!contacts.contains_key(&id));
 
         // check invoice labels are empty
         let inv_labels = storage.get_invoice_labels().unwrap();

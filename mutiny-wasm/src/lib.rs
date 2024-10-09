@@ -24,16 +24,14 @@ use bitcoin::{Address, Network, OutPoint, Txid};
 use futures::lock::Mutex;
 use gloo_utils::format::JsValueSerdeExt;
 
-use lightning::{log_info, log_warn, routing::gossip::NodeId, util::logger::Logger};
+use lightning::{log_info, routing::gossip::NodeId, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 
 use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
-use mutiny_core::utils::{sleep, spawn};
+use mutiny_core::utils::sleep;
 use mutiny_core::vss::MutinyVssClient;
 use mutiny_core::MutinyWalletBuilder;
-use mutiny_core::{
-    encrypt::encryption_key_from_pass, InvoiceHandler, MutinyWalletConfigBuilder, PrivacyLevel,
-};
+use mutiny_core::{encrypt::encryption_key_from_pass, InvoiceHandler, MutinyWalletConfigBuilder};
 use mutiny_core::{
     labels::LabelStorage,
     nodemanager::{create_lsp_config, NodeManager},
@@ -86,7 +84,7 @@ impl MutinyWallet {
         auth_url: Option<String>,
         subscription_url: Option<String>,
         storage_url: Option<String>,
-        scorer_url: Option<String>,
+        _scorer_url: Option<String>,
         do_not_connect_peers: Option<bool>,
         skip_device_lock: Option<bool>,
         safe_mode: Option<bool>,
@@ -125,7 +123,6 @@ impl MutinyWallet {
             auth_url,
             subscription_url,
             storage_url,
-            scorer_url,
             do_not_connect_peers,
             skip_device_lock,
             safe_mode,
@@ -165,10 +162,9 @@ impl MutinyWallet {
         lsp_url: Option<String>,
         lsp_connection_string: Option<String>,
         lsp_token: Option<String>,
-        auth_url: Option<String>,
+        _auth_url: Option<String>,
         subscription_url: Option<String>,
         storage_url: Option<String>,
-        scorer_url: Option<String>,
         do_not_connect_peers: Option<bool>,
         skip_device_lock: Option<bool>,
         safe_mode: Option<bool>,
@@ -204,15 +200,13 @@ impl MutinyWallet {
         let vss_client = if safe_mode {
             None
         } else {
-            let vss = storage_url.map(|url| {
+            storage_url.map(|url| {
                 Arc::new(MutinyVssClient::new_unauthenticated(
                     url,
                     xprivkey.private_key,
                     logger.clone(),
                 ))
-            });
-
-            vss
+            })
         };
 
         let storage = IndexedDbStorage::new(password, cipher, vss_client, logger.clone()).await?;
@@ -238,9 +232,6 @@ impl MutinyWallet {
         }
         if let Some(url) = subscription_url {
             config_builder.with_subscription_url(url);
-        }
-        if let Some(url) = scorer_url {
-            config_builder.with_scorer_url(url);
         }
         if let Some(url) = blind_auth_url {
             config_builder.with_blind_auth_url(url);
@@ -284,7 +275,7 @@ impl MutinyWallet {
     #[wasm_bindgen]
     pub async fn get_device_lock_remaining_secs(
         password: Option<String>,
-        auth_url: Option<String>,
+        _auth_url: Option<String>,
         storage_url: Option<String>,
     ) -> Result<Option<u64>, MutinyJsError> {
         let logger = Arc::new(MutinyLogger::default());

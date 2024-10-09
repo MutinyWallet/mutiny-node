@@ -19,7 +19,6 @@ use lightning::ln::peer_handler::PeerManager as LdkPeerManager;
 use lightning::ln::peer_handler::{APeerManager, PeerHandleError};
 use lightning::onion_message::messenger::{Destination, MessageRouter, OnionMessagePath};
 use lightning::routing::gossip::NodeId;
-use lightning::sign::EntropySource;
 use lightning::util::logger::Logger;
 use lightning::{ln::msgs::SocketAddress, log_warn};
 use std::sync::atomic::AtomicBool;
@@ -34,6 +33,7 @@ use lightning::ln::peer_handler::SocketDescriptor as LdkSocketDescriptor;
 #[cfg(target_arch = "wasm32")]
 use crate::networking::proxy::WsProxy;
 
+#[allow(dead_code)]
 pub trait PeerManager: Send + Sync + 'static {
     fn get_peer_node_ids(&self) -> Vec<PublicKey>;
 
