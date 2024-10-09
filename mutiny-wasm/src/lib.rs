@@ -16,7 +16,7 @@ use crate::error::MutinyJsError;
 use crate::indexed_db::IndexedDbStorage;
 use crate::models::*;
 use bip39::Mnemonic;
-use bitcoin::bip32::ExtendedPrivKey;
+use bitcoin::bip32::Xpriv;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
@@ -27,9 +27,6 @@ use gloo_utils::format::JsValueSerdeExt;
 use lightning::{log_info, log_warn, routing::gossip::NodeId, util::logger::Logger};
 use lightning_invoice::Bolt11Invoice;
 
-use lnurl::lnurl::LnUrl;
-use mutiny_core::auth::MutinyAuthClient;
-use mutiny_core::lnurlauth::AuthManager;
 use mutiny_core::storage::{DeviceLock, MutinyStorage, DEVICE_LOCK_KEY};
 use mutiny_core::utils::{sleep, spawn};
 use mutiny_core::vss::MutinyVssClient;
@@ -202,49 +199,10 @@ impl MutinyWallet {
                 .await?;
 
         let seed = mnemonic.to_seed("");
-        let xprivkey = ExtendedPrivKey::new_master(network, &seed).unwrap();
+        let xprivkey = Xpriv::new_master(network, &seed).unwrap();
 
-        let (auth_client, vss_client) = if safe_mode {
-            (None, None)
-        } else if let Some(auth_url) = auth_url.clone() {
-            let auth_manager = AuthManager::new(xprivkey).unwrap();
-
-            let lnurl_client = Arc::new(
-                lnurl::Builder::default()
-                    .build_async()
-                    .expect("failed to make lnurl client"),
-            );
-
-            let auth_client = Arc::new(MutinyAuthClient::new(
-                auth_manager,
-                lnurl_client,
-                logger.clone(),
-                auth_url,
-            ));
-
-            // immediately start fetching JWT
-            let auth = auth_client.clone();
-            let logger_clone = logger.clone();
-            spawn(async move {
-                // if this errors, it's okay, we'll call it again when we fetch vss
-                if let Err(e) = auth.authenticate().await {
-                    log_warn!(
-                        logger_clone,
-                        "Failed to authenticate on startup, will retry on next call: {e}"
-                    );
-                }
-            });
-
-            let vss = storage_url.map(|url| {
-                Arc::new(MutinyVssClient::new_authenticated(
-                    auth_client.clone(),
-                    url,
-                    xprivkey.private_key,
-                    logger.clone(),
-                ))
-            });
-
-            (Some(auth_client), vss)
+        let vss_client = if safe_mode {
+            None
         } else {
             let vss = storage_url.map(|url| {
                 Arc::new(MutinyVssClient::new_unauthenticated(
@@ -254,7 +212,7 @@ impl MutinyWallet {
                 ))
             });
 
-            (None, vss)
+            vss
         };
 
         let storage = IndexedDbStorage::new(password, cipher, vss_client, logger.clone()).await?;
@@ -277,9 +235,6 @@ impl MutinyWallet {
         }
         if let Some(url) = lsp_token {
             config_builder.with_lsp_token(url);
-        }
-        if let Some(a) = auth_client {
-            config_builder.with_auth_client(a);
         }
         if let Some(url) = subscription_url {
             config_builder.with_subscription_url(url);
@@ -343,41 +298,15 @@ impl MutinyWallet {
 
         let seed = mnemonic.to_seed("");
         // Network doesn't matter here, only for encoding
-        let xprivkey = ExtendedPrivKey::new_master(Network::Bitcoin, &seed).unwrap();
+        let xprivkey = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
 
-        let vss_client = if let Some(auth_url) = auth_url {
-            let auth_manager = AuthManager::new(xprivkey).unwrap();
-
-            let lnurl_client = Arc::new(
-                lnurl::Builder::default()
-                    .build_async()
-                    .expect("failed to make lnurl client"),
-            );
-
-            let auth_client = Arc::new(MutinyAuthClient::new(
-                auth_manager,
-                lnurl_client,
+        let vss_client = storage_url.map(|url| {
+            Arc::new(MutinyVssClient::new_unauthenticated(
+                url,
+                xprivkey.private_key,
                 logger.clone(),
-                auth_url,
-            ));
-
-            storage_url.map(|url| {
-                Arc::new(MutinyVssClient::new_authenticated(
-                    auth_client.clone(),
-                    url,
-                    xprivkey.private_key,
-                    logger.clone(),
-                ))
-            })
-        } else {
-            storage_url.map(|url| {
-                Arc::new(MutinyVssClient::new_unauthenticated(
-                    url,
-                    xprivkey.private_key,
-                    logger.clone(),
-                ))
-            })
-        };
+            ))
+        });
 
         if let Some(vss) = vss_client {
             let obj = vss.get_object(DEVICE_LOCK_KEY).await?;
@@ -479,7 +408,7 @@ impl MutinyWallet {
         destination_address: String,
         amount: u64,
         labels: Vec<String>,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<String, MutinyJsError> {
         let send_to =
             Address::from_str(&destination_address)?.require_network(self.inner.get_network())?;
@@ -499,7 +428,7 @@ impl MutinyWallet {
         &self,
         destination_address: String,
         labels: Vec<String>,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<String, MutinyJsError> {
         let send_to =
             Address::from_str(&destination_address)?.require_network(self.inner.get_network())?;
@@ -516,7 +445,7 @@ impl MutinyWallet {
         &self,
         destination_address: String,
         amount: u64,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<u64, MutinyJsError> {
         let addr = Address::from_str(&destination_address)?.assume_checked();
         Ok(self.inner.estimate_tx_fee(addr, amount, fee_rate).await?)
@@ -527,7 +456,7 @@ impl MutinyWallet {
     pub fn estimate_channel_open_fee(
         &self,
         amount: u64,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<u64, MutinyJsError> {
         Ok(self
             .inner
@@ -539,7 +468,7 @@ impl MutinyWallet {
     /// The fee rate is in sat/vbyte.
     pub fn estimate_sweep_channel_open_fee(
         &self,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<u64, MutinyJsError> {
         Ok(self
             .inner
@@ -569,7 +498,7 @@ impl MutinyWallet {
 
     /// Bumps the given transaction by replacing the given tx with a transaction at
     /// the new given fee rate in sats/vbyte
-    pub async fn bump_fee(&self, txid: String, fee_rate: f32) -> Result<String, MutinyJsError> {
+    pub async fn bump_fee(&self, txid: String, fee_rate: u64) -> Result<String, MutinyJsError> {
         let txid = Txid::from_str(&txid)?;
         let result = self.inner.node_manager.bump_fee(txid, fee_rate).await?;
 
@@ -782,59 +711,6 @@ impl MutinyWallet {
         Ok(self.inner.decode_invoice(invoice, network)?.into())
     }
 
-    /// Calls upon a LNURL to get the parameters for it.
-    /// This contains what kind of LNURL it is (pay, withdrawal, auth, etc).
-    #[wasm_bindgen]
-    pub async fn decode_lnurl(&self, lnurl: String) -> Result<LnUrlParams, MutinyJsError> {
-        let lnurl = LnUrl::from_str(&lnurl)?;
-        Ok(self.inner.decode_lnurl(lnurl).await?.into())
-    }
-
-    /// Calls upon a LNURL and pays it.
-    /// This will fail if the LNURL is not a LNURL pay.
-    #[wasm_bindgen]
-    pub async fn lnurl_pay(
-        &self,
-        lnurl: String,
-        amount_sats: u64,
-        labels: Vec<String>,
-        comment: Option<String>,
-        privacy_level: Option<String>,
-    ) -> Result<MutinyInvoice, MutinyJsError> {
-        let lnurl = LnUrl::from_str(&lnurl)?;
-
-        let privacy_level = privacy_level
-            .as_deref()
-            .map(PrivacyLevel::from_str)
-            .transpose()?
-            .unwrap_or_default(); // default to NotAvailable
-
-        Ok(self
-            .inner
-            .lnurl_pay(&lnurl, amount_sats, labels, comment, privacy_level)
-            .await?
-            .into())
-    }
-
-    /// Calls upon a LNURL and withdraws from it.
-    /// This will fail if the LNURL is not a LNURL withdrawal.
-    #[wasm_bindgen]
-    pub async fn lnurl_withdraw(
-        &self,
-        lnurl: String,
-        amount_sats: u64,
-    ) -> Result<bool, MutinyJsError> {
-        let lnurl = LnUrl::from_str(&lnurl)?;
-        Ok(self.inner.lnurl_withdraw(&lnurl, amount_sats).await?)
-    }
-
-    /// Authenticates with a LNURL-auth for the given profile.
-    #[wasm_bindgen]
-    pub async fn lnurl_auth(&self, lnurl: String) -> Result<(), MutinyJsError> {
-        let lnurl = LnUrl::from_str(&lnurl)?;
-        Ok(self.inner.lnurl_auth(lnurl).await?)
-    }
-
     /// Gets an invoice from the node manager.
     /// This includes sent and received invoices.
     #[wasm_bindgen]
@@ -895,7 +771,7 @@ impl MutinyWallet {
         &self,
         to_pubkey: Option<String>,
         amount: u64,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<MutinyChannel, MutinyJsError> {
         let to_pubkey = match to_pubkey {
             Some(pubkey_str) if !pubkey_str.trim().is_empty() => {
@@ -1048,21 +924,6 @@ impl MutinyWallet {
     pub async fn get_logs() -> Result<JsValue /* Option<Vec<String>> */, MutinyJsError> {
         let logs = IndexedDbStorage::get_logs().await?;
         Ok(JsValue::from_serde(&logs)?)
-    }
-
-    /// Checks if a given LNURL name is available
-    pub async fn check_available_lnurl_name(&self, name: String) -> Result<bool, MutinyJsError> {
-        Ok(self.inner.check_available_lnurl_name(name).await?)
-    }
-
-    /// Reserves a given LNURL name for the user
-    pub async fn reserve_lnurl_name(&self, name: String) -> Result<(), MutinyJsError> {
-        Ok(self.inner.reserve_lnurl_name(name).await?)
-    }
-
-    /// Checks the registered username for the user
-    pub async fn check_lnurl_name(&self) -> Result<Option<String>, MutinyJsError> {
-        Ok(self.inner.check_lnurl_name().await?)
     }
 
     /// Resets the scorer and network graph. This can be useful if you get stuck in a bad state.

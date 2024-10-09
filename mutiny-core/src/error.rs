@@ -1,7 +1,9 @@
 use aes::cipher::block_padding::UnpadError;
-use bdk::signer::SignerError;
-use bdk::wallet::error::BuildFeeBumpError;
-use bdk::wallet::tx_builder::AddUtxoError;
+use anyhow::anyhow;
+use bdk_wallet::signer::SignerError;
+use bdk_wallet::error::BuildFeeBumpError;
+use bdk_wallet::tx_builder::AddUtxoError;
+use bitcoin::psbt::ExtractTxError;
 use hex_conservative::HexToArrayError;
 use lightning::ln::channelmanager::RetryableSendFailure;
 use lightning::ln::peer_handler::PeerHandleError;
@@ -61,9 +63,6 @@ pub enum MutinyError {
     /// We do not have enough balance to pay the given amount.
     #[error("We do not have enough balance to pay the given amount.")]
     InsufficientBalance,
-    /// Failed to call on the given LNURL
-    #[error("Failed to call on the given LNURL.")]
-    LnUrlFailure,
     /// Could not make a request to the LSP.
     #[error("Failed to make a request to the LSP.")]
     LspGenericError,
@@ -137,8 +136,6 @@ pub enum MutinyError {
     /// Node pubkey given is invalid
     #[error("The given node pubkey is invalid.")]
     PubkeyInvalid,
-    #[error("Called incorrect lnurl function.")]
-    IncorrectLnUrlFunction,
     /// Error converting JS f64 value to Amount
     #[error("Satoshi amount is invalid")]
     BadAmountError,
@@ -168,6 +165,12 @@ pub enum MutinyError {
     TokenAlreadySpent,
     #[error("Message Packet size exceeded")]
     PacketSizeExceeded,
+    #[error("Invalid fee rate")]
+    InvalidFeerate,
+    #[error("Invalid psbt")]
+    InvalidPsbt,
+    #[error("Invalid hex")]
+    InvalidHex,
     #[error(transparent)]
     Other(anyhow::Error),
 }
@@ -216,7 +219,6 @@ impl PartialEq for MutinyError {
             (Self::InvoiceCreationFailed, Self::InvoiceCreationFailed) => true,
             (Self::ReserveAmountError, Self::ReserveAmountError) => true,
             (Self::InsufficientBalance, Self::InsufficientBalance) => true,
-            (Self::LnUrlFailure, Self::LnUrlFailure) => true,
             (Self::LspGenericError, Self::LspGenericError) => true,
             (Self::LspFundingError, Self::LspFundingError) => true,
             (Self::LspAmountTooHighError, Self::LspAmountTooHighError) => true,
@@ -244,7 +246,6 @@ impl PartialEq for MutinyError {
             (Self::WalletSyncError, Self::WalletSyncError) => true,
             (Self::RapidGossipSyncError, Self::RapidGossipSyncError) => true,
             (Self::PubkeyInvalid, Self::PubkeyInvalid) => true,
-            (Self::IncorrectLnUrlFunction, Self::IncorrectLnUrlFunction) => true,
             (Self::BadAmountError, Self::BadAmountError) => true,
             (Self::BitcoinPriceError, Self::BitcoinPriceError) => true,
             (Self::DLCManagerError, Self::DLCManagerError) => true,
@@ -267,6 +268,12 @@ impl MutinyError {
 
     pub fn write_err(e: MutinyStorageError) -> Self {
         MutinyError::PersistenceFailed { source: e }
+    }
+}
+
+impl From<ExtractTxError> for MutinyError {
+    fn from(_e: ExtractTxError) -> Self {
+        Self::InvalidPsbt
     }
 }
 
@@ -306,30 +313,30 @@ impl From<bdk_chain::local_chain::AlterCheckPointError> for MutinyError {
     }
 }
 
-impl From<bdk::descriptor::error::Error> for MutinyError {
-    fn from(_: bdk::descriptor::error::Error) -> Self {
+impl From<bdk_wallet::descriptor::error::Error> for MutinyError {
+    fn from(_: bdk_wallet::descriptor::error::Error) -> Self {
         Self::WalletOperationFailed
     }
 }
 
-impl From<bdk::wallet::NewError<MutinyError>> for MutinyError {
-    fn from(e: bdk::wallet::NewError<MutinyError>) -> Self {
-        match e {
-            bdk::wallet::NewError::Write(e) => e,
-            bdk::wallet::NewError::Descriptor(e) => e.into(),
-            bdk::wallet::NewError::NonEmptyDatabase => Self::WalletOperationFailed,
-        }
-    }
-}
+// impl From<bdk_wallet::NewError<MutinyError>> for MutinyError {
+//     fn from(e: bdk_wallet::NewError<MutinyError>) -> Self {
+//         match e {
+//             bdk_wallet::NewError::Write(e) => e,
+//             bdk_wallet::NewError::Descriptor(e) => e.into(),
+//             bdk_wallet::NewError::NonEmptyDatabase => Self::WalletOperationFailed,
+//         }
+//     }
+// }
 
-impl From<bdk::wallet::LoadError<MutinyError>> for MutinyError {
-    fn from(e: bdk::wallet::LoadError<MutinyError>) -> Self {
+impl From<bdk_wallet::LoadError> for MutinyError {
+    fn from(e: bdk_wallet::LoadError) -> Self {
         match e {
-            bdk::wallet::LoadError::Descriptor(e) => e.into(),
-            bdk::wallet::LoadError::Load(e) => e,
-            bdk::wallet::LoadError::MissingGenesis => Self::WalletOperationFailed,
-            bdk::wallet::LoadError::MissingNetwork => Self::WalletOperationFailed,
-            bdk::wallet::LoadError::NotInitialized => Self::WalletOperationFailed,
+            bdk_wallet::LoadError::Descriptor(e) => e.into(),
+            bdk_wallet::LoadError::MissingGenesis => Self::WalletOperationFailed,
+            bdk_wallet::LoadError::MissingNetwork => Self::WalletOperationFailed,
+            bdk_wallet::LoadError::MissingDescriptor(_keychain_kind) => Self::WalletOperationFailed,
+            bdk_wallet::LoadError::Mismatch(load_mismatch) => Self::WalletSyncError,
         }
     }
 }
@@ -352,15 +359,21 @@ impl From<bitcoin::bip32::Error> for MutinyError {
     }
 }
 
-impl From<url::ParseError> for MutinyError {
-    fn from(_e: url::ParseError) -> Self {
-        Self::LnUrlFailure
+impl From<bitcoin::address::ParseError> for MutinyError {
+    fn from(_e: bitcoin::address::ParseError) -> Self {
+        Self::PubkeyInvalid
     }
 }
 
-impl From<lnurl::Error> for MutinyError {
-    fn from(_e: lnurl::Error) -> Self {
-        Self::LnUrlFailure
+impl From<bitcoin::hex::HexToBytesError> for MutinyError {
+    fn from(_e: bitcoin::hex::HexToBytesError) -> Self {
+        Self::InvalidHex
+    }
+}
+
+impl From<bitcoin::hex::HexToArrayError> for MutinyError {
+    fn from(_e: bitcoin::hex::HexToArrayError) -> Self {
+        Self::InvalidHex
     }
 }
 
@@ -401,6 +414,7 @@ impl From<RetryableSendFailure> for MutinyError {
             RetryableSendFailure::PaymentExpired => Self::InvoiceExpired,
             RetryableSendFailure::RouteNotFound => Self::RoutingFailed,
             RetryableSendFailure::DuplicatePayment => Self::NonUniquePaymentHash,
+            RetryableSendFailure::OnionPacketSizeExceeded => Self::PacketSizeExceeded
         }
     }
 }
@@ -445,13 +459,13 @@ impl<G> From<std::sync::TryLockError<G>> for MutinyStorageError {
     }
 }
 
-impl From<bitcoin::hashes::hex::Error> for MutinyError {
-    fn from(_e: bitcoin::hashes::hex::Error) -> Self {
-        MutinyError::ReadError {
-            source: MutinyStorageError::Other(anyhow::anyhow!("Failed to decode hex")),
-        }
-    }
-}
+// impl From<bitcoin::hashes::hex::Error> for MutinyError {
+//     fn from(_e: bitcoin::hashes::hex::Error) -> Self {
+//         MutinyError::ReadError {
+//             source: MutinyStorageError::Other(anyhow::anyhow!("Failed to decode hex")),
+//         }
+//     }
+// }
 
 impl From<HexToArrayError> for MutinyError {
     fn from(value: HexToArrayError) -> Self {
@@ -461,18 +475,18 @@ impl From<HexToArrayError> for MutinyError {
     }
 }
 
-impl From<bitcoin::address::Error> for MutinyError {
-    fn from(e: bitcoin::address::Error) -> Self {
-        match e {
-            bitcoin::address::Error::NetworkValidation { .. } => MutinyError::IncorrectNetwork,
-            bitcoin::address::Error::UnrecognizedScript => MutinyError::InvalidArgumentsError,
-            bitcoin::address::Error::UnknownAddressType(_) => MutinyError::InvalidArgumentsError,
-            _ => MutinyError::ReadError {
-                source: MutinyStorageError::Other(anyhow::anyhow!("Failed to decode address")),
-            },
-        }
-    }
-}
+// impl From<bitcoin::address::Error> for MutinyError {
+//     fn from(e: bitcoin::address::Error) -> Self {
+//         match e {
+//             bitcoin::address::Error::NetworkValidation { .. } => MutinyError::IncorrectNetwork,
+//             bitcoin::address::Error::UnrecognizedScript => MutinyError::InvalidArgumentsError,
+//             bitcoin::address::Error::UnknownAddressType(_) => MutinyError::InvalidArgumentsError,
+//             _ => MutinyError::ReadError {
+//                 source: MutinyStorageError::Other(anyhow::anyhow!("Failed to decode address")),
+//             },
+//         }
+//     }
+// }
 
 impl From<esplora_client::Error> for MutinyError {
     fn from(_e: esplora_client::Error) -> Self {
@@ -481,14 +495,21 @@ impl From<esplora_client::Error> for MutinyError {
     }
 }
 
-impl From<bdk::wallet::InsertTxError> for MutinyError {
-    fn from(_e: bdk::wallet::InsertTxError) -> Self {
-        Self::WalletSyncError
+impl From<Box<esplora_client::Error>> for MutinyError {
+    fn from(_e: Box<esplora_client::Error>) -> Self {
+        // This is most likely a chain access failure
+        Self::ChainAccessFailed
     }
 }
 
-impl<S> From<bdk::wallet::error::CreateTxError<S>> for MutinyError {
-    fn from(_e: bdk::wallet::error::CreateTxError<S>) -> Self {
+// impl From<bdk_wallet::InsertTxError> for MutinyError {
+//     fn from(_e: bdk_wallet::InsertTxError) -> Self {
+//         Self::WalletSyncError
+//     }
+// }
+
+impl From<bdk_wallet::error::CreateTxError> for MutinyError {
+    fn from(_e: bdk_wallet::error::CreateTxError) -> Self {
         Self::WalletOperationFailed
     }
 }

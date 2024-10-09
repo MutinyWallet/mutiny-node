@@ -9,26 +9,22 @@
 )]
 extern crate core;
 
-pub mod auth;
 mod chain;
 pub mod encrypt;
 pub mod error;
 pub mod event;
 mod fees;
 mod gossip;
-// mod hermes;
 mod key;
 mod keymanager;
 pub mod labels;
 mod ldkstorage;
-pub mod lnurlauth;
 pub mod logging;
 pub mod lsp;
 mod messagehandler;
 mod networking;
 mod node;
 pub mod nodemanager;
-// pub mod nostr;
 mod onchain;
 mod peermanager;
 pub mod scorer;
@@ -44,19 +40,17 @@ use crate::error::MutinyError;
 pub use crate::gossip::{GOSSIP_SYNC_TIME_KEY, NETWORK_GRAPH_KEY, PROB_SCORER_KEY};
 pub use crate::keymanager::generate_seed;
 pub use crate::ldkstorage::{CHANNEL_CLOSURE_PREFIX, CHANNEL_MANAGER_KEY, MONITORS_PREFIX_KEY};
-use crate::lnurlauth::AuthManager;
 use crate::nodemanager::NodeManager;
 use crate::storage::get_invoice_by_hash;
 use crate::utils::sleep;
 use crate::utils::spawn;
-use crate::{auth::MutinyAuthClient, logging::MutinyLogger};
+use crate::{logging::MutinyLogger};
 use crate::{
     event::{HTLCStatus, MillisatAmount, PaymentInfo},
     onchain::FULL_SYNC_STOP_GAP,
 };
 use crate::{labels::LabelStorage, nodemanager::NodeBalance};
 use crate::{
-    lnurlauth::make_lnurl_auth_connection,
     nodemanager::{ChannelClosure, MutinyBip21RawMaterials},
 };
 use crate::{logging::LOGGING_KEY, nodemanager::NodeManagerBuilder};
@@ -73,7 +67,7 @@ use bdk_chain::ConfirmationTime;
 use bip39::Mnemonic;
 pub use bitcoin;
 use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
-use bitcoin::{bip32::ExtendedPrivKey, Transaction};
+use bitcoin::{bip32::Xpriv, Transaction};
 use bitcoin::{hashes::sha256, Network, Txid};
 use bitcoin::{hashes::Hash, Address};
 
@@ -87,7 +81,6 @@ use lightning::util::logger::Logger;
 use lightning::{log_debug, log_error, log_info, log_trace, log_warn};
 pub use lightning_invoice;
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription};
-use lnurl::{lnurl::LnUrl, AsyncClient as LnUrlClient, LnUrlResponse, Response};
 
 use serde::{Deserialize, Serialize};
 
@@ -516,7 +509,7 @@ pub struct FedimintSweepResult {
 }
 
 pub struct MutinyWalletConfigBuilder {
-    // xprivkey: ExtendedPrivKey,
+    // xprivkey: Xpriv,
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: Option<String>,
     network: Option<Network>,
@@ -525,7 +518,6 @@ pub struct MutinyWalletConfigBuilder {
     lsp_url: Option<String>,
     lsp_connection_string: Option<String>,
     lsp_token: Option<String>,
-    auth_client: Option<Arc<MutinyAuthClient>>,
     subscription_url: Option<String>,
     scorer_url: Option<String>,
     blind_auth_url: Option<String>,
@@ -537,7 +529,7 @@ pub struct MutinyWalletConfigBuilder {
 }
 
 impl MutinyWalletConfigBuilder {
-    pub fn new(_xprivkey: ExtendedPrivKey) -> MutinyWalletConfigBuilder {
+    pub fn new(_xprivkey: Xpriv) -> MutinyWalletConfigBuilder {
         MutinyWalletConfigBuilder {
             // xprivkey,
             #[cfg(target_arch = "wasm32")]
@@ -548,7 +540,6 @@ impl MutinyWalletConfigBuilder {
             lsp_url: None,
             lsp_connection_string: None,
             lsp_token: None,
-            auth_client: None,
             subscription_url: None,
             scorer_url: None,
             blind_auth_url: None,
@@ -589,10 +580,6 @@ impl MutinyWalletConfigBuilder {
 
     pub fn with_lsp_token(&mut self, lsp_token: String) {
         self.lsp_token = Some(lsp_token);
-    }
-
-    pub fn with_auth_client(&mut self, auth_client: Arc<MutinyAuthClient>) {
-        self.auth_client = Some(auth_client);
     }
 
     pub fn with_subscription_url(&mut self, subscription_url: String) {
@@ -641,7 +628,6 @@ impl MutinyWalletConfigBuilder {
             lsp_url: self.lsp_url,
             lsp_connection_string: self.lsp_connection_string,
             lsp_token: self.lsp_token,
-            auth_client: self.auth_client,
             subscription_url: self.subscription_url,
             scorer_url: self.scorer_url,
             blind_auth_url: self.blind_auth_url,
@@ -656,7 +642,7 @@ impl MutinyWalletConfigBuilder {
 
 #[derive(Clone)]
 pub struct MutinyWalletConfig {
-    // xprivkey: ExtendedPrivKey,
+    // xprivkey: Xpriv,
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: Option<String>,
     network: Network,
@@ -665,7 +651,6 @@ pub struct MutinyWalletConfig {
     lsp_url: Option<String>,
     lsp_connection_string: Option<String>,
     lsp_token: Option<String>,
-    auth_client: Option<Arc<MutinyAuthClient>>,
     subscription_url: Option<String>,
     scorer_url: Option<String>,
     blind_auth_url: Option<String>,
@@ -677,12 +662,11 @@ pub struct MutinyWalletConfig {
 }
 
 pub struct MutinyWalletBuilder<S: MutinyStorage> {
-    xprivkey: ExtendedPrivKey,
+    xprivkey: Xpriv,
     storage: S,
     config: Option<MutinyWalletConfig>,
     session_id: Option<String>,
     network: Option<Network>,
-    auth_client: Option<Arc<MutinyAuthClient>>,
     blind_auth_url: Option<String>,
     hermes_url: Option<String>,
     subscription_url: Option<String>,
@@ -693,14 +677,13 @@ pub struct MutinyWalletBuilder<S: MutinyStorage> {
 }
 
 impl<S: MutinyStorage> MutinyWalletBuilder<S> {
-    pub fn new(xprivkey: ExtendedPrivKey, storage: S) -> MutinyWalletBuilder<S> {
+    pub fn new(xprivkey: Xpriv, storage: S) -> MutinyWalletBuilder<S> {
         MutinyWalletBuilder::<S> {
             xprivkey,
             storage,
             config: None,
             session_id: None,
             network: None,
-            auth_client: None,
             subscription_url: None,
             blind_auth_url: None,
             hermes_url: None,
@@ -717,7 +700,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
         self.skip_hodl_invoices = config.skip_hodl_invoices;
         self.skip_device_lock = config.skip_device_lock;
         self.safe_mode = config.safe_mode;
-        self.auth_client = config.auth_client.clone();
         self.subscription_url = config.subscription_url.clone();
         self.blind_auth_url = config.blind_auth_url.clone();
         self.hermes_url = config.hermes_url.clone();
@@ -731,10 +713,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
 
     pub fn with_network(&mut self, network: Network) {
         self.network = Some(network);
-    }
-
-    pub fn with_auth_client(&mut self, auth_client: Arc<MutinyAuthClient>) {
-        self.auth_client = Some(auth_client);
     }
 
     pub fn with_subscription_url(&mut self, subscription_url: String) {
@@ -868,23 +846,6 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
 
         let start = Instant::now();
 
-        log_trace!(logger, "creating lnurl client");
-        let lnurl_client = Arc::new(
-            lnurl::Builder::default()
-                .build_async()
-                .expect("failed to make lnurl client"),
-        );
-        log_trace!(logger, "finished creating lnurl client");
-
-        // auth manager, take from auth_client if it already exists
-        log_trace!(logger, "creating auth manager");
-        let auth = if let Some(auth_client) = self.auth_client.clone() {
-            auth_client.auth.clone()
-        } else {
-            AuthManager::new(self.xprivkey)?
-        };
-        log_trace!(logger, "finished creating auth manager");
-
         // populate the activity index
         log_trace!(logger, "populating activity index");
         let mut activity_index = node_manager
@@ -976,9 +937,7 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
             config,
             storage: self.storage,
             node_manager,
-            lnurl_client,
             // esplora,
-            auth,
             stop,
             logger: logger.clone(),
             network,
@@ -1022,12 +981,10 @@ impl<S: MutinyStorage> MutinyWalletBuilder<S> {
 /// bitcoin and the lightning functionality.
 #[derive(Clone)]
 pub struct MutinyWallet<S: MutinyStorage> {
-    xprivkey: ExtendedPrivKey,
+    xprivkey: Xpriv,
     config: MutinyWalletConfig,
     pub(crate) storage: S,
     pub node_manager: Arc<NodeManager<S>>,
-    lnurl_client: Arc<LnUrlClient>,
-    auth: AuthManager,
     // esplora: Arc<AsyncClient>,
     pub stop: Arc<AtomicBool>,
     pub logger: Arc<MutinyLogger>,
@@ -1206,7 +1163,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         send_to: Address,
         amount: u64,
         labels: Vec<String>,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<Txid, MutinyError> {
         log_trace!(self.logger, "calling send_to_address");
 
@@ -1233,7 +1190,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         &self,
         destination_address: Address,
         amount: u64,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<u64, MutinyError> {
         log_trace!(self.logger, "calling estimate_tx_fee");
 
@@ -1264,7 +1221,7 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         &self,
         send_to: Address,
         labels: Vec<String>,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<Txid, MutinyError> {
         log_trace!(self.logger, "calling sweep_wallet");
 
@@ -1706,195 +1663,8 @@ impl<S: MutinyStorage> MutinyWallet<S> {
         Ok(res)
     }
 
-    /// Calls upon a LNURL to get the parameters for it.
-    /// This contains what kind of LNURL it is (pay, withdrawal, auth, etc).
-    // todo revamp LnUrlParams to be well designed
-    pub async fn decode_lnurl(&self, lnurl: LnUrl) -> Result<LnUrlParams, MutinyError> {
-        log_trace!(self.logger, "calling decode_lnurl");
-
-        // handle LNURL-AUTH
-        if lnurl.is_lnurl_auth() {
-            return Ok(LnUrlParams {
-                max: 0,
-                min: 0,
-                tag: "login".to_string(),
-            });
-        }
-
-        let response = self.lnurl_client.make_request(&lnurl.url).await?;
-
-        let params = match response {
-            LnUrlResponse::LnUrlPayResponse(pay) => LnUrlParams {
-                max: pay.max_sendable,
-                min: pay.min_sendable,
-                tag: "payRequest".to_string(),
-            },
-            LnUrlResponse::LnUrlChannelResponse(_chan) => LnUrlParams {
-                max: 0,
-                min: 0,
-                tag: "channelRequest".to_string(),
-            },
-            LnUrlResponse::LnUrlWithdrawResponse(withdraw) => LnUrlParams {
-                max: withdraw.max_withdrawable,
-                min: withdraw.min_withdrawable.unwrap_or(0),
-                tag: "withdrawRequest".to_string(),
-            },
-        };
-
-        log_trace!(self.logger, "finished calling decode_lnurl");
-        Ok(params)
-    }
-
-    /// Calls upon a LNURL and pays it.
-    /// This will fail if the LNURL is not a LNURL pay.
-    pub async fn lnurl_pay(
-        &self,
-        lnurl: &LnUrl,
-        amount_sats: u64,
-        mut labels: Vec<String>,
-        comment: Option<String>,
-        privacy_level: PrivacyLevel,
-    ) -> Result<MutinyInvoice, MutinyError> {
-        log_trace!(self.logger, "calling lnurl_pay");
-
-        let response = self.lnurl_client.make_request(&lnurl.url).await?;
-
-        let res = match response {
-            LnUrlResponse::LnUrlPayResponse(pay) => {
-                let msats = amount_sats * 1000;
-
-                let invoice = self
-                    .lnurl_client
-                    .get_invoice(&pay, msats, None, comment.as_deref())
-                    .await?;
-
-                let invoice = Bolt11Invoice::from_str(invoice.invoice())?;
-
-                if invoice
-                    .amount_milli_satoshis()
-                    .is_some_and(|amt| msats == amt)
-                {
-                    // If we don't have any labels, see if this matches a contact
-                    if labels.is_empty() {
-                        if let Some(label) = self.storage.get_contact_for_lnurl(lnurl)? {
-                            labels.insert(0, label)
-                        }
-                    }
-
-                    let mut inv = self.pay_invoice(&invoice, None, labels).await?;
-                    // save privacy level to storage, can skip if its the default privacy level
-                    if privacy_level != PrivacyLevel::default() {
-                        inv.privacy_level = privacy_level;
-                        let hash = inv.payment_hash.into_32();
-                        log_debug!(
-                            self.logger,
-                            "Saving updated payment: {} {}",
-                            hash.to_lower_hex_string(),
-                            inv.last_updated
-                        );
-                        persist_payment_info(&self.storage, &hash, &inv.clone().into(), false)?;
-                    }
-                    Ok(inv)
-                } else {
-                    log_error!(self.logger, "LNURL return invoice with incorrect amount");
-                    Err(MutinyError::LnUrlFailure)
-                }
-            }
-            LnUrlResponse::LnUrlWithdrawResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
-            LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
-        };
-        log_trace!(self.logger, "finished calling lnurl_pay");
-
-        res
-    }
-
-    /// Calls upon a LNURL and withdraws from it.
-    /// This will fail if the LNURL is not a LNURL withdrawal.
-    pub async fn lnurl_withdraw(
-        &self,
-        lnurl: &LnUrl,
-        amount_sats: u64,
-    ) -> Result<bool, MutinyError> {
-        log_trace!(self.logger, "calling lnurl_withdraw");
-
-        let response = self.lnurl_client.make_request(&lnurl.url).await?;
-
-        let res = match response {
-            LnUrlResponse::LnUrlPayResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
-            LnUrlResponse::LnUrlChannelResponse(_) => Err(MutinyError::IncorrectLnUrlFunction),
-            LnUrlResponse::LnUrlWithdrawResponse(withdraw) => {
-                // fixme: do we need to use this description?
-                let _description = withdraw.default_description.clone();
-                let mutiny_invoice = self
-                    .create_invoice(amount_sats, vec!["LNURL Withdrawal".to_string()])
-                    .await?;
-                let invoice_str = mutiny_invoice.bolt11.expect("Invoice should have bolt11");
-                let res = self
-                    .lnurl_client
-                    .do_withdrawal(&withdraw, &invoice_str.to_string())
-                    .await?;
-                match res {
-                    Response::Ok { .. } => Ok(true),
-                    Response::Error { .. } => Ok(false),
-                }
-            }
-        };
-        log_trace!(self.logger, "finished calling lnurl_withdraw");
-
-        res
-    }
-
-    /// Authenticate with a LNURL-auth
-    pub async fn lnurl_auth(&self, lnurl: LnUrl) -> Result<(), MutinyError> {
-        log_trace!(self.logger, "calling lnurl_auth");
-
-        let res = make_lnurl_auth_connection(
-            self.auth.clone(),
-            self.lnurl_client.clone(),
-            lnurl,
-            self.logger.clone(),
-        )
-        .await;
-        log_trace!(self.logger, "finished calling lnurl_auth");
-
-        res
-    }
-
     pub fn is_safe_mode(&self) -> bool {
         self.safe_mode
-    }
-
-    // FIXME
-    pub async fn check_available_lnurl_name(&self, _name: String) -> Result<bool, MutinyError> {
-        Err(MutinyError::NotFound)
-    }
-
-    pub async fn reserve_lnurl_name(&self, _name: String) -> Result<(), MutinyError> {
-        // log_trace!(self.logger, "calling reserve_lnurl_name");
-
-        // let res = if let Some(hermes_client) = self.hermes_client.clone() {
-        //     Ok(hermes_client.reserve_name(name).await?)
-        // } else {
-        //     Err(MutinyError::NotFound)
-        // };
-        // log_trace!(self.logger, "calling reserve_lnurl_name");
-
-        // res
-        Err(MutinyError::NotFound)
-    }
-
-    pub async fn check_lnurl_name(&self) -> Result<Option<String>, MutinyError> {
-        // log_trace!(self.logger, "calling check_lnurl_name");
-
-        // let res = if let Some(hermes_client) = self.hermes_client.as_ref() {
-        //     hermes_client.check_username().await
-        // } else {
-        //     Err(MutinyError::NotFound)
-        // };
-        // log_trace!(self.logger, "finished calling check_lnurl_name");
-
-        // res
-        Err(MutinyError::NotFound)
     }
 
     /// Gets the current bitcoin price in USD.
@@ -2261,12 +2031,13 @@ mod tests {
     use crate::{ldkstorage::CHANNEL_CLOSURE_PREFIX, storage::persist_transaction_details};
     use crate::{nodemanager::ChannelClosure, storage::TRANSACTION_DETAILS_PREFIX_KEY};
     use bdk_chain::{BlockId, ConfirmationTime};
-    use bitcoin::bip32::ExtendedPrivKey;
+    use bitcoin::bip32::Xpriv;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::PublicKey;
+    use bitcoin::transaction::Version;
     use bitcoin::{absolute::LockTime, Txid};
-    use bitcoin::{BlockHash, Network, Transaction, TxOut};
+    use bitcoin::{Amount, BlockHash, Network, Transaction, TxOut};
     use hex_conservative::DisplayHex;
     use itertools::Itertools;
     use std::str::FromStr;
@@ -2285,7 +2056,7 @@ mod tests {
 
         let mnemonic = generate_seed(12).unwrap();
         let network = Network::Regtest;
-        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
+        let xpriv = Xpriv::new_master(network, &mnemonic.to_seed("")).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
@@ -2308,7 +2079,7 @@ mod tests {
         let test_name = "restart_mutiny_wallet";
         log!("{}", test_name);
         let network = Network::Regtest;
-        let xpriv = ExtendedPrivKey::new_master(network, &[0; 32]).unwrap();
+        let xpriv = Xpriv::new_master(network, &[0; 32]).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
@@ -2336,7 +2107,7 @@ mod tests {
         log!("{}", test_name);
 
         let network = Network::Regtest;
-        let xpriv = ExtendedPrivKey::new_master(network, &[0; 32]).unwrap();
+        let xpriv = Xpriv::new_master(network, &[0; 32]).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
@@ -2374,7 +2145,7 @@ mod tests {
         log!("{}", test_name);
         let mnemonic = generate_seed(12).unwrap();
         let network = Network::Regtest;
-        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
+        let xpriv = Xpriv::new_master(network, &mnemonic.to_seed("")).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
@@ -2396,7 +2167,7 @@ mod tests {
         let cipher = encryption_key_from_pass(&pass).unwrap();
         let storage2 = MemoryStorage::new(Some(pass), Some(cipher), None);
         assert!(!NodeManager::has_node_manager(storage2.clone()));
-        let xpriv2 = ExtendedPrivKey::new_master(network, &[0; 32]).unwrap();
+        let xpriv2 = Xpriv::new_master(network, &[0; 32]).unwrap();
         let config2 = MutinyWalletConfigBuilder::new(xpriv2)
             .with_network(network)
             .build();
@@ -2421,7 +2192,7 @@ mod tests {
             .expect("mutiny wallet should restore");
 
         let new_mnemonic = storage3.get_mnemonic().unwrap().unwrap();
-        let new_xpriv = ExtendedPrivKey::new_master(network, &new_mnemonic.to_seed("")).unwrap();
+        let new_xpriv = Xpriv::new_master(network, &new_mnemonic.to_seed("")).unwrap();
         let config3 = MutinyWalletConfigBuilder::new(new_xpriv)
             .with_network(network)
             .build();
@@ -2441,7 +2212,7 @@ mod tests {
 
         let mnemonic = generate_seed(12).unwrap();
         let network = Network::Regtest;
-        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
+        let xpriv = Xpriv::new_master(network, &mnemonic.to_seed("")).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
@@ -2470,7 +2241,7 @@ mod tests {
         let storage = MemoryStorage::new(None, None, None);
         let seed = generate_seed(12).expect("Failed to gen seed");
         let network = Network::Regtest;
-        let xpriv = ExtendedPrivKey::new_master(network, &seed.to_seed("")).unwrap();
+        let xpriv = Xpriv::new_master(network, &seed.to_seed("")).unwrap();
         let c = MutinyWalletConfigBuilder::new(xpriv)
             .with_network(network)
             .build();
@@ -2507,11 +2278,11 @@ mod tests {
 
         let address = mw.node_manager.get_new_address(vec![]).unwrap();
         let output = TxOut {
-            value: 10_000,
+            value: Amount::from_sat(10_000),
             script_pubkey: address.script_pubkey(),
         };
         let tx1 = Transaction {
-            version: 1,
+            version: Version(1),
             lock_time: LockTime::ZERO,
             input: vec![],
             output: vec![output.clone()],
@@ -2527,7 +2298,7 @@ mod tests {
             .unwrap();
 
         let tx2 = Transaction {
-            version: 2, // tx2 has different version than tx1 so they have different txids
+            version: Version(2), // tx2 has different version than tx1 so they have different txids
             lock_time: LockTime::ZERO,
             input: vec![],
             output: vec![output],

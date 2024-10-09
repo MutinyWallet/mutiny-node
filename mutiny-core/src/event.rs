@@ -13,7 +13,7 @@ use bitcoin::absolute::LockTime;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::Secp256k1;
 use core::fmt;
-use lightning::events::{Event, PaymentPurpose};
+use lightning::events::{Event, PaymentPurpose, ReplayEvent};
 use lightning::sign::SpendableOutputDescriptor;
 use lightning::{
     log_debug, log_error, log_info, log_warn, util::errors::APIError, util::logger::Logger,
@@ -125,7 +125,7 @@ impl<S: MutinyStorage> EventHandler<S> {
         }
     }
 
-    pub async fn handle_event(&self, event: Event) {
+    pub async fn handle_event(&self, event: Event) -> Result<(), ReplayEvent> {
         match event {
             Event::FundingGenerationReady {
                 temporary_channel_id,
@@ -141,7 +141,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                     Ok(params) => params,
                     Err(e) => {
                         log_error!(self.logger, "ERROR: Could not get channel open params: {e}");
-                        return;
+                        return Ok(());
                     }
                 };
 
@@ -193,32 +193,39 @@ impl<S: MutinyStorage> EventHandler<S> {
                         psbt
                     }
                     Err(e) => {
-                        log_error!(self.logger, "ERROR: Could not create a signed transaction to open channel with: {e}");
+                        let error_msg = format!("ERROR: Could not create a signed transaction to open channel with: {e}");
                         if let Err(e) = self.channel_manager.force_close_without_broadcasting_txn(
                             &temporary_channel_id,
                             &counterparty_node_id,
+                            error_msg,
                         ) {
                             log_error!(
                                 self.logger,
                                 "ERROR: Could not force close failed channel: {e:?}"
                             );
                         }
-                        return;
+                        return Ok(());
                     }
                 };
 
-                let tx = psbt.extract_tx();
+                let tx = match psbt.extract_tx() {
+                    Ok(tx) => tx,
+                    Err(err) => {
+                        log_error!(self.logger, "ERROR: extract tx from pstb: {err:?}");
+                        return Ok(());
+                    }
+                };
 
                 if let Err(e) = self.channel_manager.funding_transaction_generated(
-                    &temporary_channel_id,
-                    &counterparty_node_id,
+                    temporary_channel_id,
+                    counterparty_node_id,
                     tx.clone(),
                 ) {
                     log_error!(
                         self.logger,
                         "ERROR: Could not send funding transaction to channel manager: {e:?}"
                     );
-                    return;
+                    return Ok(());
                 }
 
                 if let Some(mut params) = params_opt {
@@ -251,14 +258,19 @@ impl<S: MutinyStorage> EventHandler<S> {
 
                 if counterparty_skimmed_fee_msat > expected_skimmed_fee_msat {
                     log_error!(self.logger, "ERROR: Payment with hash {} skimmed a fee of {} millisatoshis when we expected a fee of {} millisatoshis", payment_hash, counterparty_skimmed_fee_msat, expected_skimmed_fee_msat);
-                    return;
+                    return Ok(());
                 }
 
                 if let Some(payment_preimage) = match purpose {
-                    PaymentPurpose::InvoicePayment {
+                    PaymentPurpose::Bolt11InvoicePayment {
                         payment_preimage, ..
                     } => payment_preimage,
                     PaymentPurpose::SpontaneousPayment(preimage) => Some(preimage),
+                    PaymentPurpose::Bolt12OfferPayment { .. }
+                    | PaymentPurpose::Bolt12RefundPayment { .. } => {
+                        log_error!(self.logger, "Not support Bolt12");
+                        return Ok(());
+                    }
                 } {
                     self.channel_manager.claim_funds(payment_preimage);
                 } else {
@@ -272,16 +284,22 @@ impl<S: MutinyStorage> EventHandler<S> {
                 amount_msat,
                 htlcs,
                 sender_intended_total_msat,
+                onion_fields,
             } => {
                 log_debug!(self.logger, "EVENT: PaymentClaimed claimed payment from payment hash {} of {} millisatoshis ({sender_intended_total_msat:?} intended)  from {} htlcs", payment_hash, amount_msat, htlcs.len());
 
                 let (payment_preimage, payment_secret) = match purpose {
-                    PaymentPurpose::InvoicePayment {
+                    PaymentPurpose::Bolt11InvoicePayment {
                         payment_preimage,
                         payment_secret,
                         ..
                     } => (payment_preimage, Some(payment_secret)),
                     PaymentPurpose::SpontaneousPayment(preimage) => (Some(preimage), None),
+                    PaymentPurpose::Bolt12OfferPayment { .. }
+                    | PaymentPurpose::Bolt12RefundPayment { .. } => {
+                        log_error!(self.logger, "Not support Bolt12");
+                        return Ok(());
+                    }
                 };
                 match read_payment_info(
                     &self.persister.storage,
@@ -448,40 +466,42 @@ impl<S: MutinyStorage> EventHandler<S> {
                 reason,
                 ..
             } => {
-                log_error!(
-                    self.logger,
-                    "EVENT: PaymentFailed: {} for reason {reason:?}",
-                    payment_hash
-                );
+                if let Some(payment_hash) = payment_hash {
+                    log_error!(
+                        self.logger,
+                        "EVENT: PaymentFailed: {} for reason {reason:?}",
+                        payment_hash
+                    );
 
-                match read_payment_info(
-                    &self.persister.storage,
-                    &payment_hash.0,
-                    false,
-                    &self.logger,
-                ) {
-                    Some(mut saved_payment_info) => {
-                        saved_payment_info.status = HTLCStatus::Failed;
-                        saved_payment_info.last_update = crate::utils::now().as_secs();
-                        match persist_payment_info(
-                            &self.persister.storage,
-                            &payment_hash.0,
-                            &saved_payment_info,
-                            false,
-                        ) {
-                            Ok(_) => (),
-                            Err(e) => log_error!(
-                                self.logger,
-                                "ERROR: could not persist payment info: {e}"
-                            ),
+                    match read_payment_info(
+                        &self.persister.storage,
+                        &payment_hash.0,
+                        false,
+                        &self.logger,
+                    ) {
+                        Some(mut saved_payment_info) => {
+                            saved_payment_info.status = HTLCStatus::Failed;
+                            saved_payment_info.last_update = crate::utils::now().as_secs();
+                            match persist_payment_info(
+                                &self.persister.storage,
+                                &payment_hash.0,
+                                &saved_payment_info,
+                                false,
+                            ) {
+                                Ok(_) => (),
+                                Err(e) => log_error!(
+                                    self.logger,
+                                    "ERROR: could not persist payment info: {e}"
+                                ),
+                            }
                         }
-                    }
-                    None => {
-                        // we failed in a payment that we didn't have saved? ...
-                        log_warn!(
-                            self.logger,
-                            "WARN: payment failed but we did not have it stored"
-                        );
+                        None => {
+                            // we failed in a payment that we didn't have saved? ...
+                            log_warn!(
+                                self.logger,
+                                "WARN: payment failed but we did not have it stored"
+                            );
+                        }
                     }
                 }
             }
@@ -537,7 +557,7 @@ impl<S: MutinyStorage> EventHandler<S> {
                     let _ = self
                         .persister
                         .persist_channel_open_params(user_channel_id, params);
-                    return;
+                    return Ok(());
                 };
 
                 log_debug!(
@@ -602,10 +622,6 @@ impl<S: MutinyStorage> EventHandler<S> {
                 log_debug!(self.logger, "EVENT: BumpTransaction: {event:?}");
                 self.bump_tx_event_handler.handle_event(&event);
             }
-            Event::InvoiceRequestFailed { payment_id } => {
-                // we don't support bolt 12 yet
-                log_warn!(self.logger, "EVENT: InvoiceRequestFailed: {payment_id}");
-            }
             Event::ConnectionNeeded { node_id, addresses } => {
                 // we don't support bolt 12 yet, and we won't have the connection info anyways
                 log_debug!(
@@ -613,7 +629,43 @@ impl<S: MutinyStorage> EventHandler<S> {
                     "EVENT: ConnectionNeeded: {node_id} @ {addresses:?}"
                 );
             }
+            Event::FundingTxBroadcastSafe {
+                channel_id,
+                user_channel_id,
+                funding_txo,
+                counterparty_node_id,
+                former_temporary_channel_id,
+            } => {
+                log_debug!(
+                    self.logger,
+                    "EVENT: FundingTxBroadcastSafe: {counterparty_node_id:?}/{channel_id}"
+                );
+            }
+            Event::InvoiceReceived {
+                payment_id,
+                invoice,
+                context,
+                responder,
+            } => {
+                log_debug!(self.logger, "EVENT: InvoiceReceived: {payment_id}");
+            }
+            Event::OnionMessageIntercepted {
+                peer_node_id,
+                message,
+            } => {
+                log_debug!(
+                    self.logger,
+                    "EVENT: OnionMessageIntercepted: {peer_node_id}"
+                );
+            }
+            Event::OnionMessagePeerConnected { peer_node_id } => {
+                log_debug!(
+                    self.logger,
+                    "EVENT: OnionMessagePeerConnected: {peer_node_id}"
+                );
+            }
         }
+        Ok(())
     }
 
     // Separate function to handle spendable outputs
@@ -654,7 +706,7 @@ impl<S: MutinyStorage> EventHandler<S> {
         // e.g. high-latency mix networks and some CoinJoin implementations, have
         // better privacy.
         // Logic copied from core: https://github.com/bitcoin/bitcoin/blob/1d4846a8443be901b8a5deb0e357481af22838d0/src/wallet/spend.cpp#L936
-        let mut height = self.channel_manager.current_best_block().height();
+        let mut height = self.channel_manager.current_best_block().height;
 
         let mut rand = [0u8; 4];
         getrandom::getrandom(&mut rand).unwrap();

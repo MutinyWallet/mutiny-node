@@ -3,8 +3,6 @@ use crate::nodemanager::NodeManager;
 use crate::storage::MutinyStorage;
 use bitcoin::Address;
 use lightning_invoice::Bolt11Invoice;
-use lnurl::lightning_address::LightningAddress;
-use lnurl::lnurl::LnUrl;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -30,29 +28,8 @@ pub struct LabelItem {
 pub struct Contact {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ln_address: Option<LightningAddress>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lnurl: Option<LnUrl>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub image_url: Option<String>,
     pub last_used: u64,
-}
-
-impl Contact {
-    /// Checks if the contact has the given lnurl as either a lnurl or a lightning address
-    pub fn has_lnurl(&self, lnurl: &LnUrl) -> bool {
-        if self.lnurl.as_ref().is_some_and(|l| l == lnurl) {
-            return true;
-        }
-
-        if let Some(ln_address) = self.ln_address.as_ref() {
-            if lnurl.lightning_address().as_ref() == Some(ln_address) {
-                return true;
-            }
-        }
-
-        false
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -108,16 +85,6 @@ pub trait LabelStorage {
     fn edit_contact(&self, id: impl AsRef<str>, contact: Contact) -> Result<(), MutinyError>;
     /// Gets all the existing tags (labels and contacts)
     fn get_tag_items(&self) -> Result<Vec<TagItem>, MutinyError>;
-    /// Finds a contact that has the given lnurl as either a lnurl or a lightning address
-    fn get_contact_for_lnurl(&self, lnurl: &LnUrl) -> Result<Option<String>, MutinyError> {
-        let contacts = self.get_contacts()?;
-        for (id, contact) in contacts {
-            if contact.has_lnurl(lnurl) {
-                return Ok(Some(id));
-            }
-        }
-        Ok(None)
-    }
 }
 
 impl<S: MutinyStorage> LabelStorage for S {
@@ -545,8 +512,6 @@ mod tests {
             Uuid::new_v4().to_string(),
             Contact {
                 name: "Satoshi Nakamoto".to_string(),
-                ln_address: None,
-                lnurl: None,
                 image_url: None,
                 last_used: 0,
             },
@@ -555,8 +520,6 @@ mod tests {
             Uuid::new_v4().to_string(),
             Contact {
                 name: "Hal Finney".to_string(),
-                ln_address: None,
-                lnurl: None,
                 image_url: None,
                 last_used: 0,
             },
@@ -565,8 +528,6 @@ mod tests {
             Uuid::new_v4().to_string(),
             Contact {
                 name: "Nick Szabo".to_string(),
-                ln_address: None,
-                lnurl: None,
                 image_url: None,
                 last_used: 0,
             },
@@ -717,8 +678,6 @@ mod tests {
 
         let contact = Contact {
             name: "Satoshi Nakamoto".to_string(),
-            ln_address: None,
-            lnurl: None,
             image_url: None,
             last_used: 0,
         };
@@ -737,8 +696,6 @@ mod tests {
 
         let contact = Contact {
             name: "Satoshi Nakamoto".to_string(),
-            ln_address: None,
-            lnurl: None,
             image_url: None,
             last_used: 0,
         };
@@ -761,8 +718,6 @@ mod tests {
 
         let contact = Contact {
             name: "Satoshi Nakamoto".to_string(),
-            ln_address: None,
-            lnurl: None,
             image_url: None,
             last_used: 0,
         };

@@ -1,4 +1,5 @@
 use crate::{logging::MutinyLogger, node::NetworkGraph};
+use lightning::blinded_path::IntroductionNode;
 use lightning::routing::router::CandidateRouteHop;
 use lightning::{
     routing::{
@@ -305,15 +306,21 @@ impl HubPreferentialScorer {
             }
             CandidateRouteHop::Blinded(hop) => {
                 // we can prefer blinded paths with hub introduction points
-                let (_, path) = hop.hint;
-                let node_id = NodeId::from_pubkey(&path.introduction_node_id);
-                self.preferred_hubs_set.contains(&node_id)
+                let path = hop.hint;
+                if let IntroductionNode::NodeId(node_id) = path.introduction_node() {
+                    self.preferred_hubs_set.contains(&NodeId::from_pubkey(node_id))
+                } else {
+                    false
+                }
             }
             CandidateRouteHop::OneHopBlinded(hop) => {
                 // one hop is just the introduction node which is a known node id
-                let (_, path) = hop.hint;
-                let node_id = NodeId::from_pubkey(&path.introduction_node_id);
-                self.preferred_hubs_set.contains(&node_id)
+                let path = hop.hint;
+                if let IntroductionNode::NodeId(node_id) = path.introduction_node() {
+                    self.preferred_hubs_set.contains(&NodeId::from_pubkey(node_id))
+                } else {
+                    false
+                }
             }
         }
     }

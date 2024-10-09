@@ -1,6 +1,6 @@
 use crate::lsp::{InvoiceRequest, LspConfig};
 use crate::nodemanager::ChannelClosure;
-use crate::peermanager::LspMessageRouter;
+use crate::peermanager::{LspMessageRouter, PeerManager};
 use crate::storage::MutinyStorage;
 use crate::utils::get_monitor_version;
 use crate::{
@@ -30,11 +30,10 @@ use crate::{
 };
 use crate::{messagehandler::MutinyMessageHandler, storage::read_payment_info};
 use anyhow::{anyhow, Context};
-use bdk::FeeRate;
-use bitcoin::bip32::ExtendedPrivKey;
+use bitcoin::bip32::Xpriv;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::secp256k1::ThirtyTwoByteHash;
-use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint};
+use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint, FeeRate};
 use lightning::ln::channel_state::ChannelDetails;
 use core::time::Duration;
 use esplora_client::AsyncClient;
@@ -192,7 +191,7 @@ impl PubkeyConnectionInfo {
 
 pub struct NodeBuilder<S: MutinyStorage> {
     // required
-    xprivkey: ExtendedPrivKey,
+    xprivkey: Xpriv,
     storage: S,
     uuid: Option<String>,
     node_index: Option<NodeIndex>,
@@ -214,7 +213,7 @@ pub struct NodeBuilder<S: MutinyStorage> {
 }
 
 impl<S: MutinyStorage> NodeBuilder<S> {
-    pub fn new(xprivkey: ExtendedPrivKey, storage: S) -> NodeBuilder<S> {
+    pub fn new(xprivkey: Xpriv, storage: S) -> NodeBuilder<S> {
         NodeBuilder::<S> {
             xprivkey,
             storage,
@@ -452,10 +451,10 @@ impl<S: MutinyStorage> NodeBuilder<S> {
 
         let network_graph = gossip_sync.network_graph().clone();
 
-        let router: Arc<Router> = Arc::new(DefaultRouter::new(
+        let router: Arc<Router<_>> = Arc::new(DefaultRouter::new(
             network_graph,
             logger.clone(),
-            keys_manager.get_secure_random_bytes(),
+            keys_manager.clone(),
             scorer.clone(),
             scoring_params(),
         ));
@@ -550,10 +549,10 @@ impl<S: MutinyStorage> NodeBuilder<S> {
             keys_manager.clone(),
             keys_manager.clone(),
             logger.clone(),
-            message_router,
+            channel_manager.clone(),
+            message_router.clone(),
             channel_manager.clone(),
             IgnoringMessageHandler {},
-            channel_manager.clone(),
             IgnoringMessageHandler {},
         ));
 
@@ -790,7 +789,7 @@ impl<S: MutinyStorage> NodeBuilder<S> {
                     |e| ev.handle_event(e),
                     background_chain_monitor.clone(),
                     background_processor_channel_manager.clone(),
-                    None,
+                    Option::<Arc<OnionMessenger<S>>>::None,
                     gs,
                     background_processor_peer_manager.clone(),
                     background_processor_logger.clone(),
@@ -1439,7 +1438,7 @@ impl<S: MutinyStorage> Node<S> {
         labels: Vec<String>,
     ) -> Result<(), MutinyError> {
         let last_update = utils::now().as_secs();
-        let payment_hash = PaymentHash(invoice.payment_hash().into_32());
+        let payment_hash = PaymentHash(invoice.payment_hash().to_byte_array());
         let payment_info = PaymentInfo {
             preimage: None,
             secret: Some(invoice.payment_secret().0),
@@ -1501,7 +1500,7 @@ impl<S: MutinyStorage> Node<S> {
     ) -> Result<(PaymentId, PaymentHash), MutinyError> {
         log_trace!(self.logger, "calling init_invoice_payment");
 
-        let payment_hash = invoice.payment_hash().into_32();
+        let payment_hash = invoice.payment_hash().to_byte_array();
 
         if read_payment_info(&self.persister.storage, &payment_hash, false, &self.logger)
             .is_some_and(|p| p.status != HTLCStatus::Failed)
@@ -1620,8 +1619,8 @@ impl<S: MutinyStorage> Node<S> {
         invoice: &Bolt11Invoice,
         amount_msats: u64,
     ) -> Result<PaymentId, RetryableSendFailure> {
-        let payment_id = PaymentId(invoice.payment_hash().into_32());
-        let payment_hash = PaymentHash((*invoice.payment_hash()).into_32());
+        let payment_id = PaymentId(invoice.payment_hash().to_byte_array());
+        let payment_hash = PaymentHash((*invoice.payment_hash()).to_byte_array());
         let mut recipient_onion = RecipientOnionFields::secret_only(*invoice.payment_secret());
         recipient_onion.payment_metadata = invoice.payment_metadata().cloned();
         let mut payment_params = PaymentParameters::from_node_id(
@@ -1795,7 +1794,7 @@ impl<S: MutinyStorage> Node<S> {
             Self::retry_strategy(),
         );
 
-        let payment_hash = PaymentHash(Sha256::hash(&preimage.0).into_32());
+        let payment_hash = PaymentHash(Sha256::hash(&preimage.0).to_byte_array());
 
         let last_update = utils::now().as_secs();
         let mut payment_info = PaymentInfo {
@@ -1860,7 +1859,7 @@ impl<S: MutinyStorage> Node<S> {
             .await?;
 
         let timeout: u64 = timeout_secs.unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
-        let payment_hash = PaymentHash(pay.payment_hash.into_32());
+        let payment_hash = PaymentHash(pay.payment_hash.to_byte_array());
 
         let res = self
             .await_payment(payment_id, payment_hash, timeout, labels)
@@ -1941,7 +1940,7 @@ impl<S: MutinyStorage> Node<S> {
         &self,
         pubkey: PublicKey,
         amount_sat: u64,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
         user_channel_id: Option<u128>,
     ) -> Result<u128, MutinyError> {
         log_trace!(self.logger, "calling init_open_channel");
@@ -1964,7 +1963,7 @@ impl<S: MutinyStorage> Node<S> {
         } else {
             let sats_per_kw = self.wallet.fees.get_normal_fee_rate();
 
-            FeeRate::from_sat_per_kwu(sats_per_kw as f32).as_sat_per_vb()
+            FeeRate::from_sat_per_kwu(sats_per_kw.into()).to_sat_per_vb_ceil()
         };
 
         // save params to db
@@ -2005,7 +2004,7 @@ impl<S: MutinyStorage> Node<S> {
         &self,
         pubkey: PublicKey,
         amount_sat: u64,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
         user_channel_id: Option<u128>,
         timeout: u64,
     ) -> Result<OutPoint, MutinyError> {
@@ -2039,7 +2038,7 @@ impl<S: MutinyStorage> Node<S> {
             let mut total = 0;
             for utxo in all_utxos {
                 if utxos.contains(&utxo.outpoint) {
-                    total += utxo.txout.value;
+                    total += utxo.txout.value.to_sat();
                 }
             }
             total
@@ -2071,7 +2070,7 @@ impl<S: MutinyStorage> Node<S> {
             u128::from_be_bytes(user_channel_id_bytes)
         });
 
-        let sats_per_vbyte = FeeRate::from_sat_per_kwu(sats_per_kw as f32).as_sat_per_vb();
+        let sats_per_vbyte = FeeRate::from_sat_per_kwu(sats_per_kw.into()).to_sat_per_vb_ceil();
         // save params to db
         let params = ChannelOpenParams::new_sweep(sats_per_vbyte, expected_fee, utxos.to_vec());
         self.persister
@@ -2417,7 +2416,7 @@ async fn start_reconnection_handling<S: MutinyStorage>(
                 .filter(|(n, _)| {
                     !current_connections
                         .iter()
-                        .any(|(c, _)| &NodeId::from_pubkey(c) == n)
+                        .any(|c| &NodeId::from_pubkey(c) == n)
                 })
                 .collect();
 

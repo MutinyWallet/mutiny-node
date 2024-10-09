@@ -1,20 +1,24 @@
 use anyhow::anyhow;
+use bdk_chain::spk_client::{
+    FullScanRequest, FullScanRequestBuilder, FullScanResult, SyncRequestBuilder, SyncResult,
+};
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
-use bdk::chain::{BlockId, ConfirmationTime};
-use bdk::psbt::PsbtUtils;
-use bdk::template::DescriptorTemplateOut;
-use bdk::wallet::{AddressIndex, Update};
-use bdk::{FeeRate, LocalOutput, SignOptions, Wallet};
-use bdk_chain::indexed_tx_graph::Indexer;
+use bdk_chain::{BlockId, ConfirmationTime, Indexer};
 use bdk_esplora::EsploraAsyncExt;
-use bitcoin::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
+use bdk_wallet::bitcoin::FeeRate;
+use bdk_wallet::psbt::PsbtUtils;
+use bdk_wallet::template::DescriptorTemplateOut;
+use bdk_wallet::{
+    CreateParams, KeychainKind, LoadParams, LocalOutput, SignOptions, Update, Wallet,
+};
+use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
 use bitcoin::consensus::serialize;
-use bitcoin::psbt::{Input, PartiallySignedTransaction};
-use bitcoin::{Address, Network, OutPoint, ScriptBuf, Transaction, Txid};
+use bitcoin::psbt::{Input, Psbt};
+use bitcoin::{Address, Amount, Network, OutPoint, ScriptBuf, Transaction, Txid};
 use esplora_client::AsyncClient;
 use hex_conservative::DisplayHex;
 use lightning::events::bump_transaction::{Utxo, WalletSource};
@@ -26,8 +30,7 @@ use crate::fees::MutinyFeeEstimator;
 use crate::labels::*;
 use crate::logging::MutinyLogger;
 use crate::storage::{
-    IndexItem, MutinyStorage, OnChainStorage, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY,
-    ONCHAIN_PREFIX,
+    IndexItem, MutinyStorage, KEYCHAIN_STORE_KEY, NEED_FULL_SYNC_KEY, ONCHAIN_PREFIX,
 };
 use crate::utils::{now, sleep};
 use crate::TransactionDetails;
@@ -37,7 +40,7 @@ pub(crate) const RESTORE_SYNC_STOP_GAP: usize = 20;
 
 #[derive(Clone)]
 pub struct OnChainWallet<S: MutinyStorage> {
-    pub wallet: Arc<RwLock<Wallet<OnChainStorage<S>>>>,
+    pub wallet: Arc<RwLock<Wallet>>,
     pub(crate) storage: S,
     pub network: Network,
     pub blockchain: Arc<AsyncClient>,
@@ -48,8 +51,8 @@ pub struct OnChainWallet<S: MutinyStorage> {
 
 impl<S: MutinyStorage> OnChainWallet<S> {
     pub fn new(
-        xprivkey: ExtendedPrivKey,
-        db: S,
+        xprivkey: Xpriv,
+        mut db: S,
         network: Network,
         esplora: Arc<AsyncClient>,
         fees: Arc<MutinyFeeEstimator<S>>,
@@ -61,34 +64,42 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             get_tr_descriptors_for_extended_key(xprivkey, network, account_number)?;
 
         // if we have a keychain set, load the wallet, otherwise create one
-        let load_wallet_res = Wallet::load(
-            receive_descriptor_template.clone(),
-            Some(change_descriptor_template.clone()),
-            OnChainStorage(db.clone()),
-        );
+        // receive_descriptor_template.clone(),
+        // Some(change_descriptor_template.clone()),
+        // OnChainStorage(db.clone()),
+        let load_wallet_res = db.read_changes()?.map(|changeset| {
+            Wallet::load_with_params(
+                changeset,
+                LoadParams::new()
+                    .descriptor(
+                        KeychainKind::External,
+                        Some(receive_descriptor_template.clone()),
+                    )
+                    .descriptor(
+                        KeychainKind::Internal,
+                        Some(change_descriptor_template.clone()),
+                    ),
+            )
+        });
         let wallet = match load_wallet_res {
-            Ok(wallet) => wallet,
-            Err(bdk::wallet::LoadError::NotInitialized) => {
+            Some(Ok(Some(wallet))) => wallet,
+            None | Some(Ok(None)) => {
                 // we don't have a bdk wallet, create one
-                Wallet::new(
-                    receive_descriptor_template,
-                    Some(change_descriptor_template),
-                    OnChainStorage(db.clone()),
-                    network,
+                Wallet::create_with_params(
+                    CreateParams::new(receive_descriptor_template, change_descriptor_template)
+                        .network(network),
                 )?
             }
-            Err(bdk::wallet::LoadError::Load(_)) => {
+            Some(Err(bdk_wallet::LoadError::Mismatch(_))) => {
                 // failed to read storage, means we have old encoding and need to delete and re-init wallet
                 db.delete(&[KEYCHAIN_STORE_KEY])?;
                 db.set_data(NEED_FULL_SYNC_KEY.to_string(), true, None)?;
-                Wallet::new(
-                    receive_descriptor_template,
-                    Some(change_descriptor_template),
-                    OnChainStorage(db.clone()),
-                    network,
+                Wallet::create_with_params(
+                    CreateParams::new(receive_descriptor_template, change_descriptor_template)
+                        .network(network),
                 )?
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 log_error!(logger, "Failed to load wallet: {e}");
                 return Err(MutinyError::WalletOperationFailed);
             }
@@ -138,7 +149,9 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             Ok(mut wallet) => match wallet.apply_update(update) {
                 Ok(_) => {
                     // commit the changes
-                    wallet.commit()?;
+                    if let Some(changeset) = wallet.take_staged() {
+                        self.storage.write_changes(&changeset)?;
+                    }
                     drop(wallet); // drop so we can read from wallet
 
                     // update the activity index, just get the list of transactions
@@ -198,7 +211,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                 let spk_vec = wallet
                     .spk_index()
                     .unused_spks()
-                    .map(|(_, _, v)| ScriptBuf::from(v))
+                    .map(|(_, v)| ScriptBuf::from(v))
                     .collect::<Vec<_>>();
 
                 let chain = wallet.local_chain();
@@ -206,7 +219,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
 
                 let unconfirmed_txids = wallet
                     .tx_graph()
-                    .list_chain_txs(chain, chain_tip)
+                    .list_canonical_txs(chain, chain_tip)
                     .filter(|canonical_tx| !canonical_tx.chain_position.is_confirmed())
                     .map(|canonical_tx| canonical_tx.tx_node.txid)
                     .collect::<Vec<Txid>>();
@@ -223,18 +236,16 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             }
         };
 
-        let update_graph = self
+        let SyncResult {
+            tx_update,
+            chain_update,
+        } = self
             .blockchain
-            .sync(spks, txids, core::iter::empty(), 5)
-            .await?;
-        let missing_heights = update_graph.missing_heights(&chain);
-        let chain_update = self
-            .blockchain
-            .update_local_chain(prev_tip, missing_heights)
+            .sync(SyncRequestBuilder::default().spks(spks).txids(txids), 5)
             .await?;
         let update = Update {
-            graph: update_graph,
-            chain: Some(chain_update),
+            tx_update,
+            chain: chain_update,
             ..Default::default()
         };
 
@@ -268,16 +279,20 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             }
         };
 
-        let (update_graph, last_active_indices) = self.blockchain.full_scan(spks, gap, 5).await?;
-        let missing_heights = update_graph.missing_heights(&chain);
-        let chain_update = self
-            .blockchain
-            .update_local_chain(prev_tip, missing_heights)
-            .await?;
+        let mut request_builder = FullScanRequestBuilder::default();
+        for (kind, pks) in spks.into_iter() {
+            request_builder = request_builder.spks_for_keychain(kind, pks)
+        }
+
+        let FullScanResult {
+            tx_update,
+            last_active_indices,
+            chain_update,
+        } = self.blockchain.full_scan(request_builder, gap, 5).await?;
         let update = Update {
             last_active_indices,
-            graph: update_graph,
-            chain: Some(chain_update),
+            tx_update,
+            chain: chain_update,
         };
 
         // get new wallet lock for writing and apply the update
@@ -309,7 +324,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                 if let Some(block_id) = block_id {
                     let mut wallet = self.wallet.try_write()?;
                     wallet.insert_checkpoint(block_id)?;
-                    wallet.insert_tx(tx, position)?;
+                    wallet.insert_tx(tx);
                 } else {
                     // if the transaction is confirmed and we don't have the block id,
                     // we should just sync the wallet otherwise we can get an error
@@ -326,8 +341,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                 // if we already have the transaction, we don't need to insert it
                 if wallet.get_tx(txid).is_none() {
                     // insert tx and commit changes
-                    wallet.insert_tx(tx, position)?;
-                    wallet.commit()?;
+                    wallet.insert_tx(tx);
                 } else {
                     log_debug!(
                         self.logger,
@@ -335,6 +349,12 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                     )
                 }
             }
+        }
+
+        // commit wallet
+        let mut wallet = self.wallet.try_write()?;
+        if let Some(changeset) = wallet.take_staged() {
+            self.storage.write_changes(&changeset)?;
         }
 
         // update activity index
@@ -368,8 +388,8 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                 .transactions()
                 .filter_map(|tx| {
                     // skip txs that were not relevant to our bdk wallet
-                    if wallet.spk_index().is_tx_relevant(tx.tx_node.tx) {
-                        let (sent, received) = wallet.spk_index().sent_and_received(tx.tx_node.tx);
+                    if wallet.spk_index().is_tx_relevant(&tx.tx_node.tx) {
+                        let (sent, received) = wallet.sent_and_received(&tx.tx_node.tx);
 
                         let transaction = if include_raw {
                             Some(tx.tx_node.tx.clone())
@@ -377,15 +397,15 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                             None
                         };
 
-                        let fee = wallet.calculate_fee(tx.tx_node.tx).ok();
+                        let fee = wallet.calculate_fee(&tx.tx_node.tx).ok();
 
                         Some(TransactionDetails {
-                            transaction,
+                            transaction: transaction.map(|t| Arc::unwrap_or_clone(t)),
                             txid: Some(tx.tx_node.txid),
                             internal_id: tx.tx_node.txid,
-                            received,
-                            sent,
-                            fee,
+                            received: received.to_sat(),
+                            sent: sent.to_sat(),
+                            fee: fee.map(|f|f.to_sat()),
                             confirmation_time: tx.chain_position.cloned().into(),
                             labels: vec![],
                         })
@@ -410,15 +430,15 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         match bdk_tx {
             None => Ok(None),
             Some(tx) => {
-                let (sent, received) = wallet.sent_and_received(tx.tx_node.tx);
-                let fee = wallet.calculate_fee(tx.tx_node.tx).ok();
+                let (sent, received) = wallet.sent_and_received(&tx.tx_node.tx);
+                let fee = wallet.calculate_fee(&tx.tx_node.tx).ok();
                 let details = TransactionDetails {
-                    transaction: Some(tx.tx_node.tx.to_owned()),
+                    transaction: Some(Transaction::clone(&tx.tx_node.tx)),
                     txid: Some(txid),
                     internal_id: txid,
-                    received,
-                    sent,
-                    fee,
+                    received: received.to_sat(),
+                    sent: sent.to_sat(),
+                    fee: fee.map(|fee|fee.to_sat()),
                     confirmation_time: tx.chain_position.cloned().into(),
                     labels: vec![],
                 };
@@ -429,10 +449,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
     }
 
     #[allow(dead_code)]
-    fn get_psbt_previous_labels(
-        &self,
-        psbt: &PartiallySignedTransaction,
-    ) -> Result<Vec<String>, MutinyError> {
+    fn get_psbt_previous_labels(&self, psbt: &Psbt) -> Result<Vec<String>, MutinyError> {
         // first get previous labels
         let address_labels = self.storage.get_address_labels()?;
 
@@ -463,11 +480,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn label_psbt(
-        &self,
-        psbt: &PartiallySignedTransaction,
-        labels: Vec<String>,
-    ) -> Result<(), MutinyError> {
+    pub(crate) fn label_psbt(&self, psbt: &Psbt, labels: Vec<String>) -> Result<(), MutinyError> {
         let mut prev_labels = vec![];
 
         // add on new labels
@@ -501,8 +514,8 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         &self,
         send_to: Address,
         amount: u64,
-        fee_rate: Option<f32>,
-    ) -> Result<PartiallySignedTransaction, MutinyError> {
+        fee_rate: Option<u64>,
+    ) -> Result<Psbt, MutinyError> {
         self.create_signed_psbt_to_spk(send_to.script_pubkey(), amount, fee_rate)
     }
 
@@ -510,20 +523,20 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         &self,
         spk: ScriptBuf,
         amount: u64,
-        fee_rate: Option<f32>,
-    ) -> Result<PartiallySignedTransaction, MutinyError> {
+        fee_rate: Option<u64>,
+    ) -> Result<Psbt, MutinyError> {
         let mut wallet = self.wallet.try_write()?;
 
         let fee_rate = if let Some(rate) = fee_rate {
-            FeeRate::from_sat_per_vb(rate)
+            FeeRate::from_sat_per_vb(rate).ok_or(MutinyError::InvalidFeerate)?
         } else {
             let sat_per_kwu = self.fees.get_normal_fee_rate();
-            FeeRate::from_sat_per_kwu(sat_per_kwu as f32)
+            FeeRate::from_sat_per_kwu(sat_per_kwu.into())
         };
         let mut psbt = {
             let mut builder = wallet.build_tx();
             builder
-                .add_recipient(spk, amount)
+                .add_recipient(spk, Amount::from_sat(amount))
                 .enable_rbf()
                 .fee_rate(fee_rate);
             builder.finish()?
@@ -539,12 +552,12 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         destination_address: Address,
         amount: u64,
         labels: Vec<String>,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<Txid, MutinyError> {
         let psbt = self.create_signed_psbt(destination_address, amount, fee_rate)?;
         self.label_psbt(&psbt, labels)?;
 
-        let raw_transaction = psbt.extract_tx();
+        let raw_transaction = psbt.extract_tx()?;
         let txid = raw_transaction.txid();
 
         self.broadcast_transaction(raw_transaction).await?;
@@ -554,8 +567,8 @@ impl<S: MutinyStorage> OnChainWallet<S> {
 
     pub async fn send_payjoin(
         &self,
-        mut original_psbt: PartiallySignedTransaction,
-        mut proposal_psbt: PartiallySignedTransaction,
+        mut original_psbt: Psbt,
+        mut proposal_psbt: Psbt,
         labels: Vec<String>,
     ) -> Result<Transaction, MutinyError> {
         let wallet = self.wallet.try_read()?;
@@ -564,7 +577,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         // proposal_psbt only contains the sender input outpoints, not scripts, which BDK
         // does not look up
         fn input_pairs(
-            psbt: &mut PartiallySignedTransaction,
+            psbt: &mut Psbt,
         ) -> Box<dyn Iterator<Item = (&bitcoin::TxIn, &mut Input)> + '_> {
             Box::new(psbt.unsigned_tx.input.iter().zip(&mut psbt.inputs))
         }
@@ -600,7 +613,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         drop(wallet);
 
         self.label_psbt(&proposal_psbt, labels)?;
-        let payjoin = proposal_psbt.extract_tx();
+        let payjoin = proposal_psbt.extract_tx()?;
 
         Ok(payjoin)
     }
@@ -608,15 +621,15 @@ impl<S: MutinyStorage> OnChainWallet<S> {
     pub fn create_sweep_psbt(
         &self,
         spk: ScriptBuf,
-        fee_rate: Option<f32>,
-    ) -> Result<PartiallySignedTransaction, MutinyError> {
+        fee_rate: Option<u64>,
+    ) -> Result<Psbt, MutinyError> {
         let mut wallet = self.wallet.try_write()?;
 
         let fee_rate = if let Some(rate) = fee_rate {
-            FeeRate::from_sat_per_vb(rate)
+            FeeRate::from_sat_per_vb(rate).ok_or_else(|| MutinyError::InvalidFeerate)?
         } else {
             let sat_per_kwu = self.fees.get_normal_fee_rate();
-            FeeRate::from_sat_per_kwu(sat_per_kwu as f32)
+            FeeRate::from_sat_per_kwu(sat_per_kwu.into() )
         };
         let mut psbt = {
             let mut builder = wallet.build_tx();
@@ -637,12 +650,12 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         &self,
         destination_address: Address,
         labels: Vec<String>,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<Txid, MutinyError> {
         let psbt = self.create_sweep_psbt(destination_address.script_pubkey(), fee_rate)?;
         self.label_psbt(&psbt, labels)?;
 
-        let raw_transaction = psbt.extract_tx();
+        let raw_transaction = psbt.extract_tx()?;
         let txid = raw_transaction.txid();
 
         self.broadcast_transaction(raw_transaction).await?;
@@ -659,15 +672,15 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         spk: ScriptBuf,
         amount_sats: u64,
         absolute_fee: u64,
-    ) -> Result<PartiallySignedTransaction, MutinyError> {
+    ) -> Result<Psbt, MutinyError> {
         let mut wallet = self.wallet.try_write()?;
         let mut psbt = {
             let mut builder = wallet.build_tx();
             builder
                 .manually_selected_only()
                 .add_utxos(utxos)?
-                .add_recipient(spk, amount_sats)
-                .fee_absolute(absolute_fee)
+                .add_recipient(spk, Amount::from_sat(amount_sats))
+                .fee_absolute(Amount::from_sat(absolute_fee))
                 .enable_rbf();
             builder.finish()?
         };
@@ -681,35 +694,35 @@ impl<S: MutinyStorage> OnChainWallet<S> {
         &self,
         spk: ScriptBuf,
         amount: u64,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<u64, MutinyError> {
         let psbt = self.create_signed_psbt_to_spk(spk, amount, fee_rate)?;
 
-        psbt.fee_amount().ok_or(MutinyError::WalletOperationFailed)
+        psbt.fee_amount().map(|amount|amount.to_sat()).ok_or(MutinyError::WalletOperationFailed)
     }
 
     pub fn estimate_sweep_tx_fee(
         &self,
         spk: ScriptBuf,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<u64, MutinyError> {
         let psbt = self.create_sweep_psbt(spk, fee_rate)?;
 
-        psbt.fee_amount().ok_or(MutinyError::WalletOperationFailed)
+        psbt.fee_amount().map(|amount|amount.to_sat()).ok_or(MutinyError::WalletOperationFailed)
     }
 
     /// Bumps the given transaction by replacing the given tx with a transaction at
     /// the new given fee rate in sats/vbyte
-    pub async fn bump_fee(&self, txid: Txid, new_fee_rate: f32) -> Result<Txid, MutinyError> {
+    pub async fn bump_fee(&self, txid: Txid, new_fee_rate: u64) -> Result<Txid, MutinyError> {
         let tx = {
             let mut wallet = self.wallet.try_write()?;
             // build RBF fee bump tx
             let mut builder = wallet.build_fee_bump(txid)?;
-            builder.fee_rate(FeeRate::from_sat_per_vb(new_fee_rate));
+            builder.fee_rate(FeeRate::from_sat_per_vb(new_fee_rate).ok_or(MutinyError::InvalidFeerate)?);
             let mut psbt = builder.finish()?;
             wallet.sign(&mut psbt, SignOptions::default())?;
 
-            psbt.extract_tx()
+            psbt.extract_tx()?
         };
 
         let txid = tx.txid();
@@ -721,7 +734,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
 }
 
 fn get_tr_descriptors_for_extended_key(
-    master_xprv: ExtendedPrivKey,
+    master_xprv: Xpriv,
     network: Network,
     account_number: u32,
 ) -> Result<(DescriptorTemplateOut, DescriptorTemplateOut), MutinyError> {
@@ -733,11 +746,11 @@ fn get_tr_descriptors_for_extended_key(
         ChildNumber::from_hardened_idx(account_number)?,
     ]);
 
-    let receive_descriptor_template = bdk::descriptor!(tr((
+    let receive_descriptor_template = bdk_wallet::descriptor!(tr((
         master_xprv,
         derivation_path.extend([ChildNumber::Normal { index: 0 }])
     )))?;
-    let change_descriptor_template = bdk::descriptor!(tr((
+    let change_descriptor_template = bdk_wallet::descriptor!(tr((
         master_xprv,
         derivation_path.extend([ChildNumber::Normal { index: 1 }])
     )))?;
@@ -787,14 +800,11 @@ impl<S: MutinyStorage> WalletSource for OnChainWallet<S> {
 
     fn get_change_script(&self) -> Result<ScriptBuf, ()> {
         let mut wallet = self.wallet.try_write().map_err(|_| ())?;
-        let addr = wallet
-            .try_get_internal_address(AddressIndex::New)
-            .map_err(|_| ())?
-            .address;
+        let addr = wallet.next_unused_address(KeychainKind::Internal).address;
         Ok(addr.script_pubkey())
     }
 
-    fn sign_psbt(&self, mut psbt: PartiallySignedTransaction) -> Result<Transaction, ()> {
+    fn sign_psbt(&self, mut psbt: Psbt) -> Result<Transaction, ()> {
         let wallet = self.wallet.try_read().map_err(|e| {
             log_error!(
                 self.logger,
@@ -811,7 +821,9 @@ impl<S: MutinyStorage> WalletSource for OnChainWallet<S> {
             .sign(&mut psbt, sign_options)
             .map_err(|e| log_error!(self.logger, "Could not sign transaction: {e:?}"))?;
 
-        Ok(psbt.extract_tx())
+        psbt.extract_tx().map_err(|e|{
+            log_error!(self.logger, "Extract signed transaction: {e:?}")
+        })
     }
 }
 
@@ -844,7 +856,7 @@ mod tests {
             logger.clone(),
         ));
         let stop = Arc::new(AtomicBool::new(false));
-        let xpriv = ExtendedPrivKey::new_master(Network::Testnet, &mnemonic.to_seed("")).unwrap();
+        let xpriv = Xpriv::new_master(Network::Testnet, &mnemonic.to_seed("")).unwrap();
 
         OnChainWallet::new(xpriv, db, Network::Testnet, esplora, fees, stop, logger).unwrap()
     }
@@ -862,7 +874,7 @@ mod tests {
         log!("{}", test_name);
         let wallet = create_wallet().await;
 
-        let psbt = PartiallySignedTransaction::from_str("cHNidP8BAKACAAAAAqsJSaCMWvfEm4IS9Bfi8Vqz9cM9zxU4IagTn4d6W3vkAAAAAAD+////qwlJoIxa98SbghL0F+LxWrP1wz3PFTghqBOfh3pbe+QBAAAAAP7///8CYDvqCwAAAAAZdqkUdopAu9dAy+gdmI5x3ipNXHE5ax2IrI4kAAAAAAAAGXapFG9GILVT+glechue4O/p+gOcykWXiKwAAAAAAAEHakcwRAIgR1lmF5fAGwNrJZKJSGhiGDR9iYZLcZ4ff89X0eURZYcCIFMJ6r9Wqk2Ikf/REf3xM286KdqGbX+EhtdVRs7tr5MZASEDXNxh/HupccC1AaZGoqg7ECy0OIEhfKaC3Ibi1z+ogpIAAQEgAOH1BQAAAAAXqRQ1RebjO4MsRwUPJNPuuTycA5SLx4cBBBYAFIXRNTfy4mVAWjTbr6nj3aAfuCMIAAAA").unwrap();
+        let psbt = Psbt::from_str("cHNidP8BAKACAAAAAqsJSaCMWvfEm4IS9Bfi8Vqz9cM9zxU4IagTn4d6W3vkAAAAAAD+////qwlJoIxa98SbghL0F+LxWrP1wz3PFTghqBOfh3pbe+QBAAAAAP7///8CYDvqCwAAAAAZdqkUdopAu9dAy+gdmI5x3ipNXHE5ax2IrI4kAAAAAAAAGXapFG9GILVT+glechue4O/p+gOcykWXiKwAAAAAAAEHakcwRAIgR1lmF5fAGwNrJZKJSGhiGDR9iYZLcZ4ff89X0eURZYcCIFMJ6r9Wqk2Ikf/REf3xM286KdqGbX+EhtdVRs7tr5MZASEDXNxh/HupccC1AaZGoqg7ECy0OIEhfKaC3Ibi1z+ogpIAAQEgAOH1BQAAAAAXqRQ1RebjO4MsRwUPJNPuuTycA5SLx4cBBBYAFIXRNTfy4mVAWjTbr6nj3aAfuCMIAAAA").unwrap();
 
         // set label for input
         let input_addr = Address::from_str("2Mx6uYKYGW5J6sV59e5NsdtCTsJYRxednbx")

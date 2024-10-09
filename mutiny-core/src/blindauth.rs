@@ -7,7 +7,7 @@ use crate::{
 use crate::{logging::MutinyLogger, storage::MutinyStorage};
 use async_lock::RwLock;
 use bitcoin::{
-    bip32::{ChildNumber, DerivationPath, ExtendedPrivKey},
+    bip32::{ChildNumber, DerivationPath, Xpriv},
     secp256k1::Secp256k1,
     Network,
 };
@@ -171,7 +171,7 @@ pub struct BlindAuthClient<S: MutinyStorage> {
 
 impl<S: MutinyStorage> BlindAuthClient<S> {
     pub fn new(
-        xprivkey: ExtendedPrivKey,
+        xprivkey: Xpriv,
         auth_client: Arc<MutinyAuthClient>,
         network: Network,
         base_url: String,
@@ -387,7 +387,7 @@ fn generate_nonce(
 //
 // Each specific service+plan will have a derivation from there.
 fn create_blind_auth_secret(
-    xprivkey: ExtendedPrivKey,
+    xprivkey: Xpriv,
     network: Network,
 ) -> Result<DerivableSecret, MutinyError> {
     let context = Secp256k1::new();
@@ -415,7 +415,7 @@ mod test {
     use crate::logging::MutinyLogger;
     use crate::storage::MemoryStorage;
     use crate::test_utils::create_manager;
-    use bitcoin::bip32::ExtendedPrivKey;
+    use bitcoin::bip32::Xpriv;
     use bitcoin::Network;
     use nostr::prelude::hex;
     use std::sync::Arc;
@@ -429,7 +429,7 @@ mod test {
         let storage = MemoryStorage::default();
         let logger = Arc::new(MutinyLogger::default());
         let mnemonic = generate_seed(12).unwrap();
-        let xpriv = ExtendedPrivKey::new_master(Network::Regtest, &mnemonic.to_seed("")).unwrap();
+        let xpriv = Xpriv::new_master(Network::Regtest, &mnemonic.to_seed("")).unwrap();
 
         // Set up test auth client
         let auth_manager = create_manager();

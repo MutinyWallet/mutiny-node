@@ -25,7 +25,7 @@ use crate::logging::MutinyLogger;
 use crate::node::{NetworkGraph, RapidGossipSync};
 use crate::storage::MutinyStorage;
 use crate::utils;
-use crate::{auth::MutinyAuthClient, error::MutinyError};
+use crate::{error::MutinyError};
 
 pub(crate) const LN_PEER_METADATA_KEY_PREFIX: &str = "ln_peer/";
 pub const GOSSIP_SYNC_TIME_KEY: &str = "last_sync_timestamp";
@@ -110,49 +110,49 @@ pub struct Scorer {
     pub value: String,
 }
 
-async fn get_remote_scorer_bytes(
-    auth_client: &MutinyAuthClient,
-    base_url: &str,
-) -> Result<Vec<u8>, MutinyError> {
-    let url = Url::parse(&format!("{}/v1/scorer", base_url))
-        .map_err(|_| MutinyError::ConnectionFailed)?;
+// async fn get_remote_scorer_bytes(
+//     auth_client: &MutinyAuthClient,
+//     base_url: &str,
+// ) -> Result<Vec<u8>, MutinyError> {
+//     let url = Url::parse(&format!("{}/v1/scorer", base_url))
+//         .map_err(|_| MutinyError::ConnectionFailed)?;
 
-    let response = auth_client
-        .request(Method::GET, url, None)
-        .await
-        .map_err(|_| MutinyError::ConnectionFailed)?;
+//     let response = auth_client
+//         .request(Method::GET, url, None)
+//         .await
+//         .map_err(|_| MutinyError::ConnectionFailed)?;
 
-    let scorer: Scorer = response
-        .json()
-        .await
-        .map_err(|_| MutinyError::ConnectionFailed)?;
+//     let scorer: Scorer = response
+//         .json()
+//         .await
+//         .map_err(|_| MutinyError::ConnectionFailed)?;
 
-    let decoded = base64::decode(scorer.value).map_err(|_| MutinyError::ConnectionFailed)?;
-    Ok(decoded)
-}
+//     let decoded = base64::decode(scorer.value).map_err(|_| MutinyError::ConnectionFailed)?;
+//     Ok(decoded)
+// }
 
-/// Gets the remote scorer from the server, parses it and returns it as a [`HubPreferentialScorer`]
-pub async fn get_remote_scorer(
-    auth_client: &MutinyAuthClient,
-    base_url: &str,
-    network_graph: Arc<NetworkGraph>,
-    logger: Arc<MutinyLogger>,
-) -> Result<HubPreferentialScorer, MutinyError> {
-    let start = Instant::now();
-    let scorer_bytes = get_remote_scorer_bytes(auth_client, base_url).await?;
-    let mut readable_bytes = lightning::io::Cursor::new(scorer_bytes);
-    let params = decay_params();
-    let args = (params, network_graph, logger.clone());
-    let scorer = ProbScorer::read(&mut readable_bytes, args)?;
+// /// Gets the remote scorer from the server, parses it and returns it as a [`HubPreferentialScorer`]
+// pub async fn get_remote_scorer(
+//     auth_client: &MutinyAuthClient,
+//     base_url: &str,
+//     network_graph: Arc<NetworkGraph>,
+//     logger: Arc<MutinyLogger>,
+// ) -> Result<HubPreferentialScorer, MutinyError> {
+//     let start = Instant::now();
+//     let scorer_bytes = get_remote_scorer_bytes(auth_client, base_url).await?;
+//     let mut readable_bytes = lightning::io::Cursor::new(scorer_bytes);
+//     let params = decay_params();
+//     let args = (params, network_graph, logger.clone());
+//     let scorer = ProbScorer::read(&mut readable_bytes, args)?;
 
-    log_trace!(
-        logger,
-        "Retrieved remote scorer in {}ms",
-        start.elapsed().as_millis()
-    );
+//     log_trace!(
+//         logger,
+//         "Retrieved remote scorer in {}ms",
+//         start.elapsed().as_millis()
+//     );
 
-    Ok(HubPreferentialScorer::new(scorer))
-}
+//     Ok(HubPreferentialScorer::new(scorer))
+// }
 
 fn write_gossip_data(
     storage: &impl MutinyStorage,

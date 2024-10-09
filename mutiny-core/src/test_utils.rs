@@ -3,7 +3,7 @@
 pub fn create_manager() -> AuthManager {
     let mnemonic = generate_seed(12).unwrap();
     let seed = mnemonic.to_seed("");
-    let xprivkey = ExtendedPrivKey::new_master(Network::Regtest, &seed).unwrap();
+    let xprivkey = Xpriv::new_master(Network::Regtest, &seed).unwrap();
     AuthManager::new(xprivkey).unwrap()
 }
 
@@ -39,7 +39,7 @@ pub async fn create_vss_client() -> MutinyVssClient {
 
 pub(crate) async fn create_mutiny_wallet<S: MutinyStorage>(storage: S) -> MutinyWallet<S> {
     let network = Network::Regtest;
-    let xpriv = ExtendedPrivKey::new_master(network, &[0; 32]).unwrap();
+    let xpriv = Xpriv::new_master(network, &[0; 32]).unwrap();
     let config = MutinyWalletConfigBuilder::new(xpriv)
         .with_network(network)
         .build();
@@ -58,7 +58,7 @@ pub(crate) async fn create_node<S: MutinyStorage>(storage: S) -> Node<S> {
     let logger = Arc::new(MutinyLogger::default());
     let seed = generate_seed(12).unwrap();
     let network = Network::Regtest;
-    let xprivkey = ExtendedPrivKey::new_master(network, &seed.to_seed("")).unwrap();
+    let xprivkey = Xpriv::new_master(network, &seed.to_seed("")).unwrap();
     let network_graph = Arc::new(NetworkGraph::new(network, logger.clone()));
     let gossip_sync = Arc::new(RapidGossipSync::new(network_graph.clone(), logger.clone()));
     let params = ProbabilisticScoringDecayParameters::default();
@@ -175,7 +175,7 @@ macro_rules! log {
     }
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
-use bitcoin::{bip32::ExtendedPrivKey, Network};
+use bitcoin::{bip32::Xpriv, Network};
 use lightning::ln::PaymentSecret;
 use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
 use lightning_invoice::{Bolt11Invoice, InvoiceBuilder};

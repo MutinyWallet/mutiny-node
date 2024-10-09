@@ -16,6 +16,8 @@ pub enum MutinyJsError {
     /// previously running on.
     #[error("Incorrect expected network.")]
     NetworkMismatch,
+    #[error("Message Packet size exceeded")]
+    PacketSizeExceeded,
     /// Returned on any resource that is not found.
     #[error("Resource Not found.")]
     NotFound,
@@ -50,9 +52,6 @@ pub enum MutinyJsError {
     /// We do not have enough balance to pay the given amount.
     #[error("We do not have enough balance to pay the given amount.")]
     InsufficientBalance,
-    /// Failed to call on the given LNURL
-    #[error("Failed to call on the given LNURL.")]
-    LnUrlFailure,
     /// Could not make a request to the LSP.
     #[error("Failed to make a request to the LSP.")]
     LspGenericError,
@@ -174,6 +173,12 @@ pub enum MutinyJsError {
     /// Token already spent.
     #[error("Token has been already spent.")]
     TokenAlreadySpent,
+    #[error("Invalid fee rate")]
+    InvalidFeerate,
+    #[error("Invalid psbt")]
+    InvalidPsbt,
+    #[error("Invalid hex")]
+    InvalidHex,
     /// Unknown error.
     #[error("Unknown Error")]
     UnknownError,
@@ -195,7 +200,6 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::InvoiceCreationFailed => MutinyJsError::InvoiceCreationFailed,
             MutinyError::ReserveAmountError => MutinyJsError::ReserveAmountError,
             MutinyError::InsufficientBalance => MutinyJsError::InsufficientBalance,
-            MutinyError::LnUrlFailure => MutinyJsError::LnUrlFailure,
             MutinyError::LspGenericError => MutinyJsError::LspGenericError,
             MutinyError::LspFundingError => MutinyJsError::LspFundingError,
             MutinyError::LspConnectionError => MutinyJsError::LspConnectionError,
@@ -219,7 +223,6 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::RapidGossipSyncError => MutinyJsError::RapidGossipSyncError,
             MutinyError::DLCManagerError => MutinyJsError::DLCManagerError,
             MutinyError::PubkeyInvalid => MutinyJsError::PubkeyInvalid,
-            MutinyError::IncorrectLnUrlFunction => MutinyJsError::IncorrectLnUrlFunction,
             MutinyError::BadAmountError => MutinyJsError::BadAmountError,
             MutinyError::NostrError => MutinyJsError::NostrError,
             MutinyError::Nip07Extension => MutinyJsError::Nip07Extension,
@@ -236,6 +239,10 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::InvalidArgumentsError => MutinyJsError::InvalidArgumentsError,
             MutinyError::LspAmountTooHighError => MutinyJsError::LspAmountTooHighError,
             MutinyError::NetworkMismatch => MutinyJsError::NetworkMismatch,
+            MutinyError::PacketSizeExceeded => MutinyJsError::PacketSizeExceeded,
+            MutinyError::InvalidFeerate => MutinyJsError::InvalidFeerate,
+            MutinyError::InvalidPsbt => MutinyJsError::InvalidPsbt,
+            MutinyError::InvalidHex => MutinyJsError::InvalidHex
         }
     }
 }
@@ -258,15 +265,9 @@ impl From<bip39::Error> for MutinyJsError {
     }
 }
 
-impl From<bitcoin::address::Error> for MutinyJsError {
-    fn from(_: bitcoin::address::Error) -> Self {
+impl From<bitcoin::address::error::ParseError> for MutinyJsError {
+    fn from(_: bitcoin::address::error::ParseError) -> Self {
         Self::JsonReadWriteError
-    }
-}
-
-impl From<lnurl::Error> for MutinyJsError {
-    fn from(e: lnurl::Error) -> Self {
-        MutinyError::from(e).into()
     }
 }
 
@@ -276,9 +277,15 @@ impl From<ParseOrSemanticError> for MutinyJsError {
     }
 }
 
-impl From<bitcoin::hashes::hex::Error> for MutinyJsError {
-    fn from(_e: bitcoin::hashes::hex::Error) -> Self {
-        Self::JsonReadWriteError
+impl From<bitcoin::hashes::hex::HexToArrayError> for MutinyJsError {
+    fn from(_e: bitcoin::hashes::hex::HexToArrayError) -> Self {
+        Self::InvalidHex
+    }
+}
+
+impl From<bitcoin::hashes::hex::HexToBytesError> for MutinyJsError {
+    fn from(_e: bitcoin::hashes::hex::HexToBytesError) -> Self {
+        Self::InvalidHex
     }
 }
 

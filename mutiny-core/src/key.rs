@@ -1,5 +1,5 @@
 use bitcoin::{
-    bip32::{ChildNumber, DerivationPath, ExtendedPrivKey},
+    bip32::{ChildNumber, DerivationPath, Xpriv},
     secp256k1::Secp256k1,
 };
 
@@ -23,9 +23,9 @@ impl ChildKey {
 
 pub(crate) fn create_root_child_key(
     context: &Secp256k1<bitcoin::secp256k1::All>,
-    xprivkey: ExtendedPrivKey,
+    xprivkey: Xpriv,
     child_key: ChildKey,
-) -> Result<ExtendedPrivKey, MutinyError> {
+) -> Result<Xpriv, MutinyError> {
     let child_number = ChildNumber::from_hardened_idx(child_key.to_child_number())?;
 
     Ok(xprivkey.derive_priv(context, &DerivationPath::from(vec![child_number]))?)
@@ -39,7 +39,7 @@ fn run_key_generation_tests() {
 
     let context = Secp256k1::new();
     let mnemonic = Mnemonic::from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").expect("could not generate");
-    let xpriv = ExtendedPrivKey::new_master(Network::Testnet, &mnemonic.to_seed("")).unwrap();
+    let xpriv = Xpriv::new_master(Network::Testnet, &mnemonic.to_seed("")).unwrap();
 
     let first_root_key = create_root_child_key(&context, xpriv, ChildKey::Node);
     let copy_root_key = create_root_child_key(&context, xpriv, ChildKey::Node);

@@ -427,7 +427,7 @@ impl<S: MutinyStorage> Lsp for LspsClient<S> {
             .await
             .map_err(|_| MutinyError::LspGenericError)??;
 
-        let payment_hash = PaymentHash(invoice.payment_hash().into_32());
+        let payment_hash = PaymentHash(invoice.payment_hash().to_byte_array());
         let payment_amount = invoice.amount_milli_satoshis();
 
         let expected_fee_msat = payment_amount.and_then(|payment_amount| {

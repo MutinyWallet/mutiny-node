@@ -130,7 +130,7 @@ impl<S: MutinyStorage> MutinyNodePersister<S> {
 
                     // these errors are not fatal, so we don't return them just log
                     if let Err(e) = chain_monitor
-                        .channel_monitor_updated(update_id.funding_txo, update_id.monitor_update_id)
+                        .channel_monitor_updated(update_id.funding_txo, update_id.update_id)
                     {
                         log_error!(
                             logger,
@@ -543,7 +543,7 @@ fn channel_open_params_key(id: u128) -> String {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct ChannelOpenParams {
-    pub(crate) sats_per_vbyte: f32,
+    pub(crate) sats_per_vbyte: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) absolute_fee: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -557,7 +557,7 @@ pub(crate) struct ChannelOpenParams {
 }
 
 impl ChannelOpenParams {
-    pub fn new(sats_per_vbyte: f32) -> Self {
+    pub fn new(sats_per_vbyte: u64) -> Self {
         Self {
             sats_per_vbyte,
             absolute_fee: None,
@@ -569,7 +569,7 @@ impl ChannelOpenParams {
     }
 
     pub fn new_sweep(
-        sats_per_vbyte: f32,
+        sats_per_vbyte: u64,
         absolute_fee: u64,
         utxos: Vec<bitcoin::OutPoint>,
     ) -> Self {
@@ -590,7 +590,7 @@ impl<'a, S: MutinyStorage>
 {
     fn persist_manager(
         &self,
-        channel_manager: &ChainMonitor<S>,
+        channel_manager: &Arc<PhantomChannelManager<S>>,
     ) -> Result<(), lightning::io::Error> {
         let old = self.manager_version.fetch_add(1, Ordering::SeqCst);
         let version = old + 1;
@@ -615,7 +615,7 @@ impl<'a, S: MutinyStorage>
 
     fn persist_scorer(
         &self,
-        scorer: &utils::Mutex<HubPreferentialScorer>,
+        scorer: &Arc<utils::Mutex<HubPreferentialScorer>>,
     ) -> Result<(), lightning::io::Error> {
         let scorer_str = scorer.encode().to_lower_hex_string();
         self.storage
@@ -644,6 +644,7 @@ impl<S: MutinyStorage> Persist<InMemorySigner> for MutinyNodePersister<S> {
 
         let update_id = MonitorUpdateIdentifier {
             funding_txo,
+            update_id
         };
 
         self.init_persist_monitor(key, monitor, version, update_id)
@@ -668,6 +669,7 @@ impl<S: MutinyStorage> Persist<InMemorySigner> for MutinyNodePersister<S> {
 
         let update_id = MonitorUpdateIdentifier {
             funding_txo,
+            update_id,
         };
 
         self.init_persist_monitor(key, monitor, version, update_id)
@@ -681,6 +683,7 @@ impl<S: MutinyStorage> Persist<InMemorySigner> for MutinyNodePersister<S> {
 #[derive(Debug, Clone)]
 pub struct MonitorUpdateIdentifier {
     pub funding_txo: OutPoint,
+    pub update_id: u64,
 }
 
 pub(crate) async fn persist_monitor(
@@ -720,7 +723,7 @@ mod test {
     use crate::{node::scoring_params, storage::persist_payment_info};
     use crate::{onchain::OnChainWallet, storage::read_payment_info};
     use bip39::Mnemonic;
-    use bitcoin::bip32::ExtendedPrivKey;
+    use bitcoin::{bip32::Xpriv, TxOut};
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::PublicKey;
     use bitcoin::Txid;
@@ -867,7 +870,7 @@ mod test {
                 txid: Txid::all_zeros(),
                 index: 0,
             },
-            output: Default::default(),
+            output: TxOut::NULL,
             channel_keys_id: None,
         };
         let result = persister.persist_failed_spendable_outputs(vec![static_output_0.clone()]);
@@ -881,7 +884,7 @@ mod test {
                 txid: Txid::all_zeros(),
                 index: 1,
             },
-            output: Default::default(),
+            output: TxOut::NULL,
             channel_keys_id: None,
         };
         let result = persister.persist_failed_spendable_outputs(vec![static_output_1.clone()]);
@@ -925,7 +928,7 @@ mod test {
         let logger = Arc::new(MutinyLogger::default());
 
         let stop = Arc::new(AtomicBool::new(false));
-        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
+        let xpriv = Xpriv::new_master(network, &mnemonic.to_seed("")).unwrap();
 
         let esplora_server_url = "https://mutinynet.com/api/".to_string();
         let esplora = Arc::new(Builder::new(&esplora_server_url).build_async().unwrap());
@@ -970,10 +973,10 @@ mod test {
             persister.clone(),
         ));
 
-        let router: Arc<Router> = Arc::new(DefaultRouter::new(
+        let router: Arc<Router<_>> = Arc::new(DefaultRouter::new(
             network_graph,
             logger.clone(),
-            km.clone().get_secure_random_bytes(),
+            km.clone(),
             Arc::new(utils::Mutex::new(scorer)),
             scoring_params(),
         ));
@@ -999,7 +1002,7 @@ mod test {
         assert!(read.is_restarting);
 
         // persist, should be new version
-        persister.persist_manager(&read.channel_manager).unwrap();
+        persister.persist_manager(&Arc::new(read.channel_manager)).unwrap();
         assert_eq!(persister.manager_version(), 1);
 
         // make sure we can read with new encoding

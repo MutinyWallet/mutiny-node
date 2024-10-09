@@ -2,10 +2,11 @@ use crate::labels::LabelStorage;
 use crate::ldkstorage::CHANNEL_CLOSURE_PREFIX;
 use crate::logging::LOGGING_KEY;
 use crate::lsp::voltage;
+use crate::peermanager::PeerManager;
 use crate::utils::{sleep, spawn};
 use crate::MutinyInvoice;
 use crate::MutinyWalletConfig;
-use crate::{auth::MutinyAuthClient, TransactionDetails};
+use crate::TransactionDetails;
 use crate::{
     chain::MutinyChain,
     error::MutinyError,
@@ -26,22 +27,22 @@ use crate::{
 };
 use anyhow::anyhow;
 use async_lock::RwLock;
-use bdk::chain::{BlockId, ConfirmationTime};
-use bdk::{wallet::AddressIndex, LocalOutput};
+use bdk_chain::{BlockId, ConfirmationTime};
+use bdk_wallet::{KeychainKind, LocalOutput};
 use bitcoin::address::NetworkUnchecked;
-use bitcoin::bip32::ExtendedPrivKey;
+use bitcoin::bip32::Xpriv;
 use bitcoin::blockdata::script;
 use bitcoin::hashes::hex::FromHex;
-
+use bitcoin::psbt::Psbt;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::{Address, Network, OutPoint, Transaction, Txid};
+use bitcoin::{Address, FeeRate, Network, OutPoint, Transaction, Txid};
 use esplora_client::{AsyncClient, Builder};
 use futures::future::join_all;
 use hex_conservative::DisplayHex;
 use lightning::chain::Confirm;
 use lightning::events::ClosureReason;
 use lightning::ln::channel_state::ChannelDetails;
-use lightning::ln::channelmanager::{PhantomRouteHints};
+use lightning::ln::channelmanager::PhantomRouteHints;
 use lightning::ln::script::ShutdownScript;
 use lightning::ln::types::ChannelId;
 use lightning::routing::gossip::NodeId;
@@ -239,7 +240,7 @@ pub struct NodeBalance {
 }
 
 pub struct NodeManagerBuilder<S: MutinyStorage> {
-    xprivkey: ExtendedPrivKey,
+    xprivkey: Xpriv,
     storage: S,
     esplora: Option<Arc<AsyncClient>>,
     config: Option<MutinyWalletConfig>,
@@ -248,7 +249,7 @@ pub struct NodeManagerBuilder<S: MutinyStorage> {
 }
 
 impl<S: MutinyStorage> NodeManagerBuilder<S> {
-    pub fn new(xprivkey: ExtendedPrivKey, storage: S) -> NodeManagerBuilder<S> {
+    pub fn new(xprivkey: Xpriv, storage: S) -> NodeManagerBuilder<S> {
         NodeManagerBuilder::<S> {
             xprivkey,
             storage,
@@ -483,7 +484,6 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
             websocket_proxy_addr,
             user_rgs_url: c.user_rgs_url,
             scorer_url: c.scorer_url,
-            auth_client: c.auth_client,
             esplora,
             lsp_config,
             logger,
@@ -505,13 +505,12 @@ impl<S: MutinyStorage> NodeManagerBuilder<S> {
 /// services provided by Mutiny.
 pub struct NodeManager<S: MutinyStorage> {
     pub(crate) stop: Arc<AtomicBool>,
-    pub(crate) xprivkey: ExtendedPrivKey,
+    pub(crate) xprivkey: Xpriv,
     network: Network,
     #[cfg(target_arch = "wasm32")]
     websocket_proxy_addr: String,
     user_rgs_url: Option<String>,
     scorer_url: Option<String>,
-    auth_client: Option<Arc<MutinyAuthClient>>,
     esplora: Arc<AsyncClient>,
     pub(crate) wallet: Arc<OnChainWallet<S>>,
     gossip_sync: Arc<RapidGossipSync>,
@@ -660,7 +659,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         log_trace!(self.logger, "calling get_new_address");
 
         if let Ok(mut wallet) = self.wallet.wallet.try_write() {
-            let address = wallet.try_get_address(AddressIndex::LastUnused)?.address;
+            let address = wallet.reveal_next_address(KeychainKind::External).address;
             self.set_address_labels(address.clone(), labels)?;
             log_trace!(self.logger, "finished calling get_new_address");
 
@@ -677,7 +676,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
         if let Ok(wallet) = self.wallet.wallet.try_read() {
             log_trace!(self.logger, "finished calling get_wallet_balance");
-            return Ok(wallet.get_balance().total());
+            return Ok(wallet.balance().total().to_sat());
         }
 
         log_error!(
@@ -696,7 +695,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         send_to: Address,
         amount: u64,
         labels: Vec<String>,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<Txid, MutinyError> {
         log_trace!(self.logger, "calling send_to_address");
         let res = self.wallet.send(send_to, amount, labels, fee_rate).await;
@@ -713,7 +712,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         &self,
         send_to: Address,
         labels: Vec<String>,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<Txid, MutinyError> {
         log_trace!(self.logger, "calling sweep_wallet");
         let res = self.wallet.sweep(send_to, labels, fee_rate).await;
@@ -728,7 +727,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         &self,
         destination_address: Address,
         amount: u64,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<u64, MutinyError> {
         log_trace!(self.logger, "calling estimate_tx_fee");
         let res =
@@ -757,7 +756,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     pub fn estimate_channel_open_fee(
         &self,
         amount: u64,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<u64, MutinyError> {
         log_trace!(self.logger, "calling estimate_channel_open_fee");
 
@@ -776,7 +775,7 @@ impl<S: MutinyStorage> NodeManager<S> {
     /// The fee rate is in sat/vbyte.
     pub fn estimate_sweep_channel_open_fee(
         &self,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
     ) -> Result<u64, MutinyError> {
         log_trace!(self.logger, "calling estimate_sweep_channel_open_fee");
 
@@ -793,7 +792,7 @@ impl<S: MutinyStorage> NodeManager<S> {
 
     /// Bumps the given transaction by replacing the given tx with a transaction at
     /// the new given fee rate in sats/vbyte
-    pub async fn bump_fee(&self, txid: Txid, new_fee_rate: f32) -> Result<Txid, MutinyError> {
+    pub async fn bump_fee(&self, txid: Txid, new_fee_rate: u64) -> Result<Txid, MutinyError> {
         log_trace!(self.logger, "calling bump_fee");
 
         // check that this is not a funding tx for any channels,
@@ -823,8 +822,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         log_trace!(self.logger, "calling check_address");
 
         let address = address.require_network(self.network)?;
-
-        let script = address.payload.script_pubkey();
+        let script = address.script_pubkey();
         let txs = self.esplora.scripthash_txs(&script, None).await?;
 
         let details_opt = txs.first().map(|tx| {
@@ -962,7 +960,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         log_trace!(self.logger, "calling get_balance");
 
         let onchain = if let Ok(wallet) = self.wallet.wallet.try_read() {
-            wallet.get_balance()
+            wallet.balance()
         } else {
             log_error!(self.logger, "Could not get wallet lock to get balance");
             return Err(MutinyError::WalletOperationFailed);
@@ -998,8 +996,8 @@ impl<S: MutinyStorage> NodeManager<S> {
         log_trace!(self.logger, "finished calling get_balance");
 
         Ok(NodeBalance {
-            confirmed: onchain.confirmed + onchain.trusted_pending,
-            unconfirmed: onchain.untrusted_pending + onchain.immature,
+            confirmed: (onchain.confirmed + onchain.trusted_pending).to_sat(),
+            unconfirmed: (onchain.untrusted_pending + onchain.immature).to_sat(),
             lightning: lightning_msats / 1_000,
             force_close,
         })
@@ -1105,26 +1103,26 @@ impl<S: MutinyStorage> NodeManager<S> {
             return Ok(());
         }
 
-        if let (Some(auth), Some(url)) = (self.auth_client.as_ref(), self.scorer_url.as_deref()) {
-            let scorer = get_remote_scorer(
-                auth,
-                url,
-                self.gossip_sync.network_graph().clone(),
-                self.logger.clone(),
-            )
-            .await
-            .map_err(|e| {
-                log_error!(self.logger, "Failed to sync scorer: {e}");
-                e
-            })?;
+        // if let (Some(auth), Some(url)) = (self.auth_client.as_ref(), self.scorer_url.as_deref()) {
+        //     let scorer = get_remote_scorer(
+        //         auth,
+        //         url,
+        //         self.gossip_sync.network_graph().clone(),
+        //         self.logger.clone(),
+        //     )
+        //     .await
+        //     .map_err(|e| {
+        //         log_error!(self.logger, "Failed to sync scorer: {e}");
+        //         e
+        //     })?;
 
-            // Replace the current scorer with the new one
-            let mut lock = self
-                .scorer
-                .try_lock()
-                .map_err(|_| MutinyError::WalletSyncError)?;
-            *lock = scorer;
-        }
+        //     // Replace the current scorer with the new one
+        //     let mut lock = self
+        //         .scorer
+        //         .try_lock()
+        //         .map_err(|_| MutinyError::WalletSyncError)?;
+        //     *lock = scorer;
+        // }
 
         log_trace!(self.logger, "finished calling sync_scorer");
         Ok(())
@@ -1548,7 +1546,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         self_node_pubkey: Option<&PublicKey>,
         to_pubkey: Option<PublicKey>,
         amount: u64,
-        fee_rate: Option<f32>,
+        fee_rate: Option<u64>,
         user_channel_id: Option<u128>,
     ) -> Result<MutinyChannel, MutinyError> {
         log_trace!(self.logger, "calling open_channel");
@@ -1682,6 +1680,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                         .force_close_broadcasting_latest_txn(
                             &channel.channel_id,
                             &channel.counterparty.node_id,
+                            "user force close".to_string(),
                         )
                         .map_err(|e| {
                             log_error!(
@@ -1697,6 +1696,7 @@ impl<S: MutinyStorage> NodeManager<S> {
                         .force_close_without_broadcasting_txn(
                             &channel.channel_id,
                             &channel.counterparty.node_id,
+                            "Abandoned".to_string(),
                         )
                         .map_err(|e| {
                             log_error!(
@@ -1794,7 +1794,7 @@ impl<S: MutinyStorage> NodeManager<S> {
         // get peers we are connected to
         let connected_peers: Vec<PublicKey> = nodes
             .iter()
-            .flat_map(|(_, n)| n.peer_manager.get_peer_node_ids().into_iter().map(|x| x.0))
+            .flat_map(|(_, n)| n.peer_manager.get_peer_node_ids().into_iter())
             .collect();
 
         // correctly set is_connected
@@ -2026,12 +2026,12 @@ mod tests {
         ActivityItem, MutinyWalletConfigBuilder, PrivacyLevel,
     };
     use crate::{keymanager::generate_seed, nodemanager::NodeManagerBuilder};
-    use bdk::chain::ConfirmationTime;
-    use bitcoin::bip32::ExtendedPrivKey;
+    use bdk_chain::ConfirmationTime;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::hashes::{sha256, Hash};
     use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
     use bitcoin::{absolute, Network, Transaction, TxOut, Txid};
+    use bitcoin::{bip32::Xpriv, transaction::Version, Amount};
     use hex_conservative::DisplayHex;
     use lightning::ln::PaymentHash;
     use lightning_invoice::Bolt11Invoice;
@@ -2056,7 +2056,7 @@ mod tests {
         log!("{}", test_name);
         let seed = generate_seed(12).unwrap();
         let network = Network::Regtest;
-        let xpriv = ExtendedPrivKey::new_master(network, &seed.to_seed("")).unwrap();
+        let xpriv = Xpriv::new_master(network, &seed.to_seed("")).unwrap();
 
         let pass = uuid::Uuid::new_v4().to_string();
         let cipher = encryption_key_from_pass(&pass).unwrap();
@@ -2085,7 +2085,7 @@ mod tests {
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
         let seed = generate_seed(12).expect("Failed to gen seed");
         let network = Network::Regtest;
-        let xpriv = ExtendedPrivKey::new_master(network, &seed.to_seed("")).unwrap();
+        let xpriv = Xpriv::new_master(network, &seed.to_seed("")).unwrap();
         let c = MutinyWalletConfigBuilder::new(xpriv)
             .with_network(network)
             .build();
@@ -2129,7 +2129,7 @@ mod tests {
         let storage = MemoryStorage::new(Some(pass), Some(cipher), None);
         let seed = generate_seed(12).expect("Failed to gen seed");
         let network = Network::Regtest;
-        let xpriv = ExtendedPrivKey::new_master(network, &seed.to_seed("")).unwrap();
+        let xpriv = Xpriv::new_master(network, &seed.to_seed("")).unwrap();
         let c = MutinyWalletConfigBuilder::new(xpriv)
             .with_network(network)
             .build();
@@ -2146,11 +2146,11 @@ mod tests {
             .expect("should create new address");
 
         let fake_tx = Transaction {
-            version: 2,
+            version: Version(2),
             lock_time: absolute::LockTime::ZERO,
             input: vec![],
             output: vec![TxOut {
-                value: 1_000_000,
+                value: Amount::from_sat(1_000_000),
                 script_pubkey: address.script_pubkey(),
             }],
         };
@@ -2158,13 +2158,8 @@ mod tests {
         // insert fake tx into wallet
         {
             let mut wallet = nm.wallet.wallet.try_write().unwrap();
-            wallet
-                .insert_tx(
-                    fake_tx.clone(),
-                    ConfirmationTime::Unconfirmed { last_seen: 0 },
-                )
-                .unwrap();
-            wallet.commit().unwrap();
+            assert!(wallet.insert_tx(fake_tx.clone(),));
+            storage.write_changes(&wallet.take_staged().unwrap());
         }
 
         let txs = nm.list_onchain().expect("should list onchain txs");
@@ -2231,7 +2226,7 @@ mod tests {
 
         let actual = MutinyInvoice::from(
             payment_info,
-            PaymentHash(payment_hash.into_32()),
+            PaymentHash(payment_hash.to_byte_array()),
             true,
             labels,
         )
@@ -2286,7 +2281,7 @@ mod tests {
 
         let actual = MutinyInvoice::from(
             payment_info,
-            PaymentHash(payment_hash.into_32()),
+            PaymentHash(payment_hash.to_byte_array()),
             false,
             vec![],
         )

@@ -1,8 +1,7 @@
 use crate::logging::MutinyLogger;
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, utils};
-use bdk::FeeRate;
-use bitcoin::Weight;
+use bitcoin::{FeeRate, Weight};
 use esplora_client::AsyncClient;
 use futures::lock::Mutex;
 use lightning::chain::chaininterface::{
@@ -67,8 +66,8 @@ impl<S: MutinyStorage> MutinyFeeEstimator<S> {
             (non_witness_size * 4) + witness_size
         };
 
-        FeeRate::from_sat_per_kwu(sats_per_kw as f32)
-            .fee_wu(Weight::from_wu(expected_weight as u64))
+        FeeRate::from_sat_per_kwu(sats_per_kw.into() )
+            .fee_wu(Weight::from_wu(expected_weight as u64)).unwrap().to_sat()
     }
 
     async fn get_last_sync_time(&self) -> Option<u64> {
@@ -133,10 +132,16 @@ impl<S: MutinyStorage> MutinyFeeEstimator<S> {
                     self.logger,
                     "Failed to retrieve fees from mempool, falling back to esplora: {e}"
                 );
-                self.esplora.get_fee_estimates().await.map_err(|e| {
-                    log_trace!(self.logger, "Failed to get esplora fee: {e}");
-                    e
-                })?
+                self.esplora
+                    .get_fee_estimates()
+                    .await
+                    .map_err(|e| {
+                        log_trace!(self.logger, "Failed to get esplora fee: {e}");
+                        e
+                    })?
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect()
             }
         };
 
@@ -159,7 +164,7 @@ impl<S: MutinyStorage> MutinyFeeEstimator<S> {
 
     pub fn get_high_fee_rate(&self) -> u32 {
         // OnChainSweep is the highest fee rate we have, so use that
-        self.get_est_sat_per_1000_weight(ConfirmationTarget::OnChainSweep)
+        self.get_est_sat_per_1000_weight(ConfirmationTarget::UrgentOnChainSweep)
     }
 }
 
@@ -203,7 +208,9 @@ fn num_blocks_from_conf_target(confirmation_target: ConfirmationTarget) -> usize
         ConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee => 1008,
         ConfirmationTarget::ChannelCloseMinimum => 1008,
         ConfirmationTarget::NonAnchorChannelFee => 6,
-        ConfirmationTarget::OnChainSweep => 1,
+        ConfirmationTarget::UrgentOnChainSweep => 1,
+        ConfirmationTarget::MaximumFeeEstimate => 1,
+        ConfirmationTarget::OutputSpendingFee => 6,
     }
 }
 
@@ -214,7 +221,9 @@ fn fallback_fee_from_conf_target(confirmation_target: ConfirmationTarget) -> u32
         ConfirmationTarget::ChannelCloseMinimum => 10 * 250,
         ConfirmationTarget::AnchorChannelFee => 10 * 250,
         ConfirmationTarget::NonAnchorChannelFee => 20 * 250,
-        ConfirmationTarget::OnChainSweep => 50 * 250,
+        ConfirmationTarget::UrgentOnChainSweep => 50 * 250,
+        ConfirmationTarget::MaximumFeeEstimate => 50 * 250,
+        ConfirmationTarget::OutputSpendingFee => 20 * 250,
     }
 }
 
@@ -254,7 +263,7 @@ mod test {
             6
         );
         assert_eq!(
-            num_blocks_from_conf_target(ConfirmationTarget::OnChainSweep),
+            num_blocks_from_conf_target(ConfirmationTarget::UrgentOnChainSweep),
             1
         );
     }
@@ -270,7 +279,7 @@ mod test {
             5_000
         );
         assert_eq!(
-            fallback_fee_from_conf_target(ConfirmationTarget::OnChainSweep),
+            fallback_fee_from_conf_target(ConfirmationTarget::UrgentOnChainSweep),
             12_500
         );
     }

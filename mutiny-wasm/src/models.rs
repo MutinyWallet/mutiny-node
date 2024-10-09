@@ -1,3 +1,4 @@
+use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::{PublicKey, ThirtyTwoByteHash};
 use bitcoin::OutPoint;
 use gloo_utils::format::JsValueSerdeExt;
@@ -95,7 +96,7 @@ impl From<mutiny_core::MutinyInvoice> for MutinyInvoice {
         MutinyInvoice {
             bolt11: m.bolt11,
             description: m.description,
-            payment_hash: m.payment_hash.into_32().to_lower_hex_string(),
+            payment_hash: m.payment_hash.to_byte_array().to_lower_hex_string(),
             preimage: m.preimage,
             payee_pubkey: m.payee_pubkey.map(|p| p.serialize().to_lower_hex_string()),
             amount_sats: m.amount_sats,

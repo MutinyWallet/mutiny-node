@@ -3,11 +3,10 @@ use crate::onchain::OnChainWallet;
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, key::create_root_child_key};
 use crate::{key::ChildKey, labels::LabelStorage};
-use bdk::wallet::AddressIndex;
+use bdk_wallet::{KeychainKind};
 use bip39::Mnemonic;
 use bitcoin::absolute::LockTime;
-use bitcoin::bech32::u5;
-use bitcoin::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey};
+use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
 use bitcoin::hashes::{sha256, Hash, HashEngine, Hmac, HmacEngine};
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::RecoverableSignature;
@@ -20,11 +19,10 @@ use lightning::log_warn;
 use lightning::offers::invoice::UnsignedBolt12Invoice;
 use lightning::offers::invoice_request::UnsignedInvoiceRequest;
 use lightning::sign::{
-    EntropySource, InMemorySigner, KeyMaterial, NodeSigner,
-    PhantomKeysManager as LdkPhantomKeysManager, Recipient, SignerProvider,
-    SpendableOutputDescriptor,
+    EntropySource, InMemorySigner, KeyMaterial, NodeSigner, OutputSpender, PhantomKeysManager as LdkPhantomKeysManager, Recipient, SignerProvider, SpendableOutputDescriptor
 };
 use lightning::util::logger::Logger;
+use lightning_invoice::RawBolt11Invoice;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -74,8 +72,7 @@ impl<S: MutinyStorage> PhantomKeysManager<S> {
             // These often fail because we continually retry these. Use LastUnused so we don't generate a ton of new
             // addresses for no reason.
             wallet
-                .try_get_internal_address(AddressIndex::LastUnused)
-                .map_err(|_| ())?
+            .next_unused_address(KeychainKind::Internal)
                 .address
         };
 
@@ -134,11 +131,10 @@ impl<S: MutinyStorage> NodeSigner for PhantomKeysManager<S> {
 
     fn sign_invoice(
         &self,
-        hrp_bytes: &[u8],
-        invoice_data: &[u5],
+        invoice: &RawBolt11Invoice,
         recipient: Recipient,
     ) -> Result<RecoverableSignature, ()> {
-        self.inner.sign_invoice(hrp_bytes, invoice_data, recipient)
+        self.inner.sign_invoice(&invoice, recipient)
     }
 
     fn sign_bolt12_invoice_request(
@@ -188,9 +184,7 @@ impl<S: MutinyStorage> SignerProvider for PhantomKeysManager<S> {
 
     fn get_destination_script(&self, _channel_keys_id: [u8; 32]) -> Result<ScriptBuf, ()> {
         let mut wallet = self.wallet.wallet.try_write().map_err(|_| ())?;
-        Ok(wallet
-            .try_get_address(AddressIndex::New)
-            .map_err(|_| ())?
+        Ok(wallet.reveal_next_address(KeychainKind::External)
             .address
             .script_pubkey())
     }
@@ -198,8 +192,7 @@ impl<S: MutinyStorage> SignerProvider for PhantomKeysManager<S> {
     fn get_shutdown_scriptpubkey(&self) -> Result<ShutdownScript, ()> {
         let mut wallet = self.wallet.wallet.try_write().map_err(|_| ())?;
         let script = wallet
-            .try_get_address(AddressIndex::New)
-            .map_err(|_| ())?
+            .reveal_next_address(KeychainKind::External)
             .address
             .script_pubkey();
         ShutdownScript::try_from(script).map_err(|_| ())
@@ -227,7 +220,7 @@ pub fn generate_seed(num_words: u8) -> Result<Mnemonic, MutinyError> {
 // key secret will be derived from `m/0'`.
 pub(crate) fn create_keys_manager<S: MutinyStorage>(
     wallet: Arc<OnChainWallet<S>>,
-    xprivkey: ExtendedPrivKey,
+    xprivkey: Xpriv,
     child_index: u32,
     logger: Arc<MutinyLogger>,
 ) -> Result<PhantomKeysManager<S>, MutinyError> {
@@ -296,7 +289,7 @@ mod tests {
     use crate::onchain::OnChainWallet;
     use crate::storage::MemoryStorage;
     use bip39::Mnemonic;
-    use bitcoin::bip32::ExtendedPrivKey;
+    use bitcoin::bip32::Xpriv;
     use bitcoin::Network;
     use esplora_client::Builder;
     use std::str::FromStr;
@@ -325,7 +318,7 @@ mod tests {
             logger.clone(),
         ));
         let stop = Arc::new(AtomicBool::new(false));
-        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
+        let xpriv = Xpriv::new_master(network, &mnemonic.to_seed("")).unwrap();
 
         let wallet = Arc::new(
             OnChainWallet::new(xpriv, db, network, esplora, fees, stop, logger.clone()).unwrap(),
@@ -373,7 +366,7 @@ mod tests {
             logger.clone(),
         ));
         let stop = Arc::new(AtomicBool::new(false));
-        let xpriv = ExtendedPrivKey::new_master(network, &mnemonic.to_seed("")).unwrap();
+        let xpriv = Xpriv::new_master(network, &mnemonic.to_seed("")).unwrap();
 
         let wallet = Arc::new(
             OnChainWallet::new(xpriv, db, network, esplora, fees, stop, logger.clone()).unwrap(),

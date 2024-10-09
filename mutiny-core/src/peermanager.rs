@@ -9,7 +9,8 @@ use crate::{gossip, ldkstorage::PhantomChannelManager, logging::MutinyLogger};
 use crate::{gossip::read_peer_info, node::PubkeyConnectionInfo};
 use bitcoin::key::{Secp256k1, Verification};
 use bitcoin::secp256k1::{PublicKey, Signing};
-use lightning::blinded_path::message::BlindedMessagePath;
+use lightning::blinded_path::message::{BlindedMessagePath, MessageContext};
+use lightning::blinded_path::IntroductionNode;
 use lightning::events::{MessageSendEvent, MessageSendEventsProvider};
 use lightning::ln::features::{InitFeatures, NodeFeatures};
 use lightning::ln::msgs;
@@ -96,7 +97,10 @@ pub(crate) type PeerManagerImpl<S: MutinyStorage> = LdkPeerManager<
 
 impl<S: MutinyStorage> PeerManager for PeerManagerImpl<S> {
     fn get_peer_node_ids(&self) -> Vec<PublicKey> {
-        self.get_peer_node_ids().into_iter().map(|x| x.0).collect()
+        self.list_peers()
+            .into_iter()
+            .map(|x| x.counterparty_node_id)
+            .collect()
     }
 
     fn new_outbound_connection(
@@ -318,11 +322,14 @@ impl MessageRouter for LspMessageRouter {
         destination: Destination,
     ) -> Result<OnionMessagePath, ()> {
         let first_node = match &destination {
-            Destination::Node(node_id) => *node_id,
-            Destination::BlindedPath(path) => path.introduction_node_id,
+            Destination::Node(node_id) => Some(*node_id),
+            Destination::BlindedPath(path) => match path.introduction_node() {
+                IntroductionNode::DirectedShortChannelId(..) => None,
+                IntroductionNode::NodeId(node_id) => Some(*node_id),
+            },
         };
 
-        if peers.contains(&first_node) {
+        if first_node.is_none() || first_node.is_some_and(|node| peers.contains(&node)) {
             Ok(OnionMessagePath {
                 intermediate_nodes: vec![],
                 destination,
@@ -337,11 +344,11 @@ impl MessageRouter for LspMessageRouter {
         }
     }
 
-    fn create_blinded_paths<ES: EntropySource + ?Sized, T: Signing + Verification>(
+    fn create_blinded_paths<T: Signing + Verification>(
         &self,
         _recipient: PublicKey,
+        _context: MessageContext,
         _peers: Vec<PublicKey>,
-        _entropy_source: &ES,
         _secp_ctx: &Secp256k1<T>,
     ) -> Result<Vec<BlindedMessagePath>, ()> {
         // Bolt12 not yet supported

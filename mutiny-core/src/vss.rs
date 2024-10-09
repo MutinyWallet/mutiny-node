@@ -1,4 +1,3 @@
-use crate::auth::MutinyAuthClient;
 use crate::encrypt::{decrypt_with_key, encrypt_with_key};
 use crate::{error::MutinyError, logging::MutinyLogger};
 use anyhow::anyhow;
@@ -12,7 +11,6 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 pub struct MutinyVssClient {
-    auth_client: Option<Arc<MutinyAuthClient>>,
     client: Option<reqwest::Client>,
     url: String,
     store_id: Option<String>,
@@ -76,14 +74,12 @@ impl EncryptedVssKeyValueItem {
 
 impl MutinyVssClient {
     pub fn new_authenticated(
-        auth_client: Arc<MutinyAuthClient>,
         url: String,
         encryption_key: SecretKey,
         logger: Arc<MutinyLogger>,
     ) -> Self {
         log_info!(logger, "Creating authenticated vss client");
         Self {
-            auth_client: Some(auth_client),
             client: None,
             url,
             store_id: None, // we get this from the auth client
@@ -103,7 +99,6 @@ impl MutinyVssClient {
             .serialize()
             .to_lower_hex_string();
         Self {
-            auth_client: None,
             client: Some(reqwest::Client::new()),
             url,
             store_id: Some(pk),
@@ -118,9 +113,8 @@ impl MutinyVssClient {
         url: Url,
         body: Option<Value>,
     ) -> Result<reqwest::Response, MutinyError> {
-        match (self.auth_client.as_ref(), self.client.as_ref()) {
-            (Some(auth), _) => auth.request(method, url, body).await,
-            (None, Some(client)) => {
+        match self.client.as_ref() {
+            Some(client) => {
                 let mut request = client.request(method, url);
                 if let Some(body) = body {
                     request = request.json(&body);
@@ -130,7 +124,7 @@ impl MutinyVssClient {
                     MutinyError::Other(anyhow!("Error making request: {e}"))
                 })
             }
-            (None, None) => unreachable!("No auth client or http client"),
+            None => unreachable!("No http client"),
         }
     }
 
