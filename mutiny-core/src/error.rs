@@ -1,7 +1,7 @@
 use aes::cipher::block_padding::UnpadError;
 use anyhow::anyhow;
-use bdk_wallet::signer::SignerError;
 use bdk_wallet::error::BuildFeeBumpError;
+use bdk_wallet::signer::SignerError;
 use bdk_wallet::tx_builder::AddUtxoError;
 use bitcoin::psbt::ExtractTxError;
 use hex_conservative::HexToArrayError;
@@ -414,7 +414,7 @@ impl From<RetryableSendFailure> for MutinyError {
             RetryableSendFailure::PaymentExpired => Self::InvoiceExpired,
             RetryableSendFailure::RouteNotFound => Self::RoutingFailed,
             RetryableSendFailure::DuplicatePayment => Self::NonUniquePaymentHash,
-            RetryableSendFailure::OnionPacketSizeExceeded => Self::PacketSizeExceeded
+            RetryableSendFailure::OnionPacketSizeExceeded => Self::PacketSizeExceeded,
         }
     }
 }

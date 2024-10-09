@@ -1,41 +1,41 @@
 #![allow(dead_code)]
 
-pub fn create_manager() -> AuthManager {
-    let mnemonic = generate_seed(12).unwrap();
-    let seed = mnemonic.to_seed("");
-    let xprivkey = Xpriv::new_master(Network::Regtest, &seed).unwrap();
-    AuthManager::new(xprivkey).unwrap()
-}
+// pub fn create_manager() -> AuthManager {
+//     let mnemonic = generate_seed(12).unwrap();
+//     let seed = mnemonic.to_seed("");
+//     let xprivkey = Xpriv::new_master(Network::Regtest, &seed).unwrap();
+//     AuthManager::new(xprivkey).unwrap()
+// }
 
-pub async fn create_vss_client() -> MutinyVssClient {
-    // Set up test auth client
-    let auth_manager = create_manager();
-    let lnurl_client = Arc::new(
-        lnurl::Builder::default()
-            .build_async()
-            .expect("failed to make lnurl client"),
-    );
-    let logger = Arc::new(MutinyLogger::default());
-    let url = "https://auth-staging.mutinywallet.com";
+// pub async fn create_vss_client() -> MutinyVssClient {
+//     // Set up test auth client
+//     let auth_manager = create_manager();
+//     let lnurl_client = Arc::new(
+//         lnurl::Builder::default()
+//             .build_async()
+//             .expect("failed to make lnurl client"),
+//     );
+//     let logger = Arc::new(MutinyLogger::default());
+//     let url = "https://auth-staging.mutinywallet.com";
 
-    let auth_client =
-        MutinyAuthClient::new(auth_manager, lnurl_client, logger.clone(), url.to_string());
+//     let auth_client =
+//         MutinyAuthClient::new(auth_manager, lnurl_client, logger.clone(), url.to_string());
 
-    // Test authenticate method
-    match auth_client.authenticate().await {
-        Ok(_) => assert!(auth_client.is_authenticated().await.is_some()),
-        Err(e) => panic!("Authentication failed with error: {:?}", e),
-    };
+//     // Test authenticate method
+//     match auth_client.authenticate().await {
+//         Ok(_) => assert!(auth_client.is_authenticated().await.is_some()),
+//         Err(e) => panic!("Authentication failed with error: {:?}", e),
+//     };
 
-    let encryption_key = SecretKey::from_slice(&[2; 32]).unwrap();
+//     let encryption_key = SecretKey::from_slice(&[2; 32]).unwrap();
 
-    MutinyVssClient::new_authenticated(
-        Arc::new(auth_client),
-        "https://vss-staging.fly.dev/v2".to_string(),
-        encryption_key,
-        logger,
-    )
-}
+//     MutinyVssClient::new_authenticated(
+//         Arc::new(auth_client),
+//         "https://vss-staging.fly.dev/v2".to_string(),
+//         encryption_key,
+//         logger,
+//     )
+// }
 
 pub(crate) async fn create_mutiny_wallet<S: MutinyStorage>(storage: S) -> MutinyWallet<S> {
     let network = Network::Regtest;
@@ -186,6 +186,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::generate_seed;
 use crate::node::{NetworkGraph, Node, RapidGossipSync};
 use crate::nodemanager::NodeIndex;
 use crate::onchain::{get_esplora_url, OnChainWallet};
@@ -193,10 +194,9 @@ use crate::scorer::{HubPreferentialScorer, ProbScorer};
 use crate::storage::MutinyStorage;
 use crate::utils::{now, Mutex};
 use crate::vss::MutinyVssClient;
-use crate::{auth::MutinyAuthClient, MutinyWallet};
+use crate::MutinyWallet;
 use crate::{chain::MutinyChain, MutinyWalletBuilder};
 use crate::{fees::MutinyFeeEstimator, MutinyWalletConfigBuilder};
-use crate::{generate_seed, lnurlauth::AuthManager};
 use crate::{logging::MutinyLogger, node::NodeBuilder};
 
 pub const MANAGER_BYTES: [u8; 256] = [

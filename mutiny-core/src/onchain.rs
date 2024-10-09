@@ -400,12 +400,12 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                         let fee = wallet.calculate_fee(&tx.tx_node.tx).ok();
 
                         Some(TransactionDetails {
-                            transaction: transaction.map(|t| Arc::unwrap_or_clone(t)),
+                            transaction: transaction.map(|t| Transaction::clone(&t)),
                             txid: Some(tx.tx_node.txid),
                             internal_id: tx.tx_node.txid,
                             received: received.to_sat(),
                             sent: sent.to_sat(),
-                            fee: fee.map(|f|f.to_sat()),
+                            fee: fee.map(|f| f.to_sat()),
                             confirmation_time: tx.chain_position.cloned().into(),
                             labels: vec![],
                         })
@@ -438,7 +438,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
                     internal_id: txid,
                     received: received.to_sat(),
                     sent: sent.to_sat(),
-                    fee: fee.map(|fee|fee.to_sat()),
+                    fee: fee.map(|fee| fee.to_sat()),
                     confirmation_time: tx.chain_position.cloned().into(),
                     labels: vec![],
                 };
@@ -629,7 +629,7 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             FeeRate::from_sat_per_vb(rate).ok_or_else(|| MutinyError::InvalidFeerate)?
         } else {
             let sat_per_kwu = self.fees.get_normal_fee_rate();
-            FeeRate::from_sat_per_kwu(sat_per_kwu.into() )
+            FeeRate::from_sat_per_kwu(sat_per_kwu.into())
         };
         let mut psbt = {
             let mut builder = wallet.build_tx();
@@ -698,7 +698,9 @@ impl<S: MutinyStorage> OnChainWallet<S> {
     ) -> Result<u64, MutinyError> {
         let psbt = self.create_signed_psbt_to_spk(spk, amount, fee_rate)?;
 
-        psbt.fee_amount().map(|amount|amount.to_sat()).ok_or(MutinyError::WalletOperationFailed)
+        psbt.fee_amount()
+            .map(|amount| amount.to_sat())
+            .ok_or(MutinyError::WalletOperationFailed)
     }
 
     pub fn estimate_sweep_tx_fee(
@@ -708,7 +710,9 @@ impl<S: MutinyStorage> OnChainWallet<S> {
     ) -> Result<u64, MutinyError> {
         let psbt = self.create_sweep_psbt(spk, fee_rate)?;
 
-        psbt.fee_amount().map(|amount|amount.to_sat()).ok_or(MutinyError::WalletOperationFailed)
+        psbt.fee_amount()
+            .map(|amount| amount.to_sat())
+            .ok_or(MutinyError::WalletOperationFailed)
     }
 
     /// Bumps the given transaction by replacing the given tx with a transaction at
@@ -718,7 +722,9 @@ impl<S: MutinyStorage> OnChainWallet<S> {
             let mut wallet = self.wallet.try_write()?;
             // build RBF fee bump tx
             let mut builder = wallet.build_fee_bump(txid)?;
-            builder.fee_rate(FeeRate::from_sat_per_vb(new_fee_rate).ok_or(MutinyError::InvalidFeerate)?);
+            builder.fee_rate(
+                FeeRate::from_sat_per_vb(new_fee_rate).ok_or(MutinyError::InvalidFeerate)?,
+            );
             let mut psbt = builder.finish()?;
             wallet.sign(&mut psbt, SignOptions::default())?;
 
@@ -821,9 +827,8 @@ impl<S: MutinyStorage> WalletSource for OnChainWallet<S> {
             .sign(&mut psbt, sign_options)
             .map_err(|e| log_error!(self.logger, "Could not sign transaction: {e:?}"))?;
 
-        psbt.extract_tx().map_err(|e|{
-            log_error!(self.logger, "Extract signed transaction: {e:?}")
-        })
+        psbt.extract_tx()
+            .map_err(|e| log_error!(self.logger, "Extract signed transaction: {e:?}"))
     }
 }
 

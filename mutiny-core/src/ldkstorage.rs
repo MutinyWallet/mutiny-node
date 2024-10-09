@@ -30,10 +30,7 @@ use lightning::sign::{InMemorySigner, SpendableOutputDescriptor};
 use lightning::util::logger::Logger;
 use lightning::util::persist::{KVStore, Persister};
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
-use lightning::{
-    chain::chainmonitor::{Persist},
-    log_trace,
-};
+use lightning::{chain::chainmonitor::Persist, log_trace};
 use lightning::{
     chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdate},
     log_warn,
@@ -585,8 +582,12 @@ impl ChannelOpenParams {
 }
 
 impl<'a, S: MutinyStorage>
-    Persister<'a, Arc<PhantomChannelManager<S>>, Arc<MutinyLogger>, Arc<utils::Mutex<HubPreferentialScorer>>>
-    for MutinyNodePersister<S>
+    Persister<
+        'a,
+        Arc<PhantomChannelManager<S>>,
+        Arc<MutinyLogger>,
+        Arc<utils::Mutex<HubPreferentialScorer>>,
+    > for MutinyNodePersister<S>
 {
     fn persist_manager(
         &self,
@@ -644,7 +645,7 @@ impl<S: MutinyStorage> Persist<InMemorySigner> for MutinyNodePersister<S> {
 
         let update_id = MonitorUpdateIdentifier {
             funding_txo,
-            update_id
+            update_id,
         };
 
         self.init_persist_monitor(key, monitor, version, update_id)
@@ -723,10 +724,10 @@ mod test {
     use crate::{node::scoring_params, storage::persist_payment_info};
     use crate::{onchain::OnChainWallet, storage::read_payment_info};
     use bip39::Mnemonic;
-    use bitcoin::{bip32::Xpriv, TxOut};
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::PublicKey;
     use bitcoin::Txid;
+    use bitcoin::{bip32::Xpriv, TxOut};
     use esplora_client::Builder;
     use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
     use lightning::sign::EntropySource;
@@ -1002,7 +1003,9 @@ mod test {
         assert!(read.is_restarting);
 
         // persist, should be new version
-        persister.persist_manager(&Arc::new(read.channel_manager)).unwrap();
+        persister
+            .persist_manager(&Arc::new(read.channel_manager))
+            .unwrap();
         assert_eq!(persister.manager_version(), 1);
 
         // make sure we can read with new encoding

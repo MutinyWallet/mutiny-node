@@ -73,7 +73,7 @@ getrandom = { version = "0.2", features = ["js"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }
 tokio-tungstenite = { version = "0.19.0", features = ["native-tls"] }
-lightning-net-tokio = "0.0.121"
+lightning-net-tokio = "0.0.124"
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = true

@@ -3,7 +3,7 @@ use crate::onchain::OnChainWallet;
 use crate::storage::MutinyStorage;
 use crate::{error::MutinyError, key::create_root_child_key};
 use crate::{key::ChildKey, labels::LabelStorage};
-use bdk_wallet::{KeychainKind};
+use bdk_wallet::KeychainKind;
 use bip39::Mnemonic;
 use bitcoin::absolute::LockTime;
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
@@ -19,7 +19,9 @@ use lightning::log_warn;
 use lightning::offers::invoice::UnsignedBolt12Invoice;
 use lightning::offers::invoice_request::UnsignedInvoiceRequest;
 use lightning::sign::{
-    EntropySource, InMemorySigner, KeyMaterial, NodeSigner, OutputSpender, PhantomKeysManager as LdkPhantomKeysManager, Recipient, SignerProvider, SpendableOutputDescriptor
+    EntropySource, InMemorySigner, KeyMaterial, NodeSigner, OutputSpender,
+    PhantomKeysManager as LdkPhantomKeysManager, Recipient, SignerProvider,
+    SpendableOutputDescriptor,
 };
 use lightning::util::logger::Logger;
 use lightning_invoice::RawBolt11Invoice;
@@ -71,9 +73,7 @@ impl<S: MutinyStorage> PhantomKeysManager<S> {
             let mut wallet = self.wallet.wallet.try_write().map_err(|_| ())?;
             // These often fail because we continually retry these. Use LastUnused so we don't generate a ton of new
             // addresses for no reason.
-            wallet
-            .next_unused_address(KeychainKind::Internal)
-                .address
+            wallet.next_unused_address(KeychainKind::Internal).address
         };
 
         let result = self.inner.spend_spendable_outputs(
@@ -184,7 +184,8 @@ impl<S: MutinyStorage> SignerProvider for PhantomKeysManager<S> {
 
     fn get_destination_script(&self, _channel_keys_id: [u8; 32]) -> Result<ScriptBuf, ()> {
         let mut wallet = self.wallet.wallet.try_write().map_err(|_| ())?;
-        Ok(wallet.reveal_next_address(KeychainKind::External)
+        Ok(wallet
+            .reveal_next_address(KeychainKind::External)
             .address
             .script_pubkey())
     }

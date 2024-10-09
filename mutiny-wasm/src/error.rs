@@ -242,7 +242,7 @@ impl From<MutinyError> for MutinyJsError {
             MutinyError::PacketSizeExceeded => MutinyJsError::PacketSizeExceeded,
             MutinyError::InvalidFeerate => MutinyJsError::InvalidFeerate,
             MutinyError::InvalidPsbt => MutinyJsError::InvalidPsbt,
-            MutinyError::InvalidHex => MutinyJsError::InvalidHex
+            MutinyError::InvalidHex => MutinyJsError::InvalidHex,
         }
     }
 }

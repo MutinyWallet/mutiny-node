@@ -21,11 +21,11 @@ use std::time::Instant;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
+use crate::error::MutinyError;
 use crate::logging::MutinyLogger;
 use crate::node::{NetworkGraph, RapidGossipSync};
 use crate::storage::MutinyStorage;
 use crate::utils;
-use crate::{error::MutinyError};
 
 pub(crate) const LN_PEER_METADATA_KEY_PREFIX: &str = "ln_peer/";
 pub const GOSSIP_SYNC_TIME_KEY: &str = "last_sync_timestamp";

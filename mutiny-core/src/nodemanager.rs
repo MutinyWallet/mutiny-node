@@ -2159,7 +2159,9 @@ mod tests {
         {
             let mut wallet = nm.wallet.wallet.try_write().unwrap();
             assert!(wallet.insert_tx(fake_tx.clone(),));
-            storage.write_changes(&wallet.take_staged().unwrap());
+            storage
+                .write_changes(&wallet.take_staged().unwrap())
+                .unwrap();
         }
 
         let txs = nm.list_onchain().expect("should list onchain txs");

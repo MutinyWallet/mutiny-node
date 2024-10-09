@@ -308,7 +308,8 @@ impl HubPreferentialScorer {
                 // we can prefer blinded paths with hub introduction points
                 let path = hop.hint;
                 if let IntroductionNode::NodeId(node_id) = path.introduction_node() {
-                    self.preferred_hubs_set.contains(&NodeId::from_pubkey(node_id))
+                    self.preferred_hubs_set
+                        .contains(&NodeId::from_pubkey(node_id))
                 } else {
                     false
                 }
@@ -317,7 +318,8 @@ impl HubPreferentialScorer {
                 // one hop is just the introduction node which is a known node id
                 let path = hop.hint;
                 if let IntroductionNode::NodeId(node_id) = path.introduction_node() {
-                    self.preferred_hubs_set.contains(&NodeId::from_pubkey(node_id))
+                    self.preferred_hubs_set
+                        .contains(&NodeId::from_pubkey(node_id))
                 } else {
                     false
                 }

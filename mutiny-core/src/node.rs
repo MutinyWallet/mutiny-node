@@ -33,14 +33,17 @@ use anyhow::{anyhow, Context};
 use bitcoin::bip32::Xpriv;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::secp256k1::ThirtyTwoByteHash;
-use bitcoin::{hashes::Hash, secp256k1::PublicKey, Network, OutPoint, FeeRate};
-use lightning::ln::channel_state::ChannelDetails;
+use bitcoin::{hashes::Hash, secp256k1::PublicKey, FeeRate, Network, OutPoint};
 use core::time::Duration;
 use esplora_client::AsyncClient;
 use futures_util::lock::Mutex;
 use hex_conservative::DisplayHex;
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
-use lightning::ln::channelmanager::{ChannelManager};
+use lightning::ln::channel_state::ChannelDetails;
+use lightning::ln::channelmanager::ChannelManager;
+use lightning::ln::invoice_utils::{
+    create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice,
+};
 use lightning::ln::PaymentSecret;
 use lightning::onion_message::messenger::OnionMessenger as LdkOnionMessenger;
 use lightning::routing::scoring::ProbabilisticScoringDecayParameters;
@@ -71,12 +74,7 @@ use lightning::{
     util::config::ChannelConfig,
 };
 use lightning_background_processor::process_events_async;
-use lightning::ln::invoice_utils::{
-    create_invoice_from_channelmanager_and_duration_since_epoch, create_phantom_invoice
-};
-use lightning_invoice::{
-    Bolt11Invoice,
-};
+use lightning_invoice::Bolt11Invoice;
 use lightning_liquidity::lsps2::client::LSPS2ClientConfig;
 use lightning_liquidity::{LiquidityClientConfig, LiquidityManager as LDKLSPLiquidityManager};
 
@@ -2569,9 +2567,9 @@ mod tests {
     use crate::storage::MemoryStorage;
     use crate::test_utils::*;
     use bitcoin::secp256k1::PublicKey;
-    use lightning::ln::channelmanager::ChannelCounterparty;
+    use lightning::ln::channel_state::ChannelCounterparty;
     use lightning::ln::features::InitFeatures;
-    use lightning::ln::ChannelId;
+    use lightning::ln::types::ChannelId;
     use lightning_invoice::Bolt11InvoiceDescription;
     use std::str::FromStr;
 
@@ -2653,10 +2651,12 @@ mod tests {
             is_channel_ready: false,
             channel_shutdown_state: None,
             is_usable: false,
-            is_public: false,
+            is_announced: false,
             inbound_htlc_minimum_msat: None,
             inbound_htlc_maximum_msat: None,
             config: None,
+            pending_inbound_htlcs: Default::default(),
+            pending_outbound_htlcs: Default::default(),
         };
 
         assert_eq!(

@@ -66,8 +66,10 @@ impl<S: MutinyStorage> MutinyFeeEstimator<S> {
             (non_witness_size * 4) + witness_size
         };
 
-        FeeRate::from_sat_per_kwu(sats_per_kw.into() )
-            .fee_wu(Weight::from_wu(expected_weight as u64)).unwrap().to_sat()
+        FeeRate::from_sat_per_kwu(sats_per_kw.into())
+            .fee_wu(Weight::from_wu(expected_weight as u64))
+            .unwrap()
+            .to_sat()
     }
 
     async fn get_last_sync_time(&self) -> Option<u64> {
@@ -311,7 +313,7 @@ mod test {
             2_500
         );
         assert_eq!(
-            fee_estimator.get_est_sat_per_1000_weight(ConfirmationTarget::OnChainSweep),
+            fee_estimator.get_est_sat_per_1000_weight(ConfirmationTarget::UrgentOnChainSweep),
             12_500
         );
 
@@ -341,7 +343,7 @@ mod test {
                 Some(TAPROOT_OUTPUT_SIZE),
                 Some(1_000)
             ),
-            616
+            615
         );
 
         // set up the cache
@@ -356,17 +358,17 @@ mod test {
 
         assert_eq!(
             fee_estimator.calculate_expected_fee(1, P2WSH_OUTPUT_SIZE, None, None),
-            888
+            886
         );
 
         assert_eq!(
             fee_estimator.calculate_expected_fee(1, P2WSH_OUTPUT_SIZE, None, Some(4000)),
-            1776
+            1772
         );
 
         assert_eq!(
             fee_estimator.calculate_expected_fee(3, P2WSH_OUTPUT_SIZE, None, None),
-            1816
+            1810
         );
 
         assert_eq!(
@@ -376,7 +378,7 @@ mod test {
                 Some(TAPROOT_OUTPUT_SIZE),
                 None
             ),
-            2160
+            2154
         );
     }
 }
